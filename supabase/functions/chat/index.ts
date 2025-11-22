@@ -101,21 +101,64 @@ serve(async (req) => {
       }).catch(err => console.error('Error scoring user message:', err));
     }
 
+    // Search for relevant memories to inject as context
+    let relevantMemories: any[] = [];
+    let systemContext = '';
+    
+    try {
+      const searchResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/search-memory`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          query: message,
+          userId: userId,
+          useSemanticSearch: true,
+          minImportance: 7, // Only high-importance memories
+        })
+      });
+
+      if (searchResponse.ok) {
+        const searchData = await searchResponse.json();
+        relevantMemories = (searchData.results || []).slice(0, 3); // Top 3 memories
+        
+        if (relevantMemories.length > 0) {
+          systemContext = `\n\nRelevant past conversations:\n${
+            relevantMemories.map((result, i) => {
+              const firstMsg = result.messages?.[0];
+              if (firstMsg) {
+                return `[Memory ${i+1}] ${firstMsg.content.substring(0, 200)}... (${(result.similarity * 100).toFixed(0)}% match, importance: ${firstMsg.importance_score || 'N/A'})`;
+              }
+              return '';
+            }).filter(Boolean).join('\n')
+          }\n\nUse these past conversations to provide more contextual and personalized responses.\n`;
+          
+          console.log(`Injecting ${relevantMemories.length} memories as context`);
+        }
+      } else {
+        console.warn('Memory search failed, continuing without context');
+      }
+    } catch (memErr) {
+      console.warn('Error searching memories:', memErr);
+    }
+
     // Call appropriate LLM API based on provider
     let assistantResponse: string;
     let model_used: string;
     
     try {
       if (requestedProvider === 'openai') {
-        const result = await callOpenAI(encrypted_key, message, requestedModel);
+        const result = await callOpenAI(encrypted_key, message, requestedModel, systemContext);
         assistantResponse = result.response;
         model_used = result.model;
       } else if (requestedProvider === 'anthropic') {
-        const result = await callAnthropic(encrypted_key, message, requestedModel);
+        const result = await callAnthropic(encrypted_key, message, requestedModel, systemContext);
         assistantResponse = result.response;
         model_used = result.model;
       } else if (requestedProvider === 'google') {
-        const result = await callGoogle(encrypted_key, message, requestedModel);
+        const result = await callGoogle(encrypted_key, message, requestedModel, systemContext);
         assistantResponse = result.response;
         model_used = result.model;
       } else {
@@ -193,8 +236,18 @@ serve(async (req) => {
       }).catch(err => console.error('Error scoring assistant message:', err));
     }
 
+    // Return response with memory metadata
     return new Response(
-      JSON.stringify({ response: assistantResponse }),
+      JSON.stringify({ 
+        response: assistantResponse,
+        memoriesUsed: relevantMemories.length,
+        memories: relevantMemories.map(result => ({
+          snippet: result.messages?.[0]?.content.substring(0, 100) || '',
+          similarity: result.similarity,
+          importance: result.messages?.[0]?.importance_score || null,
+          created_at: result.messages?.[0]?.created_at || null,
+        }))
+      }),
       {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       }
@@ -212,7 +265,9 @@ serve(async (req) => {
   }
 });
 
-async function callOpenAI(apiKey: string, message: string, model: string = 'gpt-4o-mini') {
+async function callOpenAI(apiKey: string, message: string, model: string = 'gpt-4o-mini', systemContext: string = '') {
+  const systemPrompt = 'You are a helpful AI assistant.' + systemContext;
+  
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -222,7 +277,7 @@ async function callOpenAI(apiKey: string, message: string, model: string = 'gpt-
     body: JSON.stringify({
       model: model,
       messages: [
-        { role: 'system', content: 'You are a helpful AI assistant.' },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: message }
       ],
     }),
@@ -255,7 +310,9 @@ async function callOpenAI(apiKey: string, message: string, model: string = 'gpt-
   };
 }
 
-async function callAnthropic(apiKey: string, message: string, model: string = 'claude-3-5-sonnet-20241022') {
+async function callAnthropic(apiKey: string, message: string, model: string = 'claude-3-5-sonnet-20241022', systemContext: string = '') {
+  const systemPrompt = 'You are a helpful AI assistant.' + systemContext;
+  
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -266,6 +323,7 @@ async function callAnthropic(apiKey: string, message: string, model: string = 'c
     body: JSON.stringify({
       model: model,
       max_tokens: 1024,
+      system: systemPrompt,
       messages: [
         { role: 'user', content: message }
       ],
@@ -299,7 +357,10 @@ async function callAnthropic(apiKey: string, message: string, model: string = 'c
   };
 }
 
-async function callGoogle(apiKey: string, message: string, model: string = 'gemini-pro') {
+async function callGoogle(apiKey: string, message: string, model: string = 'gemini-pro', systemContext: string = '') {
+  const systemPrompt = 'You are a helpful AI assistant.' + systemContext;
+  const augmentedMessage = systemPrompt + '\n\nUser: ' + message;
+  
   const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: {
@@ -307,7 +368,7 @@ async function callGoogle(apiKey: string, message: string, model: string = 'gemi
     },
     body: JSON.stringify({
       contents: [{
-        parts: [{ text: message }]
+        parts: [{ text: augmentedMessage }]
       }],
     }),
   });
