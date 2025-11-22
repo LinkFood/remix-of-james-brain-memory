@@ -13,6 +13,7 @@ import BackfillEmbeddings from "@/components/BackfillEmbeddings";
 import TimelineView from "@/components/TimelineView";
 import BrainReports from "@/components/BrainReports";
 import BrainInsightsDashboard from "@/components/BrainInsightsDashboard";
+import ScoreExistingMessages from "@/components/ScoreExistingMessages";
 import { toast } from "sonner";
 
 const Dashboard = () => {
@@ -157,6 +158,7 @@ const Dashboard = () => {
           <TabsContent value="analytics" className="mt-6 animate-fade-in">
             <div className="space-y-6">
               <BackfillEmbeddings userId={user?.id ?? ""} />
+              <ScoreExistingMessages userId={user?.id ?? ""} />
               <UsageAnalytics userId={user?.id ?? ""} />
             </div>
           </TabsContent>

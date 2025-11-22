@@ -24,7 +24,9 @@ serve(async (req) => {
       minLength,
       maxLength,
       minDuration,
-      maxDuration
+      maxDuration,
+      minImportance,
+      maxImportance
     } = await req.json();
 
     if (!query || !userId) {
@@ -124,12 +126,14 @@ serve(async (req) => {
         }
 
         // Apply advanced filters to semantic results
-        if (provider || model || minLength || maxLength) {
+        if (provider || model || minLength || maxLength || minImportance !== undefined || maxImportance !== undefined) {
           semanticResults = semanticResults?.filter((msg: any) => {
             if (provider && msg.provider !== provider) return false;
             if (model && msg.model_used !== model) return false;
             if (minLength && msg.content.length < minLength) return false;
             if (maxLength && msg.content.length > maxLength) return false;
+            if (minImportance !== undefined && (msg.importance_score === null || msg.importance_score < minImportance)) return false;
+            if (maxImportance !== undefined && (msg.importance_score === null || msg.importance_score > maxImportance)) return false;
             return true;
           }).slice(0, 50);
         }
@@ -160,6 +164,8 @@ serve(async (req) => {
         // Apply advanced filters
         if (provider) keywordQuery = keywordQuery.eq('provider', provider);
         if (model) keywordQuery = keywordQuery.eq('model_used', model);
+        if (minImportance !== undefined) keywordQuery = keywordQuery.gte('importance_score', minImportance);
+        if (maxImportance !== undefined) keywordQuery = keywordQuery.lte('importance_score', maxImportance);
 
         if (onThisDay) {
           const now = new Date();
@@ -202,6 +208,8 @@ serve(async (req) => {
       // Apply advanced filters
       if (provider) keywordQuery = keywordQuery.eq('provider', provider);
       if (model) keywordQuery = keywordQuery.eq('model_used', model);
+      if (minImportance !== undefined) keywordQuery = keywordQuery.gte('importance_score', minImportance);
+      if (maxImportance !== undefined) keywordQuery = keywordQuery.lte('importance_score', maxImportance);
 
       if (onThisDay) {
         const now = new Date();

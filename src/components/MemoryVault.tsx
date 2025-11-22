@@ -9,6 +9,8 @@ import { toast } from "sonner";
 import MemoryStats from "./MemoryStats";
 import DateFilter from "./DateFilter";
 import AdvancedFilters, { AdvancedFilterOptions } from "./AdvancedFilters";
+import { Badge } from "@/components/ui/badge";
+import { getImportanceLabel, getImportanceColor } from "./ImportanceFilter";
 
 interface Memory {
   id: string;
@@ -16,6 +18,7 @@ interface Memory {
   content: string;
   topic: string | null;
   created_at: string;
+  importance_score: number | null;
 }
 
 interface MemoryVaultProps {
@@ -48,6 +51,12 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
       }
       if (filters?.model) {
         query = query.eq("model_used", filters.model);
+      }
+      if (filters?.minImportance !== undefined) {
+        query = query.gte("importance_score", filters.minImportance);
+      }
+      if (filters?.maxImportance !== undefined) {
+        query = query.lte("importance_score", filters.maxImportance);
       }
 
       if (onThisDay) {
@@ -236,15 +245,22 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
                 className="p-4 bg-card border-border hover:border-primary/50 transition-all"
               >
                 <div className="flex items-start justify-between mb-2">
-                  <span
-                    className={`text-xs font-semibold px-2 py-1 rounded ${
-                      memory.role === "user"
-                        ? "bg-primary/20 text-primary"
-                        : "bg-accent/20 text-accent"
-                    }`}
-                  >
-                    {memory.role}
-                  </span>
+                  <div className="flex gap-2">
+                    <span
+                      className={`text-xs font-semibold px-2 py-1 rounded ${
+                        memory.role === "user"
+                          ? "bg-primary/20 text-primary"
+                          : "bg-accent/20 text-accent"
+                      }`}
+                    >
+                      {memory.role}
+                    </span>
+                    {memory.importance_score !== null && (
+                      <Badge variant="outline" className={getImportanceColor(memory.importance_score)}>
+                        {memory.importance_score} - {getImportanceLabel(memory.importance_score)}
+                      </Badge>
+                    )}
+                  </div>
                   <span className="text-xs text-muted-foreground">
                     {new Date(memory.created_at).toLocaleString()}
                   </span>

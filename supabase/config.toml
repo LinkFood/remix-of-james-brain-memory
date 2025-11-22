@@ -11,3 +11,9 @@ verify_jwt = false
 
 [functions.backfill-embeddings]
 verify_jwt = true
+
+[functions.calculate-importance]
+verify_jwt = true
+
+[functions.generate-brain-report]
+verify_jwt = true
