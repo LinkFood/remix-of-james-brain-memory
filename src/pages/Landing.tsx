@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Brain, Sparkles } from "lucide-react";
 
 const Landing = () => {
   const navigate = useNavigate();
@@ -15,69 +14,6 @@ const Landing = () => {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [agreedToTracking, setAgreedToTracking] = useState(false);
-  const [activeExample, setActiveExample] = useState<number>(0);
-
-  const memoryExamples = [
-    {
-      id: 0,
-      title: "First Conversation (No Memory)",
-      context: [],
-      userMessage: "I'm working on a new project",
-      response: "That's great! What kind of project are you working on? I'd be happy to help with any questions or guidance you need.",
-      injectedMemories: 0,
-    },
-    {
-      id: 1,
-      title: "Second Conversation (Memory Building)",
-      context: ["User is working on a React project", "User prefers TypeScript"],
-      userMessage: "How should I structure my components?",
-      response: "For your React TypeScript project, I recommend a component-per-file structure with clear separation of concerns. Based on our previous discussion, you might want to use...",
-      injectedMemories: 2,
-    },
-    {
-      id: 2,
-      title: "Third Conversation (Compounding Intelligence)",
-      context: [
-        "User is working on a React project",
-        "User prefers TypeScript",
-        "User is building a dashboard with data visualization",
-        "User struggles with state management in large apps",
-      ],
-      userMessage: "The app is getting complex",
-      response: "I remember you're building a React TypeScript dashboard with data visualization. Since you mentioned struggling with state management, let's implement Zustand or React Context for your growing app...",
-      injectedMemories: 4,
-    },
-    {
-      id: 3,
-      title: "How It Works",
-      type: "explainer",
-      steps: [
-        {
-          icon: "🔑",
-          title: "1. Bring Your API",
-          description: "Connect your OpenAI, Claude, or Google API key"
-        },
-        {
-          icon: "💬",
-          title: "2. Chat Normally",
-          description: "We stamp & store every conversation you have"
-        },
-        {
-          icon: "🗄️",
-          title: "3. We Store Your Data",
-          description: "All conversations stored securely. You own it."
-        },
-        {
-          icon: "🧠",
-          title: "4. Context Injected",
-          description: "Future chats get your relevant memories automatically"
-        }
-      ],
-      tagline: "You bring the AI. We bring the memory.",
-    },
-  ];
-
-  const currentExample = memoryExamples[activeExample];
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -134,13 +70,6 @@ const Landing = () => {
     }
   };
 
-  // Auto-cycle through examples
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setActiveExample((prev) => (prev + 1) % memoryExamples.length);
-    }, 5000);
-    return () => clearInterval(interval);
-  }, []);
 
   return (
     <div className="h-screen w-screen overflow-hidden bg-background flex flex-col lg:flex-row">
@@ -148,30 +77,14 @@ const Landing = () => {
       <div className="flex-1 flex flex-col justify-between p-8 lg:p-12 overflow-y-auto">
         <div className="flex-1 flex flex-col justify-center max-w-md mx-auto w-full space-y-8">
           {/* Header */}
-          <div className="space-y-4 animate-fade-in">
-            <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center shadow-glow">
-              <Brain className="w-10 h-10 text-primary" />
-            </div>
-            <h1 className="text-4xl lg:text-5xl font-bold text-foreground">
-              Stop Starting Over
-            </h1>
-            <p className="text-lg text-muted-foreground leading-relaxed">
-              Every AI conversation you have is lost when you close the tab.<br />
-              <span className="text-foreground font-semibold">We store it. You own it. Your AI finally remembers.</span>
-            </p>
-            <div className="pt-2 space-y-2 text-sm text-muted-foreground">
-              <div className="flex items-center gap-2">
-                <span className="text-primary">✓</span>
-                <span>Bring your own API (OpenAI, Claude, Google)</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-primary">✓</span>
-                <span>We capture & store every conversation</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-primary">✓</span>
-                <span>Context auto-injected into future chats</span>
-              </div>
+          <div className="space-y-12 animate-fade-in">
+            <div className="space-y-6">
+              <h1 className="text-5xl font-bold text-foreground tracking-tight">
+                Stop Starting Over
+              </h1>
+              <p className="text-lg text-muted-foreground leading-relaxed max-w-md">
+                Every AI conversation is lost when you close the tab. We store it. You own it. Your AI remembers.
+              </p>
             </div>
           </div>
 
@@ -238,154 +151,73 @@ const Landing = () => {
         </div>
 
         {/* Footer */}
-        <div className="mt-8 pt-6 border-t border-border space-y-2 animate-fade-in">
-          <p className="text-sm font-medium text-foreground">
-            Yes, we store your data — FOR YOU
+        <div className="mt-12 pt-8 border-t border-border/20 animate-fade-in">
+          <p className="text-xs text-muted-foreground tracking-wide">
+            You own it. Export anytime. Delete anytime.
           </p>
-          <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-            <span>🗄️ You own it</span>
-            <span>📦 Export anytime</span>
-            <span>🗑️ Delete anytime</span>
-          </div>
         </div>
       </div>
 
-      {/* Right Panel - Interactive Demo */}
-      <div className="flex-1 bg-muted/30 p-8 lg:p-12 overflow-y-auto border-t lg:border-t-0 lg:border-l border-border">
-        <div className="max-w-2xl mx-auto h-full flex flex-col justify-center space-y-6">
-          {/* Demo Header */}
-          <div className="text-center space-y-2 animate-fade-in">
-            <h2 className="text-2xl lg:text-3xl font-bold text-foreground">
-              Live Memory Demo
+      {/* Right Panel - Data Visualization */}
+      <div className="flex-1 bg-card/30 backdrop-blur-sm border-t lg:border-t-0 lg:border-l border-border/20 p-8 lg:p-12 flex items-center justify-center overflow-y-auto">
+        <div className="max-w-2xl w-full space-y-12">
+          {/* Header */}
+          <div className="space-y-2">
+            <h2 className="text-sm font-mono text-muted-foreground uppercase tracking-widest">
+              Context Accumulation
             </h2>
-            <p className="text-sm text-muted-foreground">
-              Watch how your AI gets smarter with every conversation
-            </p>
           </div>
 
-          {/* Example Selector */}
-          <div className="flex justify-center gap-2 flex-wrap">
-            {memoryExamples.map((example) => (
-              <button
-                key={example.id}
-                onClick={() => setActiveExample(example.id)}
-                className={`px-4 py-2 rounded-lg text-xs lg:text-sm font-medium transition-all ${
-                  activeExample === example.id
-                    ? "bg-primary text-primary-foreground shadow-glow"
-                    : "bg-background text-muted-foreground hover:text-foreground border border-border"
-                }`}
-              >
-                {example.id === 0 ? "No Memory" : example.id === 1 ? "Building" : example.id === 2 ? "High Context" : "How It Works"}
-              </button>
-            ))}
-          </div>
-
-          {/* Demo Card */}
-          <div
-            key={activeExample}
-            className="bg-card border border-border rounded-xl p-6 space-y-4 shadow-glow animate-fade-in"
-          >
-            {currentExample.type === "explainer" ? (
-              // How It Works Flow
-              <div className="space-y-6">
-                <h3 className="text-2xl font-bold text-center text-foreground">{currentExample.title}</h3>
-                
-                {/* 4-Step Flow */}
-                <div className="grid gap-4">
-                  {currentExample.steps.map((step, idx) => (
-                    <div key={idx} className="flex items-start gap-4 p-4 bg-muted/50 border border-border rounded-lg transition-all hover:shadow-glow">
-                      <div className="text-3xl flex-shrink-0">{step.icon}</div>
-                      <div className="space-y-1">
-                        <h4 className="font-semibold text-foreground">{step.title}</h4>
-                        <p className="text-sm text-muted-foreground">{step.description}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Tagline */}
-                <div className="text-center pt-4 border-t border-border">
-                  <p className="text-lg font-semibold text-primary">{currentExample.tagline}</p>
-                </div>
+          {/* Data Visualization */}
+          <div className="space-y-8">
+            {/* Conversation 1 */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-sm text-muted-foreground">Conversation 1</span>
+                <span className="font-mono text-xs text-muted-foreground">0 memories</span>
               </div>
-            ) : (
-              // Regular Memory Demo
-              <>
-                {/* Memory Injection Badge */}
-                {currentExample.context?.length > 0 && (
-                  <div className="flex items-center gap-2 text-sm font-semibold text-primary">
-                    <Sparkles className="w-4 h-4" />
-                    {currentExample.injectedMemories} Relevant Memories Injected
-                  </div>
-                )}
+              <div className="h-2 bg-border/20 rounded-full overflow-hidden">
+                <div className="h-full bg-foreground/40 rounded-full transition-all duration-1000" style={{ width: '40%' }} />
+              </div>
+              <p className="text-sm text-muted-foreground pl-2 border-l-2 border-border/30">
+                "I'm working on a new project"
+              </p>
+            </div>
 
-                {/* Context Cards */}
-                {currentExample.context?.length > 0 ? (
-                  <div className="grid gap-2">
-                    {currentExample.context.map((memory, idx) => (
-                      <div
-                        key={idx}
-                        className="p-3 bg-primary/5 border border-primary/20 rounded-lg text-sm text-foreground"
-                      >
-                        💾 {memory}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="p-4 bg-muted/50 border border-border rounded-lg text-center">
-                    <p className="text-muted-foreground text-sm">
-                      No previous context available. Starting fresh.
-                    </p>
-                  </div>
-                )}
+            {/* Conversation 2 */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-sm text-muted-foreground">Conversation 2</span>
+                <span className="font-mono text-xs text-foreground">2 memories injected</span>
+              </div>
+              <div className="h-2 bg-border/20 rounded-full overflow-hidden">
+                <div className="h-full bg-foreground/60 rounded-full transition-all duration-1000" style={{ width: '70%' }} />
+              </div>
+              <p className="text-sm text-muted-foreground pl-2 border-l-2 border-border/30">
+                "How should I structure components?"
+              </p>
+            </div>
 
-                {/* User Message */}
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    Your Message
-                  </div>
-                  <div className="p-4 bg-secondary/50 border border-border rounded-lg">
-                    <p className="text-foreground text-sm">{currentExample.userMessage}</p>
-                  </div>
-                </div>
+            {/* Conversation 3 */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-mono text-sm text-muted-foreground">Conversation 3</span>
+                <span className="font-mono text-xs text-foreground">4 memories injected</span>
+              </div>
+              <div className="h-2 bg-border/20 rounded-full overflow-hidden">
+                <div className="h-full bg-foreground rounded-full transition-all duration-1000" style={{ width: '100%' }} />
+              </div>
+              <p className="text-sm text-muted-foreground pl-2 border-l-2 border-border/30">
+                "The app is getting complex"
+              </p>
+            </div>
+          </div>
 
-                {/* AI Response */}
-                <div className="space-y-2">
-                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                    AI Response
-                  </div>
-                  <div className="p-4 bg-accent/10 border border-accent/20 rounded-lg">
-                    <p className="text-foreground text-sm">{currentExample.response}</p>
-                  </div>
-                </div>
-
-                {/* Context Meter */}
-                <div className="flex items-center justify-between p-4 bg-primary/5 border border-primary/20 rounded-lg">
-                  <span className="text-sm font-semibold text-foreground">Context Awareness</span>
-                  <div className="flex items-center gap-2">
-                    <div className="flex gap-1">
-                      {[...Array(3)].map((_, idx) => (
-                        <div
-                          key={idx}
-                          className={`w-2 h-8 rounded-full transition-all ${
-                            idx < currentExample.injectedMemories / 2
-                              ? "bg-primary"
-                              : "bg-border"
-                          }`}
-                        />
-                      ))}
-                    </div>
-                    <span className="text-sm text-primary font-bold">
-                      {currentExample.injectedMemories === 0
-                        ? "None"
-                        : currentExample.injectedMemories < 3
-                        ? "Building"
-                        : "High"}
-                    </span>
-                  </div>
-                </div>
-              </>
-            )}
+          {/* Footer */}
+          <div className="pt-8 border-t border-border/20">
+            <p className="text-sm text-muted-foreground tracking-wide">
+              Your API. Our memory layer. Compounding context.
+            </p>
           </div>
         </div>
       </div>
