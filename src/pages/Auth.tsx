@@ -30,7 +30,7 @@ const Auth = () => {
         navigate("/");
       } else {
         const redirectUrl = `${window.location.origin}/`;
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
           options: {
@@ -38,7 +38,24 @@ const Auth = () => {
           },
         });
         if (error) throw error;
-        toast.success("Account created! You can now log in.");
+        
+        // Insert sample data for the new user
+        if (data.user) {
+          try {
+            const { error: sampleDataError } = await supabase.functions.invoke('insert-sample-data');
+            if (sampleDataError) {
+              console.error('Failed to insert sample data:', sampleDataError);
+            } else {
+              toast.success("Account created with sample conversations!");
+            }
+          } catch (err) {
+            console.error('Error calling insert-sample-data:', err);
+            toast.success("Account created! You can now log in.");
+          }
+        } else {
+          toast.success("Account created! You can now log in.");
+        }
+        
         setIsLogin(true);
       }
     } catch (error: any) {
