@@ -17,3 +17,10 @@ verify_jwt = true
 
 [functions.generate-brain-report]
 verify_jwt = true
+
+[functions.export-all-data]
+verify_jwt = true
+
+[functions.delete-all-user-data]
+verify_jwt = true
+
