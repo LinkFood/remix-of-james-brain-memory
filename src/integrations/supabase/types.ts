@@ -14,6 +14,48 @@ export type Database = {
   }
   public: {
     Tables: {
+      brain_reports: {
+        Row: {
+          conversation_stats: Json | null
+          created_at: string
+          decisions: Json | null
+          end_date: string
+          id: string
+          insights: Json | null
+          key_themes: Json | null
+          report_type: string
+          start_date: string
+          summary: string
+          user_id: string
+        }
+        Insert: {
+          conversation_stats?: Json | null
+          created_at?: string
+          decisions?: Json | null
+          end_date: string
+          id?: string
+          insights?: Json | null
+          key_themes?: Json | null
+          report_type: string
+          start_date: string
+          summary: string
+          user_id: string
+        }
+        Update: {
+          conversation_stats?: Json | null
+          created_at?: string
+          decisions?: Json | null
+          end_date?: string
+          id?: string
+          insights?: Json | null
+          key_themes?: Json | null
+          report_type?: string
+          start_date?: string
+          summary?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       conversations: {
         Row: {
           created_at: string

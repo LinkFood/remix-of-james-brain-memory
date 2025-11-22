@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { Brain, LogOut, MessageSquare, Database, TrendingUp, Clock } from "lucide-react";
+import { Brain, LogOut, MessageSquare, Database, TrendingUp, Clock, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ChatInterface from "@/components/ChatInterface";
@@ -11,6 +11,7 @@ import GlobalSearch from "@/components/GlobalSearch";
 import UsageAnalytics from "@/components/UsageAnalytics";
 import BackfillEmbeddings from "@/components/BackfillEmbeddings";
 import TimelineView from "@/components/TimelineView";
+import BrainReports from "@/components/BrainReports";
 import { toast } from "sonner";
 
 const Dashboard = () => {
@@ -105,7 +106,7 @@ const Dashboard = () => {
 
       <main className="container mx-auto px-4 py-6">
         <Tabs defaultValue="chat" className="w-full">
-          <TabsList className="grid w-full max-w-3xl mx-auto grid-cols-4 bg-card border border-border">
+          <TabsList className="grid w-full max-w-4xl mx-auto grid-cols-5 bg-card border border-border">
             <TabsTrigger value="chat" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <MessageSquare className="w-4 h-4 mr-2" />
               Chat
@@ -117,6 +118,10 @@ const Dashboard = () => {
             <TabsTrigger value="timeline" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Clock className="w-4 h-4 mr-2" />
               Timeline
+            </TabsTrigger>
+            <TabsTrigger value="reports" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+              <FileText className="w-4 h-4 mr-2" />
+              Reports
             </TabsTrigger>
             <TabsTrigger value="analytics" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <TrendingUp className="w-4 h-4 mr-2" />
@@ -134,6 +139,10 @@ const Dashboard = () => {
 
           <TabsContent value="timeline" className="mt-6 animate-fade-in">
             <TimelineView userId={user?.id ?? ""} />
+          </TabsContent>
+
+          <TabsContent value="reports" className="mt-6 animate-fade-in">
+            <BrainReports userId={user?.id ?? ""} />
           </TabsContent>
 
           <TabsContent value="analytics" className="mt-6 animate-fade-in">
