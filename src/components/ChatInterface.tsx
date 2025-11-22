@@ -5,12 +5,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Send, Loader2, AlertCircle, ChevronDown } from "lucide-react";
+import { Send, Loader2, AlertCircle, ChevronDown, Copy, Star, Trash2, Edit2, Check, X, MoreVertical } from "lucide-react";
 import { toast } from "sonner";
 import ConversationSidebar from "./ConversationSidebar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { getImportanceLabel, getImportanceColor } from "./ImportanceFilter";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { useSwipeable } from "react-swipeable";
+import { cn } from "@/lib/utils";
 
 interface Message {
   id: string;
@@ -18,6 +22,9 @@ interface Message {
   content: string;
   created_at: string;
   importance_score?: number | null;
+  starred?: boolean;
+  edited?: boolean;
+  edit_history?: any[];
   memoriesUsed?: number;
   memories?: Array<{
     snippet: string;
@@ -40,6 +47,9 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
   const [provider, setProvider] = useState<string>("openai");
   const [model, setModel] = useState<string>("gpt-4-turbo");
   const [hasApiKey, setHasApiKey] = useState<boolean>(true);
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editContent, setEditContent] = useState("");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const modelOptions = {
@@ -97,7 +107,6 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  // Poll for importance scores every 10 seconds if there are messages without scores
   useEffect(() => {
     if (!conversationId || messages.length === 0) return;
 
@@ -106,7 +115,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
 
     const interval = setInterval(() => {
       loadMessages();
-    }, 10000); // Poll every 10 seconds
+    }, 10000);
 
     return () => clearInterval(interval);
   }, [conversationId, messages]);
@@ -138,7 +147,10 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
         .order("created_at", { ascending: true });
 
       if (error) throw error;
-      setMessages(data || []);
+      setMessages((data || []).map(msg => ({
+        ...msg,
+        edit_history: Array.isArray(msg.edit_history) ? msg.edit_history : []
+      })));
     } catch (error: any) {
       toast.error("Failed to load messages");
       console.error(error);
@@ -153,6 +165,90 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
   const handleNewConversation = () => {
     setConversationId(null);
     setMessages([]);
+  };
+
+  const handleCopyMessage = async (content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      toast.success("Copied to clipboard");
+    } catch (error) {
+      toast.error("Failed to copy");
+    }
+  };
+
+  const handleStarMessage = async (messageId: string, currentStarred: boolean) => {
+    try {
+      const { error } = await supabase
+        .from("messages")
+        .update({ starred: !currentStarred })
+        .eq("id", messageId);
+
+      if (error) throw error;
+      loadMessages();
+      toast.success(currentStarred ? "Unstarred" : "Starred");
+    } catch (error) {
+      toast.error("Failed to update");
+    }
+  };
+
+  const handleDeleteMessage = async (messageId: string) => {
+    try {
+      const { error } = await supabase
+        .from("messages")
+        .delete()
+        .eq("id", messageId);
+
+      if (error) throw error;
+      loadMessages();
+      toast.success("Message deleted");
+    } catch (error) {
+      toast.error("Failed to delete");
+    }
+  };
+
+  const startEditMessage = (messageId: string, content: string) => {
+    setEditingMessageId(messageId);
+    setEditContent(content);
+  };
+
+  const cancelEditMessage = () => {
+    setEditingMessageId(null);
+    setEditContent("");
+  };
+
+  const saveEditMessage = async (messageId: string) => {
+    if (!editContent.trim()) {
+      cancelEditMessage();
+      return;
+    }
+
+    try {
+      const message = messages.find(m => m.id === messageId);
+      if (!message) return;
+
+      const editHistory = message.edit_history || [];
+      editHistory.push({
+        content: message.content,
+        edited_at: new Date().toISOString(),
+      });
+
+      const { error } = await supabase
+        .from("messages")
+        .update({ 
+          content: editContent.trim(),
+          edited: true,
+          edit_history: editHistory
+        })
+        .eq("id", messageId);
+
+      if (error) throw error;
+      loadMessages();
+      toast.success("Message updated");
+    } catch (error) {
+      toast.error("Failed to update");
+    } finally {
+      cancelEditMessage();
+    }
   };
 
   const handleSend = async () => {
@@ -197,7 +293,6 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
       };
       setMessages((prev) => [...prev, assistantMsg]);
       
-      // Update conversation title if this is the first message
       if (messages.length === 1) {
         updateConversationTitle(userMessage);
       }
@@ -249,6 +344,8 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
         currentConversationId={conversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
       />
       
       <div className="flex-1 flex flex-col gap-4">
@@ -261,7 +358,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
           </Alert>
         )}
         
-        <div className="flex gap-4 items-center">
+        <div className="flex gap-4 items-center flex-wrap">
           <div className="flex gap-2 items-center flex-1">
             <Select value={provider} onValueChange={(value) => {
               setProvider(value);
@@ -270,7 +367,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
               <SelectTrigger className="w-[180px]">
                 <SelectValue placeholder="Select provider" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="bg-popover z-50">
                 <SelectItem value="openai">OpenAI</SelectItem>
                 <SelectItem value="anthropic">Anthropic</SelectItem>
                 <SelectItem value="google">Google</SelectItem>
@@ -281,7 +378,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
               <SelectTrigger className="w-[200px]">
                 <SelectValue placeholder="Select model" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="bg-popover z-50">
                 {modelOptions[provider as keyof typeof modelOptions].map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     {option.label}
@@ -298,58 +395,146 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
             <p>Start a conversation to build your memory vault...</p>
           </div>
         ) : (
-          messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-            >
+          messages.map((msg) => {
+            const swipeHandlers = useSwipeable({
+              onSwipedLeft: () => {
+                if (msg.role === "user" || msg.role === "assistant") {
+                  handleDeleteMessage(msg.id);
+                }
+              },
+              onSwipedRight: () => {
+                if (msg.role === "user" || msg.role === "assistant") {
+                  handleStarMessage(msg.id, msg.starred || false);
+                }
+              },
+              trackMouse: false,
+              delta: 50,
+            });
+
+            return (
               <div
-                className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                  msg.role === "user"
-                    ? "bg-primary text-primary-foreground shadow-glow"
-                    : "bg-secondary text-secondary-foreground"
-                }`}
+                key={msg.id}
+                {...swipeHandlers}
+                className={cn(
+                  "flex group animate-fade-in",
+                  msg.role === "user" ? "justify-end" : "justify-start"
+                )}
               >
-                <p className="text-sm leading-relaxed mb-2">{msg.content}</p>
-                {msg.importance_score !== null && msg.importance_score !== undefined && (
-                  <Badge 
-                    variant="outline" 
-                    className={`text-xs ${getImportanceColor(msg.importance_score)} mt-2`}
-                  >
-                    {msg.importance_score} - {getImportanceLabel(msg.importance_score)}
-                  </Badge>
-                )}
-                {msg.role === "assistant" && msg.memoriesUsed && msg.memoriesUsed > 0 && (
-                  <div className="mt-2">
-                    <Collapsible>
-                      <CollapsibleTrigger asChild>
-                        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 hover:bg-background/10">
-                          💭 Used {msg.memoriesUsed} {msg.memoriesUsed === 1 ? 'memory' : 'memories'}
-                          <ChevronDown className="h-3 w-3" />
+                <div
+                  className={cn(
+                    "max-w-[80%] rounded-2xl px-4 py-3 relative",
+                    msg.role === "user"
+                      ? "bg-primary text-primary-foreground shadow-glow"
+                      : "bg-secondary text-secondary-foreground"
+                  )}
+                >
+                  {msg.starred && (
+                    <Star className="absolute -top-2 -right-2 h-4 w-4 text-primary fill-primary" />
+                  )}
+                  
+                  {editingMessageId === msg.id ? (
+                    <div className="space-y-2">
+                      <Input
+                        value={editContent}
+                        onChange={(e) => setEditContent(e.target.value)}
+                        className="min-h-[60px]"
+                        autoFocus
+                      />
+                      <div className="flex gap-1">
+                        <Button size="sm" onClick={() => saveEditMessage(msg.id)}>
+                          <Check className="h-4 w-4" />
                         </Button>
-                      </CollapsibleTrigger>
-                      <CollapsibleContent className="mt-2 space-y-2">
-                        {msg.memories?.map((mem, i) => (
-                          <div key={i} className="text-xs p-2 rounded bg-background/20 border border-border/30">
-                            <div className="text-muted-foreground mb-1">
-                              {mem.snippet}...
+                        <Button size="sm" variant="outline" onClick={cancelEditMessage}>
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <p className="text-sm leading-relaxed mb-2 whitespace-pre-wrap">{msg.content}</p>
+                      {msg.edited && (
+                        <Badge variant="outline" className="text-xs mr-2">
+                          Edited
+                        </Badge>
+                      )}
+                      {msg.importance_score !== null && msg.importance_score !== undefined && (
+                        <Badge 
+                          variant="outline" 
+                          className={`text-xs ${getImportanceColor(msg.importance_score)} mt-2`}
+                        >
+                          {msg.importance_score} - {getImportanceLabel(msg.importance_score)}
+                        </Badge>
+                      )}
+                    </>
+                  )}
+                  
+                  {msg.role === "assistant" && msg.memoriesUsed && msg.memoriesUsed > 0 && (
+                    <div className="mt-2">
+                      <Collapsible>
+                        <CollapsibleTrigger asChild>
+                          <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 hover:bg-background/10">
+                            💭 Used {msg.memoriesUsed} {msg.memoriesUsed === 1 ? 'memory' : 'memories'}
+                            <ChevronDown className="h-3 w-3" />
+                          </Button>
+                        </CollapsibleTrigger>
+                        <CollapsibleContent className="mt-2 space-y-2">
+                          {msg.memories?.map((mem, i) => (
+                            <div key={i} className="text-xs p-2 rounded bg-background/20 border border-border/30">
+                              <div className="text-muted-foreground mb-1">
+                                {mem.snippet}...
+                              </div>
+                              <div className="flex gap-2 text-[10px] text-muted-foreground/70">
+                                <span>{(mem.similarity * 100).toFixed(0)}% match</span>
+                                {mem.importance && <span>• Importance: {mem.importance}</span>}
+                              </div>
                             </div>
-                            <div className="flex gap-2 text-[10px] text-muted-foreground/70">
-                              <span>{(mem.similarity * 100).toFixed(0)}% match</span>
-                              {mem.importance && <span>• Importance: {mem.importance}</span>}
-                            </div>
-                          </div>
-                        ))}
-                      </CollapsibleContent>
-                    </Collapsible>
+                          ))}
+                        </CollapsibleContent>
+                      </Collapsible>
+                    </div>
+                  )}
+
+                  <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-2 right-2">
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button size="icon" variant="ghost" className="h-6 w-6 touch-target">
+                          <MoreVertical className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end" className="bg-popover z-50">
+                        <DropdownMenuItem onClick={() => handleCopyMessage(msg.content)}>
+                          <Copy className="h-4 w-4 mr-2" />
+                          Copy
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => handleStarMessage(msg.id, msg.starred || false)}>
+                          <Star className="h-4 w-4 mr-2" />
+                          {msg.starred ? "Unstar" : "Star"}
+                        </DropdownMenuItem>
+                        {(msg.role === "user" || msg.role === "assistant") && (
+                          <>
+                            <DropdownMenuItem onClick={() => startEditMessage(msg.id, msg.content)}>
+                              <Edit2 className="h-4 w-4 mr-2" />
+                              Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem 
+                              onClick={() => handleDeleteMessage(msg.id)}
+                              className="text-destructive focus:text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4 mr-2" />
+                              Delete
+                            </DropdownMenuItem>
+                          </>
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
-                )}
+                </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
         {loading && (
-          <div className="flex justify-start">
+          <div className="flex justify-start animate-fade-in">
             <div className="bg-secondary text-secondary-foreground rounded-2xl px-4 py-3">
               <Loader2 className="w-5 h-5 animate-spin" />
             </div>
@@ -370,7 +555,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
           <Button
             onClick={handleSend}
             disabled={loading || !input.trim() || !conversationId || !hasApiKey}
-            className="bg-primary hover:bg-primary-glow text-primary-foreground shadow-glow"
+            className="bg-primary hover:bg-primary-glow text-primary-foreground shadow-glow touch-target min-h-[48px] min-w-[48px]"
             size="icon"
           >
             <Send className="w-5 h-5" />
