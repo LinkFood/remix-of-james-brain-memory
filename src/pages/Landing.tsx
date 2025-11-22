@@ -153,13 +153,26 @@ const Landing = () => {
               <Brain className="w-10 h-10 text-primary" />
             </div>
             <h1 className="text-4xl lg:text-5xl font-bold text-foreground">
-              Your AI Remembers You
+              Stop Starting Over
             </h1>
             <p className="text-lg text-muted-foreground leading-relaxed">
-              We store your conversations.<br />
-              You own your data.<br />
-              AI finally remembers.
+              Every AI conversation you have is lost when you close the tab.<br />
+              <span className="text-foreground font-semibold">We store it. You own it. Your AI finally remembers.</span>
             </p>
+            <div className="pt-2 space-y-2 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <span className="text-primary">✓</span>
+                <span>Bring your own API (OpenAI, Claude, Google)</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-primary">✓</span>
+                <span>We capture & store every conversation</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-primary">✓</span>
+                <span>Context auto-injected into future chats</span>
+              </div>
+            </div>
           </div>
 
           {/* Auth Form */}
