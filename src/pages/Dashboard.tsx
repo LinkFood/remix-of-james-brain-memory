@@ -15,6 +15,7 @@ import BrainReports from "@/components/BrainReports";
 import BrainInsightsDashboard from "@/components/BrainInsightsDashboard";
 import ScoreExistingMessages from "@/components/ScoreExistingMessages";
 import KnowledgeGraph from "@/components/KnowledgeGraph";
+import Onboarding from "@/components/Onboarding";
 import { toast } from "sonner";
 
 const Dashboard = () => {
@@ -73,6 +74,8 @@ const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-gradient-bg">
+      <Onboarding userId={user?.id ?? ""} />
+      
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">

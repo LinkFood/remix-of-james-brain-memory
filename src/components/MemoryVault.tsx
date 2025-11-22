@@ -11,6 +11,7 @@ import DateFilter from "./DateFilter";
 import AdvancedFilters, { AdvancedFilterOptions } from "./AdvancedFilters";
 import { Badge } from "@/components/ui/badge";
 import { getImportanceLabel, getImportanceColor } from "./ImportanceFilter";
+import ImportData from "./ImportData";
 
 interface Memory {
   id: string;
@@ -187,6 +188,7 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
                 className="pl-10 bg-input border-border focus:ring-primary"
               />
             </div>
+            <ImportData userId={userId} onImportComplete={fetchMemories} />
             <Button
               onClick={handleExport}
               className="bg-secondary hover:bg-secondary/80 text-secondary-foreground"
