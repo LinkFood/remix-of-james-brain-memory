@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { Search, Loader2, MessageSquare, Sparkles } from "lucide-react";
 import { toast } from "sonner";
+import DateFilter from "./DateFilter";
 
 interface SearchResult {
   conversation_id: string;
@@ -41,18 +42,30 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [useSemanticSearch, setUseSemanticSearch] = useState(true);
+  const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined } | null>(null);
+  const [isOnThisDay, setIsOnThisDay] = useState(false);
 
   const handleSearch = async () => {
     if (!query.trim()) return;
 
     setLoading(true);
+    setIsOnThisDay(false);
     try {
+      const body: any = { 
+        query: query.trim(), 
+        userId,
+        useSemanticSearch 
+      };
+
+      if (dateRange?.from) {
+        body.startDate = dateRange.from.toISOString();
+      }
+      if (dateRange?.to) {
+        body.endDate = dateRange.to.toISOString();
+      }
+
       const { data, error } = await supabase.functions.invoke("search-memory", {
-        body: { 
-          query: query.trim(), 
-          userId,
-          useSemanticSearch 
-        },
+        body,
       });
 
       if (error) throw error;
@@ -62,7 +75,45 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
         toast.info("No results found");
       } else {
         const searchType = useSemanticSearch ? "semantic" : "keyword";
-        toast.success(`Found ${data.total} matching messages using ${searchType} search`);
+        const dateInfo = dateRange?.from ? " in selected date range" : "";
+        toast.success(`Found ${data.total} matching messages using ${searchType} search${dateInfo}`);
+      }
+    } catch (error: any) {
+      toast.error("Search failed");
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOnThisDay = async () => {
+    if (!query.trim()) {
+      toast.error("Please enter a search query first");
+      return;
+    }
+
+    setLoading(true);
+    setIsOnThisDay(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("search-memory", {
+        body: { 
+          query: query.trim(), 
+          userId,
+          useSemanticSearch,
+          onThisDay: true
+        },
+      });
+
+      if (error) throw error;
+      setResults(data.results || []);
+      
+      const today = new Date();
+      const dateStr = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+      
+      if (data.total === 0) {
+        toast.info(`No memories found from ${dateStr} in past years`);
+      } else {
+        toast.success(`Found ${data.total} memories from ${dateStr} across all years`);
       }
     } catch (error: any) {
       toast.error("Search failed");
@@ -77,6 +128,8 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
     setOpen(false);
     setQuery("");
     setResults([]);
+    setDateRange(null);
+    setIsOnThisDay(false);
   };
 
   return (
@@ -114,23 +167,44 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
           </span>
         </div>
 
-        <div className="flex gap-2">
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            placeholder={useSemanticSearch 
-              ? "e.g., 'What did I say about crypto last month?'" 
-              : "e.g., 'bitcoin' or 'investment'"}
-            className="bg-input border-border"
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            <Input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+              placeholder={useSemanticSearch 
+                ? "e.g., 'What did I say about crypto last month?'" 
+                : "e.g., 'bitcoin' or 'investment'"}
+              className="bg-input border-border flex-1"
+            />
+            <Button
+              onClick={handleSearch}
+              disabled={loading || !query.trim()}
+              className="bg-primary hover:bg-primary-glow text-primary-foreground"
+            >
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            </Button>
+          </div>
+
+          <DateFilter 
+            onDateChange={setDateRange}
+            onThisDay={handleOnThisDay}
+            showOnThisDay={true}
           />
-          <Button
-            onClick={handleSearch}
-            disabled={loading || !query.trim()}
-            className="bg-primary hover:bg-primary-glow text-primary-foreground"
-          >
-            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-          </Button>
+
+          {isOnThisDay && (
+            <p className="text-xs text-muted-foreground">
+              Showing memories from {new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })} across all years
+            </p>
+          )}
+
+          {dateRange?.from && !isOnThisDay && (
+            <p className="text-xs text-muted-foreground">
+              Filtering from {dateRange.from.toLocaleDateString()} 
+              {dateRange.to ? ` to ${dateRange.to.toLocaleDateString()}` : ''}
+            </p>
+          )}
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-4 mt-4">

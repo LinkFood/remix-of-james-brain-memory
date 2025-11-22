@@ -4,9 +4,10 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, Download, BarChart3, Database } from "lucide-react";
+import { Search, Download, BarChart3, Database, Clock } from "lucide-react";
 import { toast } from "sonner";
 import MemoryStats from "./MemoryStats";
+import DateFilter from "./DateFilter";
 
 interface Memory {
   id: string;
@@ -24,18 +25,47 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined } | null>(null);
+  const [showingOnThisDay, setShowingOnThisDay] = useState(false);
 
   useEffect(() => {
     fetchMemories();
   }, []);
 
-  const fetchMemories = async () => {
+  const fetchMemories = async (dateFilter?: { from: Date | undefined; to: Date | undefined } | null, onThisDay?: boolean) => {
+    setLoading(true);
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("messages")
         .select("*")
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false });
+        .eq("user_id", userId);
+
+      if (onThisDay) {
+        const now = new Date();
+        const month = (now.getMonth() + 1).toString().padStart(2, '0');
+        const day = now.getDate().toString().padStart(2, '0');
+        
+        // Filter by month and day across all years
+        const { data, error } = await query;
+        if (error) throw error;
+        
+        const filtered = data?.filter(msg => {
+          const msgDate = new Date(msg.created_at);
+          return msgDate.getMonth() + 1 === parseInt(month) && msgDate.getDate() === parseInt(day);
+        }) || [];
+        
+        setMemories(filtered);
+        return;
+      }
+
+      if (dateFilter?.from) {
+        query = query.gte("created_at", dateFilter.from.toISOString());
+      }
+      if (dateFilter?.to) {
+        query = query.lte("created_at", dateFilter.to.toISOString());
+      }
+
+      const { data, error } = await query.order("created_at", { ascending: false });
 
       if (error) throw error;
       setMemories(data || []);
@@ -45,6 +75,21 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleOnThisDay = () => {
+    setShowingOnThisDay(true);
+    setDateRange(null);
+    fetchMemories(null, true);
+    const today = new Date();
+    const dateStr = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
+    toast.success(`Showing memories from ${dateStr} across all years`);
+  };
+
+  const handleDateChange = (range: { from: Date | undefined; to: Date | undefined } | null) => {
+    setDateRange(range);
+    setShowingOnThisDay(false);
+    fetchMemories(range, false);
   };
 
   const filteredMemories = memories.filter(
@@ -87,23 +132,46 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
       </TabsList>
 
       <TabsContent value="memories" className="space-y-6 animate-fade-in">
-        <div className="flex gap-4">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-muted-foreground" />
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search your memories..."
-              className="pl-10 bg-input border-border focus:ring-primary"
-            />
+        <div className="space-y-4">
+          <div className="flex gap-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-muted-foreground" />
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search your memories..."
+                className="pl-10 bg-input border-border focus:ring-primary"
+              />
+            </div>
+            <Button
+              onClick={handleExport}
+              className="bg-secondary hover:bg-secondary/80 text-secondary-foreground"
+            >
+              <Download className="w-4 h-4 mr-2" />
+              Export
+            </Button>
           </div>
-          <Button
-            onClick={handleExport}
-            className="bg-secondary hover:bg-secondary/80 text-secondary-foreground"
-          >
-            <Download className="w-4 h-4 mr-2" />
-            Export
-          </Button>
+
+          <div className="flex items-center justify-between">
+            <DateFilter 
+              onDateChange={handleDateChange}
+              onThisDay={handleOnThisDay}
+              showOnThisDay={true}
+            />
+
+            {showingOnThisDay && (
+              <p className="text-sm text-muted-foreground">
+                Showing memories from {new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric' })} across all years
+              </p>
+            )}
+
+            {dateRange?.from && !showingOnThisDay && (
+              <p className="text-sm text-muted-foreground">
+                Filtering from {dateRange.from.toLocaleDateString()} 
+                {dateRange.to ? ` to ${dateRange.to.toLocaleDateString()}` : ''}
+              </p>
+            )}
+          </div>
         </div>
 
         <div className="space-y-3">
