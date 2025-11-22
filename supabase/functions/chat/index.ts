@@ -69,7 +69,7 @@ serve(async (req) => {
       console.warn('Error generating user message embedding:', embErr);
     }
 
-    const { error: userMsgError } = await supabaseClient
+    const { data: userMessage, error: userMsgError } = await supabaseClient
       .from('messages')
       .insert({
         conversation_id: conversationId,
@@ -80,11 +80,25 @@ serve(async (req) => {
         provider: requestedProvider,
         token_count: userTokens,
         embedding: userEmbedding,
-      });
+      })
+      .select()
+      .single();
 
     if (userMsgError) {
       console.error('Error storing user message:', userMsgError);
       throw userMsgError;
+    }
+
+    // Score user message importance in background (fire and forget)
+    if (userMessage?.id) {
+      fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/calculate-importance`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ messageId: userMessage.id }),
+      }).catch(err => console.error('Error scoring user message:', err));
     }
 
     // Call appropriate LLM API based on provider
@@ -146,7 +160,7 @@ serve(async (req) => {
       console.warn('Error generating assistant message embedding:', embErr);
     }
 
-    const { error: assistantMsgError } = await supabaseClient
+    const { data: assistantMessage, error: assistantMsgError } = await supabaseClient
       .from('messages')
       .insert({
         conversation_id: conversationId,
@@ -158,11 +172,25 @@ serve(async (req) => {
         model_used,
         token_count: assistantTokens,
         embedding: assistantEmbedding,
-      });
+      })
+      .select()
+      .single();
 
     if (assistantMsgError) {
       console.error('Error storing assistant message:', assistantMsgError);
       throw assistantMsgError;
+    }
+
+    // Score assistant message importance in background (fire and forget)
+    if (assistantMessage?.id) {
+      fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/calculate-importance`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ messageId: assistantMessage.id }),
+      }).catch(err => console.error('Error scoring assistant message:', err));
     }
 
     return new Response(

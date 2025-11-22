@@ -3,17 +3,20 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { Send, Loader2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import ConversationSidebar from "./ConversationSidebar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { getImportanceLabel, getImportanceColor } from "./ImportanceFilter";
 
 interface Message {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
   created_at: string;
+  importance_score?: number | null;
 }
 
 interface ChatInterfaceProps {
@@ -85,6 +88,20 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // Poll for importance scores every 10 seconds if there are messages without scores
+  useEffect(() => {
+    if (!conversationId || messages.length === 0) return;
+
+    const hasUnscored = messages.some(m => m.importance_score === null || m.importance_score === undefined);
+    if (!hasUnscored) return;
+
+    const interval = setInterval(() => {
+      loadMessages();
+    }, 10000); // Poll every 10 seconds
+
+    return () => clearInterval(interval);
+  }, [conversationId, messages]);
 
   const initConversation = async () => {
     try {
@@ -283,7 +300,15 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
                     : "bg-secondary text-secondary-foreground"
                 }`}
               >
-                <p className="text-sm leading-relaxed">{msg.content}</p>
+                <p className="text-sm leading-relaxed mb-2">{msg.content}</p>
+                {msg.importance_score !== null && msg.importance_score !== undefined && (
+                  <Badge 
+                    variant="outline" 
+                    className={`text-xs ${getImportanceColor(msg.importance_score)} mt-2`}
+                  >
+                    {msg.importance_score} - {getImportanceLabel(msg.importance_score)}
+                  </Badge>
+                )}
               </div>
             </div>
           ))
