@@ -3,6 +3,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -11,18 +13,20 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { Search, Loader2, MessageSquare } from "lucide-react";
+import { Search, Loader2, MessageSquare, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 
 interface SearchResult {
   conversation_id: string;
   conversation_title: string;
+  similarity?: number;
   messages: {
     id: string;
     role: string;
     content: string;
     topic: string | null;
     created_at: string;
+    similarity?: number;
   }[];
 }
 
@@ -36,6 +40,7 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [useSemanticSearch, setUseSemanticSearch] = useState(true);
 
   const handleSearch = async () => {
     if (!query.trim()) return;
@@ -43,7 +48,11 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
     setLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke("search-memory", {
-        body: { query: query.trim(), userId },
+        body: { 
+          query: query.trim(), 
+          userId,
+          useSemanticSearch 
+        },
       });
 
       if (error) throw error;
@@ -52,7 +61,8 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
       if (data.total === 0) {
         toast.info("No results found");
       } else {
-        toast.success(`Found ${data.total} matching messages`);
+        const searchType = useSemanticSearch ? "semantic" : "keyword";
+        toast.success(`Found ${data.total} matching messages using ${searchType} search`);
       }
     } catch (error: any) {
       toast.error("Search failed");
@@ -81,16 +91,37 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
         <DialogHeader>
           <DialogTitle>Search Your Memory Vault</DialogTitle>
           <DialogDescription>
-            Search across all your conversations and memories
+            Search across all your conversations using AI-powered semantic search or keyword matching
           </DialogDescription>
         </DialogHeader>
+
+        <div className="flex items-center gap-4 pb-2 border-b border-border">
+          <div className="flex items-center gap-2">
+            <Switch 
+              id="semantic-search" 
+              checked={useSemanticSearch}
+              onCheckedChange={setUseSemanticSearch}
+            />
+            <Label htmlFor="semantic-search" className="flex items-center gap-2 cursor-pointer">
+              <Sparkles className="w-4 h-4 text-primary" />
+              <span className="text-sm">Semantic Search</span>
+            </Label>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {useSemanticSearch 
+              ? "AI understands meaning and context" 
+              : "Exact keyword matching"}
+          </span>
+        </div>
 
         <div className="flex gap-2">
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            placeholder="e.g., 'What did I say about BTC last week?'"
+            placeholder={useSemanticSearch 
+              ? "e.g., 'What did I say about crypto last month?'" 
+              : "e.g., 'bitcoin' or 'investment'"}
             className="bg-input border-border"
           />
           <Button
@@ -120,14 +151,26 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
                   <span className="text-xs text-muted-foreground ml-auto">
                     {result.messages.length} message{result.messages.length !== 1 ? "s" : ""}
                   </span>
+                  {result.messages[0]?.similarity && (
+                    <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded">
+                      {Math.round(result.messages[0].similarity * 100)}% match
+                    </span>
+                  )}
                 </div>
                 <div className="space-y-2">
                   {result.messages.slice(0, 3).map((msg) => (
                     <div key={msg.id} className="text-sm border-l-2 border-primary/30 pl-3">
                       <p className="text-foreground line-clamp-2">{msg.content}</p>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {new Date(msg.created_at).toLocaleDateString()}
-                      </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(msg.created_at).toLocaleDateString()}
+                        </p>
+                        {msg.similarity && (
+                          <span className="text-xs text-primary">
+                            {Math.round(msg.similarity * 100)}% relevant
+                          </span>
+                        )}
+                      </div>
                     </div>
                   ))}
                   {result.messages.length > 3 && (
