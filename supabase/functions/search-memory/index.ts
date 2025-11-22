@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { query, userId, useSemanticSearch } = await req.json();
+    const { query, userId, useSemanticSearch, startDate, endDate, onThisDay } = await req.json();
 
     if (!query || !userId) {
       throw new Error('Missing required fields');
@@ -24,6 +24,24 @@ serve(async (req) => {
     );
 
     let messages;
+    
+    // Build date filter conditions
+    let dateFilter = '';
+    if (onThisDay) {
+      // Get messages from this day in any year
+      const now = new Date();
+      const month = (now.getMonth() + 1).toString().padStart(2, '0');
+      const day = now.getDate().toString().padStart(2, '0');
+      dateFilter = `AND EXTRACT(MONTH FROM created_at) = ${month} AND EXTRACT(DAY FROM created_at) = ${day}`;
+    } else if (startDate || endDate) {
+      if (startDate && endDate) {
+        dateFilter = `AND created_at >= '${startDate}'::timestamptz AND created_at <= '${endDate}'::timestamptz`;
+      } else if (startDate) {
+        dateFilter = `AND created_at >= '${startDate}'::timestamptz`;
+      } else if (endDate) {
+        dateFilter = `AND created_at <= '${endDate}'::timestamptz`;
+      }
+    }
     
     // Use semantic search if requested and embeddings are available
     if (useSemanticSearch) {
@@ -47,17 +65,49 @@ serve(async (req) => {
         const queryEmbedding = embeddingData.embedding;
 
         // Use the semantic search function
-        const { data: semanticResults, error: semanticError } = await supabaseClient
-          .rpc('search_messages_by_embedding', {
-            query_embedding: queryEmbedding,
-            match_threshold: 0.3, // Minimum similarity threshold (0-1)
-            match_count: 50,
-            filter_user_id: userId,
-          });
-
-        if (semanticError) {
-          console.error('Semantic search error:', semanticError);
-          throw semanticError;
+        let semanticResults;
+        if (dateFilter) {
+          // Apply date filter after semantic search
+          const { data: allResults, error: semanticError } = await supabaseClient
+            .rpc('search_messages_by_embedding', {
+              query_embedding: queryEmbedding,
+              match_threshold: 0.3,
+              match_count: 200, // Get more to filter by date
+              filter_user_id: userId,
+            });
+          
+          if (semanticError) throw semanticError;
+          
+          // Apply date filter in JavaScript
+          const now = new Date();
+          semanticResults = allResults?.filter((msg: any) => {
+            const msgDate = new Date(msg.created_at);
+            
+            if (onThisDay) {
+              return msgDate.getMonth() === now.getMonth() && msgDate.getDate() === now.getDate();
+            }
+            
+            if (startDate && endDate) {
+              return msgDate >= new Date(startDate) && msgDate <= new Date(endDate);
+            } else if (startDate) {
+              return msgDate >= new Date(startDate);
+            } else if (endDate) {
+              return msgDate <= new Date(endDate);
+            }
+            
+            return true;
+          }).slice(0, 50);
+        } else {
+          const { data: results, error: semanticError } = await supabaseClient
+            .rpc('search_messages_by_embedding', {
+              query_embedding: queryEmbedding,
+              match_threshold: 0.3,
+              match_count: 50,
+              filter_user_id: userId,
+            });
+          
+          if (semanticError) throw semanticError;
+          semanticResults = results;
         }
 
         // Fetch conversation titles for semantic results
@@ -76,12 +126,26 @@ serve(async (req) => {
 
       } catch (semanticError) {
         console.error('Semantic search failed, falling back to keyword search:', semanticError);
-        // Fall back to keyword search
-        const { data: keywordResults, error: keywordError } = await supabaseClient
+        // Fall back to keyword search with date filter
+        let keywordQuery = supabaseClient
           .from('messages')
           .select('*, conversations!inner(title)')
           .eq('user_id', userId)
-          .or(`content.ilike.%${query}%,topic.ilike.%${query}%`)
+          .or(`content.ilike.%${query}%,topic.ilike.%${query}%`);
+
+        if (onThisDay) {
+          const now = new Date();
+          const month = now.getMonth() + 1;
+          const day = now.getDate();
+          keywordQuery = keywordQuery
+            .filter('created_at', 'gte', `1900-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`)
+            .filter('created_at', 'lte', `2100-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+        } else if (startDate || endDate) {
+          if (startDate) keywordQuery = keywordQuery.gte('created_at', startDate);
+          if (endDate) keywordQuery = keywordQuery.lte('created_at', endDate);
+        }
+
+        const { data: keywordResults, error: keywordError } = await keywordQuery
           .order('created_at', { ascending: false })
           .limit(50);
 
@@ -89,12 +153,26 @@ serve(async (req) => {
         messages = keywordResults;
       }
     } else {
-      // Standard keyword search
-      const { data: keywordResults, error: keywordError } = await supabaseClient
+      // Standard keyword search with date filter
+      let keywordQuery = supabaseClient
         .from('messages')
         .select('*, conversations!inner(title)')
         .eq('user_id', userId)
-        .or(`content.ilike.%${query}%,topic.ilike.%${query}%`)
+        .or(`content.ilike.%${query}%,topic.ilike.%${query}%`);
+
+      if (onThisDay) {
+        const now = new Date();
+        const month = now.getMonth() + 1;
+        const day = now.getDate();
+        keywordQuery = keywordQuery
+          .filter('created_at', 'gte', `1900-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`)
+          .filter('created_at', 'lte', `2100-${month.toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`);
+      } else if (startDate || endDate) {
+        if (startDate) keywordQuery = keywordQuery.gte('created_at', startDate);
+        if (endDate) keywordQuery = keywordQuery.lte('created_at', endDate);
+      }
+
+      const { data: keywordResults, error: keywordError } = await keywordQuery
         .order('created_at', { ascending: false })
         .limit(50);
 
