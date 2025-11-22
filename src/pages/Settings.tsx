@@ -101,7 +101,7 @@ const Settings = () => {
 
       toast.success("API key saved successfully");
       setApiKey("");
-      navigate("/");
+      navigate("/dashboard");
     } catch (error: any) {
       toast.error(error.message || "Failed to save API key");
     } finally {
@@ -175,7 +175,7 @@ const Settings = () => {
       setDataStats({ conversations: 0, messages: 0, dataSizeMB: 0 });
       
       // Redirect to home after short delay
-      setTimeout(() => navigate("/"), 1500);
+      setTimeout(() => navigate("/dashboard"), 1500);
     } catch (error: any) {
       toast.error(error.message || "Failed to delete data");
     } finally {
@@ -188,7 +188,7 @@ const Settings = () => {
       <Card className="w-full max-w-md p-8 bg-card border-border shadow-glow">
         <Button
           variant="ghost"
-          onClick={() => navigate("/")}
+          onClick={() => navigate("/dashboard")}
           className="mb-4"
         >
           <ArrowLeft className="w-4 h-4 mr-2" />
