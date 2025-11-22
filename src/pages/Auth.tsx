@@ -201,6 +201,14 @@ const Auth = () => {
               Big AI companies promise "we don't store your data." We promise "we <span className="text-primary font-semibold">DO</span> store your data... <span className="text-primary font-semibold">for YOU</span>." That's our competitive advantage—and your second brain.
             </p>
           </div>
+
+          <Button
+            variant="outline"
+            className="w-full mt-6 border-primary/20 hover:bg-primary/5"
+            onClick={() => navigate("/mission")}
+          >
+            Learn More About Our Mission
+          </Button>
         </Card>
       </div>
     </div>
