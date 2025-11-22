@@ -159,7 +159,23 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      search_messages_by_embedding: {
+        Args: {
+          filter_user_id: string
+          match_count: number
+          match_threshold: number
+          query_embedding: string
+        }
+        Returns: {
+          content: string
+          conversation_id: string
+          created_at: string
+          id: string
+          role: string
+          similarity: number
+          topic: string
+        }[]
+      }
     }
     Enums: {
       message_role: "user" | "assistant" | "system"

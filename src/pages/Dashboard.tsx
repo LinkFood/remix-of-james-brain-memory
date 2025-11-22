@@ -9,6 +9,7 @@ import ChatInterface from "@/components/ChatInterface";
 import MemoryVault from "@/components/MemoryVault";
 import GlobalSearch from "@/components/GlobalSearch";
 import UsageAnalytics from "@/components/UsageAnalytics";
+import BackfillEmbeddings from "@/components/BackfillEmbeddings";
 import { toast } from "sonner";
 
 const Dashboard = () => {
@@ -127,7 +128,10 @@ const Dashboard = () => {
           </TabsContent>
 
           <TabsContent value="analytics" className="mt-6 animate-fade-in">
-            <UsageAnalytics userId={user?.id ?? ""} />
+            <div className="space-y-6">
+              <BackfillEmbeddings userId={user?.id ?? ""} />
+              <UsageAnalytics userId={user?.id ?? ""} />
+            </div>
           </TabsContent>
         </Tabs>
       </main>

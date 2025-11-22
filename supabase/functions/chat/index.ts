@@ -45,8 +45,30 @@ serve(async (req) => {
 
     const { encrypted_key } = apiKeyData;
 
-    // Store user message with estimated token count
+    // Store user message with estimated token count and embedding
     const userTokens = estimateTokenCount(message);
+    let userEmbedding = null;
+    
+    try {
+      const embeddingResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/generate-embedding`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: message }),
+      });
+      
+      if (embeddingResponse.ok) {
+        const embeddingData = await embeddingResponse.json();
+        userEmbedding = JSON.stringify(embeddingData.embedding);
+      } else {
+        console.warn('Failed to generate user message embedding');
+      }
+    } catch (embErr) {
+      console.warn('Error generating user message embedding:', embErr);
+    }
+
     const { error: userMsgError } = await supabaseClient
       .from('messages')
       .insert({
@@ -57,6 +79,7 @@ serve(async (req) => {
         topic: await detectTopic(message),
         provider: requestedProvider,
         token_count: userTokens,
+        embedding: userEmbedding,
       });
 
     if (userMsgError) {
@@ -99,8 +122,30 @@ serve(async (req) => {
       throw new Error(`Failed to get response: ${apiError.message || 'Unknown error'}`);
     }
 
-    // Store assistant message with estimated token count
+    // Store assistant message with estimated token count and embedding
     const assistantTokens = estimateTokenCount(assistantResponse);
+    let assistantEmbedding = null;
+    
+    try {
+      const embeddingResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/generate-embedding`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ text: assistantResponse }),
+      });
+      
+      if (embeddingResponse.ok) {
+        const embeddingData = await embeddingResponse.json();
+        assistantEmbedding = JSON.stringify(embeddingData.embedding);
+      } else {
+        console.warn('Failed to generate assistant message embedding');
+      }
+    } catch (embErr) {
+      console.warn('Error generating assistant message embedding:', embErr);
+    }
+
     const { error: assistantMsgError } = await supabaseClient
       .from('messages')
       .insert({
@@ -112,6 +157,7 @@ serve(async (req) => {
         provider: requestedProvider,
         model_used,
         token_count: assistantTokens,
+        embedding: assistantEmbedding,
       });
 
     if (assistantMsgError) {

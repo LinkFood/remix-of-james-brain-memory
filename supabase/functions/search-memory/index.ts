@@ -12,7 +12,7 @@ serve(async (req) => {
   }
 
   try {
-    const { query, userId } = await req.json();
+    const { query, userId, useSemanticSearch } = await req.json();
 
     if (!query || !userId) {
       throw new Error('Missing required fields');
@@ -23,23 +23,88 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Search across all messages for the user
-    const { data: messages, error } = await supabaseClient
-      .from('messages')
-      .select('*, conversations!inner(title)')
-      .eq('user_id', userId)
-      .or(`content.ilike.%${query}%,topic.ilike.%${query}%`)
-      .order('created_at', { ascending: false })
-      .limit(50);
+    let messages;
+    
+    // Use semantic search if requested and embeddings are available
+    if (useSemanticSearch) {
+      try {
+        // Generate embedding for the search query
+        const embeddingResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/generate-embedding`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ text: query }),
+        });
 
-    if (error) {
-      console.error('Error searching messages:', error);
-      throw error;
+        if (!embeddingResponse.ok) {
+          console.error('Failed to generate query embedding, falling back to keyword search');
+          throw new Error('Embedding generation failed');
+        }
+
+        const embeddingData = await embeddingResponse.json();
+        const queryEmbedding = embeddingData.embedding;
+
+        // Use the semantic search function
+        const { data: semanticResults, error: semanticError } = await supabaseClient
+          .rpc('search_messages_by_embedding', {
+            query_embedding: queryEmbedding,
+            match_threshold: 0.3, // Minimum similarity threshold (0-1)
+            match_count: 50,
+            filter_user_id: userId,
+          });
+
+        if (semanticError) {
+          console.error('Semantic search error:', semanticError);
+          throw semanticError;
+        }
+
+        // Fetch conversation titles for semantic results
+        const conversationIds = [...new Set(semanticResults?.map((m: any) => m.conversation_id))];
+        const { data: conversations } = await supabaseClient
+          .from('conversations')
+          .select('id, title')
+          .in('id', conversationIds);
+
+        const convMap = new Map(conversations?.map(c => [c.id, c.title]) || []);
+
+        messages = semanticResults?.map((msg: any) => ({
+          ...msg,
+          conversations: { title: convMap.get(msg.conversation_id) || 'Untitled' }
+        }));
+
+      } catch (semanticError) {
+        console.error('Semantic search failed, falling back to keyword search:', semanticError);
+        // Fall back to keyword search
+        const { data: keywordResults, error: keywordError } = await supabaseClient
+          .from('messages')
+          .select('*, conversations!inner(title)')
+          .eq('user_id', userId)
+          .or(`content.ilike.%${query}%,topic.ilike.%${query}%`)
+          .order('created_at', { ascending: false })
+          .limit(50);
+
+        if (keywordError) throw keywordError;
+        messages = keywordResults;
+      }
+    } else {
+      // Standard keyword search
+      const { data: keywordResults, error: keywordError } = await supabaseClient
+        .from('messages')
+        .select('*, conversations!inner(title)')
+        .eq('user_id', userId)
+        .or(`content.ilike.%${query}%,topic.ilike.%${query}%`)
+        .order('created_at', { ascending: false })
+        .limit(50);
+
+      if (keywordError) throw keywordError;
+      messages = keywordResults;
     }
 
     // Group results by conversation
     const groupedResults: { [key: string]: any } = {};
-    messages?.forEach((msg) => {
+    messages?.forEach((msg: any) => {
       const convId = msg.conversation_id;
       if (!groupedResults[convId]) {
         groupedResults[convId] = {
@@ -54,6 +119,7 @@ serve(async (req) => {
         content: msg.content,
         topic: msg.topic,
         created_at: msg.created_at,
+        similarity: msg.similarity || undefined,
       });
     });
 
