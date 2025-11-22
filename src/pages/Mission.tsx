@@ -117,7 +117,7 @@ const Mission = () => {
                 key={example.id}
                 variant={activeExample === example.id ? "default" : "outline"}
                 onClick={() => setActiveExample(example.id)}
-                className="flex items-center gap-2"
+                className="flex items-center gap-2 transition-all hover-scale"
               >
                 <Database className="w-4 h-4" />
                 {example.title}
@@ -126,21 +126,27 @@ const Mission = () => {
           </div>
 
           {/* Memory Visualization */}
-          <Card className="p-8 bg-card border-border shadow-glow">
+          <Card 
+            key={activeExample} 
+            className="p-8 bg-card border-border shadow-glow animate-fade-in"
+          >
             <div className="space-y-6">
               {/* Context Being Injected */}
               {currentExample.context.length > 0 && (
-                <div className="space-y-3">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-primary">
-                    <Sparkles className="w-4 h-4" />
+                <div className="space-y-3 animate-fade-in">
+                  <div className="flex items-center gap-2 text-sm font-semibold text-primary animate-scale-in">
+                    <Sparkles className="w-4 h-4 animate-pulse" />
                     {currentExample.injectedMemories} Relevant Memories Injected
                   </div>
                   <div className="grid gap-2">
                     {currentExample.context.map((memory, idx) => (
                       <div
                         key={idx}
-                        className="p-3 bg-primary/5 border border-primary/20 rounded-lg text-sm text-foreground animate-fade-in"
-                        style={{ animationDelay: `${idx * 100}ms` }}
+                        className="p-3 bg-primary/5 border border-primary/20 rounded-lg text-sm text-foreground hover-scale transition-all opacity-0 animate-fade-in"
+                        style={{ 
+                          animationDelay: `${idx * 150}ms`,
+                          animationFillMode: 'forwards'
+                        }}
                       >
                         💾 {memory}
                       </div>
@@ -150,7 +156,7 @@ const Mission = () => {
               )}
 
               {currentExample.context.length === 0 && (
-                <div className="p-4 bg-muted/30 border border-border rounded-lg text-center">
+                <div className="p-4 bg-muted/30 border border-border rounded-lg text-center animate-fade-in">
                   <p className="text-muted-foreground text-sm">
                     No previous context available. Starting fresh.
                   </p>
@@ -158,42 +164,45 @@ const Mission = () => {
               )}
 
               {/* User Message */}
-              <div className="space-y-2">
+              <div className="space-y-2 opacity-0 animate-fade-in" style={{ animationDelay: '200ms', animationFillMode: 'forwards' }}>
                 <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                   Your Message
                 </div>
-                <div className="p-4 bg-secondary/50 border border-border rounded-lg">
+                <div className="p-4 bg-secondary/50 border border-border rounded-lg hover-scale transition-all">
                   <p className="text-foreground">{currentExample.userMessage}</p>
                 </div>
               </div>
 
               {/* AI Response */}
-              <div className="space-y-2">
+              <div className="space-y-2 opacity-0 animate-fade-in" style={{ animationDelay: '350ms', animationFillMode: 'forwards' }}>
                 <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
                   AI Response
                 </div>
-                <div className="p-4 bg-accent/10 border border-accent/20 rounded-lg">
+                <div className="p-4 bg-accent/10 border border-accent/20 rounded-lg hover-scale transition-all">
                   <p className="text-foreground">{currentExample.response}</p>
                 </div>
               </div>
 
               {/* Intelligence Indicator */}
-              <div className="flex items-center justify-between p-4 bg-primary/5 border border-primary/20 rounded-lg">
+              <div className="flex items-center justify-between p-4 bg-primary/5 border border-primary/20 rounded-lg opacity-0 animate-fade-in" style={{ animationDelay: '500ms', animationFillMode: 'forwards' }}>
                 <span className="text-sm font-semibold text-foreground">Context Awareness</span>
                 <div className="flex items-center gap-2">
                   <div className="flex gap-1">
                     {[...Array(3)].map((_, idx) => (
                       <div
                         key={idx}
-                        className={`w-2 h-8 rounded-full ${
+                        className={`w-2 h-8 rounded-full transition-all duration-500 ${
                           idx < currentExample.injectedMemories / 2
-                            ? "bg-primary"
+                            ? "bg-primary scale-110"
                             : "bg-border"
                         }`}
+                        style={{ 
+                          transitionDelay: `${idx * 100}ms`
+                        }}
                       />
                     ))}
                   </div>
-                  <span className="text-sm text-primary font-bold">
+                  <span className="text-sm text-primary font-bold animate-scale-in" style={{ animationDelay: '700ms' }}>
                     {currentExample.injectedMemories === 0
                       ? "None"
                       : currentExample.injectedMemories < 3
