@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { Brain, LogOut, MessageSquare, Database, TrendingUp, Clock, FileText } from "lucide-react";
+import { Brain, LogOut, MessageSquare, Database, TrendingUp, Clock, FileText, Network } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ChatInterface from "@/components/ChatInterface";
@@ -14,6 +14,7 @@ import TimelineView from "@/components/TimelineView";
 import BrainReports from "@/components/BrainReports";
 import BrainInsightsDashboard from "@/components/BrainInsightsDashboard";
 import ScoreExistingMessages from "@/components/ScoreExistingMessages";
+import KnowledgeGraph from "@/components/KnowledgeGraph";
 import { toast } from "sonner";
 
 const Dashboard = () => {
@@ -108,7 +109,7 @@ const Dashboard = () => {
 
       <main className="container mx-auto px-4 py-6">
         <Tabs defaultValue="chat" className="w-full">
-          <TabsList className="grid w-full max-w-4xl mx-auto grid-cols-6 bg-card border border-border">
+          <TabsList className="grid w-full max-w-4xl mx-auto grid-cols-7 bg-card border border-border">
             <TabsTrigger value="chat" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <MessageSquare className="w-4 h-4 mr-2" />
               Chat
@@ -128,6 +129,10 @@ const Dashboard = () => {
             <TabsTrigger value="insights" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Brain className="w-4 h-4 mr-2" />
               Insights
+            </TabsTrigger>
+            <TabsTrigger value="graph" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+              <Network className="w-4 h-4 mr-2" />
+              Graph
             </TabsTrigger>
             <TabsTrigger value="analytics" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <TrendingUp className="w-4 h-4 mr-2" />
@@ -153,6 +158,10 @@ const Dashboard = () => {
 
           <TabsContent value="insights" className="mt-6 animate-fade-in">
             <BrainInsightsDashboard userId={user?.id ?? ""} />
+          </TabsContent>
+
+          <TabsContent value="graph" className="mt-6 animate-fade-in">
+            <KnowledgeGraph userId={user?.id ?? ""} />
           </TabsContent>
 
           <TabsContent value="analytics" className="mt-6 animate-fade-in">
