@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { Brain, LogOut, MessageSquare, Database, TrendingUp, Clock, FileText, Network, Settings, Menu } from "lucide-react";
+import { Brain, LogOut, MessageSquare, Database, TrendingUp, Clock, FileText, Network, Settings, Menu, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import ChatInterface from "@/components/ChatInterface";
 import MemoryVault from "@/components/MemoryVault";
 import GlobalSearch from "@/components/GlobalSearch";
@@ -16,6 +17,7 @@ import BrainInsightsDashboard from "@/components/BrainInsightsDashboard";
 import ScoreExistingMessages from "@/components/ScoreExistingMessages";
 import KnowledgeGraph from "@/components/KnowledgeGraph";
 import Onboarding from "@/components/Onboarding";
+import { OnboardingWizard } from "@/components/OnboardingWizard";
 import MobileBottomNav from "@/components/MobileBottomNav";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -27,6 +29,9 @@ const Dashboard = () => {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("chat");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoConversationId, setDemoConversationId] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
@@ -44,7 +49,7 @@ const Dashboard = () => {
         .maybeSingle();
 
       if (!apiKey) {
-        navigate("/settings");
+        checkIfNewUser(session.user.id);
       }
       setLoading(false);
     });
@@ -60,6 +65,78 @@ const Dashboard = () => {
 
     return () => subscription.unsubscribe();
   }, [navigate]);
+
+  const checkIfNewUser = async (uid: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('user_api_keys')
+        .select('id')
+        .eq('user_id', uid)
+        .limit(1);
+
+      if (error) throw error;
+      
+      const { data: conversationData } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('user_id', uid)
+        .limit(1);
+
+      if ((!data || data.length === 0) && (!conversationData || conversationData.length === 0)) {
+        setShowOnboarding(true);
+      }
+    } catch (error) {
+      console.error('Error checking user status:', error);
+    }
+  };
+
+  const enableDemoMode = async () => {
+    if (!user?.id) return;
+    
+    try {
+      const { data: sampleConvs, error } = await supabase
+        .from('conversations')
+        .select('id')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+
+      if (sampleConvs && sampleConvs.length > 0) {
+        setDemoConversationId(sampleConvs[0].id);
+        setDemoMode(true);
+        setActiveTab("chat");
+        toast.success("Demo mode enabled - exploring sample conversation");
+      } else {
+        const { error: insertError } = await supabase.functions.invoke('insert-sample-data');
+        if (insertError) throw insertError;
+        
+        const { data: newConvs } = await supabase
+          .from('conversations')
+          .select('id')
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        
+        if (newConvs && newConvs.length > 0) {
+          setDemoConversationId(newConvs[0].id);
+          setDemoMode(true);
+          setActiveTab("chat");
+          toast.success("Demo mode enabled with sample data");
+        }
+      }
+    } catch (error: any) {
+      toast.error("Failed to enable demo mode");
+      console.error(error);
+    }
+  };
+
+  const disableDemoMode = () => {
+    setDemoMode(false);
+    setDemoConversationId(null);
+    toast.success("Demo mode disabled");
+  };
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -85,6 +162,13 @@ const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-gradient-bg pb-16 md:pb-0">
+      {showOnboarding && user?.id && (
+        <OnboardingWizard
+          isOpen={showOnboarding}
+          onComplete={() => setShowOnboarding(false)}
+          userId={user.id}
+        />
+      )}
       <Onboarding userId={user?.id ?? ""} />
       
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
@@ -186,6 +270,15 @@ const Dashboard = () => {
           <div className="hidden md:flex items-center gap-2">
             <GlobalSearch userId={user?.id ?? ""} onSelectConversation={setSelectedConversationId} />
             <Button
+              onClick={demoMode ? disableDemoMode : enableDemoMode}
+              variant="outline"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Play className="w-4 h-4 mr-2" />
+              {demoMode ? 'Exit Demo' : 'Demo Mode'}
+            </Button>
+            <Button
               onClick={() => navigate("/settings")}
               variant="ghost"
               size="sm"
@@ -205,6 +298,16 @@ const Dashboard = () => {
           </div>
         </div>
       </header>
+
+      {demoMode && (
+        <div className="container mx-auto px-4 pt-4">
+          <Alert>
+            <AlertDescription>
+              Demo Mode: Exploring sample conversations with pre-populated data. Exit demo to start fresh.
+            </AlertDescription>
+          </Alert>
+        </div>
+      )}
 
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -240,7 +343,11 @@ const Dashboard = () => {
           </TabsList>
 
           <TabsContent value="chat" className="mt-6 animate-fade-in">
-            <ChatInterface userId={user?.id ?? ""} key={selectedConversationId} initialConversationId={selectedConversationId} />
+            <ChatInterface 
+              userId={user?.id ?? ""} 
+              key={demoMode ? demoConversationId : selectedConversationId} 
+              initialConversationId={demoMode ? demoConversationId : selectedConversationId} 
+            />
           </TabsContent>
 
           <TabsContent value="memory" className="mt-6 animate-fade-in">
