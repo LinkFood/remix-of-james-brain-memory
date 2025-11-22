@@ -24,3 +24,6 @@ verify_jwt = true
 [functions.delete-all-user-data]
 verify_jwt = true
 
+[functions.insert-sample-data]
+verify_jwt = true
+
