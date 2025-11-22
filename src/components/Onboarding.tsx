@@ -27,33 +27,33 @@ const Onboarding = ({ userId }: OnboardingProps) => {
   const steps = [
     {
       icon: Brain,
-      title: "Welcome to Your AI Memory Vault",
-      description: "Store and retrieve your conversations with AI assistants. Every interaction is automatically saved, scored, and made searchable.",
+      title: "Your AI Memory. Your Data. Your Control.",
+      description: "James Brain OS is the missing layer between you and every AI you talk to. We capture, score, and store your conversations—creating a persistent memory that makes every chat smarter by learning from all your past interactions.",
     },
     {
       icon: MessageSquare,
-      title: "Chat & Remember",
-      description: "Start conversations with multiple AI providers (OpenAI, Anthropic, Google). The AI remembers context from your past conversations automatically.",
+      title: "Cross-Platform, Compounding Intelligence",
+      description: "Chat with OpenAI, Anthropic, Google, or any LLM through one interface. Your context travels with you—switch providers anytime while keeping your memory intact. Every conversation compounds into one unified brain.",
     },
     {
       icon: Database,
-      title: "Memory Vault",
-      description: "Browse all your saved messages, search by content or topic, filter by importance, and export your data anytime. You own your memories.",
+      title: "You Own Your Data (For Real)",
+      description: "Unlike ChatGPT or Claude, YOU control everything. Export your entire history in any format. Delete it permanently with one click. Import chats from other platforms. It's your data—stored for you, not mined by us.",
     },
     {
       icon: TrendingUp,
-      title: "Analytics & Insights",
-      description: "Track your AI usage, token consumption, and costs. Generate brain reports to see themes, decisions, and patterns over time.",
+      title: "Smart Memory Injection",
+      description: "High-importance memories are automatically injected into future conversations. The AI sees relevant context from weeks or months ago, making every response more personalized and accurate over time.",
     },
     {
       icon: Share2,
-      title: "Batch Operations",
-      description: "Select multiple conversations to delete or export at once. Manage your data efficiently with bulk actions.",
+      title: "Radical Transparency",
+      description: "We tell you exactly what we're doing: every message captured, every memory scored, every context injected. No hidden data mining, no selling your conversations, no training proprietary models on your data.",
     },
     {
       icon: Settings,
-      title: "Get Started",
-      description: "First, add your API keys in Settings. Then start chatting! Sample data is already loaded for you to explore.",
+      title: "Ready to Build Your Brain?",
+      description: "Add your API key in Settings to start. Your conversations become a valuable, portable dataset that makes AI work better for YOU. Think of it as a USB drive of years of AI chats—except it actually makes the AI smarter.",
     },
   ];
 

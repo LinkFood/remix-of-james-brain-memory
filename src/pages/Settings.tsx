@@ -245,14 +245,38 @@ const Settings = () => {
           </Button>
         </form>
 
-        <div className="mt-6 p-4 bg-muted rounded-lg">
-          <p className="text-sm text-muted-foreground">
-            <strong>Your API Key. Your Data. Your Control.</strong><br />
-            We use YOUR API key to make requests on your behalf, but we capture and store 
-            everything so you never lose your conversations. Unlike ChatGPT or Claude, 
-            you have total control over your data.
-          </p>
-        </div>
+        {/* Mission Statement */}
+        <Card className="mt-6 p-5 bg-gradient-to-br from-primary/10 via-primary/5 to-transparent border-primary/30">
+          <div className="flex items-start gap-3 mb-3">
+            <Brain className="w-5 h-5 text-primary mt-0.5" />
+            <div>
+              <h3 className="font-bold text-foreground text-sm mb-1">The James Brain OS Mission</h3>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                Your AI conversations are valuable. Every insight, decision, and thought compounds over time. 
+                We capture, score, and store everything—not to exploit your data, but to give YOU a portable, 
+                searchable AI memory that works across all LLM providers.
+              </p>
+            </div>
+          </div>
+          <div className="space-y-1.5 text-xs text-foreground/90 pl-8">
+            <div className="flex items-start gap-2">
+              <span className="text-primary font-bold">✓</span>
+              <span><strong>Your data, your control:</strong> Export, import, or delete anytime</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="text-primary font-bold">✓</span>
+              <span><strong>Cross-platform memory:</strong> Switch LLMs, keep your context</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="text-primary font-bold">✓</span>
+              <span><strong>Compounding intelligence:</strong> Every chat makes the next one smarter</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="text-primary font-bold">✓</span>
+              <span><strong>Radical transparency:</strong> You see exactly what we're doing</span>
+            </div>
+          </div>
+        </Card>
 
         <Separator className="my-8" />
 
