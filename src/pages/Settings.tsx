@@ -115,18 +115,29 @@ const Settings = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const { data, error } = await supabase.functions.invoke('export-all-data', {
-        body: { userId: user.id, format: exportFormat }
-      });
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("No active session");
 
-      if (error) throw error;
+      // Use direct fetch for file download
+      const response = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/export-all-data`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${session.access_token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ userId: user.id, format: exportFormat })
+        }
+      );
 
-      // Create blob and download
-      const blob = new Blob([data], { 
-        type: exportFormat === 'json' ? 'application/json' : 
-              exportFormat === 'csv' ? 'text/csv' : 
-              exportFormat === 'md' ? 'text/markdown' : 'text/plain'
-      });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Export failed');
+      }
+
+      // Get the blob from response
+      const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -138,6 +149,7 @@ const Settings = () => {
 
       toast.success(`Data exported as ${exportFormat.toUpperCase()}`);
     } catch (error: any) {
+      console.error('Export error:', error);
       toast.error(error.message || "Failed to export data");
     } finally {
       setExportLoading(false);
