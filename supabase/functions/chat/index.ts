@@ -12,30 +12,38 @@ serve(async (req) => {
   }
 
   try {
-    const { message, conversationId, userId } = await req.json();
+    const { message, conversationId, userId, provider, model } = await req.json();
 
     if (!message || !conversationId || !userId) {
       throw new Error('Missing required fields');
     }
+
+    const requestedProvider = provider || 'openai';
+    const requestedModel = model || 'gpt-4o-mini';
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Fetch user's API key
+    // Fetch user's API key for the requested provider
     const { data: apiKeyData, error: keyError } = await supabaseClient
       .from('user_api_keys')
       .select('provider, encrypted_key')
       .eq('user_id', userId)
-      .eq('is_default', true)
-      .single();
+      .eq('provider', requestedProvider)
+      .maybeSingle();
 
-    if (keyError || !apiKeyData) {
-      throw new Error('No API key configured. Please add one in Settings.');
+    if (keyError) {
+      console.error('API key fetch error:', keyError);
+      throw new Error('Failed to fetch API key');
     }
 
-    const { provider, encrypted_key } = apiKeyData;
+    if (!apiKeyData) {
+      throw new Error(`No ${requestedProvider} API key found. Please add one in Settings.`);
+    }
+
+    const { encrypted_key } = apiKeyData;
 
     // Store user message
     const { error: userMsgError } = await supabaseClient
@@ -46,7 +54,7 @@ serve(async (req) => {
         role: 'user',
         content: message,
         topic: await detectTopic(message),
-        provider,
+        provider: requestedProvider,
       });
 
     if (userMsgError) {
@@ -58,20 +66,35 @@ serve(async (req) => {
     let assistantResponse: string;
     let model_used: string;
     
-    if (provider === 'openai') {
-      const result = await callOpenAI(encrypted_key, message);
-      assistantResponse = result.response;
-      model_used = result.model;
-    } else if (provider === 'anthropic') {
-      const result = await callAnthropic(encrypted_key, message);
-      assistantResponse = result.response;
-      model_used = result.model;
-    } else if (provider === 'google') {
-      const result = await callGoogle(encrypted_key, message);
-      assistantResponse = result.response;
-      model_used = result.model;
-    } else {
-      throw new Error('Unsupported provider');
+    try {
+      if (requestedProvider === 'openai') {
+        const result = await callOpenAI(encrypted_key, message, requestedModel);
+        assistantResponse = result.response;
+        model_used = result.model;
+      } else if (requestedProvider === 'anthropic') {
+        const result = await callAnthropic(encrypted_key, message, requestedModel);
+        assistantResponse = result.response;
+        model_used = result.model;
+      } else if (requestedProvider === 'google') {
+        const result = await callGoogle(encrypted_key, message, requestedModel);
+        assistantResponse = result.response;
+        model_used = result.model;
+      } else {
+        throw new Error(`Unsupported provider: ${requestedProvider}`);
+      }
+    } catch (apiError: any) {
+      console.error(`${requestedProvider} API error:`, apiError);
+      
+      const errorMsg = apiError.message?.toLowerCase() || '';
+      if (errorMsg.includes('rate_limit') || errorMsg.includes('rate limit')) {
+        throw new Error('Rate limit exceeded. Please try again later.');
+      } else if (errorMsg.includes('quota') || errorMsg.includes('insufficient')) {
+        throw new Error('API quota exceeded. Please check your billing.');
+      } else if (errorMsg.includes('invalid') || errorMsg.includes('authentication') || errorMsg.includes('unauthorized')) {
+        throw new Error('Invalid API key. Please check your settings.');
+      }
+      
+      throw new Error(`Failed to get response: ${apiError.message || 'Unknown error'}`);
     }
 
     // Store assistant message
@@ -83,7 +106,7 @@ serve(async (req) => {
         role: 'assistant',
         content: assistantResponse,
         topic: await detectTopic(assistantResponse),
-        provider,
+        provider: requestedProvider,
         model_used,
       });
 
@@ -111,7 +134,7 @@ serve(async (req) => {
   }
 });
 
-async function callOpenAI(apiKey: string, message: string) {
+async function callOpenAI(apiKey: string, message: string, model: string = 'gpt-4o-mini') {
   const response = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -119,7 +142,7 @@ async function callOpenAI(apiKey: string, message: string) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'gpt-4o-mini',
+      model: model,
       messages: [
         { role: 'system', content: 'You are a helpful AI assistant.' },
         { role: 'user', content: message }
@@ -130,17 +153,31 @@ async function callOpenAI(apiKey: string, message: string) {
   if (!response.ok) {
     const errorText = await response.text();
     console.error('OpenAI error:', response.status, errorText);
+    
+    let errorData;
+    try {
+      errorData = JSON.parse(errorText);
+    } catch {}
+    
+    if (response.status === 429) {
+      throw new Error('Rate limit exceeded');
+    } else if (response.status === 401) {
+      throw new Error('Invalid API key');
+    } else if (errorData?.error?.message) {
+      throw new Error(errorData.error.message);
+    }
+    
     throw new Error('OpenAI API error');
   }
 
   const data = await response.json();
   return {
     response: data.choices?.[0]?.message?.content || 'No response',
-    model: data.model || 'gpt-4o-mini'
+    model: data.model || model
   };
 }
 
-async function callAnthropic(apiKey: string, message: string) {
+async function callAnthropic(apiKey: string, message: string, model: string = 'claude-3-5-sonnet-20241022') {
   const response = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
@@ -149,7 +186,7 @@ async function callAnthropic(apiKey: string, message: string) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-3-5-sonnet-20241022',
+      model: model,
       max_tokens: 1024,
       messages: [
         { role: 'user', content: message }
@@ -160,18 +197,32 @@ async function callAnthropic(apiKey: string, message: string) {
   if (!response.ok) {
     const errorText = await response.text();
     console.error('Anthropic error:', response.status, errorText);
+    
+    let errorData;
+    try {
+      errorData = JSON.parse(errorText);
+    } catch {}
+    
+    if (response.status === 429) {
+      throw new Error('Rate limit exceeded');
+    } else if (response.status === 401) {
+      throw new Error('Invalid API key');
+    } else if (errorData?.error?.message) {
+      throw new Error(errorData.error.message);
+    }
+    
     throw new Error('Anthropic API error');
   }
 
   const data = await response.json();
   return {
     response: data.content?.[0]?.text || 'No response',
-    model: data.model || 'claude-3-5-sonnet-20241022'
+    model: data.model || model
   };
 }
 
-async function callGoogle(apiKey: string, message: string) {
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`, {
+async function callGoogle(apiKey: string, message: string, model: string = 'gemini-pro') {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -186,13 +237,27 @@ async function callGoogle(apiKey: string, message: string) {
   if (!response.ok) {
     const errorText = await response.text();
     console.error('Google error:', response.status, errorText);
+    
+    let errorData;
+    try {
+      errorData = JSON.parse(errorText);
+    } catch {}
+    
+    if (response.status === 429) {
+      throw new Error('Rate limit exceeded');
+    } else if (response.status === 403 || response.status === 401) {
+      throw new Error('Invalid API key');
+    } else if (errorData?.error?.message) {
+      throw new Error(errorData.error.message);
+    }
+    
     throw new Error('Google API error');
   }
 
   const data = await response.json();
   return {
     response: data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response',
-    model: 'gemini-pro'
+    model: model
   };
 }
 
