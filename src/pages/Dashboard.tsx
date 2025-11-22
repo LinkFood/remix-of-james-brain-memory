@@ -7,12 +7,14 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ChatInterface from "@/components/ChatInterface";
 import MemoryVault from "@/components/MemoryVault";
+import GlobalSearch from "@/components/GlobalSearch";
 import { toast } from "sonner";
 
 const Dashboard = () => {
   const navigate = useNavigate();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -62,19 +64,22 @@ const Dashboard = () => {
               <p className="text-xs text-muted-foreground">Memory Shell v1.0</p>
             </div>
           </div>
-          <Button
-            onClick={handleSignOut}
-            variant="ghost"
-            size="sm"
-            className="text-muted-foreground hover:text-foreground"
-          >
-            <LogOut className="w-4 h-4 mr-2" />
-            Sign Out
-          </Button>
+          <div className="flex items-center gap-2">
+            <GlobalSearch userId={user?.id ?? ""} onSelectConversation={setSelectedConversationId} />
+            <Button
+              onClick={handleSignOut}
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <LogOut className="w-4 h-4 mr-2" />
+              Sign Out
+            </Button>
+          </div>
         </div>
       </header>
 
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-4 py-6">
         <Tabs defaultValue="chat" className="w-full">
           <TabsList className="grid w-full max-w-md mx-auto grid-cols-2 bg-card border border-border">
             <TabsTrigger value="chat" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
@@ -87,11 +92,11 @@ const Dashboard = () => {
             </TabsTrigger>
           </TabsList>
 
-          <TabsContent value="chat" className="mt-8 animate-fade-in">
-            <ChatInterface userId={user?.id ?? ""} />
+          <TabsContent value="chat" className="mt-6 animate-fade-in">
+            <ChatInterface userId={user?.id ?? ""} key={selectedConversationId} initialConversationId={selectedConversationId} />
           </TabsContent>
 
-          <TabsContent value="memory" className="mt-8 animate-fade-in">
+          <TabsContent value="memory" className="mt-6 animate-fade-in">
             <MemoryVault userId={user?.id ?? ""} />
           </TabsContent>
         </Tabs>
