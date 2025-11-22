@@ -2,9 +2,10 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Plus, MessageSquare, Trash2 } from "lucide-react";
+import { Plus, MessageSquare, Trash2, Edit2, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 
 interface Conversation {
   id: string;
@@ -28,6 +29,8 @@ const ConversationSidebar = ({
 }: ConversationSidebarProps) => {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
 
   useEffect(() => {
     fetchConversations();
@@ -69,6 +72,45 @@ const ConversationSidebar = ({
     }
   };
 
+  const startEdit = (e: React.MouseEvent, conv: Conversation) => {
+    e.stopPropagation();
+    setEditingId(conv.id);
+    setEditTitle(conv.title || "");
+  };
+
+  const cancelEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingId(null);
+    setEditTitle("");
+  };
+
+  const saveEdit = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!editTitle.trim()) {
+      toast.error("Title cannot be empty");
+      return;
+    }
+
+    try {
+      const { error } = await supabase
+        .from("conversations")
+        .update({ title: editTitle.trim() })
+        .eq("id", id);
+
+      if (error) throw error;
+
+      setConversations((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, title: editTitle.trim() } : c))
+      );
+      setEditingId(null);
+      setEditTitle("");
+      toast.success("Conversation renamed");
+    } catch (error: any) {
+      toast.error("Failed to rename conversation");
+      console.error(error);
+    }
+  };
+
   return (
     <div className="w-64 border-r border-border bg-card/30 flex flex-col">
       <div className="p-4 border-b border-border">
@@ -93,31 +135,74 @@ const ConversationSidebar = ({
             conversations.map((conv) => (
               <div
                 key={conv.id}
-                onClick={() => onSelectConversation(conv.id)}
+                onClick={() => editingId !== conv.id && onSelectConversation(conv.id)}
                 className={cn(
                   "group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-all hover:bg-secondary/80",
                   currentConversationId === conv.id && "bg-secondary border border-primary/30"
                 )}
               >
-                <div className="flex items-center gap-2 flex-1 min-w-0">
-                  <MessageSquare className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-foreground truncate">
-                      {conv.title}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(conv.updated_at).toLocaleDateString()}
-                    </p>
+                {editingId === conv.id ? (
+                  <div className="flex items-center gap-2 flex-1" onClick={(e) => e.stopPropagation()}>
+                    <Input
+                      value={editTitle}
+                      onChange={(e) => setEditTitle(e.target.value)}
+                      className="h-8 text-sm"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveEdit(e as any, conv.id);
+                        if (e.key === "Escape") cancelEdit(e as any);
+                      }}
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={(e) => saveEdit(e, conv.id)}
+                    >
+                      <Check className="w-4 h-4 text-green-600" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={cancelEdit}
+                    >
+                      <X className="w-4 h-4 text-destructive" />
+                    </Button>
                   </div>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8"
-                  onClick={(e) => handleDelete(e, conv.id)}
-                >
-                  <Trash2 className="w-4 h-4 text-destructive" />
-                </Button>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                      <MessageSquare className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-foreground truncate">
+                          {conv.title}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {new Date(conv.updated_at).toLocaleDateString()}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={(e) => startEdit(e, conv)}
+                      >
+                        <Edit2 className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8"
+                        onClick={(e) => handleDelete(e, conv.id)}
+                      >
+                        <Trash2 className="w-4 h-4 text-destructive" />
+                      </Button>
+                    </div>
+                  </>
+                )}
               </div>
             ))
           )}
