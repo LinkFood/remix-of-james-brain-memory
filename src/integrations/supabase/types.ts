@@ -58,22 +58,31 @@ export type Database = {
       }
       conversations: {
         Row: {
+          archived: boolean | null
           created_at: string
           id: string
+          pinned: boolean | null
+          tags: string[] | null
           title: string | null
           updated_at: string
           user_id: string
         }
         Insert: {
+          archived?: boolean | null
           created_at?: string
           id?: string
+          pinned?: boolean | null
+          tags?: string[] | null
           title?: string | null
           updated_at?: string
           user_id: string
         }
         Update: {
+          archived?: boolean | null
           created_at?: string
           id?: string
+          pinned?: boolean | null
+          tags?: string[] | null
           title?: string | null
           updated_at?: string
           user_id?: string
@@ -93,12 +102,15 @@ export type Database = {
           content: string
           conversation_id: string
           created_at: string
+          edit_history: Json | null
+          edited: boolean | null
           embedding: string | null
           id: string
           importance_score: number | null
           model_used: string | null
           provider: string | null
           role: Database["public"]["Enums"]["message_role"]
+          starred: boolean | null
           token_count: number | null
           topic: string | null
           user_id: string
@@ -107,12 +119,15 @@ export type Database = {
           content: string
           conversation_id: string
           created_at?: string
+          edit_history?: Json | null
+          edited?: boolean | null
           embedding?: string | null
           id?: string
           importance_score?: number | null
           model_used?: string | null
           provider?: string | null
           role: Database["public"]["Enums"]["message_role"]
+          starred?: boolean | null
           token_count?: number | null
           topic?: string | null
           user_id: string
@@ -121,12 +136,15 @@ export type Database = {
           content?: string
           conversation_id?: string
           created_at?: string
+          edit_history?: Json | null
+          edited?: boolean | null
           embedding?: string | null
           id?: string
           importance_score?: number | null
           model_used?: string | null
           provider?: string | null
           role?: Database["public"]["Enums"]["message_role"]
+          starred?: boolean | null
           token_count?: number | null
           topic?: string | null
           user_id?: string
