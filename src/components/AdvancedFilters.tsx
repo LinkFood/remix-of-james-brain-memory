@@ -7,6 +7,7 @@ import { Slider } from "@/components/ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Filter, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import ImportanceFilter from "./ImportanceFilter";
 
 export interface AdvancedFilterOptions {
@@ -18,6 +19,10 @@ export interface AdvancedFilterOptions {
   maxDuration?: number;
   minImportance?: number;
   maxImportance?: number;
+  hasEmbedding?: boolean;
+  role?: string;
+  minTokens?: number;
+  maxTokens?: number;
 }
 
 interface AdvancedFiltersProps {
@@ -238,6 +243,77 @@ const AdvancedFilters = ({ onFilterChange, currentFilters }: AdvancedFiltersProp
               onMaxChange={(value) => setLocalFilters({ ...localFilters, maxImportance: value })}
               onReset={() => setLocalFilters({ ...localFilters, minImportance: undefined, maxImportance: undefined })}
             />
+          </div>
+
+          {/* Additional Filters */}
+          <div className="space-y-3 pt-4 border-t border-border">
+            <Label className="text-sm font-semibold">Additional Filters</Label>
+            
+            <div className="flex items-center justify-between">
+              <Label htmlFor="has-embedding" className="text-sm">Has Embedding</Label>
+              <Switch
+                id="has-embedding"
+                checked={localFilters.hasEmbedding || false}
+                onCheckedChange={(checked) => 
+                  setLocalFilters({ ...localFilters, hasEmbedding: checked })
+                }
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="role-filter">Message Role</Label>
+              <Select
+                value={localFilters.role || "all"}
+                onValueChange={(value) =>
+                  setLocalFilters({ ...localFilters, role: value === "all" ? undefined : value })
+                }
+              >
+                <SelectTrigger id="role-filter" className="bg-input border-border">
+                  <SelectValue placeholder="All roles" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Roles</SelectItem>
+                  <SelectItem value="user">User</SelectItem>
+                  <SelectItem value="assistant">Assistant</SelectItem>
+                  <SelectItem value="system">System</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-2">
+                <Label htmlFor="min-tokens" className="text-xs">Min Tokens</Label>
+                <Input
+                  id="min-tokens"
+                  type="number"
+                  placeholder="0"
+                  value={localFilters.minTokens || ""}
+                  onChange={(e) =>
+                    setLocalFilters({
+                      ...localFilters,
+                      minTokens: e.target.value ? Number(e.target.value) : undefined
+                    })
+                  }
+                  className="bg-input border-border"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="max-tokens" className="text-xs">Max Tokens</Label>
+                <Input
+                  id="max-tokens"
+                  type="number"
+                  placeholder="∞"
+                  value={localFilters.maxTokens || ""}
+                  onChange={(e) =>
+                    setLocalFilters({
+                      ...localFilters,
+                      maxTokens: e.target.value ? Number(e.target.value) : undefined
+                    })
+                  }
+                  className="bg-input border-border"
+                />
+              </div>
+            </div>
           </div>
 
           {/* Apply Button */}
