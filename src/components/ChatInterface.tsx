@@ -473,7 +473,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
                       <Collapsible>
                         <CollapsibleTrigger asChild>
                           <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 hover:bg-background/10">
-                            💭 Used {msg.memoriesUsed} {msg.memoriesUsed === 1 ? 'memory' : 'memories'}
+                            Used {msg.memoriesUsed} {msg.memoriesUsed === 1 ? 'memory' : 'memories'}
                             <ChevronDown className="h-3 w-3" />
                           </Button>
                         </CollapsibleTrigger>
