@@ -16,6 +16,7 @@ import {
 import { Search, Loader2, MessageSquare, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import DateFilter from "./DateFilter";
+import AdvancedFilters, { AdvancedFilterOptions } from "./AdvancedFilters";
 
 interface SearchResult {
   conversation_id: string;
@@ -44,6 +45,7 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
   const [useSemanticSearch, setUseSemanticSearch] = useState(true);
   const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined } | null>(null);
   const [isOnThisDay, setIsOnThisDay] = useState(false);
+  const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilterOptions>({});
 
   const handleSearch = async () => {
     if (!query.trim()) return;
@@ -54,7 +56,8 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
       const body: any = { 
         query: query.trim(), 
         userId,
-        useSemanticSearch 
+        useSemanticSearch,
+        ...advancedFilters
       };
 
       if (dateRange?.from) {
@@ -100,7 +103,8 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
           query: query.trim(), 
           userId,
           useSemanticSearch,
-          onThisDay: true
+          onThisDay: true,
+          ...advancedFilters
         },
       });
 
@@ -130,6 +134,7 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
     setResults([]);
     setDateRange(null);
     setIsOnThisDay(false);
+    setAdvancedFilters({});
   };
 
   return (
@@ -187,11 +192,18 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
             </Button>
           </div>
 
-          <DateFilter 
-            onDateChange={setDateRange}
-            onThisDay={handleOnThisDay}
-            showOnThisDay={true}
-          />
+          <div className="flex gap-2 flex-wrap">
+            <DateFilter 
+              onDateChange={setDateRange}
+              onThisDay={handleOnThisDay}
+              showOnThisDay={true}
+            />
+            
+            <AdvancedFilters
+              onFilterChange={setAdvancedFilters}
+              currentFilters={advancedFilters}
+            />
+          </div>
 
           {isOnThisDay && (
             <p className="text-xs text-muted-foreground">
@@ -203,6 +215,12 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
             <p className="text-xs text-muted-foreground">
               Filtering from {dateRange.from.toLocaleDateString()} 
               {dateRange.to ? ` to ${dateRange.to.toLocaleDateString()}` : ''}
+            </p>
+          )}
+
+          {Object.keys(advancedFilters).length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              Active filters: {Object.keys(advancedFilters).length}
             </p>
           )}
         </div>
