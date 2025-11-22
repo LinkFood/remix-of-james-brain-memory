@@ -4,7 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Send, Loader2, AlertCircle } from "lucide-react";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Send, Loader2, AlertCircle, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import ConversationSidebar from "./ConversationSidebar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -17,6 +18,13 @@ interface Message {
   content: string;
   created_at: string;
   importance_score?: number | null;
+  memoriesUsed?: number;
+  memories?: Array<{
+    snippet: string;
+    similarity: number;
+    importance: number | null;
+    created_at: string | null;
+  }>;
 }
 
 interface ChatInterfaceProps {
@@ -184,6 +192,8 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
         role: "assistant",
         content: data.response,
         created_at: new Date().toISOString(),
+        memoriesUsed: data.memoriesUsed || 0,
+        memories: data.memories || [],
       };
       setMessages((prev) => [...prev, assistantMsg]);
       
@@ -308,6 +318,31 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
                   >
                     {msg.importance_score} - {getImportanceLabel(msg.importance_score)}
                   </Badge>
+                )}
+                {msg.role === "assistant" && msg.memoriesUsed && msg.memoriesUsed > 0 && (
+                  <div className="mt-2">
+                    <Collapsible>
+                      <CollapsibleTrigger asChild>
+                        <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 hover:bg-background/10">
+                          💭 Used {msg.memoriesUsed} {msg.memoriesUsed === 1 ? 'memory' : 'memories'}
+                          <ChevronDown className="h-3 w-3" />
+                        </Button>
+                      </CollapsibleTrigger>
+                      <CollapsibleContent className="mt-2 space-y-2">
+                        {msg.memories?.map((mem, i) => (
+                          <div key={i} className="text-xs p-2 rounded bg-background/20 border border-border/30">
+                            <div className="text-muted-foreground mb-1">
+                              {mem.snippet}...
+                            </div>
+                            <div className="flex gap-2 text-[10px] text-muted-foreground/70">
+                              <span>{(mem.similarity * 100).toFixed(0)}% match</span>
+                              {mem.importance && <span>• Importance: {mem.importance}</span>}
+                            </div>
+                          </div>
+                        ))}
+                      </CollapsibleContent>
+                    </Collapsible>
+                  </div>
                 )}
               </div>
             </div>
