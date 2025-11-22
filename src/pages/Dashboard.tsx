@@ -12,6 +12,7 @@ import UsageAnalytics from "@/components/UsageAnalytics";
 import BackfillEmbeddings from "@/components/BackfillEmbeddings";
 import TimelineView from "@/components/TimelineView";
 import BrainReports from "@/components/BrainReports";
+import BrainInsightsDashboard from "@/components/BrainInsightsDashboard";
 import { toast } from "sonner";
 
 const Dashboard = () => {
@@ -106,7 +107,7 @@ const Dashboard = () => {
 
       <main className="container mx-auto px-4 py-6">
         <Tabs defaultValue="chat" className="w-full">
-          <TabsList className="grid w-full max-w-4xl mx-auto grid-cols-5 bg-card border border-border">
+          <TabsList className="grid w-full max-w-4xl mx-auto grid-cols-6 bg-card border border-border">
             <TabsTrigger value="chat" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <MessageSquare className="w-4 h-4 mr-2" />
               Chat
@@ -122,6 +123,10 @@ const Dashboard = () => {
             <TabsTrigger value="reports" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <FileText className="w-4 h-4 mr-2" />
               Reports
+            </TabsTrigger>
+            <TabsTrigger value="insights" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+              <Brain className="w-4 h-4 mr-2" />
+              Insights
             </TabsTrigger>
             <TabsTrigger value="analytics" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <TrendingUp className="w-4 h-4 mr-2" />
@@ -143,6 +148,10 @@ const Dashboard = () => {
 
           <TabsContent value="reports" className="mt-6 animate-fade-in">
             <BrainReports userId={user?.id ?? ""} />
+          </TabsContent>
+
+          <TabsContent value="insights" className="mt-6 animate-fade-in">
+            <BrainInsightsDashboard userId={user?.id ?? ""} />
           </TabsContent>
 
           <TabsContent value="analytics" className="mt-6 animate-fade-in">
