@@ -47,6 +47,34 @@ const Landing = () => {
       response: "I remember you're building a React TypeScript dashboard with data visualization. Since you mentioned struggling with state management, let's implement Zustand or React Context for your growing app...",
       injectedMemories: 4,
     },
+    {
+      id: 3,
+      title: "How It Works",
+      type: "explainer",
+      steps: [
+        {
+          icon: "🔑",
+          title: "1. Bring Your API",
+          description: "Connect your OpenAI, Claude, or Google API key"
+        },
+        {
+          icon: "💬",
+          title: "2. Chat Normally",
+          description: "We stamp & store every conversation you have"
+        },
+        {
+          icon: "🗄️",
+          title: "3. We Store Your Data",
+          description: "All conversations stored securely. You own it."
+        },
+        {
+          icon: "🧠",
+          title: "4. Context Injected",
+          description: "Future chats get your relevant memories automatically"
+        }
+      ],
+      tagline: "You bring the AI. We bring the memory.",
+    },
   ];
 
   const currentExample = memoryExamples[activeExample];
@@ -223,18 +251,18 @@ const Landing = () => {
           </div>
 
           {/* Example Selector */}
-          <div className="flex justify-center gap-2">
+          <div className="flex justify-center gap-2 flex-wrap">
             {memoryExamples.map((example) => (
               <button
                 key={example.id}
                 onClick={() => setActiveExample(example.id)}
-                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                className={`px-4 py-2 rounded-lg text-xs lg:text-sm font-medium transition-all ${
                   activeExample === example.id
                     ? "bg-primary text-primary-foreground shadow-glow"
                     : "bg-background text-muted-foreground hover:text-foreground border border-border"
                 }`}
               >
-                {example.id === 0 ? "No Memory" : example.id === 1 ? "Building" : "High Context"}
+                {example.id === 0 ? "No Memory" : example.id === 1 ? "Building" : example.id === 2 ? "High Context" : "How It Works"}
               </button>
             ))}
           </div>
@@ -244,79 +272,107 @@ const Landing = () => {
             key={activeExample}
             className="bg-card border border-border rounded-xl p-6 space-y-4 shadow-glow animate-fade-in"
           >
-            {/* Memory Injection Badge */}
-            {currentExample.context.length > 0 && (
-              <div className="flex items-center gap-2 text-sm font-semibold text-primary">
-                <Sparkles className="w-4 h-4" />
-                {currentExample.injectedMemories} Relevant Memories Injected
-              </div>
-            )}
-
-            {/* Context Cards */}
-            {currentExample.context.length > 0 ? (
-              <div className="grid gap-2">
-                {currentExample.context.map((memory, idx) => (
-                  <div
-                    key={idx}
-                    className="p-3 bg-primary/5 border border-primary/20 rounded-lg text-sm text-foreground"
-                  >
-                    💾 {memory}
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="p-4 bg-muted/50 border border-border rounded-lg text-center">
-                <p className="text-muted-foreground text-sm">
-                  No previous context available. Starting fresh.
-                </p>
-              </div>
-            )}
-
-            {/* User Message */}
-            <div className="space-y-2">
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Your Message
-              </div>
-              <div className="p-4 bg-secondary/50 border border-border rounded-lg">
-                <p className="text-foreground text-sm">{currentExample.userMessage}</p>
-              </div>
-            </div>
-
-            {/* AI Response */}
-            <div className="space-y-2">
-              <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                AI Response
-              </div>
-              <div className="p-4 bg-accent/10 border border-accent/20 rounded-lg">
-                <p className="text-foreground text-sm">{currentExample.response}</p>
-              </div>
-            </div>
-
-            {/* Context Meter */}
-            <div className="flex items-center justify-between p-4 bg-primary/5 border border-primary/20 rounded-lg">
-              <span className="text-sm font-semibold text-foreground">Context Awareness</span>
-              <div className="flex items-center gap-2">
-                <div className="flex gap-1">
-                  {[...Array(3)].map((_, idx) => (
-                    <div
-                      key={idx}
-                      className={`w-2 h-8 rounded-full transition-all ${
-                        idx < currentExample.injectedMemories / 2
-                          ? "bg-primary"
-                          : "bg-border"
-                      }`}
-                    />
+            {currentExample.type === "explainer" ? (
+              // How It Works Flow
+              <div className="space-y-6">
+                <h3 className="text-2xl font-bold text-center text-foreground">{currentExample.title}</h3>
+                
+                {/* 4-Step Flow */}
+                <div className="grid gap-4">
+                  {currentExample.steps.map((step, idx) => (
+                    <div key={idx} className="flex items-start gap-4 p-4 bg-muted/50 border border-border rounded-lg transition-all hover:shadow-glow">
+                      <div className="text-3xl flex-shrink-0">{step.icon}</div>
+                      <div className="space-y-1">
+                        <h4 className="font-semibold text-foreground">{step.title}</h4>
+                        <p className="text-sm text-muted-foreground">{step.description}</p>
+                      </div>
+                    </div>
                   ))}
                 </div>
-                <span className="text-sm text-primary font-bold">
-                  {currentExample.injectedMemories === 0
-                    ? "None"
-                    : currentExample.injectedMemories < 3
-                    ? "Building"
-                    : "High"}
-                </span>
+
+                {/* Tagline */}
+                <div className="text-center pt-4 border-t border-border">
+                  <p className="text-lg font-semibold text-primary">{currentExample.tagline}</p>
+                </div>
               </div>
-            </div>
+            ) : (
+              // Regular Memory Demo
+              <>
+                {/* Memory Injection Badge */}
+                {currentExample.context?.length > 0 && (
+                  <div className="flex items-center gap-2 text-sm font-semibold text-primary">
+                    <Sparkles className="w-4 h-4" />
+                    {currentExample.injectedMemories} Relevant Memories Injected
+                  </div>
+                )}
+
+                {/* Context Cards */}
+                {currentExample.context?.length > 0 ? (
+                  <div className="grid gap-2">
+                    {currentExample.context.map((memory, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 bg-primary/5 border border-primary/20 rounded-lg text-sm text-foreground"
+                      >
+                        💾 {memory}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-4 bg-muted/50 border border-border rounded-lg text-center">
+                    <p className="text-muted-foreground text-sm">
+                      No previous context available. Starting fresh.
+                    </p>
+                  </div>
+                )}
+
+                {/* User Message */}
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    Your Message
+                  </div>
+                  <div className="p-4 bg-secondary/50 border border-border rounded-lg">
+                    <p className="text-foreground text-sm">{currentExample.userMessage}</p>
+                  </div>
+                </div>
+
+                {/* AI Response */}
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                    AI Response
+                  </div>
+                  <div className="p-4 bg-accent/10 border border-accent/20 rounded-lg">
+                    <p className="text-foreground text-sm">{currentExample.response}</p>
+                  </div>
+                </div>
+
+                {/* Context Meter */}
+                <div className="flex items-center justify-between p-4 bg-primary/5 border border-primary/20 rounded-lg">
+                  <span className="text-sm font-semibold text-foreground">Context Awareness</span>
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-1">
+                      {[...Array(3)].map((_, idx) => (
+                        <div
+                          key={idx}
+                          className={`w-2 h-8 rounded-full transition-all ${
+                            idx < currentExample.injectedMemories / 2
+                              ? "bg-primary"
+                              : "bg-border"
+                          }`}
+                        />
+                      ))}
+                    </div>
+                    <span className="text-sm text-primary font-bold">
+                      {currentExample.injectedMemories === 0
+                        ? "None"
+                        : currentExample.injectedMemories < 3
+                        ? "Building"
+                        : "High"}
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
