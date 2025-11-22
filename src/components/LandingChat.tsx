@@ -12,7 +12,11 @@ type Message = {
 
 const STORAGE_KEY = 'landing_chat_messages';
 
-export const LandingChat = () => {
+interface LandingChatProps {
+  onMinimize?: () => void;
+}
+
+export const LandingChat = ({ onMinimize }: LandingChatProps) => {
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -41,6 +45,15 @@ export const LandingChat = () => {
       console.error('Failed to save messages to localStorage:', error);
     }
   }, [messages]);
+
+  // Trigger minimize after first AI response
+  useEffect(() => {
+    if (messages.length >= 2 && messages[1].role === 'assistant' && onMinimize) {
+      setTimeout(() => {
+        onMinimize();
+      }, 1000);
+    }
+  }, [messages, onMinimize]);
 
   const clearConversation = () => {
     setMessages([]);
