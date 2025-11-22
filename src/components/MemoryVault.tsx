@@ -8,6 +8,7 @@ import { Search, Download, BarChart3, Database, Clock } from "lucide-react";
 import { toast } from "sonner";
 import MemoryStats from "./MemoryStats";
 import DateFilter from "./DateFilter";
+import AdvancedFilters, { AdvancedFilterOptions } from "./AdvancedFilters";
 
 interface Memory {
   id: string;
@@ -27,18 +28,27 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
   const [loading, setLoading] = useState(true);
   const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined } | null>(null);
   const [showingOnThisDay, setShowingOnThisDay] = useState(false);
+  const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilterOptions>({});
 
   useEffect(() => {
     fetchMemories();
   }, []);
 
-  const fetchMemories = async (dateFilter?: { from: Date | undefined; to: Date | undefined } | null, onThisDay?: boolean) => {
+  const fetchMemories = async (dateFilter?: { from: Date | undefined; to: Date | undefined } | null, onThisDay?: boolean, filters?: AdvancedFilterOptions) => {
     setLoading(true);
     try {
       let query = supabase
         .from("messages")
         .select("*")
         .eq("user_id", userId);
+
+      // Apply advanced filters
+      if (filters?.provider) {
+        query = query.eq("provider", filters.provider);
+      }
+      if (filters?.model) {
+        query = query.eq("model_used", filters.model);
+      }
 
       if (onThisDay) {
         const now = new Date();
@@ -49,10 +59,19 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
         const { data, error } = await query;
         if (error) throw error;
         
-        const filtered = data?.filter(msg => {
+        let filtered = data?.filter(msg => {
           const msgDate = new Date(msg.created_at);
           return msgDate.getMonth() + 1 === parseInt(month) && msgDate.getDate() === parseInt(day);
         }) || [];
+
+        // Apply length filters
+        if (filters?.minLength || filters?.maxLength) {
+          filtered = filtered.filter(msg => {
+            if (filters.minLength && msg.content.length < filters.minLength) return false;
+            if (filters.maxLength && msg.content.length > filters.maxLength) return false;
+            return true;
+          });
+        }
         
         setMemories(filtered);
         return;
@@ -68,7 +87,18 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
       const { data, error } = await query.order("created_at", { ascending: false });
 
       if (error) throw error;
-      setMemories(data || []);
+
+      // Apply length filters
+      let filteredData = data || [];
+      if (filters?.minLength || filters?.maxLength) {
+        filteredData = filteredData.filter(msg => {
+          if (filters.minLength && msg.content.length < filters.minLength) return false;
+          if (filters.maxLength && msg.content.length > filters.maxLength) return false;
+          return true;
+        });
+      }
+
+      setMemories(filteredData);
     } catch (error: any) {
       toast.error("Failed to load memories");
       console.error(error);
@@ -80,7 +110,7 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
   const handleOnThisDay = () => {
     setShowingOnThisDay(true);
     setDateRange(null);
-    fetchMemories(null, true);
+    fetchMemories(null, true, advancedFilters);
     const today = new Date();
     const dateStr = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
     toast.success(`Showing memories from ${dateStr} across all years`);
@@ -89,7 +119,12 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
   const handleDateChange = (range: { from: Date | undefined; to: Date | undefined } | null) => {
     setDateRange(range);
     setShowingOnThisDay(false);
-    fetchMemories(range, false);
+    fetchMemories(range, false, advancedFilters);
+  };
+
+  const handleAdvancedFiltersChange = (filters: AdvancedFilterOptions) => {
+    setAdvancedFilters(filters);
+    fetchMemories(dateRange, showingOnThisDay, filters);
   };
 
   const filteredMemories = memories.filter(
@@ -152,12 +187,19 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
             </Button>
           </div>
 
-          <div className="flex items-center justify-between">
-            <DateFilter 
-              onDateChange={handleDateChange}
-              onThisDay={handleOnThisDay}
-              showOnThisDay={true}
-            />
+          <div className="space-y-3">
+            <div className="flex gap-2 flex-wrap">
+              <DateFilter 
+                onDateChange={handleDateChange}
+                onThisDay={handleOnThisDay}
+                showOnThisDay={true}
+              />
+
+              <AdvancedFilters
+                onFilterChange={handleAdvancedFiltersChange}
+                currentFilters={advancedFilters}
+              />
+            </div>
 
             {showingOnThisDay && (
               <p className="text-sm text-muted-foreground">
@@ -169,6 +211,12 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
               <p className="text-sm text-muted-foreground">
                 Filtering from {dateRange.from.toLocaleDateString()} 
                 {dateRange.to ? ` to ${dateRange.to.toLocaleDateString()}` : ''}
+              </p>
+            )}
+
+            {Object.keys(advancedFilters).length > 0 && (
+              <p className="text-sm text-muted-foreground">
+                Active advanced filters: {Object.keys(advancedFilters).length}
               </p>
             )}
           </div>

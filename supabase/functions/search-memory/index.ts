@@ -12,7 +12,20 @@ serve(async (req) => {
   }
 
   try {
-    const { query, userId, useSemanticSearch, startDate, endDate, onThisDay } = await req.json();
+    const { 
+      query, 
+      userId, 
+      useSemanticSearch, 
+      startDate, 
+      endDate, 
+      onThisDay,
+      provider,
+      model,
+      minLength,
+      maxLength,
+      minDuration,
+      maxDuration
+    } = await req.json();
 
     if (!query || !userId) {
       throw new Error('Missing required fields');
@@ -102,12 +115,23 @@ serve(async (req) => {
             .rpc('search_messages_by_embedding', {
               query_embedding: queryEmbedding,
               match_threshold: 0.3,
-              match_count: 50,
+              match_count: 200,
               filter_user_id: userId,
             });
           
           if (semanticError) throw semanticError;
           semanticResults = results;
+        }
+
+        // Apply advanced filters to semantic results
+        if (provider || model || minLength || maxLength) {
+          semanticResults = semanticResults?.filter((msg: any) => {
+            if (provider && msg.provider !== provider) return false;
+            if (model && msg.model_used !== model) return false;
+            if (minLength && msg.content.length < minLength) return false;
+            if (maxLength && msg.content.length > maxLength) return false;
+            return true;
+          }).slice(0, 50);
         }
 
         // Fetch conversation titles for semantic results
@@ -133,6 +157,10 @@ serve(async (req) => {
           .eq('user_id', userId)
           .or(`content.ilike.%${query}%,topic.ilike.%${query}%`);
 
+        // Apply advanced filters
+        if (provider) keywordQuery = keywordQuery.eq('provider', provider);
+        if (model) keywordQuery = keywordQuery.eq('model_used', model);
+
         if (onThisDay) {
           const now = new Date();
           const month = now.getMonth() + 1;
@@ -147,18 +175,33 @@ serve(async (req) => {
 
         const { data: keywordResults, error: keywordError } = await keywordQuery
           .order('created_at', { ascending: false })
-          .limit(50);
+          .limit(200);
 
         if (keywordError) throw keywordError;
-        messages = keywordResults;
+        
+        // Apply length filters in JavaScript
+        let filteredResults = keywordResults;
+        if (minLength || maxLength) {
+          filteredResults = keywordResults?.filter((msg: any) => {
+            if (minLength && msg.content.length < minLength) return false;
+            if (maxLength && msg.content.length > maxLength) return false;
+            return true;
+          });
+        }
+        
+        messages = filteredResults?.slice(0, 50);
       }
     } else {
-      // Standard keyword search with date filter
+      // Standard keyword search with advanced filters
       let keywordQuery = supabaseClient
         .from('messages')
         .select('*, conversations!inner(title)')
         .eq('user_id', userId)
         .or(`content.ilike.%${query}%,topic.ilike.%${query}%`);
+
+      // Apply advanced filters
+      if (provider) keywordQuery = keywordQuery.eq('provider', provider);
+      if (model) keywordQuery = keywordQuery.eq('model_used', model);
 
       if (onThisDay) {
         const now = new Date();
@@ -174,10 +217,21 @@ serve(async (req) => {
 
       const { data: keywordResults, error: keywordError } = await keywordQuery
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(200);
 
       if (keywordError) throw keywordError;
-      messages = keywordResults;
+      
+      // Apply length filters in JavaScript
+      let filteredResults = keywordResults;
+      if (minLength || maxLength) {
+        filteredResults = keywordResults?.filter((msg: any) => {
+          if (minLength && msg.content.length < minLength) return false;
+          if (maxLength && msg.content.length > maxLength) return false;
+          return true;
+        });
+      }
+      
+      messages = filteredResults?.slice(0, 50);
     }
 
     // Group results by conversation
@@ -189,6 +243,8 @@ serve(async (req) => {
           conversation_id: convId,
           conversation_title: msg.conversations?.title || 'Untitled',
           messages: [],
+          earliest_message: msg.created_at,
+          latest_message: msg.created_at,
         };
       }
       groupedResults[convId].messages.push({
@@ -198,10 +254,31 @@ serve(async (req) => {
         topic: msg.topic,
         created_at: msg.created_at,
         similarity: msg.similarity || undefined,
+        provider: msg.provider,
+        model_used: msg.model_used,
       });
+      
+      // Track conversation duration
+      const msgTime = new Date(msg.created_at).getTime();
+      const earliest = new Date(groupedResults[convId].earliest_message).getTime();
+      const latest = new Date(groupedResults[convId].latest_message).getTime();
+      if (msgTime < earliest) groupedResults[convId].earliest_message = msg.created_at;
+      if (msgTime > latest) groupedResults[convId].latest_message = msg.created_at;
     });
 
-    const results = Object.values(groupedResults);
+    let results = Object.values(groupedResults);
+
+    // Apply conversation duration filter
+    if (minDuration || maxDuration) {
+      results = results.filter((conv: any) => {
+        const durationMs = new Date(conv.latest_message).getTime() - new Date(conv.earliest_message).getTime();
+        const durationMinutes = durationMs / (1000 * 60);
+        
+        if (minDuration && durationMinutes < minDuration) return false;
+        if (maxDuration && durationMinutes > maxDuration) return false;
+        return true;
+      });
+    }
 
     return new Response(
       JSON.stringify({ results, total: messages?.length || 0 }),
