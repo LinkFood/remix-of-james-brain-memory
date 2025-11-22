@@ -7,6 +7,7 @@ import { Slider } from "@/components/ui/slider";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Filter, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import ImportanceFilter from "./ImportanceFilter";
 
 export interface AdvancedFilterOptions {
   provider?: string;
@@ -15,6 +16,8 @@ export interface AdvancedFilterOptions {
   maxLength?: number;
   minDuration?: number;
   maxDuration?: number;
+  minImportance?: number;
+  maxImportance?: number;
 }
 
 interface AdvancedFiltersProps {
@@ -61,6 +64,12 @@ const AdvancedFilters = ({ onFilterChange, currentFilters }: AdvancedFiltersProp
     }
     if (localFilters.maxDuration !== undefined && localFilters.maxDuration > 0) {
       cleanedFilters.maxDuration = localFilters.maxDuration;
+    }
+    if (localFilters.minImportance !== undefined && localFilters.minImportance > 0) {
+      cleanedFilters.minImportance = localFilters.minImportance;
+    }
+    if (localFilters.maxImportance !== undefined && localFilters.maxImportance < 10) {
+      cleanedFilters.maxImportance = localFilters.maxImportance;
     }
 
     onFilterChange(cleanedFilters);
@@ -218,6 +227,17 @@ const AdvancedFilters = ({ onFilterChange, currentFilters }: AdvancedFiltersProp
                 />
               </div>
             </div>
+          </div>
+
+          {/* Importance Score Filter */}
+          <div className="space-y-2 pt-2 border-t border-border">
+            <ImportanceFilter
+              minImportance={localFilters.minImportance ?? 0}
+              maxImportance={localFilters.maxImportance ?? 10}
+              onMinChange={(value) => setLocalFilters({ ...localFilters, minImportance: value })}
+              onMaxChange={(value) => setLocalFilters({ ...localFilters, maxImportance: value })}
+              onReset={() => setLocalFilters({ ...localFilters, minImportance: undefined, maxImportance: undefined })}
+            />
           </div>
 
           {/* Apply Button */}

@@ -17,6 +17,8 @@ import { Search, Loader2, MessageSquare, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import DateFilter from "./DateFilter";
 import AdvancedFilters, { AdvancedFilterOptions } from "./AdvancedFilters";
+import { Badge } from "@/components/ui/badge";
+import { getImportanceLabel, getImportanceColor } from "./ImportanceFilter";
 
 interface SearchResult {
   conversation_id: string;
@@ -29,6 +31,7 @@ interface SearchResult {
     topic: string | null;
     created_at: string;
     similarity?: number;
+    importance_score?: number | null;
   }[];
 }
 
@@ -253,7 +256,7 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
                   {result.messages.slice(0, 3).map((msg) => (
                     <div key={msg.id} className="text-sm border-l-2 border-primary/30 pl-3">
                       <p className="text-foreground line-clamp-2">{msg.content}</p>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <p className="text-xs text-muted-foreground">
                           {new Date(msg.created_at).toLocaleDateString()}
                         </p>
@@ -261,6 +264,11 @@ const GlobalSearch = ({ userId, onSelectConversation }: GlobalSearchProps) => {
                           <span className="text-xs text-primary">
                             {Math.round(msg.similarity * 100)}% relevant
                           </span>
+                        )}
+                        {msg.importance_score !== null && msg.importance_score !== undefined && (
+                          <Badge variant="outline" className={`text-xs ${getImportanceColor(msg.importance_score)}`}>
+                            {msg.importance_score} - {getImportanceLabel(msg.importance_score)}
+                          </Badge>
                         )}
                       </div>
                     </div>

@@ -95,6 +95,7 @@ export type Database = {
           created_at: string
           embedding: string | null
           id: string
+          importance_score: number | null
           model_used: string | null
           provider: string | null
           role: Database["public"]["Enums"]["message_role"]
@@ -108,6 +109,7 @@ export type Database = {
           created_at?: string
           embedding?: string | null
           id?: string
+          importance_score?: number | null
           model_used?: string | null
           provider?: string | null
           role: Database["public"]["Enums"]["message_role"]
@@ -121,6 +123,7 @@ export type Database = {
           created_at?: string
           embedding?: string | null
           id?: string
+          importance_score?: number | null
           model_used?: string | null
           provider?: string | null
           role?: Database["public"]["Enums"]["message_role"]
