@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Search, Download, BarChart3, Database, Clock } from "lucide-react";
+import { Search, Download, BarChart3, Database, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import MemoryStats from "./MemoryStats";
 import DateFilter from "./DateFilter";
@@ -26,25 +26,48 @@ interface MemoryVaultProps {
   userId: string;
 }
 
+const ITEMS_PER_PAGE = 50;
+
 const MemoryVault = ({ userId }: MemoryVaultProps) => {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [page, setPage] = useState(0);
   const [dateRange, setDateRange] = useState<{ from: Date | undefined; to: Date | undefined } | null>(null);
   const [showingOnThisDay, setShowingOnThisDay] = useState(false);
   const [advancedFilters, setAdvancedFilters] = useState<AdvancedFilterOptions>({});
 
   useEffect(() => {
-    fetchMemories();
+    fetchMemories(true);
   }, []);
 
-  const fetchMemories = async (dateFilter?: { from: Date | undefined; to: Date | undefined } | null, onThisDay?: boolean, filters?: AdvancedFilterOptions) => {
-    setLoading(true);
+  const fetchMemories = async (
+    reset: boolean = false,
+    dateFilter?: { from: Date | undefined; to: Date | undefined } | null,
+    onThisDay?: boolean,
+    filters?: AdvancedFilterOptions
+  ) => {
+    if (reset) {
+      setLoading(true);
+      setPage(0);
+      setMemories([]);
+      setHasMore(true);
+    } else {
+      setLoadingMore(true);
+    }
+
     try {
+      const currentPage = reset ? 0 : page;
+      const from = currentPage * ITEMS_PER_PAGE;
+      const to = from + ITEMS_PER_PAGE - 1;
+
       let query = supabase
         .from("messages")
-        .select("*")
-        .eq("user_id", userId);
+        .select("*", { count: 'exact' })
+        .eq("user_id", userId)
+        .range(from, to);
 
       // Apply advanced filters
       if (filters?.provider) {
@@ -59,14 +82,29 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
       if (filters?.maxImportance !== undefined) {
         query = query.lte("importance_score", filters.maxImportance);
       }
+      if (filters?.hasEmbedding !== undefined) {
+        if (filters.hasEmbedding) {
+          query = query.not("embedding", "is", null);
+        } else {
+          query = query.is("embedding", null);
+        }
+      }
+      if (filters?.role) {
+        query = query.eq("role", filters.role as 'user' | 'assistant' | 'system');
+      }
+      if (filters?.minTokens !== undefined) {
+        query = query.gte("token_count", filters.minTokens);
+      }
+      if (filters?.maxTokens !== undefined) {
+        query = query.lte("token_count", filters.maxTokens);
+      }
 
       if (onThisDay) {
         const now = new Date();
         const month = (now.getMonth() + 1).toString().padStart(2, '0');
         const day = now.getDate().toString().padStart(2, '0');
         
-        // Filter by month and day across all years
-        const { data, error } = await query;
+        const { data, error, count } = await query.order("created_at", { ascending: false });
         if (error) throw error;
         
         let filtered = data?.filter(msg => {
@@ -74,7 +112,6 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
           return msgDate.getMonth() + 1 === parseInt(month) && msgDate.getDate() === parseInt(day);
         }) || [];
 
-        // Apply length filters
         if (filters?.minLength || filters?.maxLength) {
           filtered = filtered.filter(msg => {
             if (filters.minLength && msg.content.length < filters.minLength) return false;
@@ -83,7 +120,9 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
           });
         }
         
-        setMemories(filtered);
+        setMemories(reset ? filtered : [...memories, ...filtered]);
+        setHasMore(filtered.length === ITEMS_PER_PAGE);
+        setPage(currentPage + 1);
         return;
       }
 
@@ -94,11 +133,10 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
         query = query.lte("created_at", dateFilter.to.toISOString());
       }
 
-      const { data, error } = await query.order("created_at", { ascending: false });
+      const { data, error, count } = await query.order("created_at", { ascending: false });
 
       if (error) throw error;
 
-      // Apply length filters
       let filteredData = data || [];
       if (filters?.minLength || filters?.maxLength) {
         filteredData = filteredData.filter(msg => {
@@ -108,19 +146,26 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
         });
       }
 
-      setMemories(filteredData);
+      setMemories(reset ? filteredData : [...memories, ...filteredData]);
+      setHasMore(filteredData.length === ITEMS_PER_PAGE);
+      setPage(currentPage + 1);
     } catch (error: any) {
       toast.error("Failed to load memories");
       console.error(error);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
+  };
+
+  const handleLoadMore = () => {
+    fetchMemories(false, dateRange, showingOnThisDay, advancedFilters);
   };
 
   const handleOnThisDay = () => {
     setShowingOnThisDay(true);
     setDateRange(null);
-    fetchMemories(null, true, advancedFilters);
+    fetchMemories(true, null, true, advancedFilters);
     const today = new Date();
     const dateStr = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric' });
     toast.success(`Showing memories from ${dateStr} across all years`);
@@ -129,12 +174,12 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
   const handleDateChange = (range: { from: Date | undefined; to: Date | undefined } | null) => {
     setDateRange(range);
     setShowingOnThisDay(false);
-    fetchMemories(range, false, advancedFilters);
+    fetchMemories(true, range, false, advancedFilters);
   };
 
   const handleAdvancedFiltersChange = (filters: AdvancedFilterOptions) => {
     setAdvancedFilters(filters);
-    fetchMemories(dateRange, showingOnThisDay, filters);
+    fetchMemories(true, dateRange, showingOnThisDay, filters);
   };
 
   const filteredMemories = memories.filter(
@@ -188,7 +233,7 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
                 className="pl-10 bg-input border-border focus:ring-primary"
               />
             </div>
-            <ImportData userId={userId} onImportComplete={fetchMemories} />
+            <ImportData userId={userId} onImportComplete={() => fetchMemories(true)} />
             <Button
               onClick={handleExport}
               className="bg-secondary hover:bg-secondary/80 text-secondary-foreground"
@@ -241,40 +286,62 @@ const MemoryVault = ({ userId }: MemoryVaultProps) => {
               </p>
             </Card>
           ) : (
-            filteredMemories.map((memory) => (
-              <Card
-                key={memory.id}
-                className="p-4 bg-card border-border hover:border-primary/50 transition-all"
-              >
-                <div className="flex items-start justify-between mb-2">
-                  <div className="flex gap-2">
-                    <span
-                      className={`text-xs font-semibold px-2 py-1 rounded ${
-                        memory.role === "user"
-                          ? "bg-primary/20 text-primary"
-                          : "bg-accent/20 text-accent"
-                      }`}
-                    >
-                      {memory.role}
+            <>
+              {filteredMemories.map((memory) => (
+                <Card
+                  key={memory.id}
+                  className="p-4 bg-card border-border hover:border-primary/50 transition-all"
+                >
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex gap-2">
+                      <span
+                        className={`text-xs font-semibold px-2 py-1 rounded ${
+                          memory.role === "user"
+                            ? "bg-primary/20 text-primary"
+                            : "bg-accent/20 text-accent"
+                        }`}
+                      >
+                        {memory.role}
+                      </span>
+                      {memory.importance_score !== null && (
+                        <Badge variant="outline" className={getImportanceColor(memory.importance_score)}>
+                          {memory.importance_score} - {getImportanceLabel(memory.importance_score)}
+                        </Badge>
+                      )}
+                    </div>
+                    <span className="text-xs text-muted-foreground">
+                      {new Date(memory.created_at).toLocaleString()}
                     </span>
-                    {memory.importance_score !== null && (
-                      <Badge variant="outline" className={getImportanceColor(memory.importance_score)}>
-                        {memory.importance_score} - {getImportanceLabel(memory.importance_score)}
-                      </Badge>
+                  </div>
+                  <p className="text-sm text-foreground leading-relaxed">{memory.content}</p>
+                  {memory.topic && (
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      Topic: <span className="text-primary">{memory.topic}</span>
+                    </div>
+                  )}
+                </Card>
+              ))}
+              
+              {hasMore && (
+                <div className="flex justify-center pt-4">
+                  <Button
+                    onClick={handleLoadMore}
+                    disabled={loadingMore}
+                    variant="outline"
+                    className="w-full max-w-md"
+                  >
+                    {loadingMore ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Loading more...
+                      </>
+                    ) : (
+                      <>Load More ({ITEMS_PER_PAGE} at a time)</>
                     )}
-                  </div>
-                  <span className="text-xs text-muted-foreground">
-                    {new Date(memory.created_at).toLocaleString()}
-                  </span>
+                  </Button>
                 </div>
-                <p className="text-sm text-foreground leading-relaxed">{memory.content}</p>
-                {memory.topic && (
-                  <div className="mt-2 text-xs text-muted-foreground">
-                    Topic: <span className="text-primary">{memory.topic}</span>
-                  </div>
-                )}
-              </Card>
-            ))
+              )}
+            </>
           )}
         </div>
       </TabsContent>

@@ -6,6 +6,47 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Retry configuration
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY = 1000; // 1 second
+
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  context: string,
+  retries = MAX_RETRIES
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      lastError = error;
+      console.error(`${context} attempt ${attempt + 1}/${retries} failed:`, error.message);
+      
+      // Don't retry on authentication or quota errors
+      const errorMsg = error.message?.toLowerCase() || '';
+      if (
+        errorMsg.includes('invalid') ||
+        errorMsg.includes('authentication') ||
+        errorMsg.includes('unauthorized') ||
+        errorMsg.includes('quota')
+      ) {
+        throw error;
+      }
+      
+      // If not the last attempt, wait before retrying
+      if (attempt < retries - 1) {
+        const delay = INITIAL_RETRY_DELAY * Math.pow(2, attempt);
+        console.log(`Retrying in ${delay}ms...`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
+  }
+  
+  throw lastError || new Error(`${context} failed after ${retries} attempts`);
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -50,23 +91,25 @@ serve(async (req) => {
     let userEmbedding = null;
     
     try {
-      const embeddingResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/generate-embedding`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: message }),
-      });
-      
-      if (embeddingResponse.ok) {
+      userEmbedding = await retryWithBackoff(async () => {
+        const embeddingResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/generate-embedding`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ text: message }),
+        });
+        
+        if (!embeddingResponse.ok) {
+          throw new Error(`Embedding generation failed: ${embeddingResponse.status}`);
+        }
+        
         const embeddingData = await embeddingResponse.json();
-        userEmbedding = JSON.stringify(embeddingData.embedding);
-      } else {
-        console.warn('Failed to generate user message embedding');
-      }
+        return JSON.stringify(embeddingData.embedding);
+      }, 'User message embedding generation', 2);
     } catch (embErr) {
-      console.warn('Error generating user message embedding:', embErr);
+      console.warn('Failed to generate user message embedding after retries:', embErr);
     }
 
     const { data: userMessage, error: userMsgError } = await supabaseClient
@@ -106,66 +149,69 @@ serve(async (req) => {
     let systemContext = '';
     
     try {
-      const searchResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/search-memory`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          query: message,
-          userId: userId,
-          useSemanticSearch: true,
-          minImportance: 7, // Only high-importance memories
-        })
-      });
-
-      if (searchResponse.ok) {
-        const searchData = await searchResponse.json();
-        relevantMemories = (searchData.results || []).slice(0, 3); // Top 3 memories
+      const searchResponse = await retryWithBackoff(async () => {
+        const response = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/search-memory`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            query: message,
+            userId: userId,
+            useSemanticSearch: true,
+            minImportance: 7,
+          })
+        });
         
-        if (relevantMemories.length > 0) {
-          systemContext = `\n\nRelevant past conversations:\n${
-            relevantMemories.map((result, i) => {
-              const firstMsg = result.messages?.[0];
-              if (firstMsg) {
-                return `[Memory ${i+1}] ${firstMsg.content.substring(0, 200)}... (${(result.similarity * 100).toFixed(0)}% match, importance: ${firstMsg.importance_score || 'N/A'})`;
-              }
-              return '';
-            }).filter(Boolean).join('\n')
-          }\n\nUse these past conversations to provide more contextual and personalized responses.\n`;
-          
-          console.log(`Injecting ${relevantMemories.length} memories as context`);
+        if (!response.ok) {
+          throw new Error(`Memory search failed: ${response.status}`);
         }
-      } else {
-        console.warn('Memory search failed, continuing without context');
+        
+        return response;
+      }, 'Memory search', 2);
+
+      const searchData = await searchResponse.json();
+      relevantMemories = (searchData.results || []).slice(0, 3);
+      
+      if (relevantMemories.length > 0) {
+        systemContext = `\n\nRelevant past conversations:\n${
+          relevantMemories.map((result, i) => {
+            const firstMsg = result.messages?.[0];
+            if (firstMsg) {
+              return `[Memory ${i+1}] ${firstMsg.content.substring(0, 200)}... (${(result.similarity * 100).toFixed(0)}% match, importance: ${firstMsg.importance_score || 'N/A'})`;
+            }
+            return '';
+          }).filter(Boolean).join('\n')
+        }\n\nUse these past conversations to provide more contextual and personalized responses.\n`;
+        
+        console.log(`Injecting ${relevantMemories.length} memories as context`);
       }
     } catch (memErr) {
-      console.warn('Error searching memories:', memErr);
+      console.warn('Memory search failed after retries:', memErr);
     }
 
-    // Call appropriate LLM API based on provider
+    // Call appropriate LLM API based on provider with retry logic
     let assistantResponse: string;
     let model_used: string;
     
     try {
-      if (requestedProvider === 'openai') {
-        const result = await callOpenAI(encrypted_key, message, requestedModel, systemContext);
-        assistantResponse = result.response;
-        model_used = result.model;
-      } else if (requestedProvider === 'anthropic') {
-        const result = await callAnthropic(encrypted_key, message, requestedModel, systemContext);
-        assistantResponse = result.response;
-        model_used = result.model;
-      } else if (requestedProvider === 'google') {
-        const result = await callGoogle(encrypted_key, message, requestedModel, systemContext);
-        assistantResponse = result.response;
-        model_used = result.model;
-      } else {
-        throw new Error(`Unsupported provider: ${requestedProvider}`);
-      }
+      const result = await retryWithBackoff(async () => {
+        if (requestedProvider === 'openai') {
+          return await callOpenAI(encrypted_key, message, requestedModel, systemContext);
+        } else if (requestedProvider === 'anthropic') {
+          return await callAnthropic(encrypted_key, message, requestedModel, systemContext);
+        } else if (requestedProvider === 'google') {
+          return await callGoogle(encrypted_key, message, requestedModel, systemContext);
+        } else {
+          throw new Error(`Unsupported provider: ${requestedProvider}`);
+        }
+      }, `${requestedProvider} API call`);
+      
+      assistantResponse = result.response;
+      model_used = result.model;
     } catch (apiError: any) {
-      console.error(`${requestedProvider} API error:`, apiError);
+      console.error(`${requestedProvider} API error after retries:`, apiError);
       
       const errorMsg = apiError.message?.toLowerCase() || '';
       if (errorMsg.includes('rate_limit') || errorMsg.includes('rate limit')) {
@@ -176,7 +222,7 @@ serve(async (req) => {
         throw new Error('Invalid API key. Please check your settings.');
       }
       
-      throw new Error(`Failed to get response: ${apiError.message || 'Unknown error'}`);
+      throw new Error(`Failed to get response after ${MAX_RETRIES} attempts: ${apiError.message || 'Unknown error'}`);
     }
 
     // Store assistant message with estimated token count and embedding
@@ -184,23 +230,25 @@ serve(async (req) => {
     let assistantEmbedding = null;
     
     try {
-      const embeddingResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/generate-embedding`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: assistantResponse }),
-      });
-      
-      if (embeddingResponse.ok) {
+      assistantEmbedding = await retryWithBackoff(async () => {
+        const embeddingResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/generate-embedding`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ text: assistantResponse }),
+        });
+        
+        if (!embeddingResponse.ok) {
+          throw new Error(`Embedding generation failed: ${embeddingResponse.status}`);
+        }
+        
         const embeddingData = await embeddingResponse.json();
-        assistantEmbedding = JSON.stringify(embeddingData.embedding);
-      } else {
-        console.warn('Failed to generate assistant message embedding');
-      }
+        return JSON.stringify(embeddingData.embedding);
+      }, 'Assistant message embedding generation', 2);
     } catch (embErr) {
-      console.warn('Error generating assistant message embedding:', embErr);
+      console.warn('Failed to generate assistant message embedding after retries:', embErr);
     }
 
     const { data: assistantMessage, error: assistantMsgError } = await supabaseClient
@@ -401,8 +449,6 @@ async function callGoogle(apiKey: string, message: string, model: string = 'gemi
 }
 
 function estimateTokenCount(text: string): number {
-  // Rough estimate: ~4 characters per token on average
-  // This is a simplified estimation; real tokenization varies by model
   return Math.ceil(text.length / 4);
 }
 
