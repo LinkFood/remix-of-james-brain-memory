@@ -137,4 +137,9 @@ All colors MUST be HSL.
       -webkit-touch-callout: none;
     }
   }
+
+  /* Hover scale utility */
+  .hover-scale {
+    @apply transition-transform duration-200 hover:scale-105;
+  }
 }
