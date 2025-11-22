@@ -17,10 +17,23 @@ const Dashboard = () => {
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (!session?.user) {
         navigate("/auth");
+        setLoading(false);
+        return;
+      }
+
+      // Check if user has API key configured
+      const { data: apiKey } = await supabase
+        .from('user_api_keys')
+        .select('id')
+        .eq('user_id', session.user.id)
+        .maybeSingle();
+
+      if (!apiKey) {
+        navigate("/settings");
       }
       setLoading(false);
     });
@@ -66,6 +79,14 @@ const Dashboard = () => {
           </div>
           <div className="flex items-center gap-2">
             <GlobalSearch userId={user?.id ?? ""} onSelectConversation={setSelectedConversationId} />
+            <Button
+              onClick={() => navigate("/settings")}
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              Settings
+            </Button>
             <Button
               onClick={handleSignOut}
               variant="ghost"

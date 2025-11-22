@@ -23,6 +23,20 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
+    // Fetch user's API key
+    const { data: apiKeyData, error: keyError } = await supabaseClient
+      .from('user_api_keys')
+      .select('provider, encrypted_key')
+      .eq('user_id', userId)
+      .eq('is_default', true)
+      .single();
+
+    if (keyError || !apiKeyData) {
+      throw new Error('No API key configured. Please add one in Settings.');
+    }
+
+    const { provider, encrypted_key } = apiKeyData;
+
     // Store user message
     const { error: userMsgError } = await supabaseClient
       .from('messages')
@@ -32,6 +46,7 @@ serve(async (req) => {
         role: 'user',
         content: message,
         topic: await detectTopic(message),
+        provider,
       });
 
     if (userMsgError) {
@@ -39,44 +54,25 @@ serve(async (req) => {
       throw userMsgError;
     }
 
-    // Call Lovable AI
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
-      throw new Error('LOVABLE_API_KEY is not configured');
+    // Call appropriate LLM API based on provider
+    let assistantResponse: string;
+    let model_used: string;
+    
+    if (provider === 'openai') {
+      const result = await callOpenAI(encrypted_key, message);
+      assistantResponse = result.response;
+      model_used = result.model;
+    } else if (provider === 'anthropic') {
+      const result = await callAnthropic(encrypted_key, message);
+      assistantResponse = result.response;
+      model_used = result.model;
+    } else if (provider === 'google') {
+      const result = await callGoogle(encrypted_key, message);
+      assistantResponse = result.response;
+      model_used = result.model;
+    } else {
+      throw new Error('Unsupported provider');
     }
-
-    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are a helpful AI assistant. Keep responses clear and conversational.',
-          },
-          { role: 'user', content: message },
-        ],
-      }),
-    });
-
-    if (!aiResponse.ok) {
-      if (aiResponse.status === 429) {
-        throw new Error('Rate limits exceeded, please try again later.');
-      }
-      if (aiResponse.status === 402) {
-        throw new Error('Payment required, please add funds to your Lovable AI workspace.');
-      }
-      const errorText = await aiResponse.text();
-      console.error('AI gateway error:', aiResponse.status, errorText);
-      throw new Error('AI gateway error');
-    }
-
-    const aiData = await aiResponse.json();
-    const assistantResponse = aiData.choices?.[0]?.message?.content || 'No response';
 
     // Store assistant message
     const { error: assistantMsgError } = await supabaseClient
@@ -87,6 +83,8 @@ serve(async (req) => {
         role: 'assistant',
         content: assistantResponse,
         topic: await detectTopic(assistantResponse),
+        provider,
+        model_used,
       });
 
     if (assistantMsgError) {
@@ -113,7 +111,91 @@ serve(async (req) => {
   }
 });
 
-// Simple topic detection helper
+async function callOpenAI(apiKey: string, message: string) {
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You are a helpful AI assistant.' },
+        { role: 'user', content: message }
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('OpenAI error:', response.status, errorText);
+    throw new Error('OpenAI API error');
+  }
+
+  const data = await response.json();
+  return {
+    response: data.choices?.[0]?.message?.content || 'No response',
+    model: data.model || 'gpt-4o-mini'
+  };
+}
+
+async function callAnthropic(apiKey: string, message: string) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 1024,
+      messages: [
+        { role: 'user', content: message }
+      ],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('Anthropic error:', response.status, errorText);
+    throw new Error('Anthropic API error');
+  }
+
+  const data = await response.json();
+  return {
+    response: data.content?.[0]?.text || 'No response',
+    model: data.model || 'claude-3-5-sonnet-20241022'
+  };
+}
+
+async function callGoogle(apiKey: string, message: string) {
+  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      contents: [{
+        parts: [{ text: message }]
+      }],
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error('Google error:', response.status, errorText);
+    throw new Error('Google API error');
+  }
+
+  const data = await response.json();
+  return {
+    response: data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response',
+    model: 'gemini-pro'
+  };
+}
+
 async function detectTopic(text: string): Promise<string | null> {
   const topics = [
     'technology', 'business', 'health', 'education', 'entertainment',
