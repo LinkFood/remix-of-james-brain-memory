@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { Brain, LogOut, MessageSquare, Database } from "lucide-react";
+import { Brain, LogOut, MessageSquare, Database, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ChatInterface from "@/components/ChatInterface";
 import MemoryVault from "@/components/MemoryVault";
 import GlobalSearch from "@/components/GlobalSearch";
+import UsageAnalytics from "@/components/UsageAnalytics";
 import { toast } from "sonner";
 
 const Dashboard = () => {
@@ -102,7 +103,7 @@ const Dashboard = () => {
 
       <main className="container mx-auto px-4 py-6">
         <Tabs defaultValue="chat" className="w-full">
-          <TabsList className="grid w-full max-w-md mx-auto grid-cols-2 bg-card border border-border">
+          <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-3 bg-card border border-border">
             <TabsTrigger value="chat" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <MessageSquare className="w-4 h-4 mr-2" />
               Chat
@@ -110,6 +111,10 @@ const Dashboard = () => {
             <TabsTrigger value="memory" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Database className="w-4 h-4 mr-2" />
               Memory Vault
+            </TabsTrigger>
+            <TabsTrigger value="analytics" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
+              <TrendingUp className="w-4 h-4 mr-2" />
+              Analytics
             </TabsTrigger>
           </TabsList>
 
@@ -119,6 +124,10 @@ const Dashboard = () => {
 
           <TabsContent value="memory" className="mt-6 animate-fade-in">
             <MemoryVault userId={user?.id ?? ""} />
+          </TabsContent>
+
+          <TabsContent value="analytics" className="mt-6 animate-fade-in">
+            <UsageAnalytics userId={user?.id ?? ""} />
           </TabsContent>
         </Tabs>
       </main>

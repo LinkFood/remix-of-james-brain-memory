@@ -45,7 +45,8 @@ serve(async (req) => {
 
     const { encrypted_key } = apiKeyData;
 
-    // Store user message
+    // Store user message with estimated token count
+    const userTokens = estimateTokenCount(message);
     const { error: userMsgError } = await supabaseClient
       .from('messages')
       .insert({
@@ -55,6 +56,7 @@ serve(async (req) => {
         content: message,
         topic: await detectTopic(message),
         provider: requestedProvider,
+        token_count: userTokens,
       });
 
     if (userMsgError) {
@@ -97,7 +99,8 @@ serve(async (req) => {
       throw new Error(`Failed to get response: ${apiError.message || 'Unknown error'}`);
     }
 
-    // Store assistant message
+    // Store assistant message with estimated token count
+    const assistantTokens = estimateTokenCount(assistantResponse);
     const { error: assistantMsgError } = await supabaseClient
       .from('messages')
       .insert({
@@ -108,6 +111,7 @@ serve(async (req) => {
         topic: await detectTopic(assistantResponse),
         provider: requestedProvider,
         model_used,
+        token_count: assistantTokens,
       });
 
     if (assistantMsgError) {
@@ -259,6 +263,12 @@ async function callGoogle(apiKey: string, message: string, model: string = 'gemi
     response: data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response',
     model: model
   };
+}
+
+function estimateTokenCount(text: string): number {
+  // Rough estimate: ~4 characters per token on average
+  // This is a simplified estimation; real tokenization varies by model
+  return Math.ceil(text.length / 4);
 }
 
 async function detectTopic(text: string): Promise<string | null> {
