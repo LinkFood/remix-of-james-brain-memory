@@ -5,28 +5,40 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { Send, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import ConversationSidebar from "./ConversationSidebar";
 
 interface Message {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string;
   created_at: string;
 }
 
 interface ChatInterfaceProps {
   userId: string;
+  initialConversationId?: string | null;
 }
 
-const ChatInterface = ({ userId }: ChatInterfaceProps) => {
+const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(initialConversationId || null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    initConversation();
-  }, []);
+    if (initialConversationId) {
+      setConversationId(initialConversationId);
+    }
+  }, [initialConversationId]);
+
+  useEffect(() => {
+    if (!conversationId) {
+      initConversation();
+    } else {
+      loadMessages();
+    }
+  }, [conversationId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -46,6 +58,34 @@ const ChatInterface = ({ userId }: ChatInterfaceProps) => {
       toast.error("Failed to initialize conversation");
       console.error(error);
     }
+  };
+
+  const loadMessages = async () => {
+    if (!conversationId) return;
+    
+    try {
+      const { data, error } = await supabase
+        .from("messages")
+        .select("*")
+        .eq("conversation_id", conversationId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      setMessages(data || []);
+    } catch (error: any) {
+      toast.error("Failed to load messages");
+      console.error(error);
+    }
+  };
+
+  const handleSelectConversation = (id: string) => {
+    setConversationId(id);
+    setMessages([]);
+  };
+
+  const handleNewConversation = () => {
+    setConversationId(null);
+    setMessages([]);
   };
 
   const handleSend = async () => {
@@ -97,8 +137,16 @@ const ChatInterface = ({ userId }: ChatInterfaceProps) => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
-      <Card className="min-h-[500px] max-h-[600px] overflow-y-auto p-6 bg-card border-border space-y-4">
+    <div className="flex gap-4 h-[calc(100vh-12rem)]">
+      <ConversationSidebar
+        userId={userId}
+        currentConversationId={conversationId}
+        onSelectConversation={handleSelectConversation}
+        onNewConversation={handleNewConversation}
+      />
+      
+      <div className="flex-1 flex flex-col gap-4">
+        <Card className="flex-1 overflow-y-auto p-6 bg-card border-border space-y-4">
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-muted-foreground">
             <p>Start a conversation to build your memory vault...</p>
@@ -128,26 +176,27 @@ const ChatInterface = ({ userId }: ChatInterfaceProps) => {
             </div>
           </div>
         )}
-        <div ref={messagesEndRef} />
-      </Card>
+          <div ref={messagesEndRef} />
+        </Card>
 
-      <div className="flex gap-2">
-        <Textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
-          className="min-h-[60px] bg-input border-border focus:ring-primary resize-none"
-          disabled={loading}
-        />
-        <Button
-          onClick={handleSend}
-          disabled={loading || !input.trim()}
-          className="bg-primary hover:bg-primary-glow text-primary-foreground shadow-glow"
-          size="icon"
-        >
-          <Send className="w-5 h-5" />
-        </Button>
+        <div className="flex gap-2">
+          <Textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
+            className="min-h-[60px] bg-input border-border focus:ring-primary resize-none"
+            disabled={loading || !conversationId}
+          />
+          <Button
+            onClick={handleSend}
+            disabled={loading || !input.trim() || !conversationId}
+            className="bg-primary hover:bg-primary-glow text-primary-foreground shadow-glow"
+            size="icon"
+          >
+            <Send className="w-5 h-5" />
+          </Button>
+        </div>
       </div>
     </div>
   );
