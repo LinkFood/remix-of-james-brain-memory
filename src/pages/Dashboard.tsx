@@ -32,7 +32,7 @@ const Dashboard = () => {
     supabase.auth.getSession().then(async ({ data: { session } }) => {
       setUser(session?.user ?? null);
       if (!session?.user) {
-        navigate("/auth");
+        navigate("/");
         setLoading(false);
         return;
       }
@@ -54,7 +54,7 @@ const Dashboard = () => {
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user ?? null);
       if (!session?.user) {
-        navigate("/auth");
+        navigate("/");
       }
     });
 
@@ -64,7 +64,7 @@ const Dashboard = () => {
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     toast.success("Signed out successfully");
-    navigate("/auth");
+    navigate("/");
   };
 
   const handleMobileTabChange = (tab: string) => {
