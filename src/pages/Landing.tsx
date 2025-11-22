@@ -18,7 +18,7 @@ const Landing = () => {
   }, [navigate]);
 
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground">
+    <div className="h-screen flex flex-col bg-background text-foreground">
       <header className="border-b border-border px-6 py-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <h1 className="text-xl font-bold tracking-tight">JAMESBRAIN</h1>
@@ -34,7 +34,7 @@ const Landing = () => {
       <div className="flex-1 flex flex-col overflow-hidden">
         {!isMinimized ? (
           <div className="flex-1 flex flex-col max-w-7xl mx-auto w-full">
-            <div className="text-center py-12 px-6">
+            <div className="text-center py-6 px-6">
               <h2 className="text-2xl font-bold mb-3">
                 You own your data with your API
               </h2>
