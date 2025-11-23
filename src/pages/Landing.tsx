@@ -107,9 +107,9 @@ const Landing = () => {
 
   return (
     <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <header className="border-b border-border px-4 sm:px-6 py-3 sticky top-0 bg-background/95 backdrop-blur-sm z-50">
+      <header className="border-b border-border/50 px-4 sm:px-6 py-3 sticky top-0 bg-background/80 backdrop-blur-xl z-50">
         <div className="max-w-7xl mx-auto flex justify-between items-center gap-4">
-          <h1 className="text-lg sm:text-xl font-bold tracking-tight">JAMESBRAIN</h1>
+          <h1 className="text-base sm:text-lg font-semibold tracking-tight">JAMESBRAIN</h1>
           <div className="flex items-center gap-2 sm:gap-3">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
