@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Progress } from '@/components/ui/progress';
-import { Send, Trash2, LayoutGrid, Sparkles } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Send, Trash2, LayoutGrid, Sparkles, Download, CheckCircle2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import ReactMarkdown from 'react-markdown';
 import { useNavigate } from 'react-router-dom';
@@ -31,6 +32,8 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showSignupPrompt, setShowSignupPrompt] = useState(false);
+  const [hasDownloaded, setHasDownloaded] = useState(false);
+  const [exportFormat, setExportFormat] = useState<'json' | 'markdown' | 'txt'>('json');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -58,10 +61,75 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
 
   const clearConversation = () => {
     setMessages([]);
+    setHasDownloaded(false);
     localStorage.removeItem(STORAGE_KEY);
     toast({
       title: "Conversation cleared",
       description: "Starting fresh"
+    });
+  };
+
+  const downloadChat = () => {
+    if (messages.length === 0) {
+      toast({
+        title: "No messages to export",
+        description: "Start a conversation first",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    const timestamp = new Date().toISOString().split('T')[0];
+    let content = '';
+    let filename = '';
+    let mimeType = '';
+
+    switch (exportFormat) {
+      case 'json':
+        content = JSON.stringify({ 
+          exportedAt: new Date().toISOString(),
+          messageCount: messages.length,
+          messages 
+        }, null, 2);
+        filename = `demo-chat-${timestamp}.json`;
+        mimeType = 'application/json';
+        break;
+      
+      case 'markdown':
+        content = `# James Brain OS Demo Chat\n\nExported: ${new Date().toLocaleString()}\nMessages: ${messages.length}\n\n---\n\n`;
+        content += messages.map(msg => {
+          const role = msg.role === 'user' ? '**You**' : '**Assistant**';
+          return `${role}:\n\n${msg.content}\n\n---\n`;
+        }).join('\n');
+        filename = `demo-chat-${timestamp}.md`;
+        mimeType = 'text/markdown';
+        break;
+      
+      case 'txt':
+        content = `James Brain OS Demo Chat\nExported: ${new Date().toLocaleString()}\nMessages: ${messages.length}\n\n${'='.repeat(50)}\n\n`;
+        content += messages.map(msg => {
+          const role = msg.role === 'user' ? 'You' : 'Assistant';
+          return `${role}:\n${msg.content}\n\n${'-'.repeat(50)}\n`;
+        }).join('\n');
+        filename = `demo-chat-${timestamp}.txt`;
+        mimeType = 'text/plain';
+        break;
+    }
+
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    setHasDownloaded(true);
+    toast({
+      title: "✓ Chat downloaded",
+      description: "This is YOUR data. Take it anywhere."
     });
   };
 
@@ -227,7 +295,7 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
               </div>
               <div className="mt-8 p-4 bg-muted/30 border border-primary/20 rounded-lg">
                 <p className="text-sm text-muted-foreground">
-                  💬 <strong>Demo Mode:</strong> Try the chat below. Conversations aren't saved unless you sign up.
+                  💬 <strong>Try it first. Download proof. Then decide.</strong> Chat below and export your conversation to see it's real.
                 </p>
               </div>
             </div>
@@ -328,8 +396,17 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
         <div className="flex flex-col gap-2 max-w-4xl mx-auto">
           {messages.length > 0 && (
             <div className="flex flex-col gap-2">
+              {hasDownloaded && (
+                <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg flex items-start gap-2 animate-in slide-in-from-top-2 duration-300">
+                  <CheckCircle2 className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
+                  <div className="flex-1 text-xs space-y-1">
+                    <p className="font-semibold text-foreground">You own {messages.length} messages from this demo</p>
+                    <p className="text-muted-foreground">Sign up to unlock the full memory system with your own API keys</p>
+                  </div>
+                </div>
+              )}
               <div className="flex justify-between items-center gap-2">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
                   <div className="px-2.5 py-1 bg-primary/10 border border-primary/20 rounded-full flex items-center gap-1.5">
                     <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
                     <span className="font-medium">
@@ -342,12 +419,33 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
                     </span>
                   )}
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 flex-wrap justify-end">
+                  <div className="flex gap-1">
+                    <Select value={exportFormat} onValueChange={(value: any) => setExportFormat(value)}>
+                      <SelectTrigger className="h-8 w-[90px] text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="json">JSON</SelectItem>
+                        <SelectItem value="markdown">Markdown</SelectItem>
+                        <SelectItem value="txt">Text</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={downloadChat}
+                      className="text-xs h-8"
+                    >
+                      <Download className="h-3 w-3 mr-1" />
+                      Download
+                    </Button>
+                  </div>
                   <Button
                     variant="ghost"
                     size="sm"
                     onClick={clearConversation}
-                    className="text-xs text-muted-foreground hover:text-foreground"
+                    className="text-xs text-muted-foreground hover:text-foreground h-8"
                   >
                     <Trash2 className="h-3 w-3 mr-1" />
                     Clear
@@ -357,7 +455,7 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
                       variant="outline"
                       size="sm"
                       onClick={onMinimize}
-                      className="text-xs"
+                      className="text-xs h-8"
                     >
                       <LayoutGrid className="h-3 w-3 mr-1" />
                       Preview
