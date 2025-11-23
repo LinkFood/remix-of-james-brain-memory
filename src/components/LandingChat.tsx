@@ -265,39 +265,13 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full">
-            <div className="text-center space-y-4 max-w-2xl px-4">
-              <h2 className="text-3xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-                Your Universal AI Memory System
+            <div className="text-center space-y-3 max-w-md px-4">
+              <h2 className="text-2xl font-semibold">
+                Ask me anything.
               </h2>
-              <p className="text-muted-foreground text-lg">
-                Stop re-explaining context to your AI. James Brain OS captures every conversation, 
-                scores importance, and injects relevant memories automatically.
+              <p className="text-muted-foreground">
+                Your conversation, your data.
               </p>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8 text-left">
-                <div className="p-4 border border-border rounded-lg">
-                  <h3 className="font-semibold mb-2">Cross-Provider Memory</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Switch between OpenAI, Claude, Gemini. Your memory travels with you.
-                  </p>
-                </div>
-                <div className="p-4 border border-border rounded-lg">
-                  <h3 className="font-semibold mb-2">Data Sovereignty</h3>
-                  <p className="text-sm text-muted-foreground">
-                    You own it. Export anytime. Delete with one click.
-                  </p>
-                </div>
-                <div className="p-4 border border-border rounded-lg">
-                  <h3 className="font-semibold mb-2">Compounding Intelligence</h3>
-                  <p className="text-sm text-muted-foreground">
-                    Every conversation makes future ones smarter. Context builds over time.
-                  </p>
-                </div>
-              </div>
-              <div className="mt-8 p-4 bg-muted/30 border border-primary/20 rounded-lg">
-                <p className="text-sm text-muted-foreground">
-                  💬 <strong>Try it first. Download proof. Then decide.</strong> Chat below and export your conversation to see it's real.
-                </p>
-              </div>
             </div>
           </div>
         )}
@@ -474,7 +448,7 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Ask about James Brain OS..."
+              placeholder="Message James Brain OS..."
               className="min-h-[60px] resize-none"
               disabled={isLoading}
             />
