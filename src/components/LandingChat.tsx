@@ -1,9 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Progress } from '@/components/ui/progress';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Send, Trash2, LayoutGrid, Sparkles, Download, CheckCircle2 } from 'lucide-react';
+
+import { Send, Sparkles } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import ReactMarkdown from 'react-markdown';
 import { useNavigate } from 'react-router-dom';
@@ -13,27 +12,16 @@ type Message = {
   content: string;
 };
 
-const STORAGE_KEY = 'landing_chat_messages';
-
 interface LandingChatProps {
-  onMinimize?: () => void;
+  messages: Message[];
+  setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
 }
 
-export const LandingChat = ({ onMinimize }: LandingChatProps) => {
+export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
   const navigate = useNavigate();
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [showSignupPrompt, setShowSignupPrompt] = useState(false);
-  const [hasDownloaded, setHasDownloaded] = useState(false);
-  const [exportFormat, setExportFormat] = useState<'json' | 'markdown' | 'txt'>('json');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -46,92 +34,12 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
   }, [messages]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
-    } catch (error) {
-      console.error('Failed to save messages to localStorage:', error);
-    }
-
-    // Show signup prompt after 2 user messages
+    // Show signup prompt after 3 user messages
     const userMessageCount = messages.filter(m => m.role === 'user').length;
-    if (userMessageCount >= 2 && !showSignupPrompt) {
+    if (userMessageCount >= 3 && !showSignupPrompt) {
       setShowSignupPrompt(true);
     }
   }, [messages, showSignupPrompt]);
-
-  const clearConversation = () => {
-    setMessages([]);
-    setHasDownloaded(false);
-    localStorage.removeItem(STORAGE_KEY);
-    toast({
-      title: "Conversation cleared",
-      description: "Starting fresh"
-    });
-  };
-
-  const downloadChat = () => {
-    if (messages.length === 0) {
-      toast({
-        title: "No messages to export",
-        description: "Start a conversation first",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    const timestamp = new Date().toISOString().split('T')[0];
-    let content = '';
-    let filename = '';
-    let mimeType = '';
-
-    switch (exportFormat) {
-      case 'json':
-        content = JSON.stringify({ 
-          exportedAt: new Date().toISOString(),
-          messageCount: messages.length,
-          messages 
-        }, null, 2);
-        filename = `demo-chat-${timestamp}.json`;
-        mimeType = 'application/json';
-        break;
-      
-      case 'markdown':
-        content = `# James Brain OS Demo Chat\n\nExported: ${new Date().toLocaleString()}\nMessages: ${messages.length}\n\n---\n\n`;
-        content += messages.map(msg => {
-          const role = msg.role === 'user' ? '**You**' : '**Assistant**';
-          return `${role}:\n\n${msg.content}\n\n---\n`;
-        }).join('\n');
-        filename = `demo-chat-${timestamp}.md`;
-        mimeType = 'text/markdown';
-        break;
-      
-      case 'txt':
-        content = `James Brain OS Demo Chat\nExported: ${new Date().toLocaleString()}\nMessages: ${messages.length}\n\n${'='.repeat(50)}\n\n`;
-        content += messages.map(msg => {
-          const role = msg.role === 'user' ? 'You' : 'Assistant';
-          return `${role}:\n${msg.content}\n\n${'-'.repeat(50)}\n`;
-        }).join('\n');
-        filename = `demo-chat-${timestamp}.txt`;
-        mimeType = 'text/plain';
-        break;
-    }
-
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    setHasDownloaded(true);
-    toast({
-      title: "✓ Chat downloaded",
-      description: "This is YOUR data. Take it anywhere."
-    });
-  };
 
   const streamChat = async (userMessage: string) => {
     const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/landing-chat`;
@@ -265,12 +173,12 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full">
-            <div className="text-center space-y-3 max-w-md px-4">
-              <h2 className="text-2xl font-semibold">
+            <div className="text-center space-y-4 max-w-lg px-4">
+              <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">
                 Ask me anything.
               </h2>
-              <p className="text-muted-foreground">
-                Your conversation, your data.
+              <p className="text-base sm:text-lg text-muted-foreground">
+                Your data, yours to keep.
               </p>
             </div>
           </div>
@@ -368,79 +276,11 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
 
       <div className="border-t border-border p-4">
         <div className="flex flex-col gap-2 max-w-4xl mx-auto">
-          {messages.length > 0 && (
-            <div className="flex flex-col gap-2">
-              {hasDownloaded && (
-                <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg flex items-start gap-2 animate-in slide-in-from-top-2 duration-300">
-                  <CheckCircle2 className="h-4 w-4 text-primary mt-0.5 flex-shrink-0" />
-                  <div className="flex-1 text-xs space-y-1">
-                    <p className="font-semibold text-foreground">You own {messages.length} messages from this demo</p>
-                    <p className="text-muted-foreground">Sign up to unlock the full memory system with your own API keys</p>
-                  </div>
-                </div>
-              )}
-              <div className="flex justify-between items-center gap-2">
-                <div className="flex items-center gap-2 text-xs text-muted-foreground flex-wrap">
-                  <div className="px-2.5 py-1 bg-primary/10 border border-primary/20 rounded-full flex items-center gap-1.5">
-                    <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-                    <span className="font-medium">
-                      {messages.filter(m => m.role === 'user').length} of 5 demo messages used
-                    </span>
-                  </div>
-                  {messages.filter(m => m.role === 'user').length >= 4 && (
-                    <span className="text-orange-500 font-medium animate-in fade-in duration-300">
-                      Almost out! Sign up to continue
-                    </span>
-                  )}
-                </div>
-                <div className="flex gap-2 flex-wrap justify-end">
-                  <div className="flex gap-1">
-                    <Select value={exportFormat} onValueChange={(value: any) => setExportFormat(value)}>
-                      <SelectTrigger className="h-8 w-[90px] text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="json">JSON</SelectItem>
-                        <SelectItem value="markdown">Markdown</SelectItem>
-                        <SelectItem value="txt">Text</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={downloadChat}
-                      className="text-xs h-8"
-                    >
-                      <Download className="h-3 w-3 mr-1" />
-                      Download
-                    </Button>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={clearConversation}
-                    className="text-xs text-muted-foreground hover:text-foreground h-8"
-                  >
-                    <Trash2 className="h-3 w-3 mr-1" />
-                    Clear
-                  </Button>
-                  {onMinimize && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={onMinimize}
-                      className="text-xs h-8"
-                    >
-                      <LayoutGrid className="h-3 w-3 mr-1" />
-                      Preview
-                    </Button>
-                  )}
-                </div>
-              </div>
-              <Progress 
-                value={(messages.filter(m => m.role === 'user').length / 5) * 100} 
-                className="h-1.5 transition-all duration-500"
-              />
+          {messages.length > 0 && messages.filter(m => m.role === 'user').length >= 4 && (
+            <div className="text-xs text-center text-muted-foreground">
+              <span className="text-orange-500 font-medium">
+                Almost out of demo messages! Sign up to continue
+              </span>
             </div>
           )}
           <div className="flex gap-2">
@@ -448,7 +288,7 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Message James Brain OS..."
+              placeholder="Ask anything..."
               className="min-h-[60px] resize-none"
               disabled={isLoading}
             />
