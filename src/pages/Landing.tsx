@@ -69,7 +69,7 @@ const Landing = () => {
             </div>
 
             {/* Minimized Chat - 40% */}
-            <div className="h-[40%] overflow-hidden">
+            <div className="h-[40%] flex flex-col">
               <LandingChat />
             </div>
           </div>
