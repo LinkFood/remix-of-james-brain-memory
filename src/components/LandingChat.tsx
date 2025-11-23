@@ -1,9 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Trash2, LayoutGrid } from 'lucide-react';
+import { Send, Trash2, LayoutGrid, Sparkles } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import ReactMarkdown from 'react-markdown';
+import { useNavigate } from 'react-router-dom';
 
 type Message = {
   role: 'user' | 'assistant';
@@ -17,6 +18,7 @@ interface LandingChatProps {
 }
 
 export const LandingChat = ({ onMinimize }: LandingChatProps) => {
+  const navigate = useNavigate();
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
@@ -27,6 +29,7 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
   });
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [showSignupPrompt, setShowSignupPrompt] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -44,7 +47,13 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
     } catch (error) {
       console.error('Failed to save messages to localStorage:', error);
     }
-  }, [messages]);
+
+    // Show signup prompt after 2 user messages
+    const userMessageCount = messages.filter(m => m.role === 'user').length;
+    if (userMessageCount >= 2 && !showSignupPrompt) {
+      setShowSignupPrompt(true);
+    }
+  }, [messages, showSignupPrompt]);
 
   const clearConversation = () => {
     setMessages([]);
@@ -186,10 +195,74 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
     <div className="flex flex-col h-full min-h-0">
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
         {messages.length === 0 && (
-          <div className="text-center text-muted-foreground text-sm mt-20">
-            Ask about James Brain OS...
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center space-y-4 max-w-2xl px-4">
+              <h2 className="text-3xl font-bold bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+                Your Universal AI Memory System
+              </h2>
+              <p className="text-muted-foreground text-lg">
+                Stop re-explaining context to your AI. James Brain OS captures every conversation, 
+                scores importance, and injects relevant memories automatically.
+              </p>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-8 text-left">
+                <div className="p-4 border border-border rounded-lg">
+                  <h3 className="font-semibold mb-2">Cross-Provider Memory</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Switch between OpenAI, Claude, Gemini. Your memory travels with you.
+                  </p>
+                </div>
+                <div className="p-4 border border-border rounded-lg">
+                  <h3 className="font-semibold mb-2">Data Sovereignty</h3>
+                  <p className="text-sm text-muted-foreground">
+                    You own it. Export anytime. Delete with one click.
+                  </p>
+                </div>
+                <div className="p-4 border border-border rounded-lg">
+                  <h3 className="font-semibold mb-2">Compounding Intelligence</h3>
+                  <p className="text-sm text-muted-foreground">
+                    Every conversation makes future ones smarter. Context builds over time.
+                  </p>
+                </div>
+              </div>
+              <div className="mt-8 p-4 bg-muted/30 border border-primary/20 rounded-lg">
+                <p className="text-sm text-muted-foreground">
+                  💬 <strong>Demo Mode:</strong> Try the chat below. Conversations aren't saved unless you sign up.
+                </p>
+              </div>
+            </div>
           </div>
         )}
+
+        {showSignupPrompt && (
+          <div className="mx-auto max-w-2xl">
+            <div className="p-6 bg-gradient-to-br from-primary/10 to-primary/5 border-2 border-primary/30 rounded-lg space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="flex items-start gap-3">
+                <Sparkles className="w-6 h-6 text-primary mt-1 flex-shrink-0" />
+                <div className="flex-1 space-y-3">
+                  <h3 className="font-bold text-lg">Ready to unlock your AI memory?</h3>
+                  <p className="text-sm text-muted-foreground">
+                    This conversation won't be saved. Create an account to:
+                  </p>
+                  <ul className="text-sm text-muted-foreground space-y-1.5 ml-4">
+                    <li>✓ Save and search all conversations</li>
+                    <li>✓ Auto-inject relevant context into new chats</li>
+                    <li>✓ Connect your own API keys (OpenAI, Claude, Gemini)</li>
+                    <li>✓ Export your data anytime</li>
+                  </ul>
+                  <Button 
+                    onClick={() => navigate('/auth')}
+                    className="w-full sm:w-auto mt-4"
+                    size="lg"
+                  >
+                    <Sparkles className="w-4 h-4 mr-2" />
+                    Sign Up - Start Building Your Memory
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {messages.map((message, idx) => (
           <div
             key={idx}
