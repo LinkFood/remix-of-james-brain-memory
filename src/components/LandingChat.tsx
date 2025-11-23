@@ -173,11 +173,11 @@ export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full">
-            <div className="text-center space-y-4 max-w-lg px-4">
-              <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">
+            <div className="text-center space-y-6 max-w-2xl px-4 animate-fade-in">
+              <h2 className="text-4xl sm:text-6xl md:text-7xl font-bold tracking-tight leading-tight">
                 Ask me anything.
               </h2>
-              <p className="text-base sm:text-lg text-muted-foreground">
+              <p className="text-lg sm:text-xl text-muted-foreground font-light">
                 Your data, yours to keep.
               </p>
             </div>
@@ -220,10 +220,10 @@ export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
             className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
             <div
-              className={`max-w-[80%] px-4 py-3 rounded-lg ${
+              className={`max-w-[80%] px-4 py-3 rounded-2xl ${
                 message.role === 'user'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'bg-muted text-foreground'
+                  ? 'bg-primary text-primary-foreground shadow-subtle'
+                  : 'bg-muted/50 text-foreground'
               }`}
             >
               {message.role === 'assistant' ? (
@@ -289,7 +289,7 @@ export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Ask anything..."
-              className="min-h-[60px] resize-none"
+              className="min-h-[60px] resize-none bg-muted/50 border-border/50 focus-visible:ring-1 focus-visible:ring-border"
               disabled={isLoading}
             />
             <Button

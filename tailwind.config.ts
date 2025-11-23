@@ -64,8 +64,8 @@ export default {
         'gradient-bg': 'var(--gradient-bg)',
       },
       boxShadow: {
-        'glow': 'var(--shadow-glow)',
-        'intense': 'var(--shadow-intense)',
+        'subtle': 'var(--shadow-subtle)',
+        'medium': 'var(--shadow-medium)',
       },
       borderRadius: {
         lg: "var(--radius)",
