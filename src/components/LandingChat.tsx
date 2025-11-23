@@ -244,10 +244,10 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
                     This conversation won't be saved. Create an account to:
                   </p>
                   <ul className="text-sm text-muted-foreground space-y-1.5 ml-4">
-                    <li>✓ Save and search all conversations</li>
-                    <li>✓ Auto-inject relevant context into new chats</li>
-                    <li>✓ Connect your own API keys (OpenAI, Claude, Gemini)</li>
-                    <li>✓ Export your data anytime</li>
+                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '400ms', animationFillMode: 'backwards' }}>✓ Save and search all conversations</li>
+                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '500ms', animationFillMode: 'backwards' }}>✓ Auto-inject relevant context into new chats</li>
+                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '600ms', animationFillMode: 'backwards' }}>✓ Connect your own API keys (OpenAI, Claude, Gemini)</li>
+                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '700ms', animationFillMode: 'backwards' }}>✓ Export your data anytime</li>
                   </ul>
                   <Button 
                     onClick={() => navigate('/auth')}
