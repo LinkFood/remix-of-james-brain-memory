@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { LandingChat } from '@/components/LandingChat';
-import { DashboardPreview } from '@/components/DashboardPreview';
 import { FeatureComparison } from '@/components/FeatureComparison';
 import { HowItWorks } from '@/components/HowItWorks';
 import { PricingSection } from '@/components/PricingSection';
@@ -10,12 +9,15 @@ import { TestimonialsSection } from '@/components/TestimonialsSection';
 import { DemoVideoSection } from '@/components/DemoVideoSection';
 import { LandingFooter } from '@/components/LandingFooter';
 import { Button } from '@/components/ui/button';
-import { ChevronUp, ChevronDown } from 'lucide-react';
+import { ChevronDown, MessageSquare } from 'lucide-react';
+import { useIsMobile } from '@/hooks/use-mobile';
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
+import { Drawer, DrawerContent, DrawerTrigger } from '@/components/ui/drawer';
 
 const Landing = () => {
   const navigate = useNavigate();
-  const [isMinimized, setIsMinimized] = useState(false);
   const [showDetails, setShowDetails] = useState(false);
+  const isMobile = useIsMobile();
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -44,8 +46,9 @@ const Landing = () => {
         </div>
       </header>
 
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {!isMinimized ? (
+      <div className="flex-1 flex overflow-hidden">
+        {isMobile ? (
+          // Mobile: Scrollable content with bottom drawer for chat
           <div className="flex-1 flex flex-col overflow-y-auto">
             <div className="max-w-7xl mx-auto w-full">
               <div id="hero" className="text-center py-8 px-6">
@@ -67,9 +70,7 @@ const Landing = () => {
                     className="gap-2"
                   >
                     {showDetails ? (
-                      <>
-                        Hide Details <ChevronUp className="w-4 h-4" />
-                      </>
+                      <>Hide Details</>
                     ) : (
                       <>
                         Learn More <ChevronDown className="w-4 h-4" />
@@ -77,9 +78,6 @@ const Landing = () => {
                     )}
                   </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  💬 Demo chat below - try it before signing up
-                </p>
               </div>
 
               {showDetails && (
@@ -101,51 +99,102 @@ const Landing = () => {
                   </div>
                 </div>
               )}
-
-              <div className="h-[500px] px-4 pb-4">
-                <LandingChat onMinimize={() => setIsMinimized(true)} />
-              </div>
             </div>
 
             <LandingFooter />
+
+            {/* Mobile Chat Drawer */}
+            <Drawer>
+              <DrawerTrigger asChild>
+                <Button 
+                  size="lg" 
+                  className="fixed bottom-4 right-4 shadow-lg z-40 gap-2"
+                >
+                  <MessageSquare className="w-5 h-5" />
+                  Try Demo Chat
+                </Button>
+              </DrawerTrigger>
+              <DrawerContent className="h-[85vh]">
+                <div className="h-full flex flex-col">
+                  <LandingChat />
+                </div>
+              </DrawerContent>
+            </Drawer>
           </div>
         ) : (
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Dashboard Preview - 30% */}
-            <div className="h-[30%] overflow-hidden border-b border-border relative">
-              <DashboardPreview />
-              <div className="absolute inset-0 backdrop-blur-sm bg-background/40 flex items-center justify-center">
-                <div className="text-center space-y-4">
-                  <div className="text-lg font-semibold tracking-tight">
-                    Sign up to unlock full interface
+          // Desktop: Split screen with resizable panels
+          <ResizablePanelGroup direction="horizontal" className="flex-1">
+            {/* Left Panel: Content */}
+            <ResizablePanel defaultSize={60} minSize={40}>
+              <div className="h-full overflow-y-auto">
+                <div className="max-w-4xl mx-auto w-full">
+                  <div id="hero" className="text-center py-8 px-6">
+                    <h2 className="text-3xl md:text-4xl font-bold mb-4">
+                      Try It First. Download Proof. Then Decide.
+                    </h2>
+                    <p className="text-base md:text-lg text-muted-foreground leading-relaxed max-w-3xl mx-auto mb-6">
+                      Your universal memory layer for AI. Bring your own API keys (OpenAI, Claude, Google). 
+                      We log everything. You own it. Export anytime. Context compounds over time.
+                    </p>
+                    <div className="flex flex-wrap justify-center gap-3 mb-4">
+                      <Button onClick={() => navigate('/auth')} size="lg" className="gap-2">
+                        Sign Up - Free
+                      </Button>
+                      <Button 
+                        onClick={() => setShowDetails(!showDetails)} 
+                        variant="outline" 
+                        size="lg"
+                        className="gap-2"
+                      >
+                        {showDetails ? (
+                          <>Hide Details</>
+                        ) : (
+                          <>
+                            Learn More <ChevronDown className="w-4 h-4" />
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      💬 Demo chat on the right - try it before signing up
+                    </p>
                   </div>
-                  <Button 
-                    onClick={() => navigate('/auth')}
-                    size="lg"
-                  >
-                    Sign Up
-                  </Button>
-                </div>
-              </div>
-            </div>
 
-            {/* Minimized Chat - 70% */}
-            <div className="h-[70%] flex flex-col">
-              <div className="border-b border-border px-6 py-2 flex justify-between items-center bg-background/50">
-                <span className="text-sm font-medium">Continue Chatting</span>
-                <Button
-                  onClick={() => setIsMinimized(false)}
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs"
-                >
-                  <ChevronUp className="w-3 h-3 mr-1.5" />
-                  Expand Chat
-                </Button>
+                  {showDetails && (
+                    <div className="animate-in fade-in slide-in-from-top-4 duration-500">
+                      <div id="how-it-works">
+                        <HowItWorks />
+                      </div>
+                      <div id="demo">
+                        <DemoVideoSection />
+                      </div>
+                      <div id="features">
+                        <FeatureComparison />
+                      </div>
+                      <div id="testimonials">
+                        <TestimonialsSection />
+                      </div>
+                      <div id="pricing">
+                        <PricingSection />
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <LandingFooter />
               </div>
-              <LandingChat />
-            </div>
-          </div>
+            </ResizablePanel>
+
+            {/* Resizable Handle */}
+            <ResizableHandle withHandle />
+
+            {/* Right Panel: Chat */}
+            <ResizablePanel defaultSize={40} minSize={30}>
+              <div className="h-full border-l border-border bg-muted/20">
+                <LandingChat />
+              </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
         )}
       </div>
     </div>
