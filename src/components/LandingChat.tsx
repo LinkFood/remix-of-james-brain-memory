@@ -192,7 +192,7 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-h-0">
       <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
         {messages.length === 0 && (
           <div className="text-center text-muted-foreground text-sm mt-20">
