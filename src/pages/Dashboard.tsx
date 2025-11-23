@@ -18,6 +18,7 @@ import ScoreExistingMessages from "@/components/ScoreExistingMessages";
 import KnowledgeGraph from "@/components/KnowledgeGraph";
 import Onboarding from "@/components/Onboarding";
 import { OnboardingWizard } from "@/components/OnboardingWizard";
+import { PostSignupOnboarding } from "@/components/PostSignupOnboarding";
 import MobileBottomNav from "@/components/MobileBottomNav";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -163,10 +164,8 @@ const Dashboard = () => {
   return (
     <div className="min-h-screen bg-gradient-bg pb-16 md:pb-0">
       {showOnboarding && user?.id && (
-        <OnboardingWizard
-          isOpen={showOnboarding}
+        <PostSignupOnboarding
           onComplete={() => setShowOnboarding(false)}
-          userId={user.id}
         />
       )}
       <Onboarding userId={user?.id ?? ""} />

@@ -469,28 +469,53 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
                   )}
                   
                   {msg.role === "assistant" && msg.memoriesUsed && msg.memoriesUsed > 0 && (
-                    <div className="mt-2">
-                      <Collapsible>
-                        <CollapsibleTrigger asChild>
-                          <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 hover:bg-background/10">
-                            Used {msg.memoriesUsed} {msg.memoriesUsed === 1 ? 'memory' : 'memories'}
-                            <ChevronDown className="h-3 w-3" />
-                          </Button>
-                        </CollapsibleTrigger>
-                        <CollapsibleContent className="mt-2 space-y-2">
-                          {msg.memories?.map((mem, i) => (
-                            <div key={i} className="text-xs p-2 rounded bg-background/20 border border-border/30">
-                              <div className="text-muted-foreground mb-1">
-                                {mem.snippet}...
+                    <div className="mt-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
+                      <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                          <span className="text-xs font-semibold text-primary">
+                            Memory Injection Active
+                          </span>
+                          <Badge variant="outline" className="text-xs bg-primary/5 border-primary/30">
+                            {msg.memoriesUsed} {msg.memoriesUsed === 1 ? 'memory' : 'memories'} used
+                          </Badge>
+                        </div>
+                        <Collapsible>
+                          <CollapsibleTrigger asChild>
+                            <Button variant="ghost" size="sm" className="h-7 w-full text-xs gap-1 hover:bg-primary/5 justify-between">
+                              <span>View injected context</span>
+                              <ChevronDown className="h-3 w-3" />
+                            </Button>
+                          </CollapsibleTrigger>
+                          <CollapsibleContent className="mt-2 space-y-2">
+                            {msg.memories?.map((mem, i) => (
+                              <div key={i} className="text-xs p-3 rounded-lg bg-background/50 border border-primary/10 space-y-2 animate-in fade-in slide-in-from-top-1 duration-300" style={{ animationDelay: `${i * 50}ms`, animationFillMode: 'backwards' }}>
+                                <div className="text-foreground/80 leading-relaxed">
+                                  "{mem.snippet}..."
+                                </div>
+                                <div className="flex gap-3 text-[10px] text-muted-foreground">
+                                  <span className="flex items-center gap-1">
+                                    <div className="w-1 h-1 rounded-full bg-primary" />
+                                    {(mem.similarity * 100).toFixed(0)}% match
+                                  </span>
+                                  {mem.importance && (
+                                    <span className="flex items-center gap-1">
+                                      <div className="w-1 h-1 rounded-full bg-primary" />
+                                      Importance: {mem.importance}
+                                    </span>
+                                  )}
+                                  {mem.created_at && (
+                                    <span className="flex items-center gap-1">
+                                      <div className="w-1 h-1 rounded-full bg-primary" />
+                                      {new Date(mem.created_at).toLocaleDateString()}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
-                              <div className="flex gap-2 text-[10px] text-muted-foreground/70">
-                                <span>{(mem.similarity * 100).toFixed(0)}% match</span>
-                                {mem.importance && <span>• Importance: {mem.importance}</span>}
-                              </div>
-                            </div>
-                          ))}
-                        </CollapsibleContent>
-                      </Collapsible>
+                            ))}
+                          </CollapsibleContent>
+                        </Collapsible>
+                      </div>
                     </div>
                   )}
 
