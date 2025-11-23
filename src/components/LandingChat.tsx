@@ -251,7 +251,7 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
                   </ul>
                   <Button 
                     onClick={() => navigate('/auth')}
-                    className="w-full sm:w-auto mt-4"
+                    className="w-full sm:w-auto mt-4 animate-pulse hover:animate-none"
                     size="lg"
                   >
                     <Sparkles className="w-4 h-4 mr-2" />
