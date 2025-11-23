@@ -3,12 +3,15 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { LandingChat } from '@/components/LandingChat';
 import { DashboardPreview } from '@/components/DashboardPreview';
+import { FeatureComparison } from '@/components/FeatureComparison';
+import { HowItWorks } from '@/components/HowItWorks';
 import { Button } from '@/components/ui/button';
-import { ChevronUp } from 'lucide-react';
+import { ChevronUp, ChevronDown } from 'lucide-react';
 
 const Landing = () => {
   const navigate = useNavigate();
   const [isMinimized, setIsMinimized] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -31,19 +34,52 @@ const Landing = () => {
 
       <div className="flex-1 flex flex-col overflow-hidden">
         {!isMinimized ? (
-          <div className="flex-1 flex flex-col max-w-7xl mx-auto w-full">
-            <div className="text-center py-6 px-6">
-              <h2 className="text-2xl font-bold mb-3">
-                You own your data with your API
-              </h2>
-              <p className="text-sm text-muted-foreground leading-relaxed max-w-2xl mx-auto">
-                Bring your OpenAI, Claude, or Google API key. We store every conversation.
-                You own it. Context compounds. Your AI remembers.
-              </p>
-            </div>
+          <div className="flex-1 flex flex-col overflow-y-auto">
+            <div className="max-w-7xl mx-auto w-full">
+              <div className="text-center py-8 px-6">
+                <h2 className="text-3xl md:text-4xl font-bold mb-4">
+                  Try It First. Download Proof. Then Decide.
+                </h2>
+                <p className="text-base md:text-lg text-muted-foreground leading-relaxed max-w-3xl mx-auto mb-6">
+                  Your universal memory layer for AI. Bring your own API keys (OpenAI, Claude, Google). 
+                  We log everything. You own it. Export anytime. Context compounds over time.
+                </p>
+                <div className="flex flex-wrap justify-center gap-3 mb-4">
+                  <Button onClick={() => navigate('/auth')} size="lg" className="gap-2">
+                    Sign Up - Free
+                  </Button>
+                  <Button 
+                    onClick={() => setShowDetails(!showDetails)} 
+                    variant="outline" 
+                    size="lg"
+                    className="gap-2"
+                  >
+                    {showDetails ? (
+                      <>
+                        Hide Details <ChevronUp className="w-4 h-4" />
+                      </>
+                    ) : (
+                      <>
+                        Learn More <ChevronDown className="w-4 h-4" />
+                      </>
+                    )}
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  💬 Demo chat below - try it before signing up
+                </p>
+              </div>
 
-            <div className="flex-1 min-h-0">
-              <LandingChat onMinimize={() => setIsMinimized(true)} />
+              {showDetails && (
+                <div className="animate-in fade-in slide-in-from-top-4 duration-500">
+                  <HowItWorks />
+                  <FeatureComparison />
+                </div>
+              )}
+
+              <div className="h-[500px] px-4 pb-4">
+                <LandingChat onMinimize={() => setIsMinimized(true)} />
+              </div>
             </div>
           </div>
         ) : (
