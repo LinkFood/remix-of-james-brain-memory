@@ -235,7 +235,7 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
 
         {showSignupPrompt && (
           <div className="mx-auto max-w-2xl">
-            <div className="p-6 bg-gradient-to-br from-primary/10 to-primary/5 border-2 border-primary/30 rounded-lg space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="p-6 bg-gradient-to-br from-primary/10 to-primary/5 border-2 border-primary/30 rounded-lg space-y-4 animate-in slide-in-from-bottom-8 duration-700 ease-out" style={{ animationTimingFunction: 'cubic-bezier(0.34, 1.56, 0.64, 1)' }}>
               <div className="flex items-start gap-3">
                 <Sparkles className="w-6 h-6 text-primary mt-1 flex-shrink-0" />
                 <div className="flex-1 space-y-3">
