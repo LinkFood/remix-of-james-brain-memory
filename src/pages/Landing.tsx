@@ -23,12 +23,9 @@ const Landing = () => {
       <header className="border-b border-border px-6 py-4">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <h1 className="text-xl font-bold tracking-tight">JAMESBRAIN</h1>
-          <button
-            onClick={() => navigate('/auth')}
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Login
-          </button>
+          <div className="text-sm text-muted-foreground">
+            Chat below to get started →
+          </div>
         </div>
       </header>
 
