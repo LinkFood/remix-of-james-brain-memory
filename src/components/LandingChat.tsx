@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Send, Trash2 } from 'lucide-react';
+import { Send, Trash2, LayoutGrid } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import ReactMarkdown from 'react-markdown';
 
@@ -45,15 +45,6 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
       console.error('Failed to save messages to localStorage:', error);
     }
   }, [messages]);
-
-  // Trigger minimize after first AI response
-  useEffect(() => {
-    if (messages.length >= 2 && messages[1].role === 'assistant' && onMinimize) {
-      setTimeout(() => {
-        onMinimize();
-      }, 1000);
-    }
-  }, [messages, onMinimize]);
 
   const clearConversation = () => {
     setMessages([]);
@@ -262,7 +253,7 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
       <div className="border-t border-border p-4">
         <div className="flex flex-col gap-2 max-w-4xl mx-auto">
           {messages.length > 0 && (
-            <div className="flex justify-end">
+            <div className="flex justify-end gap-2">
               <Button
                 variant="ghost"
                 size="sm"
@@ -272,6 +263,17 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
                 <Trash2 className="h-3 w-3 mr-1" />
                 Clear conversation
               </Button>
+              {onMinimize && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onMinimize}
+                  className="text-xs"
+                >
+                  <LayoutGrid className="h-3 w-3 mr-1" />
+                  Preview Dashboard
+                </Button>
+              )}
             </div>
           )}
           <div className="flex gap-2">

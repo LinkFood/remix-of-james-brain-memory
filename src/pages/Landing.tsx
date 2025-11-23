@@ -4,6 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { LandingChat } from '@/components/LandingChat';
 import { DashboardPreview } from '@/components/DashboardPreview';
 import { Button } from '@/components/ui/button';
+import { ChevronUp } from 'lucide-react';
 
 const Landing = () => {
   const navigate = useNavigate();
@@ -50,8 +51,8 @@ const Landing = () => {
           </div>
         ) : (
           <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Dashboard Preview - 60% */}
-            <div className="h-[60%] overflow-hidden border-b border-border relative">
+            {/* Dashboard Preview - 30% */}
+            <div className="h-[30%] overflow-hidden border-b border-border relative">
               <DashboardPreview />
               <div className="absolute inset-0 backdrop-blur-sm bg-background/40 flex items-center justify-center">
                 <div className="text-center space-y-4">
@@ -68,8 +69,20 @@ const Landing = () => {
               </div>
             </div>
 
-            {/* Minimized Chat - 40% */}
-            <div className="h-[40%] flex flex-col">
+            {/* Minimized Chat - 70% */}
+            <div className="h-[70%] flex flex-col">
+              <div className="border-b border-border px-6 py-2 flex justify-between items-center bg-background/50">
+                <span className="text-sm font-medium">Continue Chatting</span>
+                <Button
+                  onClick={() => setIsMinimized(false)}
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs"
+                >
+                  <ChevronUp className="w-3 h-3 mr-1.5" />
+                  Expand Chat
+                </Button>
+              </div>
               <LandingChat />
             </div>
           </div>
