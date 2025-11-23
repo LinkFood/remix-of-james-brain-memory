@@ -8,6 +8,8 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar } from "recharts";
 import { toast } from "sonner";
+import { MemoryUsageStats } from "@/components/MemoryUsageStats";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 interface UsageAnalyticsProps {
   userId: string;
@@ -190,8 +192,15 @@ const UsageAnalytics = ({ userId }: UsageAnalyticsProps) => {
 
   return (
     <div className="space-y-6">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <Tabs defaultValue="costs" className="w-full">
+        <TabsList className="grid w-full grid-cols-2 max-w-md">
+          <TabsTrigger value="costs">API Costs</TabsTrigger>
+          <TabsTrigger value="memory">Memory Stats</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="costs" className="space-y-6 mt-6">
+          {/* Summary Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <Card className="p-6 bg-card border-border hover:border-primary/50 transition-all">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center">
@@ -438,6 +447,12 @@ const UsageAnalytics = ({ userId }: UsageAnalyticsProps) => {
           * Prices are approximate averages. Actual costs may vary by model.
         </p>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="memory" className="space-y-6 mt-6">
+          <MemoryUsageStats userId={userId} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

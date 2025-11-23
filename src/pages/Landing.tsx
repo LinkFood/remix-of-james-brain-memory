@@ -5,6 +5,10 @@ import { LandingChat } from '@/components/LandingChat';
 import { DashboardPreview } from '@/components/DashboardPreview';
 import { FeatureComparison } from '@/components/FeatureComparison';
 import { HowItWorks } from '@/components/HowItWorks';
+import { PricingSection } from '@/components/PricingSection';
+import { TestimonialsSection } from '@/components/TestimonialsSection';
+import { DemoVideoSection } from '@/components/DemoVideoSection';
+import { LandingFooter } from '@/components/LandingFooter';
 import { Button } from '@/components/ui/button';
 import { ChevronUp, ChevronDown } from 'lucide-react';
 
@@ -22,12 +26,20 @@ const Landing = () => {
   }, [navigate]);
 
   return (
-    <div className="h-screen flex flex-col bg-background text-foreground">
-      <header className="border-b border-border px-6 py-4">
+    <div className="min-h-screen flex flex-col bg-background text-foreground">
+      <header className="border-b border-border px-6 py-4 sticky top-0 bg-background/80 backdrop-blur-sm z-50">
         <div className="max-w-7xl mx-auto flex justify-between items-center">
           <h1 className="text-xl font-bold tracking-tight">JAMESBRAIN</h1>
-          <div className="text-sm text-muted-foreground">
-            Chat below to get started →
+          <div className="flex items-center gap-4">
+            <a href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors hidden md:block">
+              Features
+            </a>
+            <a href="#pricing" className="text-sm text-muted-foreground hover:text-foreground transition-colors hidden md:block">
+              Pricing
+            </a>
+            <Button onClick={() => navigate('/auth')} size="sm" variant="outline">
+              Sign In
+            </Button>
           </div>
         </div>
       </header>
@@ -36,7 +48,7 @@ const Landing = () => {
         {!isMinimized ? (
           <div className="flex-1 flex flex-col overflow-y-auto">
             <div className="max-w-7xl mx-auto w-full">
-              <div className="text-center py-8 px-6">
+              <div id="hero" className="text-center py-8 px-6">
                 <h2 className="text-3xl md:text-4xl font-bold mb-4">
                   Try It First. Download Proof. Then Decide.
                 </h2>
@@ -72,8 +84,21 @@ const Landing = () => {
 
               {showDetails && (
                 <div className="animate-in fade-in slide-in-from-top-4 duration-500">
-                  <HowItWorks />
-                  <FeatureComparison />
+                  <div id="how-it-works">
+                    <HowItWorks />
+                  </div>
+                  <div id="demo">
+                    <DemoVideoSection />
+                  </div>
+                  <div id="features">
+                    <FeatureComparison />
+                  </div>
+                  <div id="testimonials">
+                    <TestimonialsSection />
+                  </div>
+                  <div id="pricing">
+                    <PricingSection />
+                  </div>
                 </div>
               )}
 
@@ -81,6 +106,8 @@ const Landing = () => {
                 <LandingChat onMinimize={() => setIsMinimized(true)} />
               </div>
             </div>
+
+            <LandingFooter />
           </div>
         ) : (
           <div className="flex-1 flex flex-col overflow-hidden">
