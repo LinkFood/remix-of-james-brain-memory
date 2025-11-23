@@ -326,27 +326,42 @@ export const LandingChat = ({ onMinimize }: LandingChatProps) => {
       <div className="border-t border-border p-4">
         <div className="flex flex-col gap-2 max-w-4xl mx-auto">
           {messages.length > 0 && (
-            <div className="flex justify-end gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={clearConversation}
-                className="text-xs text-muted-foreground hover:text-foreground"
-              >
-                <Trash2 className="h-3 w-3 mr-1" />
-                Clear conversation
-              </Button>
-              {onMinimize && (
+            <div className="flex justify-between items-center gap-2">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <div className="px-2.5 py-1 bg-primary/10 border border-primary/20 rounded-full flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                  <span className="font-medium">
+                    {messages.filter(m => m.role === 'user').length} of 5 demo messages used
+                  </span>
+                </div>
+                {messages.filter(m => m.role === 'user').length >= 4 && (
+                  <span className="text-orange-500 font-medium animate-in fade-in duration-300">
+                    Almost out! Sign up to continue
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-2">
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
-                  onClick={onMinimize}
-                  className="text-xs"
+                  onClick={clearConversation}
+                  className="text-xs text-muted-foreground hover:text-foreground"
                 >
-                  <LayoutGrid className="h-3 w-3 mr-1" />
-                  Preview Dashboard
+                  <Trash2 className="h-3 w-3 mr-1" />
+                  Clear
                 </Button>
-              )}
+                {onMinimize && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onMinimize}
+                    className="text-xs"
+                  >
+                    <LayoutGrid className="h-3 w-3 mr-1" />
+                    Preview
+                  </Button>
+                )}
+              </div>
             </div>
           )}
           <div className="flex gap-2">
