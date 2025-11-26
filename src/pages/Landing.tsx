@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { LandingChat } from '@/components/LandingChat';
+import { LandingConversationSidebar } from '@/components/LandingConversationSidebar';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -12,14 +13,18 @@ type Message = {
   content: string;
 };
 
-const STORAGE_KEY = 'landing_chat_messages';
+const getStorageKey = (conversationId: string) => `landing_chat_messages_${conversationId}`;
 
 const Landing = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const [currentConversationId, setCurrentConversationId] = useState<string>(() => {
+    return localStorage.getItem('landing_current_conversation') || `conv_${Date.now()}`;
+  });
+  
   const [messages, setMessages] = useState<Message[]>(() => {
     try {
-      const stored = localStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(getStorageKey(currentConversationId));
       return stored ? JSON.parse(stored) : [];
     } catch {
       return [];
@@ -36,11 +41,28 @@ const Landing = () => {
 
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(messages));
+      localStorage.setItem(getStorageKey(currentConversationId), JSON.stringify(messages));
+      localStorage.setItem('landing_current_conversation', currentConversationId);
     } catch (error) {
       console.error('Failed to save messages to localStorage:', error);
     }
-  }, [messages]);
+  }, [messages, currentConversationId]);
+
+  const handleNewChat = () => {
+    const newId = `conv_${Date.now()}`;
+    setCurrentConversationId(newId);
+    setMessages([]);
+  };
+
+  const handleSelectConversation = (conversationId: string) => {
+    setCurrentConversationId(conversationId);
+    try {
+      const stored = localStorage.getItem(getStorageKey(conversationId));
+      setMessages(stored ? JSON.parse(stored) : []);
+    } catch {
+      setMessages([]);
+    }
+  };
 
   const downloadChat = (format: 'json' | 'markdown' | 'txt') => {
     if (messages.length === 0) {
@@ -139,7 +161,16 @@ const Landing = () => {
       </header>
 
       <div className="flex-1 flex overflow-hidden">
-        <LandingChat messages={messages} setMessages={setMessages} />
+        <LandingConversationSidebar
+          currentConversationId={currentConversationId}
+          onNewChat={handleNewChat}
+          onSelectConversation={handleSelectConversation}
+        />
+        <LandingChat 
+          messages={messages} 
+          setMessages={setMessages}
+          conversationId={currentConversationId}
+        />
       </div>
     </div>
   );
