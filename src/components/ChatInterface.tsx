@@ -5,7 +5,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Send, Loader2, AlertCircle, ChevronDown, Copy, Star, Trash2, Edit2, Check, X, MoreVertical } from "lucide-react";
+import { Send, Loader2, AlertCircle, ChevronDown, Copy, Star, Trash2, Edit2, Check, X, MoreVertical, Database, MessageSquare, Zap } from "lucide-react";
 import { toast } from "sonner";
 import ConversationSidebar from "./ConversationSidebar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -50,6 +50,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editContent, setEditContent] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [memoryStats, setMemoryStats] = useState({ totalMessages: 0, totalConversations: 0, totalProviders: 0 });
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const modelOptions = {
@@ -77,7 +78,33 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
 
   useEffect(() => {
     checkApiKey();
+    fetchMemoryStats();
   }, [userId]);
+
+  const fetchMemoryStats = async () => {
+    try {
+      const [messagesResult, conversationsResult] = await Promise.all([
+        supabase.from("messages").select("id", { count: "exact", head: true }).eq("user_id", userId),
+        supabase.from("conversations").select("id", { count: "exact", head: true }).eq("user_id", userId)
+      ]);
+
+      const providersResult = await supabase
+        .from("messages")
+        .select("provider")
+        .eq("user_id", userId)
+        .not("provider", "is", null);
+
+      const uniqueProviders = new Set(providersResult.data?.map(m => m.provider) || []).size;
+
+      setMemoryStats({
+        totalMessages: messagesResult.count || 0,
+        totalConversations: conversationsResult.count || 0,
+        totalProviders: uniqueProviders
+      });
+    } catch (error) {
+      console.error("Failed to fetch memory stats:", error);
+    }
+  };
 
   useEffect(() => {
     if (!conversationId) {
@@ -292,6 +319,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
         memories: data.memories || [],
       };
       setMessages((prev) => [...prev, assistantMsg]);
+      fetchMemoryStats();
       
       if (messages.length === 1) {
         updateConversationTitle(userMessage);
@@ -349,6 +377,33 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
       />
       
       <div className="flex-1 flex flex-col gap-4">
+        {memoryStats.totalMessages > 0 && (
+          <Card className="p-4 bg-gradient-to-r from-primary/10 to-primary/5 border-primary/20">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Database className="w-5 h-5 text-primary" />
+                <span className="font-semibold text-sm">Memory Bank</span>
+              </div>
+              <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                <div className="flex items-center gap-1.5">
+                  <MessageSquare className="w-4 h-4" />
+                  <span>{memoryStats.totalMessages} memories</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <Zap className="w-4 h-4" />
+                  <span>{memoryStats.totalConversations} conversations</span>
+                </div>
+                {memoryStats.totalProviders > 0 && (
+                  <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
+                    <span>{memoryStats.totalProviders} {memoryStats.totalProviders === 1 ? 'provider' : 'providers'}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          </Card>
+        )}
+
         {!hasApiKey && (
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
@@ -468,16 +523,16 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
                     </>
                   )}
                   
-                  {msg.role === "assistant" && msg.memoriesUsed && msg.memoriesUsed > 0 && (
+                   {msg.role === "assistant" && msg.memoriesUsed && msg.memoriesUsed > 0 && (
                     <div className="mt-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
                       <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg">
                         <div className="flex items-center gap-2 mb-2">
                           <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
                           <span className="text-xs font-semibold text-primary">
-                            Memory Injection Active
+                            Using context from {msg.memories && msg.memories.length > 0 ? new Date(msg.memories[0].created_at || '').toLocaleDateString() : 'previous conversations'}
                           </span>
                           <Badge variant="outline" className="text-xs bg-primary/5 border-primary/30">
-                            {msg.memoriesUsed} {msg.memoriesUsed === 1 ? 'memory' : 'memories'} used
+                            {msg.memoriesUsed} {msg.memoriesUsed === 1 ? 'memory' : 'memories'} injected
                           </Badge>
                         </div>
                         <Collapsible>
