@@ -128,8 +128,8 @@ const Landing = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-background text-foreground">
-      <header className="border-b border-border/50 px-4 sm:px-6 py-3 sticky top-0 bg-background/80 backdrop-blur-xl z-50">
+    <div className="h-screen flex flex-col overflow-hidden bg-background text-foreground">
+      <header className="flex-shrink-0 border-b border-border/50 px-4 sm:px-6 py-3 bg-background/80 backdrop-blur-xl z-50">
         <div className="max-w-7xl mx-auto flex justify-between items-center gap-4">
           <h1 className="text-base sm:text-lg font-semibold tracking-tight">JAMESBRAIN</h1>
           <div className="flex items-center gap-2 sm:gap-3">
@@ -169,34 +169,34 @@ const Landing = () => {
         
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Hero Section - Fixed Top Half */}
-          <div className="flex-shrink-0 border-b border-border/50 bg-gradient-to-br from-background via-background to-primary/5">
-            <div className="max-w-4xl mx-auto px-6 py-12 sm:py-16">
-              <div className="space-y-6">
-                <h1 className="text-5xl sm:text-6xl md:text-7xl font-bold tracking-tight leading-tight">
+          {/* Hero Section - Constrained Height */}
+          <div className="flex-shrink-0 h-[40vh] border-b border-border/50 bg-gradient-to-br from-background via-background to-primary/5 overflow-hidden">
+            <div className="max-w-4xl mx-auto px-6 py-8 h-full flex flex-col justify-center">
+              <div className="space-y-4">
+                <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-tight">
                   Your AI conversations,
                   <br />
                   <span className="text-primary">finally unified</span>
                 </h1>
-                <p className="text-xl sm:text-2xl text-muted-foreground font-light max-w-2xl">
+                <p className="text-lg sm:text-xl text-muted-foreground font-light max-w-2xl">
                   ChatGPT forgets what you told Claude. Claude doesn't know what you asked Gemini. 
                   <span className="text-foreground font-medium"> We fix that.</span>
                 </p>
-                <div className="grid sm:grid-cols-3 gap-4 pt-4">
-                  <div className="space-y-2">
-                    <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">1</div>
-                    <h3 className="font-semibold">Use any AI</h3>
-                    <p className="text-sm text-muted-foreground">Your API keys. Your models. GPT, Claude, Gemini.</p>
+                <div className="grid sm:grid-cols-3 gap-3 pt-2">
+                  <div className="space-y-1">
+                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">1</div>
+                    <h3 className="font-semibold text-sm">Use any AI</h3>
+                    <p className="text-xs text-muted-foreground">Your API keys. Your models.</p>
                   </div>
-                  <div className="space-y-2">
-                    <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">2</div>
-                    <h3 className="font-semibold">We remember everything</h3>
-                    <p className="text-sm text-muted-foreground">Every conversation builds your personal knowledge base.</p>
+                  <div className="space-y-1">
+                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">2</div>
+                    <h3 className="font-semibold text-sm">We remember everything</h3>
+                    <p className="text-xs text-muted-foreground">Every conversation builds your knowledge.</p>
                   </div>
-                  <div className="space-y-2">
-                    <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold">3</div>
-                    <h3 className="font-semibold">Context travels</h3>
-                    <p className="text-sm text-muted-foreground">Past context automatically enhances every new chat.</p>
+                  <div className="space-y-1">
+                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">3</div>
+                    <h3 className="font-semibold text-sm">Context travels</h3>
+                    <p className="text-xs text-muted-foreground">Past context enhances every chat.</p>
                   </div>
                 </div>
               </div>

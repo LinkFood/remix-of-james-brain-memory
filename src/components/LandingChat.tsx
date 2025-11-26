@@ -172,7 +172,7 @@ export const LandingChat = ({ messages, setMessages, conversationId }: LandingCh
   };
 
   return (
-    <main className="flex-1 flex flex-col overflow-hidden">
+    <div className="flex-1 flex flex-col overflow-hidden">
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
         <div className="max-w-4xl mx-auto space-y-6">
         {messages.length === 0 && (
@@ -277,8 +277,8 @@ export const LandingChat = ({ messages, setMessages, conversationId }: LandingCh
         </div>
       </div>
 
-      {/* Input Area */}
-      <div className="border-t border-border/50 px-4 sm:px-6 py-4 bg-background/80 backdrop-blur-xl">
+      {/* Input Area - Fixed at Bottom */}
+      <div className="flex-shrink-0 border-t border-border/50 px-4 sm:px-6 py-4 bg-background/80 backdrop-blur-xl">
         <div className="max-w-4xl mx-auto flex flex-col gap-2">
           {messages.length > 0 && messages.filter(m => m.role === 'user').length >= 4 && (
             <div className="text-xs text-center text-muted-foreground">
@@ -307,6 +307,6 @@ export const LandingChat = ({ messages, setMessages, conversationId }: LandingCh
           </div>
         </div>
       </div>
-    </main>
+    </div>
   );
 };
