@@ -175,11 +175,25 @@ export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
           <div className="flex items-center justify-center h-full">
             <div className="text-center space-y-6 max-w-2xl px-4 animate-fade-in">
               <h2 className="text-4xl sm:text-6xl md:text-7xl font-bold tracking-tight leading-tight">
-                Ask me anything.
+                One interface. All your AI memories.
               </h2>
               <p className="text-lg sm:text-xl text-muted-foreground font-light">
-                Your data, yours to keep.
+                Chat with GPT, Claude, or Gemini. Your context travels with you.
               </p>
+              <div className="flex flex-col sm:flex-row gap-4 justify-center items-center text-sm text-muted-foreground pt-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-primary" />
+                  <span>Cross-platform memory</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-primary" />
+                  <span>Context compounds over time</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-primary" />
+                  <span>You own your data</span>
+                </div>
+              </div>
             </div>
           </div>
         )}
@@ -190,15 +204,15 @@ export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
               <div className="flex items-start gap-3">
                 <Sparkles className="w-6 h-6 text-primary mt-1 flex-shrink-0" />
                 <div className="flex-1 space-y-3">
-                  <h3 className="font-bold text-lg">Ready to unlock your AI memory?</h3>
+                  <h3 className="font-bold text-lg">Your conversation history is fragmented across AI platforms. We fix that.</h3>
                   <p className="text-sm text-muted-foreground">
-                    This conversation won't be saved. Create an account to:
+                    This demo conversation won't be saved. Sign up to build your unified AI memory:
                   </p>
                   <ul className="text-sm text-muted-foreground space-y-1.5 ml-4">
-                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '400ms', animationFillMode: 'backwards' }}>✓ Save and search all conversations</li>
-                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '500ms', animationFillMode: 'backwards' }}>✓ Auto-inject relevant context into new chats</li>
-                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '600ms', animationFillMode: 'backwards' }}>✓ Connect your own API keys (OpenAI, Claude, Gemini)</li>
-                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '700ms', animationFillMode: 'backwards' }}>✓ Export your data anytime</li>
+                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '400ms', animationFillMode: 'backwards' }}>✓ Use any model (GPT, Claude, Gemini) with your API keys</li>
+                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '500ms', animationFillMode: 'backwards' }}>✓ Every conversation builds your personal knowledge base</li>
+                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '600ms', animationFillMode: 'backwards' }}>✓ Past context automatically enhances new chats</li>
+                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '700ms', animationFillMode: 'backwards' }}>✓ Own and export all your data, always</li>
                   </ul>
                   <Button 
                     onClick={() => navigate('/auth')}
@@ -206,7 +220,7 @@ export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
                     size="lg"
                   >
                     <Sparkles className="w-4 h-4 mr-2" />
-                    Sign Up - Start Building Your Memory
+                    Start Building Your Memory
                   </Button>
                 </div>
               </div>
