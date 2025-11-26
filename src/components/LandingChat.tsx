@@ -1,11 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-
 import { Send, Sparkles } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import ReactMarkdown from 'react-markdown';
 import { useNavigate } from 'react-router-dom';
+import { updateLandingConversation } from './LandingConversationSidebar';
 
 type Message = {
   role: 'user' | 'assistant';
@@ -15,9 +15,10 @@ type Message = {
 interface LandingChatProps {
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
+  conversationId: string;
 }
 
-export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
+export const LandingChat = ({ messages, setMessages, conversationId }: LandingChatProps) => {
   const navigate = useNavigate();
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -151,7 +152,9 @@ export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
 
     const userMessage = input.trim();
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
+    const newMessages: Message[] = [...messages, { role: 'user' as const, content: userMessage }];
+    setMessages(newMessages);
+    updateLandingConversation(conversationId, newMessages);
     setIsLoading(true);
 
     try {
@@ -169,8 +172,9 @@ export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0">
-      <div className="flex-1 overflow-y-auto px-4 py-6 space-y-6">
+    <main className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
+        <div className="max-w-4xl mx-auto space-y-6">
         {messages.length === 0 && (
           <div className="flex items-center justify-center h-full">
             <div className="text-center space-y-6 max-w-2xl px-4 animate-fade-in">
@@ -285,11 +289,13 @@ export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
             </div>
           </div>
         )}
-        <div ref={messagesEndRef} />
+          <div ref={messagesEndRef} />
+        </div>
       </div>
 
-      <div className="border-t border-border p-4">
-        <div className="flex flex-col gap-2 max-w-4xl mx-auto">
+      {/* Input Area */}
+      <div className="border-t border-border/50 px-4 sm:px-6 py-4 bg-background/80 backdrop-blur-xl">
+        <div className="max-w-4xl mx-auto flex flex-col gap-2">
           {messages.length > 0 && messages.filter(m => m.role === 'user').length >= 4 && (
             <div className="text-xs text-center text-muted-foreground">
               <span className="text-orange-500 font-medium">
@@ -317,6 +323,6 @@ export const LandingChat = ({ messages, setMessages }: LandingChatProps) => {
           </div>
         </div>
       </div>
-    </div>
+    </main>
   );
 };
