@@ -176,29 +176,13 @@ export const LandingChat = ({ messages, setMessages, conversationId }: LandingCh
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
         <div className="max-w-4xl mx-auto space-y-6">
         {messages.length === 0 && (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center space-y-6 max-w-2xl px-4 animate-fade-in">
-              <h2 className="text-4xl sm:text-6xl md:text-7xl font-bold tracking-tight leading-tight">
-                One interface. All your AI memories.
-              </h2>
-              <p className="text-lg sm:text-xl text-muted-foreground font-light">
-                Chat with GPT, Claude, or Gemini. Your context travels with you.
-              </p>
-              <div className="flex flex-col sm:flex-row gap-4 justify-center items-center text-sm text-muted-foreground pt-4">
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-primary" />
-                  <span>Cross-platform memory</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-primary" />
-                  <span>Context compounds over time</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-primary" />
-                  <span>You own your data</span>
-                </div>
-              </div>
-            </div>
+          <div className="text-center space-y-4 py-8 animate-fade-in">
+            <p className="text-muted-foreground">
+              👆 Try asking anything. Watch your conversation appear in the sidebar.
+            </p>
+            <p className="text-sm text-muted-foreground/60">
+              This is proof it works. No marketing fluff, just truth.
+            </p>
           </div>
         )}
 
