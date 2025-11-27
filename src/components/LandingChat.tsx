@@ -30,6 +30,22 @@ export const LandingChat = ({ messages, setMessages, conversationId }: LandingCh
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  const detectIntent = (message: string): 'signup' | 'login' | null => {
+    const lower = message.toLowerCase();
+    const signupPatterns = [
+      'sign up', 'signup', 'create account', 'create an account',
+      'register', 'get started', 'join', 'sign me up', 'help me sign up',
+      'want to try', 'how do i start', 'make an account'
+    ];
+    const loginPatterns = [
+      'sign in', 'signin', 'login', 'log in', 'already have account'
+    ];
+    
+    if (signupPatterns.some(p => lower.includes(p))) return 'signup';
+    if (loginPatterns.some(p => lower.includes(p))) return 'login';
+    return null;
+  };
+
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
@@ -151,6 +167,22 @@ export const LandingChat = ({ messages, setMessages, conversationId }: LandingCh
     if (!input.trim() || isLoading) return;
 
     const userMessage = input.trim();
+    const intent = detectIntent(userMessage);
+    
+    if (intent === 'signup' || intent === 'login') {
+      setMessages(prev => [
+        ...prev, 
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content: intent === 'signup' 
+          ? "Taking you to sign up now..." 
+          : "Taking you to sign in..." 
+        }
+      ]);
+      setInput('');
+      setTimeout(() => navigate('/auth'), 500);
+      return;
+    }
+
     setInput('');
     const newMessages: Message[] = [...messages, { role: 'user' as const, content: userMessage }];
     setMessages(newMessages);
