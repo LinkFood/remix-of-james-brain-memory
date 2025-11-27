@@ -1,12 +1,14 @@
 import { HeroDefault } from './landing/HeroDefault';
 import { HeroAuth } from './landing/HeroAuth';
 import { HeroHowItWorks } from './landing/HeroHowItWorks';
+import { HeroDemoComplete } from './landing/HeroDemoComplete';
 
 export type HeroMode = 
   | 'default'
   | 'signup'
   | 'login'
-  | 'how-it-works';
+  | 'how-it-works'
+  | 'demo-complete';
 
 interface LandingHeroProps {
   mode: HeroMode;
@@ -28,6 +30,7 @@ export const LandingHero = ({ mode, onModeChange, onAuthSuccess }: LandingHeroPr
       {mode === 'how-it-works' && (
         <HeroHowItWorks onBack={() => onModeChange('default')} />
       )}
+      {mode === 'demo-complete' && <HeroDemoComplete />}
     </div>
   );
 };

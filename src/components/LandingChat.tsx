@@ -23,7 +23,6 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
   const navigate = useNavigate();
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [showSignupPrompt, setShowSignupPrompt] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
@@ -58,12 +57,12 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
   }, [messages]);
 
   useEffect(() => {
-    // Show signup prompt after 3 user messages
+    // Trigger demo completion after 4 user messages
     const userMessageCount = messages.filter(m => m.role === 'user').length;
-    if (userMessageCount >= 3 && !showSignupPrompt) {
-      setShowSignupPrompt(true);
+    if (userMessageCount >= 4 && onIntentDetected) {
+      onIntentDetected('demo-complete');
     }
-  }, [messages, showSignupPrompt]);
+  }, [messages, onIntentDetected]);
 
   const streamChat = async (userMessage: string) => {
     const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/landing-chat`;
@@ -82,6 +81,10 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
       });
 
       if (!resp.ok) {
+        if (resp.status === 429 && onIntentDetected) {
+          onIntentDetected('demo-complete');
+          return;
+        }
         const errorData = await resp.json().catch(() => ({ error: 'Unknown error' }));
         throw new Error(errorData.error || 'Failed to start stream');
       }
@@ -221,36 +224,6 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
           </div>
         )}
 
-        {showSignupPrompt && (
-          <div className="mx-auto max-w-2xl">
-            <div className="p-6 bg-gradient-to-br from-primary/10 to-primary/5 border-2 border-primary/30 rounded-lg space-y-4 animate-in slide-in-from-bottom-8 duration-700 ease-out" style={{ animationTimingFunction: 'cubic-bezier(0.34, 1.56, 0.64, 1)' }}>
-              <div className="flex items-start gap-3">
-                <Sparkles className="w-6 h-6 text-primary mt-1 flex-shrink-0" />
-                <div className="flex-1 space-y-3">
-                  <h3 className="font-bold text-lg">Your conversation history is fragmented across AI platforms. We fix that.</h3>
-                  <p className="text-sm text-muted-foreground">
-                    This demo conversation won't be saved. Sign up to build your unified AI memory:
-                  </p>
-                  <ul className="text-sm text-muted-foreground space-y-1.5 ml-4">
-                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '400ms', animationFillMode: 'backwards' }}>✓ Use any model (GPT, Claude, Gemini) with your API keys</li>
-                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '500ms', animationFillMode: 'backwards' }}>✓ Every conversation builds your personal knowledge base</li>
-                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '600ms', animationFillMode: 'backwards' }}>✓ Past context automatically enhances new chats</li>
-                    <li className="animate-in fade-in slide-in-from-left-2 duration-300" style={{ animationDelay: '700ms', animationFillMode: 'backwards' }}>✓ Own and export all your data, always</li>
-                  </ul>
-                  <Button 
-                    onClick={() => navigate('/auth')}
-                    className="w-full sm:w-auto mt-4 animate-pulse hover:animate-none"
-                    size="lg"
-                  >
-                    <Sparkles className="w-4 h-4 mr-2" />
-                    Start Building Your Memory
-                  </Button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
         {messages.map((message, idx) => (
           <div
             key={idx}
@@ -314,15 +287,7 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
 
       {/* Input Area - Fixed at Bottom */}
       <div className="flex-shrink-0 border-t border-border/50 px-4 sm:px-6 py-4 bg-background/80 backdrop-blur-xl">
-        <div className="max-w-4xl mx-auto flex flex-col gap-2">
-          {messages.length > 0 && messages.filter(m => m.role === 'user').length >= 4 && (
-            <div className="text-xs text-center text-muted-foreground">
-              <span className="text-orange-500 font-medium">
-                Almost out of demo messages! Sign up to continue
-              </span>
-            </div>
-          )}
-          <div className="flex gap-2">
+        <div className="max-w-4xl mx-auto flex gap-2">
             <Textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -339,7 +304,6 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
             >
               <Send className="h-5 w-5" />
             </Button>
-          </div>
         </div>
       </div>
     </div>
