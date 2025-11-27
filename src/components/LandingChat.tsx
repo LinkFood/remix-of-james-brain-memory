@@ -4,6 +4,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Send, Sparkles } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { MemoryInjectionBanner } from './MemoryInjectionBanner';
+import { toast } from '@/hooks/use-toast';
 
 type Message = {
   role: 'user' | 'assistant';
@@ -45,6 +46,7 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
   }, [messages]);
 
   const streamChat = async (userMessage: string) => {
+    console.log('🚀 streamChat called with message:', userMessage);
     setIsLoading(true);
     
     const assistantMessage: Message = {
@@ -56,38 +58,56 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
     if (Math.random() > 0.3) {
       const memoryCount = Math.random() > 0.5 ? 2 : 1;
       assistantMessage.memories = DEMO_MEMORIES.slice(0, memoryCount);
+      console.log('💾 Injecting demo memories:', memoryCount);
     }
 
+    console.log('📝 Adding user message and empty assistant message to state');
     setMessages((prev) => [...prev, { role: 'user', content: userMessage }, assistantMessage]);
 
     try {
+      console.log('🌐 Making fetch request to landing-chat edge function');
       const response = await fetch(
-        'https://yuzhzaiitiugqfnxnlso.supabase.co/functions/v1/landing-chat',
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/landing-chat`,
         {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            Authorization: `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`,
           },
           body: JSON.stringify({
-            message: userMessage,
-            conversationHistory: messages.slice(-10),
+            messages: [
+              ...messages.map((msg) => ({ role: msg.role, content: msg.content })),
+              { role: 'user', content: userMessage },
+            ],
+            conversationId,
           }),
         }
       );
 
+      console.log('📡 Response received, status:', response.status);
+
       if (!response.ok) {
-        throw new Error('Failed to get response');
+        const errorText = await response.text();
+        console.error('❌ Response not OK:', response.status, errorText);
+        throw new Error(`Chat failed: ${response.status} - ${errorText}`);
       }
 
-      const reader = response.body?.getReader();
-      if (!reader) throw new Error('No reader available');
+      if (!response.body) {
+        console.error('❌ No response body');
+        throw new Error('No response body');
+      }
 
+      console.log('✅ Starting to read stream');
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          console.log('✅ Stream complete');
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
@@ -96,12 +116,16 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
         for (const line of lines) {
           if (line.startsWith('data: ')) {
             const data = line.slice(6);
-            if (data === '[DONE]') continue;
+            if (data === '[DONE]') {
+              console.log('✅ Received [DONE] signal');
+              continue;
+            }
 
             try {
               const parsed = JSON.parse(data);
               const content = parsed.choices?.[0]?.delta?.content || '';
               if (content) {
+                console.log('📨 Received content chunk:', content.substring(0, 20) + '...');
                 setMessages((prev) => 
                   prev.map((msg, idx) => 
                     idx === prev.length - 1 && msg.role === 'assistant'
@@ -111,13 +135,18 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
                 );
               }
             } catch (e) {
-              console.error('Parse error:', e);
+              console.error('❌ Parse error:', e);
             }
           }
         }
       }
     } catch (error) {
-      console.error('Chat error:', error);
+      console.error('❌ Chat error:', error);
+      toast({
+        title: "Chat Error",
+        description: error instanceof Error ? error.message : "Failed to send message. Please try again.",
+        variant: "destructive",
+      });
       setMessages((prev) => 
         prev.map((msg, idx) => 
           idx === prev.length - 1 && msg.role === 'assistant'
@@ -131,9 +160,17 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isLoading) return;
+    console.log('🎯 handleSend called');
+    console.log('📝 Input value:', input);
+    console.log('⏳ isLoading:', isLoading);
+    
+    if (!input.trim() || isLoading) {
+      console.log('⚠️ Blocked: empty input or already loading');
+      return;
+    }
 
     const userMessage = input.trim();
+    console.log('✅ Proceeding to send message:', userMessage);
     setInput('');
     
     if (textareaRef.current) {
@@ -268,9 +305,13 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
               onClick={handleSend}
               disabled={!input.trim() || isLoading}
               size="icon"
-              className="h-12 w-12 rounded-xl"
+              className={`h-12 w-12 rounded-xl transition-all ${isLoading ? 'animate-pulse' : ''}`}
             >
-              <Send className="w-5 h-5" />
+              {isLoading ? (
+                <div className="w-5 h-5 border-2 border-primary-foreground border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Send className="w-5 h-5" />
+              )}
             </Button>
           </div>
           {isEmpty && (
