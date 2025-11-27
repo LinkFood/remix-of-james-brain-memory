@@ -20,7 +20,7 @@ interface LandingHeroProps {
 
 export const LandingHero = ({ mode, onModeChange, onAuthSuccess }: LandingHeroProps) => {
   return (
-    <div className="flex-shrink-0 h-[40vh] border-b border-border/50 bg-gradient-to-br from-background via-background to-primary/5 overflow-hidden">
+    <div className="flex-shrink-0 h-[28vh] min-h-[280px] border-b border-border/50 bg-gradient-to-br from-background via-background to-primary/5 overflow-hidden">
       {mode === 'default' && <HeroDefault />}
       {mode === 'pre-signup' && (
         <HeroPreSignup 
