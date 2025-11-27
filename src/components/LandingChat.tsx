@@ -2,190 +2,133 @@ import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Send, Sparkles } from 'lucide-react';
-import { useToast } from '@/hooks/use-toast';
 import ReactMarkdown from 'react-markdown';
-import { useNavigate } from 'react-router-dom';
-import { updateLandingConversation } from './LandingConversationSidebar';
 import { MemoryInjectionBanner } from './MemoryInjectionBanner';
 
 type Message = {
   role: 'user' | 'assistant';
   content: string;
-  memories?: Array<{ content: string; importance_score?: number }>;
+  memories?: Array<{ content: string; importance_score: number }>;
 };
 
 interface LandingChatProps {
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   conversationId: string;
-  onIntentDetected?: (intent: string) => void;
+  onSignupClick: () => void;
 }
 
 const DEMO_MEMORIES = [
-  { content: "You like spicy food", importance_score: 8 },
-  { content: "You run a printing business in Maryland", importance_score: 9 },
-  { content: "You have a 4-month-old son", importance_score: 10 },
-  { content: "You trade 1–5 min QQQ/SPY options", importance_score: 9 },
-  { content: "You are building AVWAP indicators", importance_score: 8 },
+  { content: "You like spicy food and prefer Thai cuisine", importance_score: 0.85 },
+  { content: "You run a printing business in Maryland", importance_score: 0.92 },
+  { content: "You have a 4-month-old son", importance_score: 0.95 },
 ];
 
-export const LandingChat = ({ messages, setMessages, conversationId, onIntentDetected }: LandingChatProps) => {
-  const navigate = useNavigate();
+const EXAMPLE_PROMPTS = [
+  "How does cross-platform memory work?",
+  "What makes this different from ChatGPT?",
+  "Show me an example of memory injection"
+];
+
+export const LandingChat = ({ messages, setMessages, conversationId, onSignupClick }: LandingChatProps) => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const { toast } = useToast();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  };
-
-  const detectIntent = (message: string): string | null => {
-    const lower = message.toLowerCase();
-    
-    const signupPatterns = [
-      'sign up', 'signup', 'create account', 'create an account',
-      'register', 'get started', 'join', 'sign me up', 'help me sign up',
-      'want to try', 'how do i start', 'make an account'
-    ];
-    const loginPatterns = [
-      'sign in', 'signin', 'login', 'log in', 'already have account'
-    ];
-    const howItWorksPatterns = [
-      'how does this work', 'how it works', 'explain', 'what is this',
-      'tell me more', 'learn more', 'what does this do'
-    ];
-    
-    if (signupPatterns.some(p => lower.includes(p))) return 'signup';
-    if (loginPatterns.some(p => lower.includes(p))) return 'login';
-    if (howItWorksPatterns.some(p => lower.includes(p))) return 'how-it-works';
-    return null;
   };
 
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  useEffect(() => {
-    // Trigger demo completion after 4 user messages
-    const userMessageCount = messages.filter(m => m.role === 'user').length;
-    if (userMessageCount >= 4 && onIntentDetected) {
-      onIntentDetected('demo-complete');
-    }
-  }, [messages, onIntentDetected]);
-
   const streamChat = async (userMessage: string) => {
-    const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/landing-chat`;
+    setIsLoading(true);
     
-    try {
-      const resp = await fetch(CHAT_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
-        },
-        body: JSON.stringify({ 
-          message: userMessage,
-          conversationHistory: messages 
-        }),
-      });
+    const assistantMessage: Message = {
+      role: 'assistant',
+      content: '',
+    };
 
-      if (!resp.ok) {
-        if (resp.status === 429 && onIntentDetected) {
-          onIntentDetected('demo-complete');
-          return;
+    // Randomly inject 1-2 demo memories for demo preview
+    if (Math.random() > 0.3) {
+      const memoryCount = Math.random() > 0.5 ? 2 : 1;
+      assistantMessage.memories = DEMO_MEMORIES.slice(0, memoryCount);
+    }
+
+    setMessages([...messages, { role: 'user', content: userMessage }, assistantMessage]);
+
+    try {
+      const response = await fetch(
+        'https://yuzhzaiitiugqfnxnlso.supabase.co/functions/v1/landing-chat',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: userMessage,
+            conversationHistory: messages.slice(-10),
+          }),
         }
-        const errorData = await resp.json().catch(() => ({ error: 'Unknown error' }));
-        throw new Error(errorData.error || 'Failed to start stream');
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to get response');
       }
 
-      if (!resp.body) throw new Error('No response body');
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No reader available');
 
-      const reader = resp.body.getReader();
       const decoder = new TextDecoder();
-      let textBuffer = '';
-      let streamDone = false;
-      let assistantContent = '';
-      
-      // Randomly inject 1-2 demo memories after 2+ messages
-      const shouldInjectMemory = messages.length >= 2 && Math.random() > 0.5;
-      const memoriesToInject = shouldInjectMemory 
-        ? DEMO_MEMORIES.slice(0, Math.floor(Math.random() * 2) + 1)
-        : [];
+      let buffer = '';
 
-      while (!streamDone) {
+      while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        textBuffer += decoder.decode(value, { stream: true });
 
-        let newlineIndex: number;
-        while ((newlineIndex = textBuffer.indexOf('\n')) !== -1) {
-          let line = textBuffer.slice(0, newlineIndex);
-          textBuffer = textBuffer.slice(newlineIndex + 1);
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
 
-          if (line.endsWith('\r')) line = line.slice(0, -1);
-          if (line.startsWith(':') || line.trim() === '') continue;
-          if (!line.startsWith('data: ')) continue;
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') continue;
 
-          const jsonStr = line.slice(6).trim();
-          if (jsonStr === '[DONE]') {
-            streamDone = true;
-            break;
-          }
-
-          try {
-            const parsed = JSON.parse(jsonStr);
-            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-            if (content) {
-              assistantContent += content;
-              setMessages(prev => {
-                const last = prev[prev.length - 1];
-                if (last?.role === 'assistant') {
-                  return prev.map((m, i) => 
-                    i === prev.length - 1 ? { ...m, content: assistantContent, memories: memoriesToInject } : m
-                  );
-                }
-                return [...prev, { role: 'assistant', content: assistantContent, memories: memoriesToInject }];
-              });
+            try {
+              const parsed = JSON.parse(data);
+              const content = parsed.choices?.[0]?.delta?.content || '';
+              if (content) {
+                setMessages((prev) => {
+                  const updated = [...prev];
+                  const lastMessage = updated[updated.length - 1];
+                  if (lastMessage.role === 'assistant') {
+                    lastMessage.content += content;
+                  }
+                  return updated;
+                });
+              }
+            } catch (e) {
+              console.error('Parse error:', e);
             }
-          } catch {
-            textBuffer = line + '\n' + textBuffer;
-            break;
           }
-        }
-      }
-
-      if (textBuffer.trim()) {
-        for (let raw of textBuffer.split('\n')) {
-          if (!raw || raw.startsWith(':') || raw.trim() === '') continue;
-          if (!raw.startsWith('data: ')) continue;
-          const jsonStr = raw.slice(6).trim();
-          if (jsonStr === '[DONE]') continue;
-          try {
-            const parsed = JSON.parse(jsonStr);
-            const content = parsed.choices?.[0]?.delta?.content as string | undefined;
-            if (content) {
-              assistantContent += content;
-              setMessages(prev => {
-                const last = prev[prev.length - 1];
-                if (last?.role === 'assistant') {
-                  return prev.map((m, i) => 
-                    i === prev.length - 1 ? { ...m, content: assistantContent } : m
-                  );
-                }
-                return [...prev, { role: 'assistant', content: assistantContent }];
-              });
-            }
-          } catch {}
         }
       }
     } catch (error) {
-      console.error('Stream error:', error);
-      toast({
-        title: "Error",
-        description: error instanceof Error ? error.message : "Failed to send message",
-        variant: "destructive"
+      console.error('Chat error:', error);
+      setMessages((prev) => {
+        const updated = [...prev];
+        const lastMessage = updated[updated.length - 1];
+        if (lastMessage.role === 'assistant') {
+          lastMessage.content = 'Sorry, I encountered an error. Please try again.';
+        }
+        return updated;
       });
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -193,29 +136,13 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
     if (!input.trim() || isLoading) return;
 
     const userMessage = input.trim();
-    const intent = detectIntent(userMessage);
-    
-    if (intent && onIntentDetected) {
-      setMessages(prev => [
-        ...prev, 
-        { role: 'user', content: userMessage }
-      ]);
-      setInput('');
-      onIntentDetected(intent);
-      return;
-    }
-
     setInput('');
-    const newMessages: Message[] = [...messages, { role: 'user' as const, content: userMessage }];
-    setMessages(newMessages);
-    updateLandingConversation(conversationId, newMessages);
-    setIsLoading(true);
-
-    try {
-      await streamChat(userMessage);
-    } finally {
-      setIsLoading(false);
+    
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
     }
+
+    await streamChat(userMessage);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -225,105 +152,136 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
     }
   };
 
-  return (
-    <div className="flex-1 flex flex-col overflow-hidden">
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-6">
-        <div className="max-w-4xl mx-auto space-y-6">
-        {messages.length === 0 && (
-          <div className="text-center space-y-4 py-8 animate-fade-in">
-            <p className="text-muted-foreground">
-              👆 Try asking anything. Watch your conversation appear in the sidebar.
-            </p>
-            <p className="text-sm text-muted-foreground/60">
-              This is proof it works. No marketing fluff, just truth.
-            </p>
-          </div>
-        )}
+  const handleExampleClick = (prompt: string) => {
+    setInput(prompt);
+    textareaRef.current?.focus();
+  };
 
-        {messages.map((message, idx) => (
-          <div key={idx}>
-            {message.role === 'assistant' && message.memories && message.memories.length > 0 && (
-              <MemoryInjectionBanner memories={message.memories} />
-            )}
-            <div
-              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              <div
-                className={`max-w-[80%] px-4 py-3 rounded-2xl ${
-                  message.role === 'user'
-                    ? 'bg-primary text-primary-foreground shadow-subtle'
-                    : 'bg-muted/50 text-foreground'
-                }`}
-              >
-                {message.role === 'assistant' ? (
-                <div className="prose prose-sm dark:prose-invert max-w-none">
-                  <ReactMarkdown
-                    components={{
-                      table: ({ children }) => (
-                        <div className="overflow-x-auto my-4">
-                          <table className="min-w-full divide-y divide-border text-sm">
-                            {children}
-                          </table>
-                        </div>
-                      ),
-                      thead: ({ children }) => (
-                        <thead className="bg-muted/50">{children}</thead>
-                      ),
-                      th: ({ children }) => (
-                        <th className="px-3 py-2 text-left text-xs font-semibold">
-                          {children}
-                        </th>
-                      ),
-                      td: ({ children }) => (
-                        <td className="px-3 py-2 text-xs">{children}</td>
-                      ),
-                      p: ({ children }) => (
-                        <p className="mb-2 last:mb-0">{children}</p>
-                      ),
-                    }}
-                  >
-                    {message.content}
-                  </ReactMarkdown>
-                </div>
+  const handleTextareaChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setInput(e.target.value);
+    e.target.style.height = 'auto';
+    e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+  };
+
+  const isEmpty = messages.length === 0;
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden bg-background">
+      {isEmpty ? (
+        // Centered empty state - like ChatGPT
+        <div className="flex-1 flex flex-col items-center justify-center px-6 pb-32">
+          <div className="max-w-3xl w-full space-y-8 animate-fade-in">
+            <div className="text-center space-y-4">
+              <h1 className="text-4xl sm:text-5xl font-bold tracking-tight">
+                Your AI conversations,
+                <br />
+                <span className="text-primary">finally unified</span>
+              </h1>
+              <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+                ChatGPT forgets what you told Claude. Claude doesn't know what you asked Gemini.
+                <span className="text-foreground font-medium"> We fix that.</span>
+              </p>
+            </div>
+
+            {/* Example prompts */}
+            <div className="grid sm:grid-cols-3 gap-3">
+              {EXAMPLE_PROMPTS.map((prompt, i) => (
+                <button
+                  key={i}
+                  onClick={() => handleExampleClick(prompt)}
+                  className="p-4 rounded-lg border border-border/50 bg-card hover:bg-accent/50 text-left transition-colors group"
+                >
+                  <div className="text-sm font-medium group-hover:text-primary transition-colors">
+                    {prompt}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      ) : (
+        // Message list - standard chat view
+        <div className="flex-1 overflow-y-auto px-4 py-6">
+          <div className="max-w-3xl mx-auto space-y-6">
+            {messages.map((msg, idx) => (
+              <div key={idx}>
+                {msg.role === 'user' ? (
+                  <div className="flex justify-end">
+                    <div className="bg-primary text-primary-foreground rounded-2xl px-4 py-3 max-w-[80%]">
+                      {msg.content}
+                    </div>
+                  </div>
                 ) : (
-                  <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                    {message.content}
+                  <div className="flex gap-3">
+                    <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
+                      <Sparkles className="w-4 h-4 text-primary" />
+                    </div>
+                    <div className="flex-1 space-y-3">
+                      {msg.memories && msg.memories.length > 0 && (
+                        <MemoryInjectionBanner memories={msg.memories} />
+                      )}
+                      <div className="prose prose-sm max-w-none dark:prose-invert">
+                        <ReactMarkdown
+                          components={{
+                            p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                            ul: ({ children }) => <ul className="mb-2 list-disc pl-4">{children}</ul>,
+                            ol: ({ children }) => <ol className="mb-2 list-decimal pl-4">{children}</ol>,
+                            li: ({ children }) => <li className="mb-1">{children}</li>,
+                          }}
+                        >
+                          {msg.content}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
-            </div>
+            ))}
+            {isLoading && (
+              <div className="flex gap-3">
+                <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
+                  <Sparkles className="w-4 h-4 text-primary animate-pulse" />
+                </div>
+                <div className="text-muted-foreground">Thinking...</div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
           </div>
-        ))}
-        {isLoading && messages[messages.length - 1]?.role === 'user' && (
-          <div className="flex justify-start">
-            <div className="max-w-[80%] px-4 py-3 rounded-lg bg-muted text-foreground">
-              <div className="text-sm text-muted-foreground">Thinking...</div>
-            </div>
-          </div>
-        )}
-          <div ref={messagesEndRef} />
         </div>
-      </div>
+      )}
 
-      {/* Input Area - Fixed at Bottom */}
-      <div className="flex-shrink-0 border-t border-border/50 px-4 sm:px-6 py-4 bg-background/80 backdrop-blur-xl">
-        <div className="max-w-4xl mx-auto flex gap-2">
+      {/* Input area - always at bottom */}
+      <div className="flex-shrink-0 border-t border-border/50 bg-background/80 backdrop-blur-xl">
+        <div className="max-w-3xl mx-auto px-4 py-4">
+          <div className="flex gap-2 items-end">
             <Textarea
+              ref={textareaRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
               placeholder="Ask anything..."
-              className="min-h-[60px] resize-none bg-muted/50 border-border/50 focus-visible:ring-1 focus-visible:ring-border"
               disabled={isLoading}
+              className="flex-1 min-h-[48px] max-h-[200px] resize-none bg-card border-border/50"
+              rows={1}
             />
             <Button
               onClick={handleSend}
               disabled={!input.trim() || isLoading}
               size="icon"
-              className="h-[60px] w-[60px] shrink-0"
+              className="h-12 w-12 rounded-xl"
             >
-              <Send className="h-5 w-5" />
+              <Send className="w-5 h-5" />
             </Button>
+          </div>
+          {isEmpty && (
+            <p className="text-xs text-center text-muted-foreground mt-3">
+              ✨ Try the demo (using our AI) ·{' '}
+              <button onClick={onSignupClick} className="text-primary hover:underline font-medium">
+                Sign up
+              </button>{' '}
+              to connect your own
+            </p>
+          )}
         </div>
       </div>
     </div>

@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { LandingChat } from '@/components/LandingChat';
 import { LandingConversationSidebar } from '@/components/LandingConversationSidebar';
-import { LandingHero, HeroMode } from '@/components/LandingHero';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -19,7 +18,6 @@ const getStorageKey = (conversationId: string) => `landing_chat_messages_${conve
 const Landing = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const [heroMode, setHeroMode] = useState<HeroMode>('default');
   const [currentConversationId, setCurrentConversationId] = useState<string>(() => {
     return localStorage.getItem('landing_current_conversation') || `conv_${Date.now()}`;
   });
@@ -64,10 +62,6 @@ const Landing = () => {
     } catch {
       setMessages([]);
     }
-  };
-
-  const handleIntentDetected = (intent: string) => {
-    setHeroMode(intent as HeroMode);
   };
 
   const downloadChat = (format: 'json' | 'markdown' | 'txt') => {
@@ -173,23 +167,13 @@ const Landing = () => {
           onSelectConversation={handleSelectConversation}
         />
         
-        {/* Main Content Area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Reactive Hero Section */}
-          <LandingHero 
-            mode={heroMode}
-            onModeChange={setHeroMode}
-            onAuthSuccess={() => navigate('/dashboard')}
-          />
-
-          {/* Chat Interface - Bottom Half */}
-          <LandingChat 
-            messages={messages} 
-            setMessages={setMessages}
-            conversationId={currentConversationId}
-            onIntentDetected={handleIntentDetected}
-          />
-        </div>
+        {/* Main Chat Area */}
+        <LandingChat 
+          messages={messages} 
+          setMessages={setMessages}
+          conversationId={currentConversationId}
+          onSignupClick={() => navigate('/auth')}
+        />
       </div>
     </div>
   );
