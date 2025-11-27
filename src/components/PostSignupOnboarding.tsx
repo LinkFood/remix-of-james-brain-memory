@@ -4,7 +4,7 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { CheckCircle2, Key, Upload, Rocket } from 'lucide-react';
+import { CheckCircle2, Key, Upload, Rocket, ExternalLink } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/integrations/supabase/client';
 
@@ -105,6 +105,21 @@ export const PostSignupOnboarding = ({ onComplete }: PostSignupOnboardingProps) 
                   <SelectItem value="google">Google (Gemini)</SelectItem>
                 </SelectContent>
               </Select>
+              {provider && (
+                <a
+                  href={
+                    provider === 'openai' ? 'https://platform.openai.com/api-keys' :
+                    provider === 'anthropic' ? 'https://console.anthropic.com/settings/keys' :
+                    'https://aistudio.google.com/app/apikey'
+                  }
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-primary hover:underline flex items-center gap-1"
+                >
+                  Get your {provider === 'openai' ? 'OpenAI' : provider === 'anthropic' ? 'Anthropic' : 'Google'} API key
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
             </div>
 
             <div className="space-y-2">

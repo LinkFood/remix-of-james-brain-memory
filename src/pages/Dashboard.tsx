@@ -2,20 +2,13 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { Brain, LogOut, MessageSquare, Database, TrendingUp, Clock, FileText, Network, Settings, Menu, Play } from "lucide-react";
+import { Brain, LogOut, MessageSquare, Database, Settings, Menu, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import ChatInterface from "@/components/ChatInterface";
 import MemoryVault from "@/components/MemoryVault";
 import GlobalSearch from "@/components/GlobalSearch";
-import UsageAnalytics from "@/components/UsageAnalytics";
-import BackfillEmbeddings from "@/components/BackfillEmbeddings";
-import TimelineView from "@/components/TimelineView";
-import BrainReports from "@/components/BrainReports";
-import BrainInsightsDashboard from "@/components/BrainInsightsDashboard";
-import ScoreExistingMessages from "@/components/ScoreExistingMessages";
-import KnowledgeGraph from "@/components/KnowledgeGraph";
 import Onboarding from "@/components/Onboarding";
 import { OnboardingWizard } from "@/components/OnboardingWizard";
 import { PostSignupOnboarding } from "@/components/PostSignupOnboarding";
@@ -197,46 +190,6 @@ const Dashboard = () => {
                     <Database className="w-4 h-4 mr-2" />
                     Memory
                   </Button>
-                  <Button
-                    variant={activeTab === "timeline" ? "secondary" : "ghost"}
-                    className="justify-start"
-                    onClick={() => { setActiveTab("timeline"); setMobileMenuOpen(false); }}
-                  >
-                    <Clock className="w-4 h-4 mr-2" />
-                    Timeline
-                  </Button>
-                  <Button
-                    variant={activeTab === "reports" ? "secondary" : "ghost"}
-                    className="justify-start"
-                    onClick={() => { setActiveTab("reports"); setMobileMenuOpen(false); }}
-                  >
-                    <FileText className="w-4 h-4 mr-2" />
-                    Reports
-                  </Button>
-                  <Button
-                    variant={activeTab === "insights" ? "secondary" : "ghost"}
-                    className="justify-start"
-                    onClick={() => { setActiveTab("insights"); setMobileMenuOpen(false); }}
-                  >
-                    <Brain className="w-4 h-4 mr-2" />
-                    Insights
-                  </Button>
-                  <Button
-                    variant={activeTab === "graph" ? "secondary" : "ghost"}
-                    className="justify-start"
-                    onClick={() => { setActiveTab("graph"); setMobileMenuOpen(false); }}
-                  >
-                    <Network className="w-4 h-4 mr-2" />
-                    Graph
-                  </Button>
-                  <Button
-                    variant={activeTab === "analytics" ? "secondary" : "ghost"}
-                    className="justify-start"
-                    onClick={() => { setActiveTab("analytics"); setMobileMenuOpen(false); }}
-                  >
-                    <TrendingUp className="w-4 h-4 mr-2" />
-                    Analytics
-                  </Button>
                   <div className="border-t border-border my-4" />
                   <Button
                     variant="ghost"
@@ -310,7 +263,7 @@ const Dashboard = () => {
 
       <main className="container mx-auto px-4 py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="hidden md:grid w-full max-w-4xl mx-auto grid-cols-7 bg-card border border-border">
+          <TabsList className="hidden md:grid w-full max-w-4xl mx-auto grid-cols-2 bg-card border border-border">
             <TabsTrigger value="chat" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <MessageSquare className="w-4 h-4 mr-2" />
               Chat
@@ -318,26 +271,6 @@ const Dashboard = () => {
             <TabsTrigger value="memory" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
               <Database className="w-4 h-4 mr-2" />
               Memory
-            </TabsTrigger>
-            <TabsTrigger value="timeline" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-              <Clock className="w-4 h-4 mr-2" />
-              Timeline
-            </TabsTrigger>
-            <TabsTrigger value="reports" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-              <FileText className="w-4 h-4 mr-2" />
-              Reports
-            </TabsTrigger>
-            <TabsTrigger value="insights" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-              <Brain className="w-4 h-4 mr-2" />
-              Insights
-            </TabsTrigger>
-            <TabsTrigger value="graph" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-              <Network className="w-4 h-4 mr-2" />
-              Graph
-            </TabsTrigger>
-            <TabsTrigger value="analytics" className="data-[state=active]:bg-primary data-[state=active]:text-primary-foreground">
-              <TrendingUp className="w-4 h-4 mr-2" />
-              Analytics
             </TabsTrigger>
           </TabsList>
 
@@ -351,30 +284,6 @@ const Dashboard = () => {
 
           <TabsContent value="memory" className="mt-6 animate-fade-in">
             <MemoryVault userId={user?.id ?? ""} />
-          </TabsContent>
-
-          <TabsContent value="timeline" className="mt-6 animate-fade-in">
-            <TimelineView userId={user?.id ?? ""} />
-          </TabsContent>
-
-          <TabsContent value="reports" className="mt-6 animate-fade-in">
-            <BrainReports userId={user?.id ?? ""} />
-          </TabsContent>
-
-          <TabsContent value="insights" className="mt-6 animate-fade-in">
-            <BrainInsightsDashboard userId={user?.id ?? ""} />
-          </TabsContent>
-
-          <TabsContent value="graph" className="mt-6 animate-fade-in">
-            <KnowledgeGraph userId={user?.id ?? ""} />
-          </TabsContent>
-
-          <TabsContent value="analytics" className="mt-6 animate-fade-in">
-            <div className="space-y-6">
-              <BackfillEmbeddings userId={user?.id ?? ""} />
-              <ScoreExistingMessages userId={user?.id ?? ""} />
-              <UsageAnalytics userId={user?.id ?? ""} />
-            </div>
           </TabsContent>
         </Tabs>
       </main>

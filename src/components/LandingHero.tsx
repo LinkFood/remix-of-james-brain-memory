@@ -2,9 +2,11 @@ import { HeroDefault } from './landing/HeroDefault';
 import { HeroAuth } from './landing/HeroAuth';
 import { HeroHowItWorks } from './landing/HeroHowItWorks';
 import { HeroDemoComplete } from './landing/HeroDemoComplete';
+import { HeroPreSignup } from './landing/HeroPreSignup';
 
 export type HeroMode = 
   | 'default'
+  | 'pre-signup'
   | 'signup'
   | 'login'
   | 'how-it-works'
@@ -20,6 +22,12 @@ export const LandingHero = ({ mode, onModeChange, onAuthSuccess }: LandingHeroPr
   return (
     <div className="flex-shrink-0 h-[40vh] border-b border-border/50 bg-gradient-to-br from-background via-background to-primary/5 overflow-hidden">
       {mode === 'default' && <HeroDefault />}
+      {mode === 'pre-signup' && (
+        <HeroPreSignup 
+          onContinue={() => onModeChange('signup')}
+          onBack={() => onModeChange('default')}
+        />
+      )}
       {(mode === 'signup' || mode === 'login') && (
         <HeroAuth 
           mode={mode} 

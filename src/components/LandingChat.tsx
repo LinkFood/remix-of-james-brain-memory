@@ -6,10 +6,12 @@ import { useToast } from '@/hooks/use-toast';
 import ReactMarkdown from 'react-markdown';
 import { useNavigate } from 'react-router-dom';
 import { updateLandingConversation } from './LandingConversationSidebar';
+import { MemoryInjectionBanner } from './MemoryInjectionBanner';
 
 type Message = {
   role: 'user' | 'assistant';
   content: string;
+  memories?: Array<{ content: string; importance_score?: number }>;
 };
 
 interface LandingChatProps {
@@ -18,6 +20,14 @@ interface LandingChatProps {
   conversationId: string;
   onIntentDetected?: (intent: string) => void;
 }
+
+const DEMO_MEMORIES = [
+  { content: "You like spicy food", importance_score: 8 },
+  { content: "You run a printing business in Maryland", importance_score: 9 },
+  { content: "You have a 4-month-old son", importance_score: 10 },
+  { content: "You trade 1–5 min QQQ/SPY options", importance_score: 9 },
+  { content: "You are building AVWAP indicators", importance_score: 8 },
+];
 
 export const LandingChat = ({ messages, setMessages, conversationId, onIntentDetected }: LandingChatProps) => {
   const navigate = useNavigate();
@@ -96,6 +106,12 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
       let textBuffer = '';
       let streamDone = false;
       let assistantContent = '';
+      
+      // Randomly inject 1-2 demo memories after 2+ messages
+      const shouldInjectMemory = messages.length >= 2 && Math.random() > 0.5;
+      const memoriesToInject = shouldInjectMemory 
+        ? DEMO_MEMORIES.slice(0, Math.floor(Math.random() * 2) + 1)
+        : [];
 
       while (!streamDone) {
         const { done, value } = await reader.read();
@@ -126,10 +142,10 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
                 const last = prev[prev.length - 1];
                 if (last?.role === 'assistant') {
                   return prev.map((m, i) => 
-                    i === prev.length - 1 ? { ...m, content: assistantContent } : m
+                    i === prev.length - 1 ? { ...m, content: assistantContent, memories: memoriesToInject } : m
                   );
                 }
-                return [...prev, { role: 'assistant', content: assistantContent }];
+                return [...prev, { role: 'assistant', content: assistantContent, memories: memoriesToInject }];
               });
             }
           } catch {
@@ -225,18 +241,21 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
         )}
 
         {messages.map((message, idx) => (
-          <div
-            key={idx}
-            className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
+          <div key={idx}>
+            {message.role === 'assistant' && message.memories && message.memories.length > 0 && (
+              <MemoryInjectionBanner memories={message.memories} />
+            )}
             <div
-              className={`max-w-[80%] px-4 py-3 rounded-2xl ${
-                message.role === 'user'
-                  ? 'bg-primary text-primary-foreground shadow-subtle'
-                  : 'bg-muted/50 text-foreground'
-              }`}
+              className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              {message.role === 'assistant' ? (
+              <div
+                className={`max-w-[80%] px-4 py-3 rounded-2xl ${
+                  message.role === 'user'
+                    ? 'bg-primary text-primary-foreground shadow-subtle'
+                    : 'bg-muted/50 text-foreground'
+                }`}
+              >
+                {message.role === 'assistant' ? (
                 <div className="prose prose-sm dark:prose-invert max-w-none">
                   <ReactMarkdown
                     components={{
@@ -266,11 +285,12 @@ export const LandingChat = ({ messages, setMessages, conversationId, onIntentDet
                     {message.content}
                   </ReactMarkdown>
                 </div>
-              ) : (
-                <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                  {message.content}
-                </div>
-              )}
+                ) : (
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                    {message.content}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         ))}
