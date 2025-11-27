@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { LandingChat } from '@/components/LandingChat';
 import { LandingConversationSidebar } from '@/components/LandingConversationSidebar';
+import { LandingHero, HeroMode } from '@/components/LandingHero';
 import { Button } from '@/components/ui/button';
 import { Download } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -18,6 +19,7 @@ const getStorageKey = (conversationId: string) => `landing_chat_messages_${conve
 const Landing = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const [heroMode, setHeroMode] = useState<HeroMode>('default');
   const [currentConversationId, setCurrentConversationId] = useState<string>(() => {
     return localStorage.getItem('landing_current_conversation') || `conv_${Date.now()}`;
   });
@@ -62,6 +64,10 @@ const Landing = () => {
     } catch {
       setMessages([]);
     }
+  };
+
+  const handleIntentDetected = (intent: string) => {
+    setHeroMode(intent as HeroMode);
   };
 
   const downloadChat = (format: 'json' | 'markdown' | 'txt') => {
@@ -169,45 +175,19 @@ const Landing = () => {
         
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Hero Section - Constrained Height */}
-          <div className="flex-shrink-0 h-[40vh] border-b border-border/50 bg-gradient-to-br from-background via-background to-primary/5 overflow-hidden">
-            <div className="max-w-4xl mx-auto px-6 py-8 h-full flex flex-col justify-center">
-              <div className="space-y-4">
-                <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight leading-tight">
-                  Your AI conversations,
-                  <br />
-                  <span className="text-primary">finally unified</span>
-                </h1>
-                <p className="text-lg sm:text-xl text-muted-foreground font-light max-w-2xl">
-                  ChatGPT forgets what you told Claude. Claude doesn't know what you asked Gemini. 
-                  <span className="text-foreground font-medium"> We fix that.</span>
-                </p>
-                <div className="grid sm:grid-cols-3 gap-3 pt-2">
-                  <div className="space-y-1">
-                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">1</div>
-                    <h3 className="font-semibold text-sm">Use any AI</h3>
-                    <p className="text-xs text-muted-foreground">Your API keys. Your models.</p>
-                  </div>
-                  <div className="space-y-1">
-                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">2</div>
-                    <h3 className="font-semibold text-sm">We remember everything</h3>
-                    <p className="text-xs text-muted-foreground">Every conversation builds your knowledge.</p>
-                  </div>
-                  <div className="space-y-1">
-                    <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">3</div>
-                    <h3 className="font-semibold text-sm">Context travels</h3>
-                    <p className="text-xs text-muted-foreground">Past context enhances every chat.</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
+          {/* Reactive Hero Section */}
+          <LandingHero 
+            mode={heroMode}
+            onModeChange={setHeroMode}
+            onAuthSuccess={() => navigate('/dashboard')}
+          />
 
           {/* Chat Interface - Bottom Half */}
           <LandingChat 
             messages={messages} 
             setMessages={setMessages}
             conversationId={currentConversationId}
+            onIntentDetected={handleIntentDetected}
           />
         </div>
       </div>

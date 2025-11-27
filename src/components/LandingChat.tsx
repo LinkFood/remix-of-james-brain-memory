@@ -16,9 +16,10 @@ interface LandingChatProps {
   messages: Message[];
   setMessages: React.Dispatch<React.SetStateAction<Message[]>>;
   conversationId: string;
+  onIntentDetected?: (intent: string) => void;
 }
 
-export const LandingChat = ({ messages, setMessages, conversationId }: LandingChatProps) => {
+export const LandingChat = ({ messages, setMessages, conversationId, onIntentDetected }: LandingChatProps) => {
   const navigate = useNavigate();
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -30,8 +31,9 @@ export const LandingChat = ({ messages, setMessages, conversationId }: LandingCh
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const detectIntent = (message: string): 'signup' | 'login' | null => {
+  const detectIntent = (message: string): string | null => {
     const lower = message.toLowerCase();
+    
     const signupPatterns = [
       'sign up', 'signup', 'create account', 'create an account',
       'register', 'get started', 'join', 'sign me up', 'help me sign up',
@@ -40,9 +42,14 @@ export const LandingChat = ({ messages, setMessages, conversationId }: LandingCh
     const loginPatterns = [
       'sign in', 'signin', 'login', 'log in', 'already have account'
     ];
+    const howItWorksPatterns = [
+      'how does this work', 'how it works', 'explain', 'what is this',
+      'tell me more', 'learn more', 'what does this do'
+    ];
     
     if (signupPatterns.some(p => lower.includes(p))) return 'signup';
     if (loginPatterns.some(p => lower.includes(p))) return 'login';
+    if (howItWorksPatterns.some(p => lower.includes(p))) return 'how-it-works';
     return null;
   };
 
@@ -169,17 +176,13 @@ export const LandingChat = ({ messages, setMessages, conversationId }: LandingCh
     const userMessage = input.trim();
     const intent = detectIntent(userMessage);
     
-    if (intent === 'signup' || intent === 'login') {
+    if (intent && onIntentDetected) {
       setMessages(prev => [
         ...prev, 
-        { role: 'user', content: userMessage },
-        { role: 'assistant', content: intent === 'signup' 
-          ? "Taking you to sign up now..." 
-          : "Taking you to sign in..." 
-        }
+        { role: 'user', content: userMessage }
       ]);
       setInput('');
-      setTimeout(() => navigate('/auth'), 500);
+      onIntentDetected(intent);
       return;
     }
 
