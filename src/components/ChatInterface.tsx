@@ -4,8 +4,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Send, Loader2, AlertCircle, ChevronDown, Copy, Star, Trash2, Edit2, Check, X, MoreVertical, Database, MessageSquare, Zap } from "lucide-react";
+import { Send, Loader2, AlertCircle, Copy, Star, Trash2, Edit2, Check, X, MoreVertical, Database, MessageSquare, Zap } from "lucide-react";
+import { MemoryInjectionBanner } from "@/components/MemoryInjectionBanner";
 import { toast } from "sonner";
 import ConversationSidebar from "./ConversationSidebar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -27,10 +27,12 @@ interface Message {
   edit_history?: any[];
   memoriesUsed?: number;
   memories?: Array<{
-    snippet: string;
-    similarity: number;
-    importance: number | null;
-    created_at: string | null;
+    content: string;
+    snippet?: string;
+    similarity?: number;
+    importance?: number | null;
+    importance_score?: number | null;
+    created_at?: string | null;
   }>;
 }
 
@@ -412,37 +414,6 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
             </AlertDescription>
           </Alert>
         )}
-        
-        <div className="flex gap-4 items-center flex-wrap">
-          <div className="flex gap-2 items-center flex-1">
-            <Select value={provider} onValueChange={(value) => {
-              setProvider(value);
-              setModel(modelOptions[value as keyof typeof modelOptions][0].value);
-            }}>
-              <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="Select provider" />
-              </SelectTrigger>
-              <SelectContent className="bg-popover z-50">
-                <SelectItem value="openai">OpenAI</SelectItem>
-                <SelectItem value="anthropic">Anthropic</SelectItem>
-                <SelectItem value="google">Google</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Select value={model} onValueChange={setModel}>
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="Select model" />
-              </SelectTrigger>
-              <SelectContent className="bg-popover z-50">
-                {modelOptions[provider as keyof typeof modelOptions].map((option) => (
-                  <SelectItem key={option.value} value={option.value}>
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
 
         <Card className="flex-1 overflow-y-auto p-6 bg-card border-border space-y-4">
         {messages.length === 0 ? (
@@ -467,22 +438,24 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
             });
 
             return (
-              <div
-                key={msg.id}
-                {...swipeHandlers}
-                className={cn(
-                  "flex group animate-fade-in",
-                  msg.role === "user" ? "justify-end" : "justify-start"
+              <div key={msg.id} {...swipeHandlers}>
+                {msg.role === "assistant" && msg.memories && msg.memories.length > 0 && (
+                  <MemoryInjectionBanner memories={msg.memories} />
                 )}
-              >
                 <div
                   className={cn(
-                    "max-w-[80%] rounded-2xl px-4 py-3 relative",
-                    msg.role === "user"
-                      ? "bg-primary text-primary-foreground shadow-glow"
-                      : "bg-secondary text-secondary-foreground"
+                    "flex group animate-fade-in",
+                    msg.role === "user" ? "justify-end" : "justify-start"
                   )}
                 >
+                  <div
+                    className={cn(
+                      "max-w-[80%] rounded-2xl px-4 py-3 relative",
+                      msg.role === "user"
+                        ? "bg-primary text-primary-foreground shadow-glow"
+                        : "bg-secondary text-secondary-foreground"
+                    )}
+                  >
                   {msg.starred && (
                     <Star className="absolute -top-2 -right-2 h-4 w-4 text-primary fill-primary" />
                   )}
@@ -522,57 +495,6 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
                       )}
                     </>
                   )}
-                  
-                   {msg.role === "assistant" && msg.memoriesUsed && msg.memoriesUsed > 0 && (
-                    <div className="mt-3 animate-in fade-in slide-in-from-bottom-2 duration-500">
-                      <div className="p-3 bg-primary/10 border border-primary/20 rounded-lg">
-                        <div className="flex items-center gap-2 mb-2">
-                          <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-                          <span className="text-xs font-semibold text-primary">
-                            Using context from {msg.memories && msg.memories.length > 0 ? new Date(msg.memories[0].created_at || '').toLocaleDateString() : 'previous conversations'}
-                          </span>
-                          <Badge variant="outline" className="text-xs bg-primary/5 border-primary/30">
-                            {msg.memoriesUsed} {msg.memoriesUsed === 1 ? 'memory' : 'memories'} injected
-                          </Badge>
-                        </div>
-                        <Collapsible>
-                          <CollapsibleTrigger asChild>
-                            <Button variant="ghost" size="sm" className="h-7 w-full text-xs gap-1 hover:bg-primary/5 justify-between">
-                              <span>View injected context</span>
-                              <ChevronDown className="h-3 w-3" />
-                            </Button>
-                          </CollapsibleTrigger>
-                          <CollapsibleContent className="mt-2 space-y-2">
-                            {msg.memories?.map((mem, i) => (
-                              <div key={i} className="text-xs p-3 rounded-lg bg-background/50 border border-primary/10 space-y-2 animate-in fade-in slide-in-from-top-1 duration-300" style={{ animationDelay: `${i * 50}ms`, animationFillMode: 'backwards' }}>
-                                <div className="text-foreground/80 leading-relaxed">
-                                  "{mem.snippet}..."
-                                </div>
-                                <div className="flex gap-3 text-[10px] text-muted-foreground">
-                                  <span className="flex items-center gap-1">
-                                    <div className="w-1 h-1 rounded-full bg-primary" />
-                                    {(mem.similarity * 100).toFixed(0)}% match
-                                  </span>
-                                  {mem.importance && (
-                                    <span className="flex items-center gap-1">
-                                      <div className="w-1 h-1 rounded-full bg-primary" />
-                                      Importance: {mem.importance}
-                                    </span>
-                                  )}
-                                  {mem.created_at && (
-                                    <span className="flex items-center gap-1">
-                                      <div className="w-1 h-1 rounded-full bg-primary" />
-                                      {new Date(mem.created_at).toLocaleDateString()}
-                                    </span>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </CollapsibleContent>
-                        </Collapsible>
-                      </div>
-                    </div>
-                  )}
 
                   <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-2 right-2">
                     <DropdownMenu>
@@ -609,6 +531,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
                     </DropdownMenu>
                   </div>
                 </div>
+                </div>
               </div>
             );
           })
@@ -623,23 +546,45 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
           <div ref={messagesEndRef} />
         </Card>
 
-        <div className="flex gap-2">
-          <Textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
-            className="min-h-[60px] bg-input border-border focus:ring-primary resize-none"
-            disabled={loading || !conversationId || !hasApiKey}
-          />
-          <Button
-            onClick={handleSend}
-            disabled={loading || !input.trim() || !conversationId || !hasApiKey}
-            className="bg-primary hover:bg-primary-glow text-primary-foreground shadow-glow touch-target min-h-[48px] min-w-[48px]"
-            size="icon"
-          >
-            <Send className="w-5 h-5" />
-          </Button>
+        <div className="flex gap-2 items-end">
+          <div className="flex-1">
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Type your message... (Enter to send, Shift+Enter for new line)"
+              className="min-h-[60px] bg-input border-border focus:ring-primary resize-none"
+              disabled={loading || !conversationId || !hasApiKey}
+            />
+          </div>
+          <div className="flex gap-2 items-center">
+            <Select value={`${provider}-${model}`} onValueChange={(value) => {
+              const [prov, ...modelParts] = value.split('-');
+              setProvider(prov);
+              setModel(modelParts.join('-'));
+            }}>
+              <SelectTrigger className="w-[140px] h-[60px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-popover z-50">
+                <SelectItem value="openai-gpt-4-turbo">GPT-4 Turbo</SelectItem>
+                <SelectItem value="openai-gpt-4">GPT-4</SelectItem>
+                <SelectItem value="openai-gpt-3.5-turbo">GPT-3.5</SelectItem>
+                <SelectItem value="anthropic-claude-3-5-sonnet-20241022">Claude 3.5</SelectItem>
+                <SelectItem value="anthropic-claude-3-opus-20240229">Claude Opus</SelectItem>
+                <SelectItem value="google-gemini-pro">Gemini Pro</SelectItem>
+                <SelectItem value="google-gemini-1.5-flash">Gemini Flash</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              onClick={handleSend}
+              disabled={loading || !input.trim() || !conversationId || !hasApiKey}
+              className="bg-primary hover:bg-primary-glow text-primary-foreground shadow-glow touch-target h-[60px] w-[60px]"
+              size="icon"
+            >
+              <Send className="w-5 h-5" />
+            </Button>
+          </div>
         </div>
       </div>
     </div>
