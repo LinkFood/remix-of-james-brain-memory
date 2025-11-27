@@ -11,6 +11,9 @@ export const HeroDefault = () => {
           ChatGPT forgets what you told Claude. Claude doesn't know what you asked Gemini. 
           <span className="text-foreground font-medium"> We fix that.</span>
         </p>
+        <p className="text-sm text-primary/60 font-medium">
+          Try the demo below (using our AI) — sign up to connect your own.
+        </p>
         <div className="grid sm:grid-cols-3 gap-3 pt-2">
           <div className="space-y-1">
             <div className="w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center text-primary font-bold text-sm">1</div>
