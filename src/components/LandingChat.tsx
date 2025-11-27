@@ -58,7 +58,7 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
       assistantMessage.memories = DEMO_MEMORIES.slice(0, memoryCount);
     }
 
-    setMessages([...messages, { role: 'user', content: userMessage }, assistantMessage]);
+    setMessages((prev) => [...prev, { role: 'user', content: userMessage }, assistantMessage]);
 
     try {
       const response = await fetch(
@@ -102,14 +102,13 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
               const parsed = JSON.parse(data);
               const content = parsed.choices?.[0]?.delta?.content || '';
               if (content) {
-                setMessages((prev) => {
-                  const updated = [...prev];
-                  const lastMessage = updated[updated.length - 1];
-                  if (lastMessage.role === 'assistant') {
-                    lastMessage.content += content;
-                  }
-                  return updated;
-                });
+                setMessages((prev) => 
+                  prev.map((msg, idx) => 
+                    idx === prev.length - 1 && msg.role === 'assistant'
+                      ? { ...msg, content: msg.content + content }
+                      : msg
+                  )
+                );
               }
             } catch (e) {
               console.error('Parse error:', e);
@@ -119,14 +118,13 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
       }
     } catch (error) {
       console.error('Chat error:', error);
-      setMessages((prev) => {
-        const updated = [...prev];
-        const lastMessage = updated[updated.length - 1];
-        if (lastMessage.role === 'assistant') {
-          lastMessage.content = 'Sorry, I encountered an error. Please try again.';
-        }
-        return updated;
-      });
+      setMessages((prev) => 
+        prev.map((msg, idx) => 
+          idx === prev.length - 1 && msg.role === 'assistant'
+            ? { ...msg, content: 'Sorry, I encountered an error. Please try again.' }
+            : msg
+        )
+      );
     } finally {
       setIsLoading(false);
     }
@@ -216,9 +214,11 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
                     <div className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/20 flex items-center justify-center">
                       <Sparkles className="w-4 h-4 text-primary" />
                     </div>
-                    <div className="flex-1 space-y-3">
-                      {msg.memories && msg.memories.length > 0 && (
-                        <MemoryInjectionBanner memories={msg.memories} />
+                     <div className="flex-1 space-y-3">
+                      {msg.memories && msg.memories.length > 0 && msg.content.length > 50 && (
+                        <div className="animate-in fade-in slide-in-from-top-2 duration-500">
+                          <MemoryInjectionBanner memories={msg.memories} />
+                        </div>
                       )}
                       <div className="prose prose-sm max-w-none dark:prose-invert">
                         <ReactMarkdown
@@ -229,7 +229,7 @@ export const LandingChat = ({ messages, setMessages, conversationId, onSignupCli
                             li: ({ children }) => <li className="mb-1">{children}</li>,
                           }}
                         >
-                          {msg.content}
+                          {msg.content || '●●●'}
                         </ReactMarkdown>
                       </div>
                     </div>
