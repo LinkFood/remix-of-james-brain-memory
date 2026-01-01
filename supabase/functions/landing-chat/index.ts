@@ -11,11 +11,29 @@ serve(async (req) => {
   }
 
   try {
-    const { message, conversationHistory = [] } = await req.json();
+    const body = await req.json();
+    console.log('Received body:', JSON.stringify(body));
+    
+    // Support both formats: { message, conversationHistory } OR { messages }
+    let userMessage: string;
+    let conversationHistory: Array<{ role: string; content: string }> = [];
+    
+    if (body.messages && Array.isArray(body.messages)) {
+      // Frontend sends messages array format
+      const lastUserMsg = body.messages.filter((m: { role: string }) => m.role === 'user').pop();
+      userMessage = lastUserMsg?.content || '';
+      conversationHistory = body.messages.slice(0, -1); // All except last message
+    } else {
+      // Legacy format
+      userMessage = body.message || '';
+      conversationHistory = body.conversationHistory || [];
+    }
 
-    if (!message) {
+    if (!userMessage) {
       throw new Error('Message is required');
     }
+    
+    console.log('Parsed message:', userMessage);
 
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
@@ -80,7 +98,7 @@ When asked about pricing or features, format responses with clear structure usin
     const messages = [
       { role: 'system', content: systemPrompt },
       ...conversationHistory,
-      { role: 'user', content: message }
+      { role: 'user', content: userMessage }
     ];
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
