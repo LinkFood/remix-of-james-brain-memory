@@ -73,7 +73,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
   }, [initialConversationId]);
 
   useEffect(() => {
-    checkApiKey();
+    loadUserApiSettings();
     fetchMemoryStats();
   }, [userId]);
 
@@ -110,18 +110,30 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
     }
   }, [conversationId]);
 
-  const checkApiKey = async () => {
+  const loadUserApiSettings = async () => {
     try {
       const { data, error } = await supabase
         .from("user_api_keys")
-        .select("id")
+        .select("id, provider")
         .eq("user_id", userId)
-        .limit(1);
+        .limit(1)
+        .maybeSingle();
 
       if (error) throw error;
-      setHasApiKey(data && data.length > 0);
+      setHasApiKey(!!data);
+      
+      // Auto-set provider and model to match user's saved key
+      if (data?.provider) {
+        setProvider(data.provider);
+        const defaultModels: Record<string, string> = {
+          openai: "gpt-4-turbo",
+          anthropic: "claude-3-5-sonnet-20241022",
+          google: "gemini-pro"
+        };
+        setModel(defaultModels[data.provider] || "gpt-4-turbo");
+      }
     } catch (error) {
-      console.error("Failed to check API key:", error);
+      console.error("Failed to load API settings:", error);
       setHasApiKey(false);
     }
   };
