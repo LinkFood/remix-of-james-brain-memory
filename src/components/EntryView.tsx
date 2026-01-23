@@ -118,7 +118,7 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
         .update({
           title: editTitle.trim() || null,
           content: editContent.trim(),
-          list_items: listItems,
+          list_items: JSON.parse(JSON.stringify(listItems)),
           updated_at: new Date().toISOString(),
         })
         .eq("id", entry.id)
@@ -146,7 +146,7 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
     try {
       const { data, error } = await supabase
         .from("entries")
-        .update({ list_items: newItems })
+        .update({ list_items: JSON.parse(JSON.stringify(newItems)) })
         .eq("id", entry.id)
         .select()
         .single();

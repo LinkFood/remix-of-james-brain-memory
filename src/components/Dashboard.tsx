@@ -248,7 +248,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
 
       const { error } = await supabase
         .from("entries")
-        .update({ list_items: updatedItems })
+        .update({ list_items: JSON.parse(JSON.stringify(updatedItems)) })
         .eq("id", entryId);
 
       if (error) throw error;

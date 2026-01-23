@@ -1,110 +1,120 @@
+/**
+ * search-memory — Semantic + Keyword Search
+ * 
+ * GOAL: Find anything in the user's brain.
+ * 
+ * Uses embeddings for semantic search, falls back to keyword search.
+ * Filters by date, type, tags, importance.
+ */
+
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { extractUserId } from '../_shared/auth.ts';
+import { checkRateLimit, RATE_LIMIT_CONFIGS, getRateLimitHeaders } from '../_shared/rateLimit.ts';
+import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
+import { validateSearchQuery, escapeForLike, parseNumber, parseJsonBody } from '../_shared/validation.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
-
-// Sanitize query string to prevent SQL injection in ILIKE patterns
-function sanitizeSearchQuery(query: string): string {
-  // Escape SQL LIKE special characters: % and _
-  // Also escape backslash which is used as escape character
-  return query
-    .replace(/\\/g, '\\\\')  // Escape backslashes first
-    .replace(/%/g, '\\%')    // Escape percent signs
-    .replace(/_/g, '\\_');   // Escape underscores
+interface SearchRequest {
+  query: string;
+  useSemanticSearch?: boolean;
+  startDate?: string;
+  endDate?: string;
+  contentType?: string;
+  minImportance?: number;
+  maxImportance?: number;
+  tags?: string[];
+  limit?: number;
 }
 
-// Validate query input
-function validateQuery(query: string): { valid: boolean; error?: string } {
-  if (!query || typeof query !== 'string') {
-    return { valid: false, error: 'Query must be a non-empty string' };
-  }
-  
-  // Limit query length to prevent abuse
-  if (query.length > 500) {
-    return { valid: false, error: 'Query too long (max 500 characters)' };
-  }
-  
-  // Check for null bytes or other problematic characters
-  if (/\0/.test(query)) {
-    return { valid: false, error: 'Query contains invalid characters' };
-  }
-  
-  return { valid: true };
+interface SearchResult {
+  id: string;
+  content: string;
+  title: string | null;
+  content_type: string;
+  content_subtype: string | null;
+  tags: string[];
+  importance_score: number | null;
+  created_at: string;
+  similarity?: number;
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
+
+  const corsHeaders = getCorsHeaders(req);
 
   try {
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    // Authenticate user
+    const { userId, error: authError } = await extractUserId(req);
+    if (authError || !userId) {
+      return errorResponse(req, authError ?? 'Unauthorized', 401);
+    }
 
-    // SECURITY FIX: Extract user ID from JWT instead of request body
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
+    // Check rate limit (search is limited to 30 req/min)
+    const rateLimit = checkRateLimit(userId, RATE_LIMIT_CONFIGS.search);
+    if (!rateLimit.allowed) {
       return new Response(
-        JSON.stringify({ error: 'Authorization header required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({
+          error: 'Rate limit exceeded. Please try again later.',
+          retryAfter: Math.ceil(rateLimit.resetIn / 1000),
+        }),
+        {
+          status: 429,
+          headers: {
+            ...corsHeaders,
+            ...getRateLimitHeaders(rateLimit),
+            'Content-Type': 'application/json',
+          },
+        }
       );
     }
 
-    const jwt = authHeader.replace('Bearer ', '');
-    const { data: { user }, error: authError } = await supabaseClient.auth.getUser(jwt);
-    
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid or expired token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    // Parse request body
+    const { data: body, error: parseError } = await parseJsonBody<SearchRequest>(req);
+    if (parseError || !body) {
+      return errorResponse(req, parseError ?? 'Invalid request body', 400);
     }
 
-    const userId = user.id;
+    // Validate and sanitize query
+    const queryValidation = validateSearchQuery(body.query);
+    if (!queryValidation.valid || !queryValidation.sanitized) {
+      return errorResponse(req, queryValidation.error ?? 'Invalid query', 400);
+    }
 
-    const { 
-      query, 
+    const query = queryValidation.sanitized;
+    const {
       useSemanticSearch = true,
-      startDate, 
+      startDate,
       endDate,
       contentType,
       minImportance,
       maxImportance,
       tags,
-      limit = 50
-    } = await req.json();
-
-    // Validate query input
-    const validation = validateQuery(query);
-    if (!validation.valid) {
-      return new Response(
-        JSON.stringify({ error: validation.error }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Sanitize query for ILIKE usage
-    const sanitizedQuery = sanitizeSearchQuery(query);
+    } = body;
+    const limit = parseNumber(body.limit, { min: 1, max: 100, default: 50 }) ?? 50;
 
     console.log('Search request:', { query: query.substring(0, 50), userId, useSemanticSearch, contentType, tags });
 
-    let entries: any[] = [];
-    
+    // Initialize Supabase client
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const supabaseClient = createClient(supabaseUrl, supabaseKey);
+
+    let entries: SearchResult[] = [];
+
     // Use semantic search if requested
     if (useSemanticSearch) {
       try {
         console.log('Attempting semantic search...');
-        
+
         // Generate embedding for the search query
-        const embeddingResponse = await fetch(`${Deno.env.get('SUPABASE_URL')}/functions/v1/generate-embedding`, {
+        const embeddingResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
           method: 'POST',
           headers: {
-            'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
+            'Authorization': `Bearer ${supabaseKey}`,
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ text: query }),
@@ -117,55 +127,59 @@ serve(async (req) => {
 
         const embeddingData = await embeddingResponse.json();
         const queryEmbedding = embeddingData.embedding;
-        
+
         console.log('Generated query embedding, searching...');
 
-        // Use the semantic search function for entries
-        const { data: semanticResults, error: semanticError } = await supabaseClient
-          .rpc('search_entries_by_embedding', {
+        // Use the semantic search function
+        const { data: semanticResults, error: semanticError } = await supabaseClient.rpc(
+          'search_entries_by_embedding',
+          {
             query_embedding: `[${queryEmbedding.join(',')}]`,
             filter_user_id: userId,
-            match_count: limit * 2, // Get more to filter
+            match_count: limit * 2,
             match_threshold: 0.3,
-          });
-        
+          }
+        );
+
         if (semanticError) {
           console.error('Semantic search RPC error:', semanticError);
           throw semanticError;
         }
-        
-        console.log(`Semantic search returned ${semanticResults?.length || 0} results`);
-        entries = semanticResults || [];
 
+        console.log(`Semantic search returned ${semanticResults?.length ?? 0} results`);
+        entries = semanticResults ?? [];
       } catch (semanticError) {
         console.error('Semantic search failed, falling back to keyword search:', semanticError);
-        // Fall back to keyword search with SANITIZED query
+
+        // Fall back to keyword search with escaped query
+        const escapedQuery = escapeForLike(query);
         const { data: keywordResults, error: keywordError } = await supabaseClient
           .from('entries')
-          .select('*')
+          .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
           .eq('user_id', userId)
           .eq('archived', false)
-          .or(`content.ilike.%${sanitizedQuery}%,title.ilike.%${sanitizedQuery}%`)
+          .or(`content.ilike.%${escapedQuery}%,title.ilike.%${escapedQuery}%`)
           .order('created_at', { ascending: false })
           .limit(limit * 2);
 
         if (keywordError) throw keywordError;
-        entries = keywordResults || [];
+        entries = keywordResults ?? [];
       }
     } else {
-      // Standard keyword search with SANITIZED query
+      // Standard keyword search with escaped query
       console.log('Using keyword search...');
+      const escapedQuery = escapeForLike(query);
       const { data: keywordResults, error: keywordError } = await supabaseClient
         .from('entries')
-        .select('*')
+        .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
         .eq('user_id', userId)
         .eq('archived', false)
-        .or(`content.ilike.%${sanitizedQuery}%,title.ilike.%${sanitizedQuery}%`)
+        .or(`content.ilike.%${escapedQuery}%,title.ilike.%${escapedQuery}%`)
         .order('created_at', { ascending: false })
         .limit(limit * 2);
 
       if (keywordError) throw keywordError;
-      entries = keywordResults || [];
+      entries = keywordResults ?? [];
     }
 
     // Apply filters
@@ -174,34 +188,34 @@ serve(async (req) => {
     // Date filters
     if (startDate) {
       const start = new Date(startDate);
-      filteredEntries = filteredEntries.filter((e: any) => new Date(e.created_at) >= start);
+      filteredEntries = filteredEntries.filter((e) => new Date(e.created_at) >= start);
     }
     if (endDate) {
       const end = new Date(endDate);
-      filteredEntries = filteredEntries.filter((e: any) => new Date(e.created_at) <= end);
+      filteredEntries = filteredEntries.filter((e) => new Date(e.created_at) <= end);
     }
 
     // Content type filter
     if (contentType) {
-      filteredEntries = filteredEntries.filter((e: any) => e.content_type === contentType);
+      filteredEntries = filteredEntries.filter((e) => e.content_type === contentType);
     }
 
     // Importance filters
     if (minImportance !== undefined) {
-      filteredEntries = filteredEntries.filter((e: any) => 
-        e.importance_score !== null && e.importance_score >= minImportance
+      filteredEntries = filteredEntries.filter(
+        (e) => e.importance_score !== null && e.importance_score >= minImportance
       );
     }
     if (maxImportance !== undefined) {
-      filteredEntries = filteredEntries.filter((e: any) => 
-        e.importance_score !== null && e.importance_score <= maxImportance
+      filteredEntries = filteredEntries.filter(
+        (e) => e.importance_score !== null && e.importance_score <= maxImportance
       );
     }
 
     // Tags filter
     if (tags && Array.isArray(tags) && tags.length > 0) {
-      filteredEntries = filteredEntries.filter((e: any) => 
-        e.tags && tags.some((tag: string) => e.tags.includes(tag))
+      filteredEntries = filteredEntries.filter(
+        (e) => e.tags && tags.some((tag: string) => e.tags.includes(tag))
       );
     }
 
@@ -210,26 +224,19 @@ serve(async (req) => {
 
     console.log(`Returning ${results.length} filtered results`);
 
-    return new Response(
-      JSON.stringify({ 
-        results, 
+    return successResponse(
+      req,
+      {
+        results,
         total: results.length,
         query,
-        semantic: useSemanticSearch 
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
+        semantic: useSemanticSearch,
+      },
+      200,
+      rateLimit
     );
   } catch (error) {
     console.error('Error in search-memory function:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
-    );
+    return serverErrorResponse(req, error instanceof Error ? error : new Error('Unknown error'));
   }
 });

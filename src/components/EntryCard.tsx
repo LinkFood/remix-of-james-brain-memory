@@ -28,41 +28,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
 import { useSignedUrl } from "@/hooks/use-signed-url";
+import type { Entry, EntryCardProps } from "@/types";
 
-export interface Entry {
-  id: string;
-  user_id: string;
-  content: string;
-  title: string | null;
-  content_type: string;
-  content_subtype: string | null;
-  tags: string[];
-  extracted_data: Record<string, unknown>;
-  importance_score: number | null;
-  list_items: Array<{ text: string; checked: boolean }>;
-  source: string;
-  starred: boolean;
-  archived: boolean;
-  image_url?: string | null;
-  event_date?: string | null;
-  event_time?: string | null;
-  is_recurring?: boolean | null;
-  recurrence_pattern?: string | null;
-  created_at: string;
-  updated_at: string;
-  _pending?: boolean; // For optimistic updates
-}
-
-interface EntryCardProps {
-  entry: Entry;
-  compact?: boolean;
-  showContent?: boolean;
-  onToggleListItem?: (entryId: string, itemIndex: number, checked: boolean) => void;
-  onStar?: (entryId: string, starred: boolean) => void;
-  onArchive?: (entryId: string) => void;
-  onDelete?: (entryId: string) => void;
-  onClick?: (entry: Entry) => void;
-}
+// Re-export Entry type for backward compatibility
+export type { Entry } from "@/types";
 
 const typeIcons: Record<string, React.ReactNode> = {
   code: <Code className="w-4 h-4" />,
@@ -74,6 +43,7 @@ const typeIcons: Record<string, React.ReactNode> = {
   reminder: <Bell className="w-4 h-4" />,
   note: <FileText className="w-4 h-4" />,
   image: <ImageIcon className="w-4 h-4" />,
+  document: <FileText className="w-4 h-4" />,
 };
 
 const typeColors: Record<string, string> = {
@@ -86,6 +56,7 @@ const typeColors: Record<string, string> = {
   reminder: "bg-red-500/10 text-red-500 border-red-500/20",
   note: "bg-gray-500/10 text-gray-500 border-gray-500/20",
   image: "bg-cyan-500/10 text-cyan-500 border-cyan-500/20",
+  document: "bg-indigo-500/10 text-indigo-500 border-indigo-500/20",
 };
 
 const EntryCard = ({
@@ -98,11 +69,11 @@ const EntryCard = ({
   onDelete,
   onClick,
 }: EntryCardProps) => {
-  const icon = typeIcons[entry.content_type] || typeIcons.note;
-  const colorClass = typeColors[entry.content_type] || typeColors.note;
+  const icon = typeIcons[entry.content_type] ?? typeIcons.note;
+  const colorClass = typeColors[entry.content_type] ?? typeColors.note;
   
   // Get signed URL for private storage images
-  const { signedUrl: imageUrl } = useSignedUrl(entry.image_url);
+  const { signedUrl: imageUrl } = useSignedUrl(entry.image_url ?? null);
 
   const truncatedContent =
     entry.content.length > 150
@@ -110,16 +81,14 @@ const EntryCard = ({
       : entry.content;
 
   const handleCardClick = () => {
-    if (onClick) {
-      onClick(entry);
-    }
+    onClick?.(entry);
   };
 
   const handleListItemToggle = (index: number, checked: boolean) => {
-    if (onToggleListItem) {
-      onToggleListItem(entry.id, index, checked);
-    }
+    onToggleListItem?.(entry.id, index, checked);
   };
+
+  const isPending = '_pending' in entry && entry._pending;
 
   return (
     <Card
@@ -127,7 +96,7 @@ const EntryCard = ({
         "group transition-all duration-200 hover:shadow-md",
         onClick && "cursor-pointer hover:border-primary/30",
         entry.starred && "border-yellow-500/30 bg-yellow-500/5",
-        entry._pending && "opacity-60 animate-pulse pointer-events-none"
+        isPending && "opacity-60 animate-pulse pointer-events-none"
       )}
       onClick={handleCardClick}
     >
@@ -135,12 +104,12 @@ const EntryCard = ({
         {/* Header */}
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="flex items-center gap-2 flex-1 min-w-0">
-            <div className={cn("p-1.5 rounded-md border", colorClass)}>
+            <div className={cn("p-1.5 rounded-md border", colorClass)} data-testid="content-type-badge">
               {icon}
             </div>
             <div className="flex-1 min-w-0">
               <h3 className="font-medium text-sm truncate">
-                {entry.title || "Untitled"}
+                {entry.title ?? "Untitled"}
               </h3>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>{format(new Date(entry.created_at), "MMM d, h:mm a")}</span>
@@ -156,7 +125,11 @@ const EntryCard = ({
 
           <div className="flex items-center gap-1">
             {entry.importance_score !== null && entry.importance_score >= 7 && (
-              <Badge variant="outline" className="text-xs bg-orange-500/10 text-orange-500 border-orange-500/20">
+              <Badge 
+                variant="outline" 
+                className="text-xs bg-orange-500/10 text-orange-500 border-orange-500/20"
+                data-testid="importance-badge"
+              >
                 {entry.importance_score}/10
               </Badge>
             )}
@@ -171,6 +144,7 @@ const EntryCard = ({
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                  aria-label="Entry options"
                 >
                   <MoreVertical className="w-4 h-4" />
                 </Button>
@@ -214,14 +188,14 @@ const EntryCard = ({
               <div className="mb-2 rounded-md overflow-hidden border border-border">
                 <img 
                   src={imageUrl} 
-                  alt={entry.title || 'Uploaded image'}
+                  alt={entry.title ?? 'Uploaded image'}
                   className="w-full h-32 object-cover"
                   loading="lazy"
                 />
               </div>
             )}
             
-            {entry.content_type === "list" && entry.list_items?.length > 0 ? (
+            {entry.content_type === "list" && entry.list_items.length > 0 ? (
               <div className="space-y-1.5">
                 {entry.list_items.slice(0, compact ? 3 : 5).map((item, index) => (
                   <div
@@ -272,7 +246,7 @@ const EntryCard = ({
         )}
 
         {/* Tags */}
-        {entry.tags && entry.tags.length > 0 && !compact && (
+        {entry.tags.length > 0 && !compact && (
           <div className="flex flex-wrap gap-1 mt-3">
             {entry.tags.slice(0, 4).map((tag) => (
               <Badge key={tag} variant="secondary" className="text-xs">
