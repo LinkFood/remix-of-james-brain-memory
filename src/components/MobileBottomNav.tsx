@@ -1,4 +1,4 @@
-import { MessageSquare, Database, TrendingUp, Settings, Menu } from "lucide-react";
+import { Brain, MessageSquare, Settings, Menu } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -10,9 +10,8 @@ interface MobileBottomNavProps {
 
 const MobileBottomNav = ({ activeTab, onTabChange, onMenuClick }: MobileBottomNavProps) => {
   const navItems = [
-    { id: "chat", icon: MessageSquare, label: "Chat" },
-    { id: "memory", icon: Database, label: "Memory" },
-    { id: "analytics", icon: TrendingUp, label: "Analytics" },
+    { id: "dump", icon: Brain, label: "Dump" },
+    { id: "assistant", icon: MessageSquare, label: "Ask" },
     { id: "settings", icon: Settings, label: "Settings" },
   ];
 
