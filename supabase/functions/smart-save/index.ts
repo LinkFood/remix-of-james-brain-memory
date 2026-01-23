@@ -37,6 +37,7 @@ interface ClassificationResult {
   extractedData: Record<string, unknown>;
   appendTo?: string;
   listItems?: Array<{ text: string; checked: boolean }>;
+  imageDescription?: string;
 }
 
 interface Entry {
@@ -50,6 +51,7 @@ interface Entry {
   extracted_data: Record<string, unknown>;
   importance_score: number | null;
   list_items: Array<{ text: string; checked: boolean }>;
+  image_url: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -60,11 +62,19 @@ serve(async (req) => {
   }
 
   try {
-    const { content, userId, source = 'manual' } = await req.json();
+    const { content, userId, source = 'manual', imageUrl } = await req.json();
 
-    if (!content || !userId) {
+    if (!userId) {
       return new Response(
-        JSON.stringify({ error: 'Content and userId are required' }),
+        JSON.stringify({ error: 'userId is required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Content is optional if imageUrl is provided
+    if (!content && !imageUrl) {
+      return new Response(
+        JSON.stringify({ error: 'Either content or imageUrl is required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -79,11 +89,12 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Step 1: Classify content
+    console.log(`[smart-save] Processing ${imageUrl ? 'image' : 'text'} dump for user ${userId}`);
+
+    // Step 1: Classify content (with vision if imageUrl provided)
     console.log('Step 1: Classifying content...');
     const classifyResponse = await fetch(`${supabaseUrl}/functions/v1/classify-content`, {
       method: 'POST',
@@ -91,16 +102,26 @@ serve(async (req) => {
         'Authorization': `Bearer ${supabaseKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ content, userId }),
+      body: JSON.stringify({ content: content || '', userId, imageUrl }),
     });
 
+    let classification: ClassificationResult;
     if (!classifyResponse.ok) {
       const errorText = await classifyResponse.text();
       console.error('Classification failed:', errorText);
-      throw new Error('Failed to classify content');
+      // Fallback classification for images
+      classification = {
+        type: imageUrl ? 'image' : 'note',
+        subtype: imageUrl ? 'photo' : undefined,
+        suggestedTitle: content?.slice(0, 50) || (imageUrl ? 'Uploaded Image' : 'Untitled'),
+        tags: [],
+        extractedData: {},
+        listItems: [],
+      };
+    } else {
+      classification = await classifyResponse.json();
     }
-
-    const classification: ClassificationResult = await classifyResponse.json();
+    
     console.log('Classification result:', classification);
 
     // Step 2: Check if we should append to an existing entry
@@ -123,7 +144,7 @@ serve(async (req) => {
         const newListItems = classification.listItems || [];
         const combinedListItems = [...existingListItems, ...newListItems];
 
-        const updatedContent = existingEntry.content + '\n' + content;
+        const updatedContent = existingEntry.content + '\n' + (content || '');
         const updatedTags = [...new Set([...(existingEntry.tags || []), ...classification.tags])];
 
         const { data: updatedEntry, error: updateError } = await supabase
@@ -157,6 +178,11 @@ serve(async (req) => {
     if (action === 'created') {
       console.log('Step 3: Creating new entry...');
 
+      // Build the content to embed - include image description if available
+      const contentForEmbedding = classification.imageDescription 
+        ? `${content || ''}\n\nImage description: ${classification.imageDescription}`.trim()
+        : content || classification.suggestedTitle || '';
+
       // Generate embedding
       console.log('Generating embedding...');
       const embeddingResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
@@ -165,7 +191,7 @@ serve(async (req) => {
           'Authorization': `Bearer ${supabaseKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ text: content }),
+        body: JSON.stringify({ text: contentForEmbedding }),
       });
 
       let embedding = null;
@@ -185,7 +211,7 @@ serve(async (req) => {
           'Authorization': `Bearer ${supabaseKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ content, role: 'user' }),
+        body: JSON.stringify({ content: contentForEmbedding, role: 'user' }),
       });
 
       let importanceScore = null;
@@ -198,21 +224,27 @@ serve(async (req) => {
       }
 
       // Insert new entry
+      const entryData = {
+        user_id: userId,
+        content: content || classification.imageDescription || '',
+        title: classification.suggestedTitle,
+        content_type: classification.type,
+        content_subtype: classification.subtype || null,
+        tags: classification.tags,
+        extracted_data: {
+          ...classification.extractedData,
+          ...(classification.imageDescription && { imageDescription: classification.imageDescription }),
+        },
+        embedding: embedding ? `[${embedding.join(',')}]` : null,
+        importance_score: importanceScore,
+        list_items: classification.listItems || [],
+        source,
+        image_url: imageUrl || null,
+      };
+
       const { data: newEntry, error: insertError } = await supabase
         .from('entries')
-        .insert({
-          user_id: userId,
-          content,
-          title: classification.suggestedTitle,
-          content_type: classification.type,
-          content_subtype: classification.subtype || null,
-          tags: classification.tags,
-          extracted_data: classification.extractedData || {},
-          embedding: embedding ? `[${embedding.join(',')}]` : null,
-          importance_score: importanceScore,
-          list_items: classification.listItems || [],
-          source,
-        })
+        .insert(entryData)
         .select()
         .single();
 
@@ -228,7 +260,9 @@ serve(async (req) => {
     // Generate summary for the response
     const summary = action === 'appended'
       ? `Added to ${entry!.title || 'list'}`
-      : `Saved: ${entry!.title || 'Untitled'} · ${classification.type}${entry!.importance_score ? ` · ${entry!.importance_score}/10` : ''}`;
+      : imageUrl 
+        ? `Image saved: "${entry!.title}"`
+        : `Saved: ${entry!.title || 'Untitled'} · ${classification.type}${entry!.importance_score ? ` · ${entry!.importance_score}/10` : ''}`;
 
     return new Response(
       JSON.stringify({
