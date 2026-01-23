@@ -44,6 +44,10 @@ export interface Entry {
   starred: boolean;
   archived: boolean;
   image_url?: string | null;
+  event_date?: string | null;
+  event_time?: string | null;
+  is_recurring?: boolean | null;
+  recurrence_pattern?: string | null;
   created_at: string;
   updated_at: string;
   _pending?: boolean; // For optimistic updates
