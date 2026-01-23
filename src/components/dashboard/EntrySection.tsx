@@ -22,6 +22,7 @@ interface EntrySectionProps {
   onToggleListItem?: (entryId: string, itemIndex: number, checked: boolean) => void;
   onStar?: (entryId: string, starred: boolean) => void;
   onArchive?: (entryId: string) => void;
+  onDelete?: (entryId: string) => void;
   onViewEntry?: (entry: Entry) => void;
 }
 
@@ -43,6 +44,7 @@ const EntrySection = ({
   onToggleListItem,
   onStar,
   onArchive,
+  onDelete,
   onViewEntry,
 }: EntrySectionProps) => {
   const displayEntries = entries.slice(0, limit);
@@ -70,6 +72,7 @@ const EntrySection = ({
               onToggleListItem={onToggleListItem}
               onStar={onStar}
               onArchive={onArchive}
+              onDelete={onDelete}
               onClick={onViewEntry}
             />
           ))}

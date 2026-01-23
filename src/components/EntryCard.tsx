@@ -16,7 +16,8 @@ import {
   Archive,
   MoreVertical,
   ExternalLink,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Trash2
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -54,6 +55,7 @@ interface EntryCardProps {
   onToggleListItem?: (entryId: string, itemIndex: number, checked: boolean) => void;
   onStar?: (entryId: string, starred: boolean) => void;
   onArchive?: (entryId: string) => void;
+  onDelete?: (entryId: string) => void;
   onClick?: (entry: Entry) => void;
 }
 
@@ -88,6 +90,7 @@ const EntryCard = ({
   onToggleListItem,
   onStar,
   onArchive,
+  onDelete,
   onClick,
 }: EntryCardProps) => {
   const icon = typeIcons[entry.content_type] || typeIcons.note;
@@ -182,6 +185,13 @@ const EntryCard = ({
                 >
                   <Archive className="w-4 h-4 mr-2" />
                   Archive
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => onDelete?.(entry.id)}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Delete
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
