@@ -15,189 +15,202 @@ serve(async (req) => {
     const { userId, format = 'json' } = await req.json();
 
     if (!userId) {
-      throw new Error('Missing userId');
+      return new Response(
+        JSON.stringify({ error: 'userId is required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
+
+    console.log(`Exporting data for user: ${userId} in format: ${format}`);
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Fetch all user data
-    const { data: conversations, error: convError } = await supabaseClient
-      .from('conversations')
-      .select('*')
+    // Fetch all entries
+    const { data: entries, error: entriesError } = await supabaseClient
+      .from('entries')
+      .select('id, content, title, content_type, content_subtype, tags, extracted_data, importance_score, list_items, starred, archived, source, created_at, updated_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    if (convError) throw convError;
+    if (entriesError) {
+      console.error('Error fetching entries:', entriesError);
+      throw entriesError;
+    }
 
-    const { data: messages, error: msgError } = await supabaseClient
-      .from('messages')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-
-    if (msgError) throw msgError;
-
-    const { data: reports, error: repError } = await supabaseClient
+    // Fetch brain reports
+    const { data: brainReports, error: reportsError } = await supabaseClient
       .from('brain_reports')
-      .select('*')
+      .select('id, report_type, summary, key_themes, decisions, insights, conversation_stats, start_date, end_date, created_at')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    if (repError) throw repError;
+    if (reportsError) {
+      console.error('Error fetching brain_reports:', reportsError);
+      throw reportsError;
+    }
+
+    // Fetch profile
+    const { data: profile, error: profileError } = await supabaseClient
+      .from('profiles')
+      .select('username, created_at, updated_at')
+      .eq('id', userId)
+      .single();
+
+    if (profileError && profileError.code !== 'PGRST116') {
+      console.error('Error fetching profile:', profileError);
+    }
 
     const exportData = {
-      exported_at: new Date().toISOString(),
-      user_id: userId,
-      conversations: conversations || [],
-      messages: messages || [],
-      brain_reports: reports || [],
+      exportedAt: new Date().toISOString(),
+      userId,
+      profile: profile || null,
+      entries: entries || [],
+      brainReports: brainReports || [],
       stats: {
-        total_conversations: conversations?.length || 0,
-        total_messages: messages?.length || 0,
-        total_reports: reports?.length || 0,
+        totalEntries: entries?.length || 0,
+        totalReports: brainReports?.length || 0,
+        contentTypes: entries?.reduce((acc, e) => {
+          acc[e.content_type] = (acc[e.content_type] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>) || {},
+        starredCount: entries?.filter(e => e.starred).length || 0,
+        archivedCount: entries?.filter(e => e.archived).length || 0
       }
     };
 
-    let content: string;
+    let responseContent: string;
     let contentType: string;
     let filename: string;
     const timestamp = new Date().toISOString().split('T')[0];
 
     switch (format.toLowerCase()) {
-      case 'json':
-        content = JSON.stringify(exportData, null, 2);
-        contentType = 'application/json';
-        filename = `memory-vault-${timestamp}.json`;
-        break;
-
       case 'csv':
-        // Convert messages to CSV format
-        const csvRows = [
-          ['Timestamp', 'Role', 'Content', 'Conversation ID', 'Topic', 'Importance', 'Provider', 'Model'].join(','),
-          ...messages.map(msg => [
-            msg.created_at,
-            msg.role,
-            `"${msg.content.replace(/"/g, '""')}"`, // Escape quotes
-            msg.conversation_id,
-            msg.topic || '',
-            msg.importance_score || '',
-            msg.provider || '',
-            msg.model_used || '',
-          ].join(','))
-        ];
-        content = csvRows.join('\n');
+        // Export entries as CSV
+        const csvHeaders = ['id', 'title', 'content_type', 'tags', 'importance_score', 'starred', 'created_at'];
+        const csvRows = (entries || []).map(e => [
+          e.id,
+          `"${(e.title || '').replace(/"/g, '""')}"`,
+          e.content_type,
+          `"${(e.tags || []).join(', ')}"`,
+          e.importance_score || 0,
+          e.starred ? 'true' : 'false',
+          e.created_at
+        ].join(','));
+        responseContent = [csvHeaders.join(','), ...csvRows].join('\n');
         contentType = 'text/csv';
-        filename = `memory-vault-${timestamp}.csv`;
+        filename = `brain-dump-${timestamp}.csv`;
         break;
 
       case 'markdown':
       case 'md':
-        // Convert to Markdown format
-        const mdLines = [
-          `# Memory Vault Export`,
-          `Exported: ${new Date().toLocaleString()}`,
-          ``,
-          `## Summary`,
-          `- Total Conversations: ${conversations?.length || 0}`,
-          `- Total Messages: ${messages?.length || 0}`,
-          `- Total Reports: ${reports?.length || 0}`,
-          ``,
-          `---`,
-          ``,
-        ];
-
-        conversations?.forEach(conv => {
-          mdLines.push(`## ${conv.title || 'Untitled Conversation'}`);
-          mdLines.push(`*Created: ${new Date(conv.created_at).toLocaleString()}*`);
-          mdLines.push('');
-
-          const convMessages = messages?.filter(m => m.conversation_id === conv.id) || [];
-          convMessages.forEach(msg => {
-            const role = msg.role === 'user' ? '**You**' : '*Assistant*';
-            mdLines.push(`### ${role} (${new Date(msg.created_at).toLocaleString()})`);
-            if (msg.importance_score) {
-              mdLines.push(`*Importance: ${msg.importance_score}/10*`);
-            }
-            mdLines.push('');
-            mdLines.push(msg.content);
-            mdLines.push('');
-          });
-
-          mdLines.push('---');
-          mdLines.push('');
-        });
-
-        content = mdLines.join('\n');
+        responseContent = generateMarkdown(exportData);
         contentType = 'text/markdown';
-        filename = `memory-vault-${timestamp}.md`;
+        filename = `brain-dump-${timestamp}.md`;
         break;
 
       case 'txt':
-        // Convert to plain text format
-        const txtLines = [
-          `MEMORY VAULT EXPORT`,
-          `Exported: ${new Date().toLocaleString()}`,
-          ``,
-          `SUMMARY`,
-          `Total Conversations: ${conversations?.length || 0}`,
-          `Total Messages: ${messages?.length || 0}`,
-          `Total Reports: ${reports?.length || 0}`,
-          ``,
-          `${'='.repeat(80)}`,
-          ``,
-        ];
-
-        conversations?.forEach(conv => {
-          txtLines.push(`CONVERSATION: ${conv.title || 'Untitled'}`);
-          txtLines.push(`Created: ${new Date(conv.created_at).toLocaleString()}`);
-          txtLines.push('');
-
-          const convMessages = messages?.filter(m => m.conversation_id === conv.id) || [];
-          convMessages.forEach(msg => {
-            const role = msg.role === 'user' ? 'YOU' : 'ASSISTANT';
-            txtLines.push(`[${role}] ${new Date(msg.created_at).toLocaleString()}`);
-            if (msg.importance_score) {
-              txtLines.push(`Importance: ${msg.importance_score}/10`);
-            }
-            txtLines.push('');
-            txtLines.push(msg.content);
-            txtLines.push('');
-            txtLines.push('-'.repeat(80));
-            txtLines.push('');
-          });
-
-          txtLines.push('='.repeat(80));
-          txtLines.push('');
-        });
-
-        content = txtLines.join('\n');
+        responseContent = generatePlainText(exportData);
         contentType = 'text/plain';
-        filename = `memory-vault-${timestamp}.txt`;
+        filename = `brain-dump-${timestamp}.txt`;
         break;
 
+      case 'json':
       default:
-        throw new Error(`Unsupported format: ${format}`);
+        responseContent = JSON.stringify(exportData, null, 2);
+        contentType = 'application/json';
+        filename = `brain-dump-${timestamp}.json`;
+        break;
     }
 
-    return new Response(content, {
+    console.log(`Export complete: ${entries?.length || 0} entries, ${brainReports?.length || 0} reports`);
+
+    return new Response(responseContent, {
       headers: {
         ...corsHeaders,
         'Content-Type': contentType,
         'Content-Disposition': `attachment; filename="${filename}"`,
       },
     });
+
   } catch (error) {
-    console.error('Error in export-all-data function:', error);
+    console.error('Error in export-all-data:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
       JSON.stringify({ error: errorMessage }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
+
+function generateMarkdown(data: any): string {
+  let md = `# Brain Dump Export\n\n`;
+  md += `**Exported:** ${data.exportedAt}\n\n`;
+  
+  if (data.profile) {
+    md += `## Profile\n\n`;
+    md += `- Username: ${data.profile.username || 'Not set'}\n\n`;
+  }
+
+  md += `## Stats\n\n`;
+  md += `- Total Entries: ${data.stats.totalEntries}\n`;
+  md += `- Starred: ${data.stats.starredCount}\n`;
+  md += `- Archived: ${data.stats.archivedCount}\n\n`;
+
+  if (Object.keys(data.stats.contentTypes).length > 0) {
+    md += `### Content Types\n\n`;
+    for (const [type, count] of Object.entries(data.stats.contentTypes)) {
+      md += `- ${type}: ${count}\n`;
+    }
+    md += '\n';
+  }
+
+  md += `## Entries\n\n`;
+  for (const entry of data.entries) {
+    md += `### ${entry.title || 'Untitled'}\n\n`;
+    md += `- **Type:** ${entry.content_type}${entry.content_subtype ? ` / ${entry.content_subtype}` : ''}\n`;
+    md += `- **Importance:** ${entry.importance_score || 'N/A'}\n`;
+    md += `- **Tags:** ${(entry.tags || []).join(', ') || 'None'}\n`;
+    md += `- **Created:** ${entry.created_at}\n\n`;
+    md += `${entry.content}\n\n`;
+    md += `---\n\n`;
+  }
+
+  if (data.brainReports.length > 0) {
+    md += `## Brain Reports\n\n`;
+    for (const report of data.brainReports) {
+      md += `### ${report.report_type} Report\n\n`;
+      md += `**Period:** ${report.start_date} to ${report.end_date}\n\n`;
+      md += `${report.summary}\n\n`;
+      md += `---\n\n`;
+    }
+  }
+
+  return md;
+}
+
+function generatePlainText(data: any): string {
+  let txt = `BRAIN DUMP EXPORT\n`;
+  txt += `==================\n\n`;
+  txt += `Exported: ${data.exportedAt}\n\n`;
+
+  txt += `STATS\n`;
+  txt += `-----\n`;
+  txt += `Total Entries: ${data.stats.totalEntries}\n`;
+  txt += `Starred: ${data.stats.starredCount}\n`;
+  txt += `Archived: ${data.stats.archivedCount}\n\n`;
+
+  txt += `ENTRIES\n`;
+  txt += `-------\n\n`;
+  for (const entry of data.entries) {
+    txt += `[${entry.content_type.toUpperCase()}] ${entry.title || 'Untitled'}\n`;
+    txt += `Importance: ${entry.importance_score || 'N/A'} | Tags: ${(entry.tags || []).join(', ') || 'None'}\n`;
+    txt += `Created: ${entry.created_at}\n\n`;
+    txt += `${entry.content}\n\n`;
+    txt += `---\n\n`;
+  }
+
+  return txt;
+}

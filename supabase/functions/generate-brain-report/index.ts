@@ -12,206 +12,193 @@ serve(async (req) => {
   }
 
   try {
-    const { userId, reportType, startDate, endDate } = await req.json();
+    const { userId, reportType = 'weekly', startDate, endDate } = await req.json();
 
-    if (!userId || !reportType || !startDate || !endDate) {
-      throw new Error('Missing required fields');
+    if (!userId) {
+      return new Response(
+        JSON.stringify({ error: 'userId is required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
+
+    console.log(`Generating ${reportType} report for user: ${userId}`);
 
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Fetch messages in the date range
-    const { data: messages, error: messagesError } = await supabaseClient
-      .from('messages')
-      .select('id, content, role, created_at, topic, conversation_id')
+    // Calculate date range
+    const now = new Date();
+    let reportStartDate: Date;
+    let reportEndDate = endDate ? new Date(endDate) : now;
+
+    if (startDate) {
+      reportStartDate = new Date(startDate);
+    } else {
+      switch (reportType) {
+        case 'daily':
+          reportStartDate = new Date(now.setHours(0, 0, 0, 0));
+          break;
+        case 'monthly':
+          reportStartDate = new Date(now.getFullYear(), now.getMonth(), 1);
+          break;
+        case 'weekly':
+        default:
+          reportStartDate = new Date(now.setDate(now.getDate() - 7));
+          break;
+      }
+    }
+
+    // Fetch entries within date range
+    const { data: entries, error: entriesError } = await supabaseClient
+      .from('entries')
+      .select('id, content, title, content_type, content_subtype, tags, importance_score, starred, created_at')
       .eq('user_id', userId)
-      .gte('created_at', startDate)
-      .lte('created_at', endDate)
-      .order('created_at', { ascending: true });
+      .eq('archived', false)
+      .gte('created_at', reportStartDate.toISOString())
+      .lte('created_at', reportEndDate.toISOString())
+      .order('created_at', { ascending: false });
 
-    if (messagesError) throw messagesError;
+    if (entriesError) {
+      console.error('Error fetching entries:', entriesError);
+      throw entriesError;
+    }
 
-    if (!messages || messages.length === 0) {
+    if (!entries || entries.length === 0) {
       return new Response(
-        JSON.stringify({ error: 'No messages found in this date range' }),
-        {
-          status: 404,
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
+        JSON.stringify({ 
+          error: 'No entries found in the specified date range',
+          startDate: reportStartDate.toISOString(),
+          endDate: reportEndDate.toISOString()
+        }),
+        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Fetch conversation titles
-    const conversationIds = [...new Set(messages.map(m => m.conversation_id))];
-    const { data: conversations } = await supabaseClient
-      .from('conversations')
-      .select('id, title')
-      .in('id', conversationIds);
+    console.log(`Found ${entries.length} entries for report`);
 
-    const convMap = new Map(conversations?.map(c => [c.id, c.title]) || []);
+    // Calculate stats
+    const stats = {
+      totalEntries: entries.length,
+      starredCount: entries.filter(e => e.starred).length,
+      contentTypes: entries.reduce((acc, e) => {
+        acc[e.content_type] = (acc[e.content_type] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>),
+      topTags: getTopTags(entries),
+      avgImportance: entries.reduce((sum, e) => sum + (e.importance_score || 0), 0) / entries.length,
+      highPriorityCount: entries.filter(e => (e.importance_score || 0) >= 8).length
+    };
 
-    // Prepare context for AI
-    const userMessages = messages.filter(m => m.role === 'user');
-    const assistantMessages = messages.filter(m => m.role === 'assistant');
-    const conversationCount = conversationIds.length;
-
-    // Build a summary of conversations
-    const conversationSummaries = conversationIds.slice(0, 20).map(convId => {
-      const convMessages = messages.filter(m => m.conversation_id === convId);
-      const title = convMap.get(convId) || 'Untitled';
-      const preview = convMessages.slice(0, 3).map(m => 
-        `${m.role}: ${m.content.substring(0, 150)}...`
-      ).join('\n');
-      return `Conversation: "${title}"\n${preview}`;
-    }).join('\n\n');
-
-    const reportPeriod = reportType === 'daily' ? 'day' : 
-                        reportType === 'weekly' ? 'week' : 'month';
-
-    // Call Lovable AI to generate the report
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
-      throw new Error('LOVABLE_API_KEY is not configured');
+    // Generate AI summary using Lovable API
+    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
+    if (!lovableApiKey) {
+      throw new Error('LOVABLE_API_KEY not configured');
     }
 
-    const systemPrompt = `You are an AI analyst that generates insightful brain reports from conversation data. 
-Analyze the conversations and extract:
-1. A concise summary (2-3 sentences) of the overall activity
-2. 3-5 key themes or topics discussed
-3. Important decisions or action items identified
-4. 2-4 meaningful insights or patterns observed
+    const entrySummaries = entries.slice(0, 20).map(e => 
+      `[${e.content_type}${e.importance_score ? ` importance:${e.importance_score}` : ''}] ${e.title || 'Untitled'}: ${e.content.substring(0, 200)}...`
+    ).join('\n');
 
-Be specific and actionable. Focus on what's most valuable to remember from this time period.`;
+    const prompt = `Analyze this user's brain dump entries from the past ${reportType === 'daily' ? 'day' : reportType === 'monthly' ? 'month' : 'week'} and generate a structured report.
 
-    const userPrompt = `Analyze these conversations from ${new Date(startDate).toLocaleDateString()} to ${new Date(endDate).toLocaleDateString()}:
+Stats:
+- Total entries: ${stats.totalEntries}
+- High priority (8+): ${stats.highPriorityCount}
+- Average importance: ${stats.avgImportance.toFixed(1)}
+- Content types: ${Object.entries(stats.contentTypes).map(([k, v]) => `${k}: ${v}`).join(', ')}
+- Top tags: ${stats.topTags.join(', ')}
 
-Statistics:
-- Total messages: ${messages.length}
-- User messages: ${userMessages.length}
-- Assistant responses: ${assistantMessages.length}
-- Conversations: ${conversationCount}
+Sample entries:
+${entrySummaries}
 
-Sample conversations:
-${conversationSummaries}
-
-Generate a ${reportType} brain report with key themes, decisions, and insights.`;
+Generate a report with:
+1. A 2-3 sentence executive summary
+2. 3-5 key themes or patterns
+3. 2-3 notable decisions or commitments mentioned
+4. 2-3 actionable insights or recommendations`;
 
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        'Authorization': `Bearer ${lovableApiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
+        model: 'openai/gpt-5-mini',
         messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
+          { role: 'system', content: 'You are an AI analyst helping users understand patterns in their brain dump entries. Be concise, insightful, and actionable.' },
+          { role: 'user', content: prompt }
         ],
-        tools: [
-          {
-            type: 'function',
-            function: {
-              name: 'generate_brain_report',
-              description: 'Generate a structured brain report from conversation analysis',
-              parameters: {
-                type: 'object',
-                properties: {
-                  summary: {
-                    type: 'string',
-                    description: 'A 2-3 sentence summary of the overall activity'
-                  },
-                  key_themes: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        theme: { type: 'string' },
-                        description: { type: 'string' },
-                        frequency: { type: 'string' }
-                      },
-                      required: ['theme', 'description']
-                    },
-                    description: '3-5 key themes or topics discussed'
-                  },
-                  decisions: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        decision: { type: 'string' },
-                        context: { type: 'string' },
-                        date: { type: 'string' }
-                      },
-                      required: ['decision', 'context']
-                    },
-                    description: 'Important decisions or action items'
-                  },
-                  insights: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        insight: { type: 'string' },
-                        significance: { type: 'string' }
-                      },
-                      required: ['insight', 'significance']
-                    },
-                    description: '2-4 meaningful insights or patterns'
-                  }
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'create_brain_report',
+            description: 'Create a structured brain report',
+            parameters: {
+              type: 'object',
+              properties: {
+                summary: { type: 'string', description: '2-3 sentence executive summary' },
+                key_themes: { 
+                  type: 'array', 
+                  items: { type: 'string' },
+                  description: '3-5 key themes or patterns observed'
                 },
-                required: ['summary', 'key_themes', 'decisions', 'insights']
-              }
+                decisions: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '2-3 notable decisions or commitments'
+                },
+                insights: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description: '2-3 actionable insights or recommendations'
+                }
+              },
+              required: ['summary', 'key_themes', 'decisions', 'insights']
             }
           }
-        ],
-        tool_choice: { type: 'function', function: { name: 'generate_brain_report' } }
-      }),
+        }],
+        tool_choice: { type: 'function', function: { name: 'create_brain_report' } }
+      })
     });
 
     if (!aiResponse.ok) {
       const errorText = await aiResponse.text();
-      console.error('Lovable AI error:', aiResponse.status, errorText);
-      
-      if (aiResponse.status === 429) {
-        throw new Error('Rate limit exceeded. Please try again later.');
-      }
-      if (aiResponse.status === 402) {
-        throw new Error('AI credits exhausted. Please add credits to continue.');
-      }
-      
-      throw new Error('Failed to generate report with AI');
+      console.error('AI API error:', errorText);
+      throw new Error(`AI API error: ${aiResponse.status}`);
     }
 
     const aiData = await aiResponse.json();
-    const toolCall = aiData.choices[0]?.message?.tool_calls?.[0];
-    
-    if (!toolCall) {
-      throw new Error('No structured report generated');
-    }
+    console.log('AI response received');
 
-    const reportData = JSON.parse(toolCall.function.arguments);
-
-    // Calculate conversation stats
-    const stats = {
-      total_messages: messages.length,
-      user_messages: userMessages.length,
-      assistant_messages: assistantMessages.length,
-      conversations: conversationCount,
-      avg_messages_per_conversation: (messages.length / conversationCount).toFixed(1)
+    // Extract structured data from tool call
+    let reportData = {
+      summary: 'Report generation in progress...',
+      key_themes: [] as string[],
+      decisions: [] as string[],
+      insights: [] as string[]
     };
 
-    // Save the report to the database
+    if (aiData.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments) {
+      try {
+        reportData = JSON.parse(aiData.choices[0].message.tool_calls[0].function.arguments);
+      } catch (parseError) {
+        console.error('Error parsing AI response:', parseError);
+      }
+    } else if (aiData.choices?.[0]?.message?.content) {
+      reportData.summary = aiData.choices[0].message.content;
+    }
+
+    // Save report to database
     const { data: savedReport, error: saveError } = await supabaseClient
       .from('brain_reports')
       .insert({
         user_id: userId,
         report_type: reportType,
-        start_date: startDate,
-        end_date: endDate,
+        start_date: reportStartDate.toISOString(),
+        end_date: reportEndDate.toISOString(),
         summary: reportData.summary,
         key_themes: reportData.key_themes,
         decisions: reportData.decisions,
@@ -221,28 +208,37 @@ Generate a ${reportType} brain report with key themes, decisions, and insights.`
       .select()
       .single();
 
-    if (saveError) throw saveError;
+    if (saveError) {
+      console.error('Error saving report:', saveError);
+      throw saveError;
+    }
 
-    console.log(`Generated ${reportType} report for user ${userId}`);
+    console.log(`Report saved with ID: ${savedReport.id}`);
 
     return new Response(
-      JSON.stringify({ 
-        report: savedReport,
-        message: 'Brain report generated successfully' 
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
+      JSON.stringify({ success: true, report: savedReport }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
+
   } catch (error) {
-    console.error('Error in generate-brain-report function:', error);
+    console.error('Error in generate-brain-report:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
       JSON.stringify({ error: errorMessage }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
+
+function getTopTags(entries: any[]): string[] {
+  const tagCounts: Record<string, number> = {};
+  for (const entry of entries) {
+    for (const tag of (entry.tags || [])) {
+      tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+    }
+  }
+  return Object.entries(tagCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([tag]) => tag);
+}

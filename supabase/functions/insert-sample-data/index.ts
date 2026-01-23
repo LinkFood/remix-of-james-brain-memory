@@ -28,108 +28,197 @@ serve(async (req) => {
     }
 
     const userId = user.id;
+    console.log(`Inserting sample entries for user: ${userId}`);
 
-    // Create sample conversations
-    const conversations = [
-      { title: 'Project Planning Discussion', created_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString() },
-      { title: 'Technical Architecture Review', created_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString() },
-      { title: 'Product Strategy Brainstorm', created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() },
-      { title: 'Code Review & Optimization', created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString() },
+    // Sample entries covering different content types
+    const sampleEntries = [
+      {
+        content: `function fibonacci(n: number): number {
+  if (n <= 1) return n;
+  return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+// Memoized version for better performance
+const memo = new Map<number, number>();
+function fibMemo(n: number): number {
+  if (memo.has(n)) return memo.get(n)!;
+  if (n <= 1) return n;
+  const result = fibMemo(n - 1) + fibMemo(n - 2);
+  memo.set(n, result);
+  return result;
+}`,
+        title: 'Fibonacci with Memoization',
+        content_type: 'code',
+        content_subtype: 'typescript',
+        tags: ['algorithms', 'typescript', 'optimization', 'recursion'],
+        importance_score: 7,
+        created_at: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        content: `- Eggs
+- Milk (oat milk)
+- Bread (sourdough)
+- Avocados
+- Cherry tomatoes
+- Greek yogurt
+- Bananas
+- Coffee beans
+- Olive oil`,
+        title: 'Weekly Groceries',
+        content_type: 'list',
+        content_subtype: 'shopping',
+        tags: ['groceries', 'food', 'weekly'],
+        importance_score: 5,
+        list_items: [
+          { text: 'Eggs', completed: false },
+          { text: 'Milk (oat milk)', completed: false },
+          { text: 'Bread (sourdough)', completed: true },
+          { text: 'Avocados', completed: false },
+          { text: 'Cherry tomatoes', completed: false },
+          { text: 'Greek yogurt', completed: false },
+          { text: 'Bananas', completed: true },
+          { text: 'Coffee beans', completed: false },
+          { text: 'Olive oil', completed: false },
+        ],
+        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        content: `What if we built an AI that learns your personal context over time? Not just chat history, but actual semantic understanding of your preferences, projects, and thinking patterns. A "second brain" that compounds in value the more you use it. Could integrate with all AI providers as a context layer.`,
+        title: 'Second Brain AI Concept',
+        content_type: 'idea',
+        content_subtype: null,
+        tags: ['ai', 'product-idea', 'startup', 'innovation'],
+        importance_score: 9,
+        created_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        content: 'https://arxiv.org/abs/2312.00752 - "Retrieval-Augmented Generation for Large Language Models: A Survey" - Comprehensive overview of RAG techniques, chunking strategies, and embedding approaches. Really useful for the vector search implementation.',
+        title: 'RAG Survey Paper',
+        content_type: 'link',
+        content_subtype: 'article',
+        tags: ['research', 'ai', 'rag', 'embeddings', 'reading-list'],
+        importance_score: 8,
+        extracted_data: {
+          url: 'https://arxiv.org/abs/2312.00752',
+          domain: 'arxiv.org',
+          type: 'research-paper'
+        },
+        created_at: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        content: `Sarah Chen - Product Lead at TechCorp
+Email: sarah.chen@techcorp.io
+Met at ProductCon 2024, interested in AI integration for their platform.
+Follow up next week about partnership opportunity.`,
+        title: 'Sarah Chen - TechCorp',
+        content_type: 'contact',
+        content_subtype: null,
+        tags: ['networking', 'partnership', 'follow-up'],
+        importance_score: 7,
+        extracted_data: {
+          name: 'Sarah Chen',
+          email: 'sarah.chen@techcorp.io',
+          company: 'TechCorp',
+          role: 'Product Lead'
+        },
+        created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        content: 'Team standup - Discuss migration timeline and blockers',
+        title: 'Team Standup',
+        content_type: 'event',
+        content_subtype: 'meeting',
+        tags: ['work', 'meeting', 'team'],
+        importance_score: 6,
+        extracted_data: {
+          date: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString(),
+          recurring: true
+        },
+        created_at: new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        content: 'Remember to cancel the old hosting subscription before the renewal date on the 15th. Also need to update DNS records after migration.',
+        title: 'Cancel Old Hosting',
+        content_type: 'reminder',
+        content_subtype: null,
+        tags: ['infrastructure', 'billing', 'urgent'],
+        importance_score: 9,
+        created_at: new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        content: `Been thinking about the difference between "building in public" and actually shipping. There's a fine line between transparency and procrastination. The best founders I know ship first, then share learnings. The narrative comes from the work, not the other way around.`,
+        title: 'Building in Public Thoughts',
+        content_type: 'note',
+        content_subtype: 'reflection',
+        tags: ['startup', 'philosophy', 'productivity', 'shipping'],
+        importance_score: 6,
+        created_at: new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        content: `Project Roadmap Q1:
+- [ ] Complete database migration
+- [ ] Launch semantic search
+- [ ] Mobile responsive redesign
+- [ ] Public API beta
+- [ ] Integration with 3rd party apps`,
+        title: 'Q1 Project Roadmap',
+        content_type: 'list',
+        content_subtype: 'todo',
+        tags: ['planning', 'roadmap', 'q1', 'milestones'],
+        importance_score: 10,
+        list_items: [
+          { text: 'Complete database migration', completed: true },
+          { text: 'Launch semantic search', completed: false },
+          { text: 'Mobile responsive redesign', completed: false },
+          { text: 'Public API beta', completed: false },
+          { text: 'Integration with 3rd party apps', completed: false },
+        ],
+        created_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+      },
+      {
+        content: `Debugging tip: When React components re-render unexpectedly, use React DevTools Profiler to identify which props changed. Often it's object references being recreated. Solutions: useMemo for computed values, useCallback for functions, or move static objects outside component.`,
+        title: 'React Re-render Debugging',
+        content_type: 'note',
+        content_subtype: 'til',
+        tags: ['react', 'debugging', 'performance', 'til'],
+        importance_score: 7,
+        created_at: new Date().toISOString(),
+      },
     ];
 
-    const insertedConversations = [];
-    for (const conv of conversations) {
-      const { data, error } = await supabaseClient
-        .from('conversations')
-        .insert({ user_id: userId, ...conv })
-        .select()
-        .single();
-      
-      if (error) throw error;
-      insertedConversations.push(data);
-    }
+    // Insert entries
+    for (const entry of sampleEntries) {
+      const { error } = await supabaseClient
+        .from('entries')
+        .insert({
+          user_id: userId,
+          ...entry,
+          source: 'sample-data',
+        });
 
-    // Sample messages for each conversation
-    const messageTemplates = [
-      // Conversation 1: Project Planning
-      [
-        { role: 'user', content: 'Can you help me plan out the roadmap for our new feature?', topic: 'Project Planning', importance_score: 8 },
-        { role: 'assistant', content: 'I\'d be happy to help with your feature roadmap. Let\'s break it down into phases: discovery, design, development, and launch.', topic: 'Project Planning', importance_score: 7 },
-        { role: 'user', content: 'What should we prioritize in the discovery phase?', topic: 'Requirements Gathering', importance_score: 9 },
-        { role: 'assistant', content: 'Focus on user research, competitive analysis, and defining clear success metrics. These will guide all subsequent decisions.', topic: 'Requirements Gathering', importance_score: 8 },
-      ],
-      // Conversation 2: Technical Architecture
-      [
-        { role: 'user', content: 'We need to scale our database architecture. What are the best approaches?', topic: 'Database Scaling', importance_score: 10 },
-        { role: 'assistant', content: 'For database scaling, consider read replicas, connection pooling, and implementing caching layers like Redis.', topic: 'Database Scaling', importance_score: 9 },
-        { role: 'user', content: 'Should we use horizontal or vertical scaling?', topic: 'Infrastructure', importance_score: 8 },
-        { role: 'assistant', content: 'Start with vertical scaling for simplicity, but design for horizontal scaling to handle future growth efficiently.', topic: 'Infrastructure', importance_score: 7 },
-        { role: 'user', content: 'What about implementing a CDN for static assets?', topic: 'Performance Optimization', importance_score: 7 },
-        { role: 'assistant', content: 'Absolutely! A CDN will significantly reduce latency and bandwidth costs for global users.', topic: 'Performance Optimization', importance_score: 6 },
-      ],
-      // Conversation 3: Product Strategy
-      [
-        { role: 'user', content: 'How should we position our product against competitors?', topic: 'Product Strategy', importance_score: 9 },
-        { role: 'assistant', content: 'Focus on your unique value proposition. Identify gaps in competitor offerings and emphasize your strengths.', topic: 'Product Strategy', importance_score: 8 },
-        { role: 'user', content: 'What metrics should we track for product-market fit?', topic: 'Metrics & Analytics', importance_score: 10 },
-        { role: 'assistant', content: 'Track retention rate, NPS score, activation rate, and time-to-value. These indicate real product-market fit.', topic: 'Metrics & Analytics', importance_score: 9 },
-      ],
-      // Conversation 4: Code Review
-      [
-        { role: 'user', content: 'Can you review this React component for performance issues?', topic: 'Code Review', importance_score: 7 },
-        { role: 'assistant', content: 'I see several optimization opportunities: memoize expensive calculations, use useCallback for event handlers, and implement virtualization for long lists.', topic: 'Code Review', importance_score: 8 },
-        { role: 'user', content: 'Should we refactor this into smaller components?', topic: 'Code Architecture', importance_score: 6 },
-        { role: 'assistant', content: 'Yes, break it into focused components with single responsibilities. This improves testability and reusability.', topic: 'Code Architecture', importance_score: 7 },
-        { role: 'user', content: 'What about adding unit tests?', topic: 'Testing', importance_score: 8 },
-        { role: 'assistant', content: 'Definitely. Start with critical business logic and user interactions. Aim for 80% coverage on key paths.', topic: 'Testing', importance_score: 7 },
-        { role: 'user', content: 'Any security concerns I should address?', topic: 'Security', importance_score: 10 },
-        { role: 'assistant', content: 'Validate all user inputs, implement proper authentication checks, and sanitize data before rendering to prevent XSS attacks.', topic: 'Security', importance_score: 9 },
-      ],
-    ];
-
-    // Insert messages for each conversation
-    for (let i = 0; i < insertedConversations.length; i++) {
-      const conversation = insertedConversations[i];
-      const messages = messageTemplates[i];
-      
-      for (let j = 0; j < messages.length; j++) {
-        const message = messages[j];
-        const messageDate = new Date(conversation.created_at);
-        messageDate.setHours(messageDate.getHours() + j);
-        
-        const { error } = await supabaseClient
-          .from('messages')
-          .insert({
-            conversation_id: conversation.id,
-            user_id: userId,
-            role: message.role,
-            content: message.content,
-            topic: message.topic,
-            importance_score: message.importance_score,
-            created_at: messageDate.toISOString(),
-            model_used: message.role === 'assistant' ? 'gpt-4' : null,
-            provider: message.role === 'assistant' ? 'openai' : null,
-          });
-        
-        if (error) throw error;
+      if (error) {
+        console.error(`Error inserting entry "${entry.title}":`, error);
+        throw error;
       }
     }
+
+    console.log(`Successfully inserted ${sampleEntries.length} sample entries`);
 
     return new Response(
-      JSON.stringify({ success: true, message: 'Sample data inserted successfully' }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
+      JSON.stringify({ 
+        success: true, 
+        message: `Inserted ${sampleEntries.length} sample entries`,
+        entries: sampleEntries.map(e => ({ title: e.title, type: e.content_type }))
+      }),
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
+
   } catch (error) {
     console.error('Error inserting sample data:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return new Response(
       JSON.stringify({ error: errorMessage }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
 });
