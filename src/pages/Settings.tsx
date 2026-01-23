@@ -26,7 +26,7 @@ const Settings = () => {
   const [exportLoading, setExportLoading] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [dataStats, setDataStats] = useState({ entries: 0, conversations: 0, messages: 0, dataSizeMB: 0 });
+  const [dataStats, setDataStats] = useState({ entries: 0, dataSizeMB: 0 });
 
   useEffect(() => {
     checkAuth();
@@ -47,22 +47,18 @@ const Settings = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const [entriesResult, convResult, msgResult] = await Promise.all([
-        supabase.from('entries').select('id', { count: 'exact' }).eq('user_id', user.id),
-        supabase.from('conversations').select('id', { count: 'exact' }).eq('user_id', user.id),
-        supabase.from('messages').select('content', { count: 'exact' }).eq('user_id', user.id),
-      ]);
+      const { count } = await supabase
+        .from('entries')
+        .select('id', { count: 'exact' })
+        .eq('user_id', user.id);
 
-      const entries = entriesResult.count || 0;
-      const conversations = convResult.count || 0;
-      const messages = msgResult.count || 0;
+      const entries = count || 0;
 
-      // Estimate data size
-      const avgSize = 500;
-      const dataSizeBytes = (entries + messages) * avgSize;
+      // Estimate data size (avg 500 bytes per entry)
+      const dataSizeBytes = entries * 500;
       const dataSizeMB = parseFloat((dataSizeBytes / (1024 * 1024)).toFixed(2));
 
-      setDataStats({ entries, conversations, messages, dataSizeMB });
+      setDataStats({ entries, dataSizeMB });
     } catch (error) {
       console.error('Failed to fetch data stats:', error);
     }
@@ -136,7 +132,7 @@ const Settings = () => {
 
       toast.success("All data deleted successfully");
       setDeleteDialogOpen(false);
-      setDataStats({ entries: 0, conversations: 0, messages: 0, dataSizeMB: 0 });
+      setDataStats({ entries: 0, dataSizeMB: 0 });
 
       setTimeout(() => navigate("/dashboard"), 1500);
     } catch (error: any) {
@@ -278,13 +274,8 @@ const Settings = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete All Data?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete:
-              <ul className="list-disc list-inside mt-2 space-y-1">
-                <li>{dataStats.entries} entries</li>
-                <li>{dataStats.conversations} conversations</li>
-                <li>{dataStats.messages} messages</li>
-              </ul>
-              <br />
+              This will permanently delete all <strong>{dataStats.entries} entries</strong> from your brain dump.
+              <br /><br />
               <strong>This action cannot be undone.</strong> Consider exporting your data first.
             </AlertDialogDescription>
           </AlertDialogHeader>
