@@ -6,100 +6,61 @@
  * Takes audio, returns text. Let the brain hear you.
  */
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { extractUserId } from '../_shared/auth.ts';
+import { checkRateLimit, getRateLimitHeaders } from '../_shared/rateLimit.ts';
+import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+Deno.serve(async (req) => {
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
 
-// Rate limiting: 20 STT requests per minute per user
-const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT = 20;
-const RATE_LIMIT_WINDOW_MS = 60000;
-
-function checkRateLimit(userId: string): boolean {
-  const now = Date.now();
-  const userLimit = rateLimitMap.get(userId);
-
-  if (!userLimit || now > userLimit.resetTime) {
-    rateLimitMap.set(userId, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-
-  if (userLimit.count >= RATE_LIMIT) {
-    return false;
-  }
-
-  userLimit.count++;
-  return true;
-}
-
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  const corsHeaders = getCorsHeaders(req);
 
   try {
-    // Auth check
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
+    // Authenticate user
+    const { userId, error: authError } = await extractUserId(req);
+    if (authError || !userId) {
+      return errorResponse(req, authError || 'Authorization required', 401);
+    }
+
+    // Rate limiting - 20 requests per minute
+    const rateLimitResult = checkRateLimit(`stt:${userId}`, { maxRequests: 20, windowMs: 60000 });
+    if (!rateLimitResult.allowed) {
       return new Response(
-        JSON.stringify({ error: 'Authorization required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Rate limit exceeded. Please try again later.', retryAfter: Math.ceil(rateLimitResult.resetIn / 1000) }),
+        { 
+          status: 429, 
+          headers: { ...corsHeaders, ...getRateLimitHeaders(rateLimitResult), 'Content-Type': 'application/json' } 
+        }
       );
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
-
-    const jwt = authHeader.replace('Bearer ', '');
-    const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
-
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Rate limit check
-    if (!checkRateLimit(user.id)) {
-      return new Response(
-        JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
-        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
+    // Check for API key
     const ELEVENLABS_API_KEY = Deno.env.get('ELEVENLABS_API_KEY');
     if (!ELEVENLABS_API_KEY) {
       console.error('ELEVENLABS_API_KEY not configured');
-      return new Response(
-        JSON.stringify({ error: 'Voice service not configured' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return errorResponse(req, 'Voice service not configured', 503);
     }
 
     // Get the audio file from the request
+    const contentType = req.headers.get('content-type') || '';
+    if (!contentType.includes('multipart/form-data')) {
+      return errorResponse(req, 'Expected multipart/form-data with audio file', 400);
+    }
+
     const formData = await req.formData();
     const audioFile = formData.get('audio') as File;
 
     if (!audioFile) {
-      return new Response(
-        JSON.stringify({ error: 'Audio file is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return errorResponse(req, 'Audio file is required', 400);
     }
 
     // Limit audio size to 25MB
     const MAX_SIZE = 25 * 1024 * 1024;
     if (audioFile.size > MAX_SIZE) {
-      return new Response(
-        JSON.stringify({ error: 'Audio file too large (max 25MB)' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return errorResponse(req, 'Audio file too large (max 25MB)', 400);
     }
 
     console.log(`[elevenlabs-stt] Transcribing ${audioFile.size} bytes, type: ${audioFile.type}`);
@@ -110,7 +71,6 @@ serve(async (req) => {
     apiFormData.append('model_id', 'scribe_v2');
     apiFormData.append('tag_audio_events', 'false');
     apiFormData.append('diarize', 'false');
-    // Let it auto-detect language
 
     const response = await fetch('https://api.elevenlabs.io/v1/speech-to-text', {
       method: 'POST',
@@ -125,34 +85,22 @@ serve(async (req) => {
       console.error('[elevenlabs-stt] ElevenLabs API error:', response.status, errorText);
 
       if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: 'Voice service rate limit. Try again in a moment.' }),
-          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse(req, 'Voice service rate limit. Try again in a moment.', 429);
       }
 
-      return new Response(
-        JSON.stringify({ error: 'Transcription failed' }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return serverErrorResponse(req, 'Transcription failed');
     }
 
     const transcription = await response.json();
     console.log(`[elevenlabs-stt] Transcribed: "${transcription.text?.substring(0, 100)}..."`);
 
-    return new Response(
-      JSON.stringify({
-        text: transcription.text || '',
-        words: transcription.words || [],
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return successResponse(req, {
+      text: transcription.text || '',
+      words: transcription.words || [],
+    }, 200, rateLimitResult);
 
   } catch (error) {
     console.error('[elevenlabs-stt] Error:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return serverErrorResponse(req, error instanceof Error ? error : 'Unknown error');
   }
 });

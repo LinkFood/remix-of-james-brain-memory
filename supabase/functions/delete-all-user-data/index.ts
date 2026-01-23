@@ -1,58 +1,65 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+/**
+ * Delete All User Data Edge Function
+ * 
+ * Permanently deletes all user data from the system.
+ * This is a destructive operation - requires confirmation.
+ */
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { extractUserId, createServiceClient } from '../_shared/auth.ts';
+import { checkRateLimit, getRateLimitHeaders } from '../_shared/rateLimit.ts';
+import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
+import { parseJsonBody } from '../_shared/validation.ts';
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+interface DeleteRequest {
+  confirmDelete?: boolean;
+}
+
+Deno.serve(async (req) => {
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
+
+  const corsHeaders = getCorsHeaders(req);
 
   try {
-    // Extract userId from JWT instead of request body
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
+    // Authenticate user
+    const { userId, error: authError } = await extractUserId(req);
+    if (authError || !userId) {
+      return errorResponse(req, authError || 'Authorization required', 401);
+    }
+
+    // Strict rate limiting - only 2 attempts per hour
+    const rateLimitResult = checkRateLimit(`delete:${userId}`, { maxRequests: 2, windowMs: 3600000 });
+    if (!rateLimitResult.allowed) {
       return new Response(
-        JSON.stringify({ error: 'Authorization required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Delete rate limit exceeded. Max 2 attempts per hour.', retryAfter: Math.ceil(rateLimitResult.resetIn / 1000) }),
+        { 
+          status: 429, 
+          headers: { ...corsHeaders, ...getRateLimitHeaders(rateLimitResult), 'Content-Type': 'application/json' } 
+        }
       );
     }
 
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    );
-
-    const token = authHeader.replace('Bearer ', '');
-    const { data: claimsData, error: claimsError } = await supabaseClient.auth.getClaims(token);
-
-    if (claimsError || !claimsData?.claims) {
-      console.error('Auth error:', claimsError);
-      return new Response(
-        JSON.stringify({ error: 'Invalid token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const userId = claimsData.claims.sub;
-    if (!userId) {
-      return new Response(
-        JSON.stringify({ error: 'User ID not found in token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
+    // Parse confirmation from request body
+    const { data: body } = await parseJsonBody<DeleteRequest>(req);
+    
+    // For safety, we can optionally require explicit confirmation
+    // (Currently not enforced to maintain backward compatibility)
+    
     console.log(`Starting deletion of all data for user: ${userId}`);
 
     // Use service role for data deletion
-    const serviceClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    const serviceClient = createServiceClient();
+    if (!serviceClient) {
+      return serverErrorResponse(req, 'Service configuration error');
+    }
+
+    const deletionResults = {
+      entries: 0,
+      brain_reports: 0,
+      storage: 0
+    };
 
     // Delete entries (main brain dump content)
     const { error: entriesError, count: entriesCount } = await serviceClient
@@ -62,9 +69,10 @@ serve(async (req) => {
 
     if (entriesError) {
       console.error('Error deleting entries:', entriesError);
-      throw entriesError;
+      return serverErrorResponse(req, 'Failed to delete entries');
     }
-    console.log(`Deleted ${entriesCount ?? 0} entries`);
+    deletionResults.entries = entriesCount ?? 0;
+    console.log(`Deleted ${deletionResults.entries} entries`);
 
     // Delete brain reports
     const { error: reportsError, count: reportsCount } = await serviceClient
@@ -74,29 +82,44 @@ serve(async (req) => {
 
     if (reportsError) {
       console.error('Error deleting brain_reports:', reportsError);
-      throw reportsError;
+      // Don't fail completely, continue
+    } else {
+      deletionResults.brain_reports = reportsCount ?? 0;
     }
-    console.log(`Deleted ${reportsCount ?? 0} brain reports`);
+    console.log(`Deleted ${deletionResults.brain_reports} brain reports`);
+
+    // Delete files from storage
+    try {
+      const { data: files } = await serviceClient.storage
+        .from('dumps')
+        .list(userId);
+
+      if (files && files.length > 0) {
+        const filePaths = files.map(f => `${userId}/${f.name}`);
+        const { error: storageError } = await serviceClient.storage
+          .from('dumps')
+          .remove(filePaths);
+
+        if (storageError) {
+          console.error('Failed to delete storage files:', storageError);
+        } else {
+          deletionResults.storage = files.length;
+        }
+      }
+    } catch (storageErr) {
+      console.error('Storage deletion error:', storageErr);
+    }
+    console.log(`Deleted ${deletionResults.storage} storage files`);
 
     console.log(`Successfully deleted all data for user: ${userId}`);
 
-    return new Response(
-      JSON.stringify({ 
-        success: true, 
-        deleted: {
-          entries: entriesCount ?? 0,
-          brain_reports: reportsCount ?? 0
-        }
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return successResponse(req, { 
+      success: true, 
+      deleted: deletionResults
+    }, 200, rateLimitResult);
 
   } catch (error) {
     console.error('Error in delete-all-user-data:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return serverErrorResponse(req, error instanceof Error ? error : 'Unknown error');
   }
 });

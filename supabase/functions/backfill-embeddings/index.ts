@@ -1,61 +1,57 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+/**
+ * Backfill Embeddings Edge Function
+ * 
+ * Generates embeddings for entries that don't have them yet.
+ * Useful for existing entries or after embedding failures.
+ */
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { extractUserId, createServiceClient } from '../_shared/auth.ts';
+import { checkRateLimit, getRateLimitHeaders } from '../_shared/rateLimit.ts';
+import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
+import { parseJsonBody, parseNumber } from '../_shared/validation.ts';
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+interface BackfillRequest {
+  batchSize?: number;
+}
+
+Deno.serve(async (req) => {
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
+
+  const corsHeaders = getCorsHeaders(req);
 
   try {
-    // Extract userId from JWT instead of request body
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
+    // Authenticate user
+    const { userId, error: authError } = await extractUserId(req);
+    if (authError || !userId) {
+      return errorResponse(req, authError || 'Authorization required', 401);
+    }
+
+    // Rate limiting - heavy operation (5 per hour)
+    const rateLimitResult = checkRateLimit(`backfill:${userId}`, { maxRequests: 5, windowMs: 3600000 });
+    if (!rateLimitResult.allowed) {
       return new Response(
-        JSON.stringify({ error: 'Authorization required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Backfill rate limit exceeded. Max 5 per hour.', retryAfter: Math.ceil(rateLimitResult.resetIn / 1000) }),
+        { 
+          status: 429, 
+          headers: { ...corsHeaders, ...getRateLimitHeaders(rateLimitResult), 'Content-Type': 'application/json' } 
+        }
       );
     }
 
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    );
-
-    const token = authHeader.replace('Bearer ', '');
-    const { data: claimsData, error: claimsError } = await supabaseClient.auth.getClaims(token);
-
-    if (claimsError || !claimsData?.claims) {
-      console.error('Auth error:', claimsError);
-      return new Response(
-        JSON.stringify({ error: 'Invalid token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const userId = claimsData.claims.sub;
-    if (!userId) {
-      return new Response(
-        JSON.stringify({ error: 'User ID not found in token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Parse batchSize from request body (userId is ignored if provided)
-    const { batchSize = 50 } = await req.json().catch(() => ({}));
+    // Parse request
+    const { data: body } = await parseJsonBody<BackfillRequest>(req);
+    const batchSize = parseNumber(body?.batchSize, { min: 1, max: 100, default: 50 }) || 50;
 
     console.log(`Starting backfill for user ${userId}, batch size: ${batchSize}`);
 
     // Use service role for data access
-    const serviceClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    const serviceClient = createServiceClient();
+    if (!serviceClient) {
+      return serverErrorResponse(req, 'Service configuration error');
+    }
 
     // Fetch entries without embeddings
     const { data: entries, error: fetchError } = await serviceClient
@@ -68,23 +64,18 @@ serve(async (req) => {
 
     if (fetchError) {
       console.error('Error fetching entries:', fetchError);
-      throw fetchError;
+      return serverErrorResponse(req, 'Failed to fetch entries');
     }
 
     if (!entries || entries.length === 0) {
       console.log('No entries to process');
-      return new Response(
-        JSON.stringify({ 
-          message: 'No entries to process',
-          processed: 0,
-          failed: 0,
-          remaining: 0,
-          hasMore: false
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        }
-      );
+      return successResponse(req, { 
+        message: 'No entries to process',
+        processed: 0,
+        failed: 0,
+        remaining: 0,
+        hasMore: false
+      }, 200, rateLimitResult);
     }
 
     console.log(`Found ${entries.length} entries to process`);
@@ -159,27 +150,16 @@ serve(async (req) => {
 
     console.log(`Completed: ${processed} processed, ${failed} failed, ${remainingCount || 0} remaining`);
 
-    return new Response(
-      JSON.stringify({
-        message: `Processed ${processed} entries successfully, ${failed} failed`,
-        processed,
-        failed,
-        remaining: remainingCount || 0,
-        hasMore: (remainingCount || 0) > 0,
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
-    );
+    return successResponse(req, {
+      message: `Processed ${processed} entries successfully, ${failed} failed`,
+      processed,
+      failed,
+      remaining: remainingCount || 0,
+      hasMore: (remainingCount || 0) > 0,
+    }, 200, rateLimitResult);
+
   } catch (error) {
     console.error('Error in backfill-embeddings function:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      }
-    );
+    return serverErrorResponse(req, error instanceof Error ? error : 'Unknown error');
   }
 });
