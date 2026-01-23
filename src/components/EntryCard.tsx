@@ -16,7 +16,7 @@ import {
   Archive,
   MoreVertical,
   ExternalLink,
-  Image as ImageIcon,
+  Image as ImageIcon
 } from "lucide-react";
 import {
   DropdownMenu,
