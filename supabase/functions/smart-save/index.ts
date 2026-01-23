@@ -74,14 +74,32 @@ serve(async (req) => {
   }
 
   try {
-    const { content, userId, source = 'manual', imageUrl } = await req.json();
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
 
-    if (!userId) {
+    // SECURITY FIX: Extract user ID from JWT instead of request body
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
       return new Response(
-        JSON.stringify({ error: 'userId is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Authorization header required' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
+    const jwt = authHeader.replace('Bearer ', '');
+    const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
+    
+    if (authError || !user) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid or expired token' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const userId = user.id;
+
+    const { content, source = 'manual', imageUrl } = await req.json();
 
     // Content is optional if imageUrl is provided
     if (!content && !imageUrl) {
@@ -99,11 +117,6 @@ serve(async (req) => {
       );
     }
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
     console.log(`[smart-save] Processing ${imageUrl ? 'image' : 'text'} dump for user ${userId}`);
 
     // Step 1: Classify content (with vision if imageUrl provided)
@@ -111,10 +124,10 @@ serve(async (req) => {
     const classifyResponse = await fetch(`${supabaseUrl}/functions/v1/classify-content`, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${supabaseKey}`,
+        'Authorization': authHeader,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ content: content || '', userId, imageUrl }),
+      body: JSON.stringify({ content: content || '', imageUrl }),
     });
 
     let classification: ClassificationResult;

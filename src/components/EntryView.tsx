@@ -33,6 +33,7 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { parseListItems } from "@/lib/parseListItems";
+import { useSignedUrl } from "@/hooks/use-signed-url";
 import type { Entry } from "./EntryCard";
 
 interface EntryViewProps {
@@ -81,6 +82,9 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
   const [editContent, setEditContent] = useState("");
   const [listItems, setListItems] = useState<Array<{ text: string; checked: boolean }>>([]);
   const [saving, setSaving] = useState(false);
+  
+  // Get signed URL for private storage images
+  const { signedUrl: imageUrl } = useSignedUrl(entry?.image_url);
 
   if (!entry) return null;
 
@@ -321,10 +325,10 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
           )}
 
           {/* Image Display */}
-          {entry.image_url && (
+          {imageUrl && (
             <div className="mb-4 rounded-lg overflow-hidden border border-border">
               <img 
-                src={entry.image_url} 
+                src={imageUrl} 
                 alt={entry.title || 'Uploaded image'}
                 className="w-full max-h-96 object-contain bg-muted/30"
               />

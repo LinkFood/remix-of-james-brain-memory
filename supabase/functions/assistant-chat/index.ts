@@ -57,11 +57,38 @@ serve(async (req) => {
   }
 
   try {
-    const { message, userId, conversationHistory = [], stream = true } = await req.json();
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
 
-    if (!message || !userId) {
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // SECURITY FIX: Extract user ID from JWT instead of request body
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
       return new Response(
-        JSON.stringify({ error: 'Message and userId are required' }),
+        JSON.stringify({ error: 'Authorization header required' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const jwt = authHeader.replace('Bearer ', '');
+    const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
+    
+    if (authError || !user) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid or expired token' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const userId = user.id;
+
+    const { message, conversationHistory = [], stream = true } = await req.json();
+
+    if (!message) {
+      return new Response(
+        JSON.stringify({ error: 'Message is required' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -73,12 +100,6 @@ serve(async (req) => {
         { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
-
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
-
-    const supabase = createClient(supabaseUrl, supabaseKey);
 
     // Step 1: Generate embedding for the user's message
     console.log('Generating embedding for query...');
@@ -274,12 +295,11 @@ ${contextText ? `\n\nHere are relevant entries from the user's brain:\n\n${conte
           const saveResponse = await fetch(`${supabaseUrl}/functions/v1/smart-save`, {
             method: 'POST',
             headers: {
-              'Authorization': `Bearer ${supabaseKey}`,
+              'Authorization': authHeader,
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
               content: contentToSave,
-              userId,
               source: 'assistant',
             }),
           });

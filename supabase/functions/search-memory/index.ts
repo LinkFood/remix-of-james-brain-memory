@@ -12,9 +12,34 @@ serve(async (req) => {
   }
 
   try {
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+
+    // SECURITY FIX: Extract user ID from JWT instead of request body
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      return new Response(
+        JSON.stringify({ error: 'Authorization header required' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const jwt = authHeader.replace('Bearer ', '');
+    const { data: { user }, error: authError } = await supabaseClient.auth.getUser(jwt);
+    
+    if (authError || !user) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid or expired token' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const userId = user.id;
+
     const { 
       query, 
-      userId, 
       useSemanticSearch = true,
       startDate, 
       endDate,
@@ -25,16 +50,11 @@ serve(async (req) => {
       limit = 50
     } = await req.json();
 
-    if (!query || !userId) {
-      throw new Error('Missing required fields: query and userId');
+    if (!query) {
+      throw new Error('Missing required field: query');
     }
 
     console.log('Search request:', { query, userId, useSemanticSearch, contentType, tags });
-
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
 
     let entries: any[] = [];
     
