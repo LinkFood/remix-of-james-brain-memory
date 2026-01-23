@@ -1,8 +1,36 @@
 /**
  * useSearch - Centralized search hook with debouncing
  * 
- * Provides consistent search behavior across GlobalSearch and other components.
- * Implements a 300ms debounce for performance optimization.
+ * Provides consistent search behavior across GlobalSearch and AssistantChat.
+ * Supports both semantic (vector) and keyword search modes.
+ * 
+ * @module hooks/useSearch
+ * 
+ * @example
+ * ```tsx
+ * const {
+ *   query,
+ *   setQuery,
+ *   results,
+ *   loading,
+ *   search,
+ *   useSemanticSearch,
+ *   setUseSemanticSearch,
+ * } = useSearch({ userId: user.id, autoSearch: true });
+ * 
+ * // Automatic search (debounced) - just update query
+ * setQuery(userInput);
+ * 
+ * // Manual search - bypass debounce
+ * await search();
+ * ```
+ * 
+ * Features:
+ * - 300ms debounce (configurable) for auto-search mode
+ * - Toggle between semantic and keyword search
+ * - Minimum query length validation
+ * - Toast notifications for search feedback
+ * - Invokes `search-memory` edge function
  */
 
 import { useState, useCallback, useEffect } from "react";
@@ -10,6 +38,9 @@ import { useDebouncedCallback } from "use-debounce";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
+/**
+ * Search result item returned from the search-memory edge function
+ */
 export interface SearchResult {
   id: string;
   title: string | null;
@@ -19,17 +50,26 @@ export interface SearchResult {
   tags: string[];
   importance_score: number | null;
   created_at: string;
+  /** Similarity score (0-1) when using semantic search */
   similarity?: number;
   starred?: boolean;
   list_items?: unknown[];
   extracted_data?: Record<string, unknown>;
 }
 
+/**
+ * Configuration options for the search hook
+ */
 interface UseSearchOptions {
+  /** The authenticated user's ID */
   userId: string;
+  /** Debounce delay in milliseconds (default: 300) */
   debounceMs?: number;
+  /** Maximum results to return (default: 50) */
   limit?: number;
+  /** Enable automatic search on query change (default: false) */
   autoSearch?: boolean;
+  /** Minimum characters before search triggers (default: 2) */
   minQueryLength?: number;
 }
 
