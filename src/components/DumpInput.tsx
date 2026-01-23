@@ -15,9 +15,32 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
-import { Send, Loader2, Sparkles, Check, Upload, Image, X } from "lucide-react";
+import { Send, Loader2, Sparkles, Check, Upload, Image, X, Mic, MicOff } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+
+// Extend Window interface for SpeechRecognition
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+}
+
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionEvent) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: Event) => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+declare global {
+  interface Window {
+    SpeechRecognition: new () => SpeechRecognition;
+    webkitSpeechRecognition: new () => SpeechRecognition;
+  }
+}
 
 export interface DumpInputHandle {
   setValue: (text: string) => void;
@@ -50,8 +73,55 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
   const [isDragging, setIsDragging] = useState(false);
   const [previewImage, setPreviewImage] = useState<{ file: File; url: string } | null>(null);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
+  const [isListening, setIsListening] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  // Voice input handler
+  const handleVoiceInput = () => {
+    const SpeechRecognitionAPI = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (!SpeechRecognitionAPI) {
+      toast.error("Voice input not supported in this browser");
+      return;
+    }
+
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+      return;
+    }
+
+    const recognition = new SpeechRecognitionAPI();
+    recognitionRef.current = recognition;
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      const transcript = event.results[0][0].transcript;
+      setContent(prev => {
+        const separator = prev.trim() ? ' ' : '';
+        return prev + separator + transcript;
+      });
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+      recognitionRef.current = null;
+    };
+
+    recognition.onerror = () => {
+      setIsListening(false);
+      recognitionRef.current = null;
+      toast.error("Voice input failed. Please try again.");
+    };
+
+    recognition.start();
+    setIsListening(true);
+    toast.info("Listening... Speak now!");
+  };
 
   // Expose methods to parent
   useImperativeHandle(ref, () => ({
@@ -392,6 +462,27 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
             >
               <Image className="w-4 h-4" />
               <span className="hidden sm:inline ml-1">Image</span>
+            </Button>
+            
+            {/* Voice input button */}
+            <Button
+              variant="ghost"
+              size="sm"
+              className={cn(
+                "h-7 px-2 transition-all",
+                isListening 
+                  ? "text-red-500 animate-pulse bg-red-500/10" 
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+              onClick={handleVoiceInput}
+              disabled={loading}
+            >
+              {isListening ? (
+                <MicOff className="w-4 h-4" />
+              ) : (
+                <Mic className="w-4 h-4" />
+              )}
+              <span className="hidden sm:inline ml-1">{isListening ? "Stop" : "Voice"}</span>
             </Button>
           </div>
 
