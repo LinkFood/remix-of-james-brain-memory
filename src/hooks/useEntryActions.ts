@@ -2,6 +2,28 @@
  * useEntryActions - Entry CRUD operations hook
  * 
  * Provides standardized star, archive, delete, and list item toggle operations.
+ * All operations are optimistic with server sync and error rollback via callbacks.
+ * 
+ * @module hooks/useEntryActions
+ * 
+ * @example
+ * ```tsx
+ * const { toggleStar, toggleArchive, deleteEntry, toggleListItem } = useEntryActions({
+ *   onEntryUpdate: (id, updates) => updateLocalEntry(id, updates),
+ *   onEntryRemove: (id) => removeLocalEntry(id),
+ * });
+ * 
+ * // Star an entry
+ * await toggleStar(entryId, true);
+ * 
+ * // Toggle a checklist item
+ * await toggleListItem(entryId, listItems, 0, true);
+ * ```
+ * 
+ * Features:
+ * - Consistent toast notifications for user feedback
+ * - Error handling with console logging
+ * - Callback-based local state updates for flexibility
  */
 
 import { useCallback } from "react";
@@ -10,9 +32,15 @@ import { toast } from "sonner";
 import type { Entry } from "@/components/EntryCard";
 import type { ListItem } from "@/types";
 
+/**
+ * Configuration callbacks for entry actions
+ */
 interface UseEntryActionsOptions {
+  /** Called after successful update to sync local state */
   onEntryUpdate?: (entryId: string, updates: Partial<Entry>) => void;
+  /** Called after successful archive/delete to remove from local state */
   onEntryRemove?: (entryId: string) => void;
+  /** Called after delete to update dashboard statistics */
   onStatsUpdate?: (entryId: string, action: 'delete') => void;
 }
 

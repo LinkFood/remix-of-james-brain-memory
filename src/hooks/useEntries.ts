@@ -1,7 +1,28 @@
 /**
  * useEntries - Centralized entries state management hook
  * 
- * Handles fetching, pagination, and CRUD operations for entries.
+ * Handles fetching, pagination, and local state management for entries.
+ * This hook is the single source of truth for entries data in the Dashboard.
+ * 
+ * @module hooks/useEntries
+ * 
+ * @example
+ * ```tsx
+ * const {
+ *   entries,
+ *   loading,
+ *   loadMore,
+ *   updateEntry,
+ *   removeEntry,
+ *   addEntry,
+ * } = useEntries({ userId: user.id, pageSize: 50 });
+ * ```
+ * 
+ * Features:
+ * - Cursor-based pagination for infinite scroll
+ * - Automatic stats calculation (total, today, important, by type)
+ * - Optimistic update helpers (updateEntry, removeEntry, addEntry)
+ * - Proper list_items parsing via parseListItems utility
  */
 
 import { useState, useCallback, useEffect } from "react";
@@ -10,20 +31,35 @@ import { toast } from "sonner";
 import { parseListItems } from "@/lib/parseListItems";
 import type { Entry } from "@/components/EntryCard";
 
-// Extended Entry type for pending entries
+/**
+ * Extended Entry type that includes pending state for optimistic updates
+ */
 export interface DashboardEntry extends Entry {
+  /** Indicates this entry is pending server confirmation */
   _pending?: boolean;
 }
 
+/**
+ * Dashboard statistics derived from entries
+ */
 export interface DashboardStats {
+  /** Total number of non-archived entries */
   total: number;
+  /** Entries created today */
   today: number;
+  /** Entries with importance_score >= 7 */
   important: number;
+  /** Count of entries grouped by content_type */
   byType: Record<string, number>;
 }
 
+/**
+ * Configuration options for useEntries hook
+ */
 interface UseEntriesOptions {
+  /** The authenticated user's ID */
   userId: string;
+  /** Number of entries per page (default: 50) */
   pageSize?: number;
 }
 
