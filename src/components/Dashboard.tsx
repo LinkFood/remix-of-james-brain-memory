@@ -297,6 +297,23 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
     }
   };
 
+  const handleDelete = async (entryId: string) => {
+    try {
+      const { error } = await supabase
+        .from("entries")
+        .delete()
+        .eq("id", entryId);
+
+      if (error) throw error;
+
+      setEntries((prev) => prev.filter((e) => e.id !== entryId));
+      setStats((prev) => ({ ...prev, total: Math.max(0, prev.total - 1) }));
+      toast.success("Deleted");
+    } catch (error) {
+      toast.error("Failed to delete");
+    }
+  };
+
   const handleTryExample = (text: string) => {
     if (dumpRef.current) {
       dumpRef.current.setValue(text);
@@ -370,6 +387,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             onToggleListItem={handleToggleListItem}
             onStar={handleStar}
             onArchive={handleArchive}
+            onDelete={handleDelete}
             onViewEntry={onViewEntry}
           />
         )}
@@ -388,6 +406,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             onToggleListItem={handleToggleListItem}
             onStar={handleStar}
             onArchive={handleArchive}
+            onDelete={handleDelete}
             onViewEntry={onViewEntry}
           />
         )}
@@ -405,6 +424,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             onToggleListItem={handleToggleListItem}
             onStar={handleStar}
             onArchive={handleArchive}
+            onDelete={handleDelete}
             onViewEntry={onViewEntry}
           />
         )}
@@ -422,6 +442,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             compact
             onStar={handleStar}
             onArchive={handleArchive}
+            onDelete={handleDelete}
             onViewEntry={onViewEntry}
           />
         )}
@@ -439,6 +460,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             compact
             onStar={handleStar}
             onArchive={handleArchive}
+            onDelete={handleDelete}
             onViewEntry={onViewEntry}
           />
         )}
@@ -460,6 +482,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
           onLoadMore={loadMore}
           onStar={handleStar}
           onArchive={handleArchive}
+          onDelete={handleDelete}
           onViewEntry={onViewEntry}
         />
       </div>
