@@ -6,6 +6,35 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Sanitize query string to prevent SQL injection in ILIKE patterns
+function sanitizeSearchQuery(query: string): string {
+  // Escape SQL LIKE special characters: % and _
+  // Also escape backslash which is used as escape character
+  return query
+    .replace(/\\/g, '\\\\')  // Escape backslashes first
+    .replace(/%/g, '\\%')    // Escape percent signs
+    .replace(/_/g, '\\_');   // Escape underscores
+}
+
+// Validate query input
+function validateQuery(query: string): { valid: boolean; error?: string } {
+  if (!query || typeof query !== 'string') {
+    return { valid: false, error: 'Query must be a non-empty string' };
+  }
+  
+  // Limit query length to prevent abuse
+  if (query.length > 500) {
+    return { valid: false, error: 'Query too long (max 500 characters)' };
+  }
+  
+  // Check for null bytes or other problematic characters
+  if (/\0/.test(query)) {
+    return { valid: false, error: 'Query contains invalid characters' };
+  }
+  
+  return { valid: true };
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -50,11 +79,19 @@ serve(async (req) => {
       limit = 50
     } = await req.json();
 
-    if (!query) {
-      throw new Error('Missing required field: query');
+    // Validate query input
+    const validation = validateQuery(query);
+    if (!validation.valid) {
+      return new Response(
+        JSON.stringify({ error: validation.error }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
 
-    console.log('Search request:', { query, userId, useSemanticSearch, contentType, tags });
+    // Sanitize query for ILIKE usage
+    const sanitizedQuery = sanitizeSearchQuery(query);
+
+    console.log('Search request:', { query: query.substring(0, 50), userId, useSemanticSearch, contentType, tags });
 
     let entries: any[] = [];
     
@@ -102,13 +139,13 @@ serve(async (req) => {
 
       } catch (semanticError) {
         console.error('Semantic search failed, falling back to keyword search:', semanticError);
-        // Fall back to keyword search
+        // Fall back to keyword search with SANITIZED query
         const { data: keywordResults, error: keywordError } = await supabaseClient
           .from('entries')
           .select('*')
           .eq('user_id', userId)
           .eq('archived', false)
-          .or(`content.ilike.%${query}%,title.ilike.%${query}%`)
+          .or(`content.ilike.%${sanitizedQuery}%,title.ilike.%${sanitizedQuery}%`)
           .order('created_at', { ascending: false })
           .limit(limit * 2);
 
@@ -116,14 +153,14 @@ serve(async (req) => {
         entries = keywordResults || [];
       }
     } else {
-      // Standard keyword search
+      // Standard keyword search with SANITIZED query
       console.log('Using keyword search...');
       const { data: keywordResults, error: keywordError } = await supabaseClient
         .from('entries')
         .select('*')
         .eq('user_id', userId)
         .eq('archived', false)
-        .or(`content.ilike.%${query}%,title.ilike.%${query}%`)
+        .or(`content.ilike.%${sanitizedQuery}%,title.ilike.%${sanitizedQuery}%`)
         .order('created_at', { ascending: false })
         .limit(limit * 2);
 
