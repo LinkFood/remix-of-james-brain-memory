@@ -2,11 +2,10 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
-import { Brain, Key, ArrowLeft, Download, Trash2, Database, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Brain, ArrowLeft, Download, Trash2, Database, User } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
@@ -20,41 +19,27 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
 
-type Provider = 'openai' | 'anthropic' | 'google';
-
 const Settings = () => {
   const navigate = useNavigate();
-  const [provider, setProvider] = useState<Provider>('openai');
-  const [apiKey, setApiKey] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [validating, setValidating] = useState(false);
-  const [validationStatus, setValidationStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
-  const [hasKey, setHasKey] = useState(false);
+  const [userEmail, setUserEmail] = useState<string>("");
   const [exportFormat, setExportFormat] = useState<string>('json');
   const [exportLoading, setExportLoading] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [dataStats, setDataStats] = useState({ conversations: 0, messages: 0, dataSizeMB: 0 });
+  const [dataStats, setDataStats] = useState({ entries: 0, conversations: 0, messages: 0, dataSizeMB: 0 });
 
   useEffect(() => {
-    checkExistingKeys();
+    checkAuth();
     fetchDataStats();
   }, []);
 
-  const checkExistingKeys = async () => {
+  const checkAuth = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) {
       navigate("/auth");
       return;
     }
-
-    const { data } = await supabase
-      .from('user_api_keys')
-      .select('provider')
-      .eq('user_id', user.id)
-      .maybeSingle();
-
-    setHasKey(!!data);
+    setUserEmail(user.email || "");
   };
 
   const fetchDataStats = async () => {
@@ -62,92 +47,24 @@ const Settings = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
 
-      const [convResult, msgResult] = await Promise.all([
+      const [entriesResult, convResult, msgResult] = await Promise.all([
+        supabase.from('entries').select('id', { count: 'exact' }).eq('user_id', user.id),
         supabase.from('conversations').select('id', { count: 'exact' }).eq('user_id', user.id),
         supabase.from('messages').select('content', { count: 'exact' }).eq('user_id', user.id),
       ]);
 
+      const entries = entriesResult.count || 0;
       const conversations = convResult.count || 0;
       const messages = msgResult.count || 0;
-      
-      // Estimate data size (rough calculation)
-      const avgMessageSize = 500; // Average characters per message
-      const dataSizeBytes = messages * avgMessageSize;
+
+      // Estimate data size
+      const avgSize = 500;
+      const dataSizeBytes = (entries + messages) * avgSize;
       const dataSizeMB = parseFloat((dataSizeBytes / (1024 * 1024)).toFixed(2));
 
-      setDataStats({ conversations, messages, dataSizeMB });
+      setDataStats({ entries, conversations, messages, dataSizeMB });
     } catch (error) {
       console.error('Failed to fetch data stats:', error);
-    }
-  };
-
-  const validateApiKey = async (keyToValidate: string, providerToValidate: Provider): Promise<boolean> => {
-    setValidating(true);
-    setValidationStatus('idle');
-    
-    try {
-      const { data, error } = await supabase.functions.invoke('validate-api-key', {
-        body: { apiKey: keyToValidate, provider: providerToValidate }
-      });
-
-      if (error) throw error;
-      
-      if (data?.valid) {
-        setValidationStatus('valid');
-        return true;
-      } else {
-        setValidationStatus('invalid');
-        toast.error(data?.error || "Invalid API key");
-        return false;
-      }
-    } catch (error: any) {
-      console.error("Validation error:", error);
-      setValidationStatus('invalid');
-      toast.error("Failed to validate API key");
-      return false;
-    } finally {
-      setValidating(false);
-    }
-  };
-
-  const handleSaveKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!apiKey.trim()) {
-      toast.error("Please enter an API key");
-      return;
-    }
-
-    // Trim whitespace and validate the key first
-    const trimmedKey = apiKey.trim();
-    const isValid = await validateApiKey(trimmedKey, provider);
-    if (!isValid) return;
-
-    setLoading(true);
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const { error } = await supabase
-        .from('user_api_keys')
-        .upsert({
-          user_id: user.id,
-          provider,
-          encrypted_key: trimmedKey,
-          is_default: true
-        });
-
-      if (error) throw error;
-
-      toast.success("API key validated and saved successfully!");
-      setApiKey("");
-      setValidationStatus('idle');
-      navigate("/dashboard");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to save API key");
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -160,7 +77,6 @@ const Settings = () => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error("No active session");
 
-      // Use direct fetch for file download
       const response = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/export-all-data`,
         {
@@ -178,12 +94,11 @@ const Settings = () => {
         throw new Error(errorData.error || 'Export failed');
       }
 
-      // Get the blob from response
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `memory-vault-${new Date().toISOString().split('T')[0]}.${exportFormat}`;
+      a.download = `brain-dump-${new Date().toISOString().split('T')[0]}.${exportFormat}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -204,6 +119,15 @@ const Settings = () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
+      // Delete entries
+      const { error: entriesError } = await supabase
+        .from('entries')
+        .delete()
+        .eq('user_id', user.id);
+
+      if (entriesError) throw entriesError;
+
+      // Delete via function for other data
       const { error } = await supabase.functions.invoke('delete-all-user-data', {
         body: { userId: user.id }
       });
@@ -212,11 +136,8 @@ const Settings = () => {
 
       toast.success("All data deleted successfully");
       setDeleteDialogOpen(false);
-      
-      // Update stats
-      setDataStats({ conversations: 0, messages: 0, dataSizeMB: 0 });
-      
-      // Redirect to home after short delay
+      setDataStats({ entries: 0, conversations: 0, messages: 0, dataSizeMB: 0 });
+
       setTimeout(() => navigate("/dashboard"), 1500);
     } catch (error: any) {
       toast.error(error.message || "Failed to delete data");
@@ -225,219 +146,131 @@ const Settings = () => {
     }
   };
 
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    toast.success("Signed out successfully");
+    navigate("/");
+  };
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-bg p-4">
-      <Card className="w-full max-w-md p-8 bg-card border-border shadow-glow">
+    <div className="min-h-screen bg-gradient-bg p-4">
+      <div className="max-w-lg mx-auto">
         <Button
           variant="ghost"
           onClick={() => navigate("/dashboard")}
-          className="mb-4"
+          className="mb-6"
         >
           <ArrowLeft className="w-4 h-4 mr-2" />
-          Back
+          Back to Dashboard
         </Button>
 
-        <div className="flex flex-col items-center mb-8">
-          <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mb-4">
-            <Key className="w-10 h-10 text-primary" />
-          </div>
-          <h1 className="text-3xl font-bold text-foreground">API Key Setup</h1>
-          <p className="text-muted-foreground mt-2 text-center">
-            {hasKey ? "Update your LLM API key" : "Enter your LLM API key to start chatting"}
-          </p>
-        </div>
-
-        <form onSubmit={handleSaveKey} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="provider">Provider</Label>
-            <Select value={provider} onValueChange={(v) => setProvider(v as Provider)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="openai">OpenAI (GPT-4, GPT-5)</SelectItem>
-                <SelectItem value="anthropic">Anthropic (Claude)</SelectItem>
-                <SelectItem value="google">Google (Gemini)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-2">
-            <Label htmlFor="apiKey">API Key</Label>
-            <div className="relative">
-              <Input
-                id="apiKey"
-                type="password"
-                placeholder="sk-..."
-                value={apiKey}
-                onChange={(e) => {
-                  setApiKey(e.target.value);
-                  setValidationStatus('idle');
-                }}
-                required
-                className="font-mono text-sm pr-10"
-              />
-              {validating && (
-                <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-muted-foreground" />
-              )}
-              {validationStatus === 'valid' && !validating && (
-                <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-success" />
-              )}
-              {validationStatus === 'invalid' && !validating && (
-                <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-destructive" />
-              )}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Your key will be validated before saving
-            </p>
-          </div>
-
-          <Button
-            type="submit"
-            className="w-full"
-            disabled={loading || validating || !apiKey.trim()}
-          >
-            {validating ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Validating...
-              </>
-            ) : loading ? (
-              "Saving..."
-            ) : hasKey ? (
-              "Validate & Update Key"
-            ) : (
-              "Validate & Save Key"
-            )}
-          </Button>
-        </form>
-
-        {/* Mission Statement */}
-        <Card className="mt-6 p-5 bg-gradient-to-br from-primary/10 via-primary/5 to-transparent border-primary/30">
-          <div className="flex items-start gap-3 mb-3">
-            <Brain className="w-5 h-5 text-primary mt-0.5" />
-            <div>
-              <h3 className="font-bold text-foreground text-sm mb-1">The James Brain OS Mission</h3>
-              <p className="text-xs text-muted-foreground leading-relaxed">
-                Your AI conversations are valuable. Every insight, decision, and thought compounds over time. 
-                We capture, score, and store everything—not to exploit your data, but to give YOU a portable, 
-                searchable AI memory that works across all LLM providers.
-              </p>
-            </div>
-          </div>
-          <div className="space-y-1.5 text-xs text-foreground/90 pl-8">
-            <div className="flex items-start gap-2">
-              <span className="text-primary font-bold">✓</span>
-              <span><strong>Your data, your control:</strong> Export, import, or delete anytime</span>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="text-primary font-bold">✓</span>
-              <span><strong>Cross-platform memory:</strong> Switch LLMs, keep your context</span>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="text-primary font-bold">✓</span>
-              <span><strong>Compounding intelligence:</strong> Every chat makes the next one smarter</span>
-            </div>
-            <div className="flex items-start gap-2">
-              <span className="text-primary font-bold">✓</span>
-              <span><strong>Radical transparency:</strong> You see exactly what we're doing</span>
-            </div>
-          </div>
-        </Card>
-
-        <Separator className="my-8" />
-
-        {/* Data Management Section */}
-        <div className="space-y-6">
-          <div className="flex items-center gap-3">
+        <Card className="p-6 bg-card border-border">
+          {/* Header */}
+          <div className="flex items-center gap-3 mb-6">
             <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center">
-              <Database className="w-6 h-6 text-primary" />
+              <Brain className="w-6 h-6 text-primary" />
             </div>
             <div>
-              <h2 className="text-2xl font-bold text-foreground">Data Management</h2>
-              <p className="text-sm text-muted-foreground">Your data, your rules</p>
+              <h1 className="text-2xl font-bold text-foreground">Settings</h1>
+              <p className="text-sm text-muted-foreground">Manage your account</p>
             </div>
           </div>
+
+          {/* Account Info */}
+          <div className="space-y-4 mb-6">
+            <div className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
+              <User className="w-5 h-5 text-muted-foreground" />
+              <div>
+                <p className="text-sm font-medium">{userEmail}</p>
+                <p className="text-xs text-muted-foreground">Signed in</p>
+              </div>
+              <Button variant="ghost" size="sm" className="ml-auto" onClick={handleSignOut}>
+                Sign Out
+              </Button>
+            </div>
+          </div>
+
+          <Separator className="my-6" />
 
           {/* Data Stats */}
-          <Card className="p-4 bg-muted/50 border-border">
-            <div className="space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Total Conversations</span>
-                <span className="font-semibold text-foreground">{dataStats.conversations}</span>
+          <div className="space-y-4 mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                <Database className="w-5 h-5 text-primary" />
               </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Total Messages</span>
-                <span className="font-semibold text-foreground">{dataStats.messages}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-muted-foreground">Estimated Data Size</span>
-                <span className="font-semibold text-foreground">{dataStats.dataSizeMB} MB</span>
+              <div>
+                <h2 className="text-lg font-semibold">Your Data</h2>
+                <p className="text-xs text-muted-foreground">Everything you've dumped</p>
               </div>
             </div>
-          </Card>
+
+            <Card className="p-4 bg-muted/30 border-border">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-2xl font-bold">{dataStats.entries}</p>
+                  <p className="text-xs text-muted-foreground">Entries</p>
+                </div>
+                <div>
+                  <p className="text-2xl font-bold">{dataStats.dataSizeMB} MB</p>
+                  <p className="text-xs text-muted-foreground">Data size</p>
+                </div>
+              </div>
+            </Card>
+          </div>
 
           {/* Export Section */}
-          <div className="space-y-3">
+          <div className="space-y-3 mb-6">
             <Label>Export All Data</Label>
             <p className="text-xs text-muted-foreground">
-              Download your entire memory vault. Fits on a flash drive. Take it anywhere.
+              Download your entire brain dump. Your data, your control.
             </p>
             <div className="flex gap-2">
               <Select value={exportFormat} onValueChange={setExportFormat}>
-                <SelectTrigger className="w-32">
+                <SelectTrigger className="w-28">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="json">JSON</SelectItem>
                   <SelectItem value="csv">CSV</SelectItem>
                   <SelectItem value="md">Markdown</SelectItem>
-                  <SelectItem value="txt">Text</SelectItem>
                 </SelectContent>
               </Select>
               <Button
                 onClick={handleExport}
-                disabled={exportLoading || dataStats.messages === 0}
+                disabled={exportLoading || dataStats.entries === 0}
                 className="flex-1"
               >
                 <Download className="w-4 h-4 mr-2" />
-                {exportLoading ? "Exporting..." : "Export All Data"}
+                {exportLoading ? "Exporting..." : "Export"}
               </Button>
             </div>
           </div>
+
+          <Separator className="my-6" />
 
           {/* Delete Section */}
           <div className="space-y-3">
             <Label className="text-destructive">Danger Zone</Label>
             <p className="text-xs text-muted-foreground">
-              Delete all your data permanently. This action cannot be undone.
+              Delete all your data permanently. This cannot be undone.
             </p>
             <Button
               variant="destructive"
               onClick={() => setDeleteDialogOpen(true)}
-              disabled={deleteLoading || dataStats.messages === 0}
+              disabled={deleteLoading || dataStats.entries === 0}
               className="w-full"
             >
               <Trash2 className="w-4 h-4 mr-2" />
               Delete All My Data
             </Button>
           </div>
+        </Card>
 
-          {/* Differentiator Copy */}
-          <Card className="p-4 bg-primary/5 border-primary/20">
-            <p className="text-xs text-foreground leading-relaxed">
-              <strong>Unlike ChatGPT, Claude, or Gemini:</strong><br />
-              ✓ Export everything to a flash drive<br />
-              ✓ Delete all data with one click<br />
-              ✓ No hidden logs or retention policies<br />
-              ✓ We store nothing after you delete<br />
-              <br />
-              <em>They can't offer this because of their compliance/legal logging requirements. 
-              We can, because you own the infrastructure.</em>
-            </p>
-          </Card>
+        {/* Footer */}
+        <div className="mt-6 text-center text-xs text-muted-foreground">
+          <p>Brain Dump - Your AI-powered second brain</p>
         </div>
-      </Card>
+      </div>
 
       {/* Delete Confirmation Dialog */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
@@ -447,10 +280,9 @@ const Settings = () => {
             <AlertDialogDescription>
               This will permanently delete:
               <ul className="list-disc list-inside mt-2 space-y-1">
+                <li>{dataStats.entries} entries</li>
                 <li>{dataStats.conversations} conversations</li>
                 <li>{dataStats.messages} messages</li>
-                <li>All brain reports</li>
-                <li>All API keys</li>
               </ul>
               <br />
               <strong>This action cannot be undone.</strong> Consider exporting your data first.
