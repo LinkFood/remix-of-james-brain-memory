@@ -1,3 +1,14 @@
+/**
+ * classify-content — The Brain Behind the Brain
+ * 
+ * GOAL: Figure out what the user dumped without asking them.
+ * 
+ * Code? We know. Grocery list? We know. Random thought? We know.
+ * 
+ * This is the magic. Get this right and the product works.
+ * Get this wrong and users have to organize. We failed.
+ */
+
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
