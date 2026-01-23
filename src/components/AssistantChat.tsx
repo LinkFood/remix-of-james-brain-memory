@@ -1,3 +1,15 @@
+/**
+ * AssistantChat — Your Brain's Search Engine
+ * 
+ * GOAL: "What was that thing..." → Found it.
+ * 
+ * This isn't ChatGPT. This isn't Claude. This is YOUR assistant.
+ * It only knows what YOU dumped. That's the point.
+ * 
+ * Show sources. Be fast. Stream responses.
+ * If users ask and we can't find it, we failed to save it right.
+ */
+
 import { useState, useRef, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";

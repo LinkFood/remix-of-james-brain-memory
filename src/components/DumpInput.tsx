@@ -1,3 +1,15 @@
+/**
+ * DumpInput — The core of Brain Dump
+ * 
+ * GOAL: 2 seconds to dump anything. Zero friction. Zero questions.
+ * 
+ * If users have to think about WHERE something goes, we failed.
+ * If users have to choose a TYPE, we failed.
+ * If users have to wait, we failed.
+ * 
+ * Just dump. We handle the rest.
+ */
+
 import { useState, useRef, useEffect, useImperativeHandle, forwardRef, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";

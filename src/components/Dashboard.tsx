@@ -1,3 +1,14 @@
+/**
+ * Dashboard — Your Brain at a Glance
+ * 
+ * GOAL: See what matters without organizing anything.
+ * 
+ * Important stuff floats up. Lists are actionable. Recent is visible.
+ * User never built this view. AI did. That's the magic.
+ * 
+ * Keep it clean. Keep it fast. Keep it alive (realtime).
+ */
+
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
