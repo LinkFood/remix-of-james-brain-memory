@@ -32,6 +32,8 @@ interface Message {
 interface AssistantChatProps {
   userId: string;
   onEntryCreated?: (entry: any) => void;
+  externalOpen?: boolean;
+  onExternalOpenChange?: (open: boolean) => void;
 }
 
 const suggestedQueries = [
@@ -41,14 +43,31 @@ const suggestedQueries = [
   "Summarize my ideas",
 ];
 
-const AssistantChat = ({ userId, onEntryCreated }: AssistantChatProps) => {
-  const [isOpen, setIsOpen] = useState(false);
+const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenChange }: AssistantChatProps) => {
+  const [internalOpen, setInternalOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Sync with external open state
+  const isOpen = externalOpen !== undefined ? externalOpen : internalOpen;
+  const setIsOpen = (open: boolean) => {
+    if (onExternalOpenChange) {
+      onExternalOpenChange(open);
+    } else {
+      setInternalOpen(open);
+    }
+  };
+
+  // When external opens, expand
+  useEffect(() => {
+    if (externalOpen === true) {
+      setIsMinimized(false);
+    }
+  }, [externalOpen]);
 
   useEffect(() => {
     if (isOpen && !isMinimized) {

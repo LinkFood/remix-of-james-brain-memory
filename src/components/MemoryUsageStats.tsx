@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
-import { Brain, TrendingUp, MessageSquare, Star, Database, Clock } from 'lucide-react';
+import { Brain, TrendingUp, FileText, Star, Database, Clock } from 'lucide-react';
 import { Progress } from '@/components/ui/progress';
 
 interface MemoryUsageStatsProps {
@@ -10,19 +10,18 @@ interface MemoryUsageStatsProps {
 
 export const MemoryUsageStats = ({ userId }: MemoryUsageStatsProps) => {
   const [stats, setStats] = useState({
-    totalMessages: 0,
-    totalConversations: 0,
+    totalEntries: 0,
     averageImportance: 0,
-    starredMessages: 0,
-    messagesWithEmbeddings: 0,
-    topTopics: [] as { topic: string; count: number }[],
+    starredEntries: 0,
+    entriesWithEmbeddings: 0,
+    topTags: [] as { tag: string; count: number }[],
     importanceDistribution: {
       critical: 0,
       high: 0,
       medium: 0,
       low: 0,
     },
-    recentActivity: [] as { date: string; count: number }[],
+    contentTypeDistribution: {} as Record<string, number>,
   });
   const [loading, setLoading] = useState(true);
 
@@ -32,84 +31,80 @@ export const MemoryUsageStats = ({ userId }: MemoryUsageStatsProps) => {
 
   const loadStats = async () => {
     try {
-      // Total messages
-      const { count: msgCount } = await supabase
-        .from('messages')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', userId);
-
-      // Total conversations
-      const { count: convCount } = await supabase
-        .from('conversations')
-        .select('*', { count: 'exact', head: true })
-        .eq('user_id', userId);
-
-      // Messages with embeddings
-      const { count: embeddingCount } = await supabase
-        .from('messages')
+      // Total entries
+      const { count: entryCount } = await supabase
+        .from('entries')
         .select('*', { count: 'exact', head: true })
         .eq('user_id', userId)
+        .eq('archived', false);
+
+      // Entries with embeddings
+      const { count: embeddingCount } = await supabase
+        .from('entries')
+        .select('*', { count: 'exact', head: true })
+        .eq('user_id', userId)
+        .eq('archived', false)
         .not('embedding', 'is', null);
 
-      // Starred messages
+      // Starred entries
       const { count: starredCount } = await supabase
-        .from('messages')
+        .from('entries')
         .select('*', { count: 'exact', head: true })
         .eq('user_id', userId)
         .eq('starred', true);
 
-      // Average importance
-      const { data: avgData } = await supabase
-        .from('messages')
-        .select('importance_score')
+      // Get all entries for analysis
+      const { data: entriesData } = await supabase
+        .from('entries')
+        .select('importance_score, tags, content_type')
         .eq('user_id', userId)
-        .not('importance_score', 'is', null);
+        .eq('archived', false);
 
-      const avgImportance = avgData && avgData.length > 0
-        ? avgData.reduce((sum, m) => sum + (m.importance_score || 0), 0) / avgData.length
+      // Average importance
+      const importanceScores = entriesData
+        ?.map((e) => e.importance_score)
+        .filter((s): s is number => s !== null) || [];
+      const avgImportance = importanceScores.length > 0
+        ? importanceScores.reduce((sum, s) => sum + s, 0) / importanceScores.length
         : 0;
 
-      // Top topics
-      const { data: topicsData } = await supabase
-        .from('messages')
-        .select('topic')
-        .eq('user_id', userId)
-        .not('topic', 'is', null);
+      // Top tags
+      const tagCounts: Record<string, number> = {};
+      entriesData?.forEach((entry) => {
+        const tags = entry.tags as string[] | null;
+        tags?.forEach((tag: string) => {
+          tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+        });
+      });
 
-      const topicCounts = topicsData?.reduce((acc, m) => {
-        const topic = m.topic || 'Uncategorized';
-        acc[topic] = (acc[topic] || 0) + 1;
-        return acc;
-      }, {} as Record<string, number>);
-
-      const topTopics = Object.entries(topicCounts || {})
+      const topTags = Object.entries(tagCounts)
         .sort(([, a], [, b]) => b - a)
         .slice(0, 5)
-        .map(([topic, count]) => ({ topic, count }));
+        .map(([tag, count]) => ({ tag, count }));
 
-      // Importance distribution
-      const { data: importanceData } = await supabase
-        .from('messages')
-        .select('importance_score')
-        .eq('user_id', userId)
-        .not('importance_score', 'is', null);
-
+      // Importance distribution (0-10 scale)
       const distribution = {
-        critical: importanceData?.filter(m => (m.importance_score || 0) >= 80).length || 0,
-        high: importanceData?.filter(m => (m.importance_score || 0) >= 60 && (m.importance_score || 0) < 80).length || 0,
-        medium: importanceData?.filter(m => (m.importance_score || 0) >= 40 && (m.importance_score || 0) < 60).length || 0,
-        low: importanceData?.filter(m => (m.importance_score || 0) < 40).length || 0,
+        critical: importanceScores.filter(s => s >= 8).length,
+        high: importanceScores.filter(s => s >= 6 && s < 8).length,
+        medium: importanceScores.filter(s => s >= 4 && s < 6).length,
+        low: importanceScores.filter(s => s < 4).length,
       };
 
+      // Content type distribution
+      const typeDistribution: Record<string, number> = {};
+      entriesData?.forEach((entry) => {
+        const type = entry.content_type || 'note';
+        typeDistribution[type] = (typeDistribution[type] || 0) + 1;
+      });
+
       setStats({
-        totalMessages: msgCount || 0,
-        totalConversations: convCount || 0,
-        averageImportance: Math.round(avgImportance),
-        starredMessages: starredCount || 0,
-        messagesWithEmbeddings: embeddingCount || 0,
-        topTopics,
+        totalEntries: entryCount || 0,
+        averageImportance: Math.round(avgImportance * 10) / 10,
+        starredEntries: starredCount || 0,
+        entriesWithEmbeddings: embeddingCount || 0,
+        topTags,
         importanceDistribution: distribution,
-        recentActivity: [],
+        contentTypeDistribution: typeDistribution,
       });
     } catch (error) {
       console.error('Error loading stats:', error);
@@ -122,29 +117,21 @@ export const MemoryUsageStats = ({ userId }: MemoryUsageStatsProps) => {
     return <div className="animate-pulse">Loading stats...</div>;
   }
 
-  const embeddingPercentage = stats.totalMessages > 0
-    ? (stats.messagesWithEmbeddings / stats.totalMessages) * 100
+  const embeddingPercentage = stats.totalEntries > 0
+    ? (stats.entriesWithEmbeddings / stats.totalEntries) * 100
     : 0;
 
   return (
     <div className="space-y-6">
       <div>
-        <h3 className="text-lg font-semibold mb-4">Memory System Overview</h3>
+        <h3 className="text-lg font-semibold mb-4">Brain Dump Overview</h3>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <Card className="p-4">
             <div className="flex items-center gap-3 mb-2">
-              <MessageSquare className="w-5 h-5 text-primary" />
-              <span className="text-sm text-muted-foreground">Total Messages</span>
+              <FileText className="w-5 h-5 text-primary" />
+              <span className="text-sm text-muted-foreground">Total Entries</span>
             </div>
-            <p className="text-3xl font-bold">{stats.totalMessages.toLocaleString()}</p>
-          </Card>
-
-          <Card className="p-4">
-            <div className="flex items-center gap-3 mb-2">
-              <Database className="w-5 h-5 text-primary" />
-              <span className="text-sm text-muted-foreground">Conversations</span>
-            </div>
-            <p className="text-3xl font-bold">{stats.totalConversations.toLocaleString()}</p>
+            <p className="text-3xl font-bold">{stats.totalEntries.toLocaleString()}</p>
           </Card>
 
           <Card className="p-4">
@@ -152,7 +139,7 @@ export const MemoryUsageStats = ({ userId }: MemoryUsageStatsProps) => {
               <TrendingUp className="w-5 h-5 text-primary" />
               <span className="text-sm text-muted-foreground">Avg Importance</span>
             </div>
-            <p className="text-3xl font-bold">{stats.averageImportance}</p>
+            <p className="text-3xl font-bold">{stats.averageImportance}/10</p>
           </Card>
 
           <Card className="p-4">
@@ -160,7 +147,7 @@ export const MemoryUsageStats = ({ userId }: MemoryUsageStatsProps) => {
               <Star className="w-5 h-5 text-primary" />
               <span className="text-sm text-muted-foreground">Starred</span>
             </div>
-            <p className="text-3xl font-bold">{stats.starredMessages.toLocaleString()}</p>
+            <p className="text-3xl font-bold">{stats.starredEntries.toLocaleString()}</p>
           </Card>
 
           <Card className="p-4">
@@ -168,8 +155,16 @@ export const MemoryUsageStats = ({ userId }: MemoryUsageStatsProps) => {
               <Brain className="w-5 h-5 text-primary" />
               <span className="text-sm text-muted-foreground">With Embeddings</span>
             </div>
-            <p className="text-3xl font-bold">{stats.messagesWithEmbeddings.toLocaleString()}</p>
+            <p className="text-3xl font-bold">{stats.entriesWithEmbeddings.toLocaleString()}</p>
             <Progress value={embeddingPercentage} className="mt-2 h-1" />
+          </Card>
+
+          <Card className="p-4">
+            <div className="flex items-center gap-3 mb-2">
+              <Database className="w-5 h-5 text-primary" />
+              <span className="text-sm text-muted-foreground">Content Types</span>
+            </div>
+            <p className="text-3xl font-bold">{Object.keys(stats.contentTypeDistribution).length}</p>
           </Card>
 
           <Card className="p-4">
@@ -193,7 +188,7 @@ export const MemoryUsageStats = ({ userId }: MemoryUsageStatsProps) => {
                 <div key={level}>
                   <div className="flex justify-between text-sm mb-1">
                     <span className="capitalize">{level}</span>
-                    <span className="text-muted-foreground">{count} messages</span>
+                    <span className="text-muted-foreground">{count} entries</span>
                   </div>
                   <Progress value={percentage} className="h-2" />
                 </div>
@@ -203,19 +198,19 @@ export const MemoryUsageStats = ({ userId }: MemoryUsageStatsProps) => {
         </Card>
 
         <Card className="p-6">
-          <h4 className="font-semibold mb-4">Top Topics</h4>
+          <h4 className="font-semibold mb-4">Top Tags</h4>
           <div className="space-y-3">
-            {stats.topTopics.length > 0 ? (
-              stats.topTopics.map((topic) => (
-                <div key={topic.topic} className="flex justify-between items-center">
-                  <span className="text-sm truncate flex-1">{topic.topic}</span>
+            {stats.topTags.length > 0 ? (
+              stats.topTags.map((item) => (
+                <div key={item.tag} className="flex justify-between items-center">
+                  <span className="text-sm truncate flex-1">#{item.tag}</span>
                   <span className="text-sm font-semibold text-primary ml-2">
-                    {topic.count}
+                    {item.count}
                   </span>
                 </div>
               ))
             ) : (
-              <p className="text-sm text-muted-foreground">No topics yet</p>
+              <p className="text-sm text-muted-foreground">No tags yet</p>
             )}
           </div>
         </Card>

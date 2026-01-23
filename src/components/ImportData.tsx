@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Upload, FileJson, AlertCircle, CheckCircle2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
@@ -13,6 +13,15 @@ interface ImportDataProps {
   onImportComplete: () => void;
 }
 
+interface ImportEntry {
+  content: string;
+  title?: string;
+  content_type?: string;
+  tags?: string[];
+  importance_score?: number;
+  created_at?: string;
+}
+
 const ImportData = ({ userId, onImportComplete }: ImportDataProps) => {
   const [importing, setImporting] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -22,32 +31,14 @@ const ImportData = ({ userId, onImportComplete }: ImportDataProps) => {
   const validateData = (data: any): boolean => {
     const errors: string[] = [];
 
-    if (!Array.isArray(data.conversations)) {
-      errors.push("Invalid format: 'conversations' must be an array");
+    if (!Array.isArray(data.entries)) {
+      errors.push("Invalid format: 'entries' must be an array");
     }
 
-    if (!Array.isArray(data.messages)) {
-      errors.push("Invalid format: 'messages' must be an array");
-    }
-
-    if (data.conversations) {
-      data.conversations.forEach((conv: any, i: number) => {
-        if (!conv.title || typeof conv.title !== 'string') {
-          errors.push(`Conversation ${i + 1}: missing or invalid title`);
-        }
-      });
-    }
-
-    if (data.messages) {
-      data.messages.forEach((msg: any, i: number) => {
-        if (!msg.content || typeof msg.content !== 'string') {
-          errors.push(`Message ${i + 1}: missing or invalid content`);
-        }
-        if (!msg.role || !['user', 'assistant', 'system'].includes(msg.role)) {
-          errors.push(`Message ${i + 1}: invalid role (must be user, assistant, or system)`);
-        }
-        if (!msg.conversation_id) {
-          errors.push(`Message ${i + 1}: missing conversation_id`);
+    if (data.entries) {
+      data.entries.forEach((entry: any, i: number) => {
+        if (!entry.content || typeof entry.content !== 'string') {
+          errors.push(`Entry ${i + 1}: missing or invalid content`);
         }
       });
     }
@@ -84,55 +75,42 @@ const ImportData = ({ userId, onImportComplete }: ImportDataProps) => {
     reader.readAsText(file);
   };
 
-  const importData = async (data: any) => {
+  const importData = async (data: { entries: ImportEntry[] }) => {
     setImporting(true);
     setProgress(0);
 
     try {
-      const totalSteps = (data.conversations?.length || 0) + (data.messages?.length || 0);
+      const totalSteps = data.entries?.length || 0;
       let completed = 0;
 
-      // Import conversations
-      if (data.conversations && data.conversations.length > 0) {
-        const conversationsWithUserId = data.conversations.map((conv: any) => ({
-          ...conv,
-          user_id: userId,
-          id: conv.id || undefined, // Let Supabase generate if not provided
-        }));
-
-        const { error: convError } = await supabase
-          .from('conversations')
-          .insert(conversationsWithUserId);
-
-        if (convError) throw convError;
-        
-        completed += data.conversations.length;
-        setProgress((completed / totalSteps) * 100);
-      }
-
-      // Import messages in batches
-      if (data.messages && data.messages.length > 0) {
-        const batchSize = 100;
-        for (let i = 0; i < data.messages.length; i += batchSize) {
-          const batch = data.messages.slice(i, i + batchSize);
-          const messagesWithUserId = batch.map((msg: any) => ({
-            ...msg,
+      // Import entries in batches
+      if (data.entries && data.entries.length > 0) {
+        const batchSize = 50;
+        for (let i = 0; i < data.entries.length; i += batchSize) {
+          const batch = data.entries.slice(i, i + batchSize);
+          const entriesWithUserId = batch.map((entry: ImportEntry) => ({
+            content: entry.content,
+            title: entry.title || null,
+            content_type: entry.content_type || 'note',
+            tags: entry.tags || [],
+            importance_score: entry.importance_score || null,
+            created_at: entry.created_at || new Date().toISOString(),
             user_id: userId,
-            id: msg.id || undefined,
+            source: 'import',
           }));
 
-          const { error: msgError } = await supabase
-            .from('messages')
-            .insert(messagesWithUserId);
+          const { error } = await supabase
+            .from('entries')
+            .insert(entriesWithUserId);
 
-          if (msgError) throw msgError;
+          if (error) throw error;
 
           completed += batch.length;
           setProgress((completed / totalSteps) * 100);
         }
       }
 
-      toast.success(`Successfully imported ${data.conversations?.length || 0} conversations and ${data.messages?.length || 0} messages`);
+      toast.success(`Successfully imported ${data.entries?.length || 0} entries`);
       setOpen(false);
       onImportComplete();
     } catch (error: any) {
@@ -159,7 +137,7 @@ const ImportData = ({ userId, onImportComplete }: ImportDataProps) => {
             Import Data
           </DialogTitle>
           <DialogDescription>
-            Upload a JSON file to import conversations and messages
+            Upload a JSON file to import entries into your brain dump
           </DialogDescription>
         </DialogHeader>
 
@@ -185,15 +163,12 @@ const ImportData = ({ userId, onImportComplete }: ImportDataProps) => {
             <CardContent>
               <pre className="text-xs bg-muted p-3 rounded overflow-x-auto">
 {`{
-  "conversations": [{
-    "id": "uuid",
-    "title": "Conversation Title",
-    "created_at": "2024-01-01T00:00:00Z"
-  }],
-  "messages": [{
-    "conversation_id": "uuid",
-    "role": "user|assistant|system",
-    "content": "Message text",
+  "entries": [{
+    "content": "Your content here",
+    "title": "Optional title",
+    "content_type": "note|code|list|idea|link",
+    "tags": ["tag1", "tag2"],
+    "importance_score": 5,
     "created_at": "2024-01-01T00:00:00Z"
   }]
 }`}

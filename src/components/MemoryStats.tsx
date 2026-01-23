@@ -1,25 +1,25 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
-import { Brain, MessageSquare, Hash, TrendingUp } from "lucide-react";
+import { Brain, Hash, TrendingUp, Clock } from "lucide-react";
 
 interface MemoryStatsProps {
   userId: string;
 }
 
 interface Stats {
-  totalMessages: number;
-  totalConversations: number;
-  topTopics: { topic: string; count: number }[];
+  totalEntries: number;
+  topTags: { tag: string; count: number }[];
   recentActivity: number;
+  avgImportance: number;
 }
 
 const MemoryStats = ({ userId }: MemoryStatsProps) => {
   const [stats, setStats] = useState<Stats>({
-    totalMessages: 0,
-    totalConversations: 0,
-    topTopics: [],
+    totalEntries: 0,
+    topTags: [],
     recentActivity: 0,
+    avgImportance: 0,
   });
   const [loading, setLoading] = useState(true);
 
@@ -29,51 +29,56 @@ const MemoryStats = ({ userId }: MemoryStatsProps) => {
 
   const fetchStats = async () => {
     try {
-      // Total messages
-      const { count: messageCount } = await supabase
-        .from("messages")
+      // Total entries
+      const { count: entryCount } = await supabase
+        .from("entries")
         .select("*", { count: "exact", head: true })
-        .eq("user_id", userId);
-
-      // Total conversations
-      const { count: conversationCount } = await supabase
-        .from("conversations")
-        .select("*", { count: "exact", head: true })
-        .eq("user_id", userId);
+        .eq("user_id", userId)
+        .eq("archived", false);
 
       // Recent activity (last 7 days)
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
       const { count: recentCount } = await supabase
-        .from("messages")
+        .from("entries")
         .select("*", { count: "exact", head: true })
         .eq("user_id", userId)
         .gte("created_at", sevenDaysAgo.toISOString());
 
-      // Top topics
-      const { data: topicsData } = await supabase
-        .from("messages")
-        .select("topic")
+      // Get all entries for tag analysis and importance
+      const { data: entriesData } = await supabase
+        .from("entries")
+        .select("tags, importance_score")
         .eq("user_id", userId)
-        .not("topic", "is", null);
+        .eq("archived", false);
 
-      const topicCounts: { [key: string]: number } = {};
-      topicsData?.forEach((msg) => {
-        if (msg.topic) {
-          topicCounts[msg.topic] = (topicCounts[msg.topic] || 0) + 1;
-        }
+      // Calculate top tags
+      const tagCounts: { [key: string]: number } = {};
+      entriesData?.forEach((entry) => {
+        const tags = entry.tags as string[] | null;
+        tags?.forEach((tag: string) => {
+          tagCounts[tag] = (tagCounts[tag] || 0) + 1;
+        });
       });
 
-      const topTopics = Object.entries(topicCounts)
+      const topTags = Object.entries(tagCounts)
         .sort(([, a], [, b]) => b - a)
         .slice(0, 5)
-        .map(([topic, count]) => ({ topic, count }));
+        .map(([tag, count]) => ({ tag, count }));
+
+      // Calculate average importance
+      const importanceScores = entriesData
+        ?.map((e) => e.importance_score)
+        .filter((s): s is number => s !== null) || [];
+      const avgImportance = importanceScores.length > 0
+        ? importanceScores.reduce((a, b) => a + b, 0) / importanceScores.length
+        : 0;
 
       setStats({
-        totalMessages: messageCount || 0,
-        totalConversations: conversationCount || 0,
-        topTopics,
+        totalEntries: entryCount || 0,
+        topTags,
         recentActivity: recentCount || 0,
+        avgImportance: Math.round(avgImportance * 10) / 10,
       });
     } catch (error) {
       console.error("Failed to fetch stats:", error);
@@ -100,11 +105,11 @@ const MemoryStats = ({ userId }: MemoryStatsProps) => {
         <Card className="p-6 bg-card border-border hover:border-primary/50 transition-all">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center">
-              <MessageSquare className="w-6 h-6 text-primary" />
+              <Brain className="w-6 h-6 text-primary" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-foreground">{stats.totalMessages}</p>
-              <p className="text-sm text-muted-foreground">Total Messages</p>
+              <p className="text-2xl font-bold text-foreground">{stats.totalEntries}</p>
+              <p className="text-sm text-muted-foreground">Total Entries</p>
             </div>
           </div>
         </Card>
@@ -112,19 +117,7 @@ const MemoryStats = ({ userId }: MemoryStatsProps) => {
         <Card className="p-6 bg-card border-border hover:border-primary/50 transition-all">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 bg-accent/10 rounded-xl flex items-center justify-center">
-              <Brain className="w-6 h-6 text-accent" />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-foreground">{stats.totalConversations}</p>
-              <p className="text-sm text-muted-foreground">Conversations</p>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="p-6 bg-card border-border hover:border-primary/50 transition-all">
-          <div className="flex items-center gap-4">
-            <div className="w-12 h-12 bg-primary-glow/10 rounded-xl flex items-center justify-center">
-              <TrendingUp className="w-6 h-6 text-primary-glow" />
+              <Clock className="w-6 h-6 text-accent" />
             </div>
             <div>
               <p className="text-2xl font-bold text-foreground">{stats.recentActivity}</p>
@@ -135,30 +128,42 @@ const MemoryStats = ({ userId }: MemoryStatsProps) => {
 
         <Card className="p-6 bg-card border-border hover:border-primary/50 transition-all">
           <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-primary-glow/10 rounded-xl flex items-center justify-center">
+              <TrendingUp className="w-6 h-6 text-primary-glow" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-foreground">{stats.avgImportance}</p>
+              <p className="text-sm text-muted-foreground">Avg Importance</p>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="p-6 bg-card border-border hover:border-primary/50 transition-all">
+          <div className="flex items-center gap-4">
             <div className="w-12 h-12 bg-secondary/50 rounded-xl flex items-center justify-center">
               <Hash className="w-6 h-6 text-secondary-foreground" />
             </div>
             <div>
-              <p className="text-2xl font-bold text-foreground">{stats.topTopics.length}</p>
-              <p className="text-sm text-muted-foreground">Topics Discussed</p>
+              <p className="text-2xl font-bold text-foreground">{stats.topTags.length}</p>
+              <p className="text-sm text-muted-foreground">Unique Tags</p>
             </div>
           </div>
         </Card>
       </div>
 
-      {stats.topTopics.length > 0 && (
+      {stats.topTags.length > 0 && (
         <Card className="p-6 bg-card border-border">
-          <h3 className="text-lg font-semibold text-foreground mb-4">Top Topics</h3>
+          <h3 className="text-lg font-semibold text-foreground mb-4">Top Tags</h3>
           <div className="space-y-2">
-            {stats.topTopics.map(({ topic, count }) => (
-              <div key={topic} className="flex items-center justify-between">
-                <span className="text-sm text-foreground capitalize">{topic}</span>
+            {stats.topTags.map(({ tag, count }) => (
+              <div key={tag} className="flex items-center justify-between">
+                <span className="text-sm text-foreground">#{tag}</span>
                 <div className="flex items-center gap-2">
                   <div className="h-2 w-32 bg-muted rounded-full overflow-hidden">
                     <div
                       className="h-full bg-primary"
                       style={{
-                        width: `${(count / stats.totalMessages) * 100}%`,
+                        width: `${(count / stats.totalEntries) * 100}%`,
                       }}
                     />
                   </div>
