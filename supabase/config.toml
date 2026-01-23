@@ -10,7 +10,7 @@ verify_jwt = true
 verify_jwt = true
 
 [functions.generate-embedding]
-verify_jwt = false
+verify_jwt = true
 
 [functions.backfill-embeddings]
 verify_jwt = true
@@ -29,4 +29,3 @@ verify_jwt = true
 
 [functions.insert-sample-data]
 verify_jwt = true
-
