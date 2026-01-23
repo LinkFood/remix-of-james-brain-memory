@@ -64,11 +64,15 @@ export type Database = {
           content_type: string
           created_at: string
           embedding: string | null
+          event_date: string | null
+          event_time: string | null
           extracted_data: Json | null
           id: string
           image_url: string | null
           importance_score: number | null
+          is_recurring: boolean | null
           list_items: Json | null
+          recurrence_pattern: string | null
           source: string
           starred: boolean
           tags: string[] | null
@@ -83,11 +87,15 @@ export type Database = {
           content_type?: string
           created_at?: string
           embedding?: string | null
+          event_date?: string | null
+          event_time?: string | null
           extracted_data?: Json | null
           id?: string
           image_url?: string | null
           importance_score?: number | null
+          is_recurring?: boolean | null
           list_items?: Json | null
+          recurrence_pattern?: string | null
           source?: string
           starred?: boolean
           tags?: string[] | null
@@ -102,11 +110,15 @@ export type Database = {
           content_type?: string
           created_at?: string
           embedding?: string | null
+          event_date?: string | null
+          event_time?: string | null
           extracted_data?: Json | null
           id?: string
           image_url?: string | null
           importance_score?: number | null
+          is_recurring?: boolean | null
           list_items?: Json | null
+          recurrence_pattern?: string | null
           source?: string
           starred?: boolean
           tags?: string[] | null

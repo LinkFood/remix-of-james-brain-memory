@@ -11,7 +11,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp } from "lucide-react";
+import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp, Calendar } from "lucide-react";
 import { toast } from "sonner";
 import { Entry } from "./EntryCard";
 import DumpInput, { DumpInputHandle } from "./DumpInput";
@@ -54,6 +54,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
 
   // Collapsible sections
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    upcoming: true,
     today: true,
     important: true,
     lists: true,
@@ -338,6 +339,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
   // Computed lists
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const todayStr = now.toISOString().split('T')[0];
 
   const todayEntries = entries.filter((e) => new Date(e.created_at) >= todayStart);
   const importantEntries = entries.filter((e) => (e.importance_score ?? 0) >= 7);
@@ -345,6 +347,17 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
   const codeEntries = entries.filter((e) => e.content_type === "code");
   const ideaEntries = entries.filter((e) => e.content_type === "idea");
   const starredCount = entries.filter((e) => e.starred).length;
+  
+  // Upcoming entries: events/reminders with future event_date
+  const upcomingEntries = entries.filter((e) => {
+    const eventDate = (e as any).event_date;
+    if (!eventDate) return false;
+    return eventDate >= todayStr;
+  }).sort((a, b) => {
+    const dateA = (a as any).event_date || '';
+    const dateB = (b as any).event_date || '';
+    return dateA.localeCompare(dateB);
+  });
 
   if (loading) {
     return (
@@ -373,6 +386,25 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
 
       {/* Sections */}
       <div className="space-y-4">
+        {/* Upcoming Section */}
+        {upcomingEntries.length > 0 && (
+          <EntrySection
+            title="Upcoming"
+            icon={<Calendar className="w-4 h-4 text-green-500" />}
+            entries={upcomingEntries}
+            section="upcoming"
+            expanded={expandedSections.upcoming}
+            onToggle={toggleSection}
+            color="bg-green-500/10"
+            compact
+            onToggleListItem={handleToggleListItem}
+            onStar={handleStar}
+            onArchive={handleArchive}
+            onDelete={handleDelete}
+            onViewEntry={onViewEntry}
+          />
+        )}
+
         {/* Today Section */}
         {todayEntries.length > 0 && (
           <EntrySection

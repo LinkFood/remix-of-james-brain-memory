@@ -28,6 +28,11 @@ interface ClassificationResult {
   listItems?: Array<{ text: string; checked: boolean }>;
   imageDescription?: string;
   documentText?: string; // Full extracted text from PDF
+  // Calendar/time fields
+  eventDate?: string; // ISO date string (YYYY-MM-DD)
+  eventTime?: string; // Time string (HH:MM)
+  isRecurring?: boolean;
+  recurrencePattern?: 'daily' | 'weekly' | 'monthly' | 'yearly';
 }
 
 serve(async (req) => {
@@ -88,6 +93,7 @@ Analyze the content and determine:
 7. LIST ITEMS: If it's a list, extract individual items
 8. IMAGE DESCRIPTION: For images, perform FORENSIC-LEVEL extraction
 9. DOCUMENT TEXT: For PDFs, extract ALL text content preserving structure
+10. EVENT DATE/TIME: If content mentions dates or times, extract them
 
 Guidelines:
 - CODE: Contains programming syntax, functions, variables, imports
@@ -95,11 +101,48 @@ Guidelines:
 - IDEA: Concepts, brainstorms, "what if", feature ideas
 - LINK: URLs, website references
 - CONTACT: Names with phone/email/address
-- EVENT: Dates, meetings, appointments
+- EVENT: Dates, meetings, appointments with specific dates/times
 - REMINDER: Tasks with "tomorrow", "remember to", deadlines
 - NOTE: Everything else - random thoughts, information
 - IMAGE: Photos, screenshots, diagrams, visual content
 - DOCUMENT: PDFs, scanned documents, multi-page content
+
+=== DATE/TIME EXTRACTION (CRITICAL) ===
+Extract dates and times from content to enable calendar features:
+
+RELATIVE DATES (resolve to actual dates based on today):
+- "tomorrow" → next day's date
+- "next week" → 7 days from now
+- "next Monday" → next Monday's date
+- "in 3 days" → 3 days from now
+- "tonight" → today's date, evening time (20:00)
+- "this afternoon" → today's date, afternoon time (14:00)
+
+ABSOLUTE DATES:
+- "June 5th" → 2026-06-05
+- "3/15/2026" → 2026-03-15
+- "March 15" → 2026-03-15
+
+TIMES:
+- "at 3pm" → 15:00
+- "at 10:30 AM" → 10:30
+- "at noon" → 12:00
+- "in the morning" → 09:00
+- "evening" → 19:00
+
+RECURRING PATTERNS:
+- "every day", "daily" → isRecurring: true, recurrencePattern: "daily"
+- "every week", "weekly" → isRecurring: true, recurrencePattern: "weekly"
+- "every month", "monthly" → isRecurring: true, recurrencePattern: "monthly"
+- "every year", "yearly" → isRecurring: true, recurrencePattern: "yearly"
+
+Examples:
+- "Dentist appointment tomorrow at 3pm" → eventDate: tomorrow's date, eventTime: "15:00"
+- "Meeting with John next Monday morning" → eventDate: next Monday, eventTime: "09:00"
+- "Weekly standup every Tuesday at 10am" → eventDate: next Tuesday, eventTime: "10:00", isRecurring: true, recurrencePattern: "weekly"
+- "Remember to call mom on her birthday June 15th" → eventDate: "2026-06-15"
+
+Today's date is: ${new Date().toISOString().split('T')[0]}
 
 === CRITICAL: FORENSIC IMAGE EXTRACTION ===
 For ALL images, you MUST perform exhaustive data extraction:
@@ -311,6 +354,23 @@ ${recentListsContext}`;
                   documentText: {
                     type: 'string',
                     description: 'For PDFs/documents: the full extracted text content, preserving structure'
+                  },
+                  eventDate: {
+                    type: 'string',
+                    description: 'ISO date string (YYYY-MM-DD) for events, reminders, or any content with a date'
+                  },
+                  eventTime: {
+                    type: 'string',
+                    description: 'Time string (HH:MM) for events or reminders with a specific time'
+                  },
+                  isRecurring: {
+                    type: 'boolean',
+                    description: 'Whether this is a recurring event/reminder'
+                  },
+                  recurrencePattern: {
+                    type: 'string',
+                    enum: ['daily', 'weekly', 'monthly', 'yearly'],
+                    description: 'Recurrence pattern for recurring events'
                   }
                 },
                 required: ['type', 'suggestedTitle', 'tags'],
@@ -372,7 +432,11 @@ ${recentListsContext}`;
       appendTo: classification.appendTo,
       listItems: classification.listItems || [],
       imageDescription: classification.imageDescription,
-      documentText: classification.documentText
+      documentText: classification.documentText,
+      eventDate: classification.eventDate,
+      eventTime: classification.eventTime,
+      isRecurring: classification.isRecurring,
+      recurrencePattern: classification.recurrencePattern,
     };
 
     console.log('Classification result:', result);
