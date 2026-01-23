@@ -85,7 +85,7 @@ Analyze the content and determine:
 5. EXTRACTED DATA: Structured data based on type
 6. APPEND TO: If content should be added to an existing entry, provide the ID
 7. LIST ITEMS: If it's a list, extract individual items
-8. IMAGE DESCRIPTION: For images, provide a detailed description of what's visible
+8. IMAGE DESCRIPTION: For images, perform FORENSIC-LEVEL extraction
 
 Guidelines:
 - CODE: Contains programming syntax, functions, variables, imports
@@ -98,12 +98,53 @@ Guidelines:
 - NOTE: Everything else - random thoughts, information
 - IMAGE: Photos, screenshots, diagrams, visual content
 
-For images:
-- If it's a screenshot of text/code, extract the actual text content in imageDescription
-- If it's a diagram or wireframe, describe the structure and elements
-- If it's a photo, describe the subject and context
-- If it's a receipt, extract amounts, vendor, and date
-- The imageDescription is CRITICAL for making images searchable later
+=== CRITICAL: FORENSIC IMAGE EXTRACTION ===
+For ALL images, you MUST perform exhaustive data extraction:
+
+1. TEXT EXTRACTION (OCR-style):
+   - Extract EVERY piece of visible text, word-for-word
+   - Include ALL numbers, percentages, dates, symbols, ticker symbols
+   - Preserve structure (headers, labels, values, columns)
+   - Capture small text, watermarks, timestamps
+
+2. FINANCIAL/CHART IMAGES:
+   - Ticker symbols (TSLA, AAPL, BTC, etc.)
+   - Current prices, price changes, percentages
+   - Dates, timeframes, intervals
+   - Indicators (RSI, MACD, moving averages, volume)
+   - Support/resistance levels, trend lines
+   - Any visible order book data, bid/ask
+
+3. RECEIPTS/INVOICES/DOCUMENTS:
+   - Vendor/store name, logo text
+   - Date, time, transaction ID
+   - All line items with prices
+   - Subtotal, tax, tips, total
+   - Payment method, last 4 digits
+   - Address, phone numbers
+
+4. SCREENSHOTS OF APPS/WEBSITES:
+   - App name, page title, URL if visible
+   - ALL visible data: emails, names, numbers, addresses
+   - Button labels, menu items
+   - Notification text, error messages
+   - Form field contents
+
+5. PHOTOS WITH TEXT:
+   - Signs, labels, business names
+   - Handwritten notes (transcribe fully)
+   - Product names, model numbers
+   - Prices, barcodes if readable
+
+6. DIAGRAMS/WIREFRAMES:
+   - All labels, annotations, arrows
+   - Component names, flow directions
+   - Notes, comments, measurements
+
+The imageDescription field MUST contain ALL extracted data in structured format.
+This is the ONLY way users can search for this content later.
+OVER-EXTRACT. More data is ALWAYS better than less.
+If you see it, extract it.
 
 For lists, extract each item as a separate list_item with checked: false.
 ${recentListsContext}`;
@@ -149,8 +190,8 @@ ${recentListsContext}`;
       });
     }
 
-    // Use vision-capable model for images
-    const model = imageUrl ? 'google/gemini-2.5-flash' : 'google/gemini-2.5-flash-lite';
+    // Use best vision model for images, fast model for text
+    const model = imageUrl ? 'google/gemini-2.5-pro' : 'google/gemini-2.5-flash';
     console.log(`[classify-content] Using model: ${model}, hasImage: ${!!imageUrl}`);
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {

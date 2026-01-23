@@ -6,11 +6,11 @@
  * This isn't ChatGPT. This isn't Claude. This is YOUR assistant.
  * It only knows what YOU dumped. That's the point.
  * 
- * Show sources. Be fast. Stream responses.
+ * Show sources. Be fast. Stream responses. SPEAK back.
  * If users ask and we can't find it, we failed to save it right.
  */
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -24,6 +24,10 @@ import {
   X,
   Sparkles,
   FileText,
+  Volume2,
+  VolumeX,
+  Mic,
+  MicOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -58,6 +62,8 @@ const suggestedQueries = [
 ];
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/assistant-chat`;
+const TTS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/elevenlabs-tts`;
+const STT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/elevenlabs-stt`;
 
 const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenChange }: AssistantChatProps) => {
   const [internalOpen, setInternalOpen] = useState(false);
@@ -65,8 +71,14 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [autoSpeak, setAutoSpeak] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // Sync with external open state
   const isOpen = externalOpen !== undefined ? externalOpen : internalOpen;
@@ -97,6 +109,162 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
     }
   }, [isOpen, isMinimized]);
 
+  // Speak text using ElevenLabs TTS
+  const speakText = useCallback(async (text: string) => {
+    if (!text || isSpeaking) return;
+
+    try {
+      setIsSpeaking(true);
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Not authenticated");
+      }
+
+      // Use fetch instead of supabase.functions.invoke for binary data
+      const response = await fetch(TTS_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({ text }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Speech generation failed");
+      }
+
+      const audioBlob = await response.blob();
+      const audioUrl = URL.createObjectURL(audioBlob);
+      
+      // Stop any existing audio
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+
+      const audio = new Audio(audioUrl);
+      audioRef.current = audio;
+
+      audio.onended = () => {
+        setIsSpeaking(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+
+      audio.onerror = () => {
+        setIsSpeaking(false);
+        URL.revokeObjectURL(audioUrl);
+        toast.error("Failed to play audio");
+      };
+
+      await audio.play();
+    } catch (error: any) {
+      console.error("TTS error:", error);
+      setIsSpeaking(false);
+      toast.error(error.message || "Failed to speak");
+    }
+  }, [isSpeaking]);
+
+  // Stop speaking
+  const stopSpeaking = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    setIsSpeaking(false);
+  }, []);
+
+  // Start voice recording
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        }
+      });
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        stream.getTracks().forEach(track => track.stop());
+        
+        if (audioChunksRef.current.length === 0) return;
+
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        await transcribeAudio(audioBlob);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (error: any) {
+      console.error("Recording error:", error);
+      toast.error("Could not access microphone");
+    }
+  }, []);
+
+  // Stop recording and transcribe
+  const stopRecording = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+      mediaRecorderRef.current.stop();
+    }
+    setIsRecording(false);
+  }, []);
+
+  // Transcribe audio using ElevenLabs STT
+  const transcribeAudio = async (audioBlob: Blob) => {
+    try {
+      setLoading(true);
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Not authenticated");
+      }
+
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+
+      const response = await fetch(STT_URL, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${session.access_token}`,
+        },
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Transcription failed");
+      }
+
+      const { text } = await response.json();
+
+      if (text && text.trim()) {
+        setInput(text.trim());
+        // Auto-send after voice input
+        handleSend(text.trim());
+      } else {
+        toast.error("Couldn't understand that. Try again.");
+      }
+    } catch (error: any) {
+      console.error("STT error:", error);
+      toast.error(error.message || "Transcription failed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSend = async (messageText?: string) => {
     const text = messageText || input.trim();
     if (!text || loading) return;
@@ -108,6 +276,8 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
 
     // Add placeholder assistant message for streaming
     setMessages((prev) => [...prev, { role: "assistant", content: "", sources: [] }]);
+
+    let finalContent = "";
 
     try {
       // Get user session token for proper authentication
@@ -189,6 +359,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
             const content = parsed.choices?.[0]?.delta?.content as string | undefined;
             if (content) {
               assistantContent += content;
+              finalContent = assistantContent;
               // Update the last assistant message immutably
               setMessages((prev) => {
                 const newMessages = [...prev];
@@ -225,6 +396,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
             const content = parsed.choices?.[0]?.delta?.content as string | undefined;
             if (content) {
               assistantContent += content;
+              finalContent = assistantContent;
               setMessages((prev) => {
                 const newMessages = [...prev];
                 const lastIdx = newMessages.length - 1;
@@ -242,6 +414,11 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
             // ignore
           }
         }
+      }
+
+      // Auto-speak if enabled
+      if (autoSpeak && finalContent) {
+        speakText(finalContent);
       }
 
     } catch (error: any) {
@@ -285,6 +462,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
   const handleClose = () => {
     setIsOpen(false);
     setIsMinimized(true);
+    stopSpeaking();
   };
 
   // Floating button when closed
@@ -317,8 +495,31 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
             <Sparkles className="w-4 h-4 text-primary" />
           </div>
           <span className="font-medium text-sm">Brain Assistant</span>
+          {isSpeaking && (
+            <Badge variant="secondary" className="text-xs animate-pulse">
+              Speaking...
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-1">
+          {/* Auto-speak toggle */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={(e) => {
+              e.stopPropagation();
+              setAutoSpeak(!autoSpeak);
+              if (isSpeaking) stopSpeaking();
+            }}
+            title={autoSpeak ? "Disable auto-speak" : "Enable auto-speak"}
+          >
+            {autoSpeak ? (
+              <Volume2 className="w-4 h-4 text-primary" />
+            ) : (
+              <VolumeX className="w-4 h-4 text-muted-foreground" />
+            )}
+          </Button>
           <Button
             variant="ghost"
             size="icon"
@@ -412,6 +613,29 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
                     </div>
                   )}
 
+                  {/* Speak button for assistant messages */}
+                  {msg.role === "assistant" && msg.content && !loading && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 w-6 p-0 mt-1"
+                      onClick={() => {
+                        if (isSpeaking) {
+                          stopSpeaking();
+                        } else {
+                          speakText(msg.content);
+                        }
+                      }}
+                      title={isSpeaking ? "Stop speaking" : "Speak this response"}
+                    >
+                      {isSpeaking ? (
+                        <VolumeX className="w-3 h-3" />
+                      ) : (
+                        <Volume2 className="w-3 h-3" />
+                      )}
+                    </Button>
+                  )}
+
                   {/* Sources */}
                   {msg.sources && msg.sources.length > 0 && (
                     <div className="mt-2 pt-2 border-t border-border/50">
@@ -447,18 +671,39 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
           {/* Input */}
           <div className="p-3 border-t">
             <div className="flex gap-2">
+              {/* Voice input button */}
+              <Button
+                variant={isRecording ? "destructive" : "outline"}
+                size="icon"
+                className="shrink-0"
+                onClick={() => {
+                  if (isRecording) {
+                    stopRecording();
+                  } else {
+                    startRecording();
+                  }
+                }}
+                disabled={loading}
+                title={isRecording ? "Stop recording" : "Voice input"}
+              >
+                {isRecording ? (
+                  <MicOff className="w-4 h-4" />
+                ) : (
+                  <Mic className="w-4 h-4" />
+                )}
+              </Button>
               <Input
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask your brain..."
-                disabled={loading}
+                placeholder={isRecording ? "Listening..." : "Ask your brain..."}
+                disabled={loading || isRecording}
                 className="text-sm"
               />
               <Button
                 onClick={() => handleSend()}
-                disabled={loading || !input.trim()}
+                disabled={loading || !input.trim() || isRecording}
                 size="icon"
                 className="shrink-0"
               >

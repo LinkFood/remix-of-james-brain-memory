@@ -155,7 +155,7 @@ Generate a report with:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'openai/gpt-5-mini',
+        model: 'openai/gpt-5',
         messages: [
           { role: 'system', content: 'You are an AI analyst helping users understand patterns in their brain dump entries. Be concise, insightful, and actionable.' },
           { role: 'user', content: prompt }
