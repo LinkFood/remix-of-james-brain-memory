@@ -118,8 +118,9 @@ const Settings = () => {
       return;
     }
 
-    // Validate the key first
-    const isValid = await validateApiKey(apiKey, provider);
+    // Trim whitespace and validate the key first
+    const trimmedKey = apiKey.trim();
+    const isValid = await validateApiKey(trimmedKey, provider);
     if (!isValid) return;
 
     setLoading(true);
@@ -133,7 +134,7 @@ const Settings = () => {
         .upsert({
           user_id: user.id,
           provider,
-          encrypted_key: apiKey,
+          encrypted_key: trimmedKey,
           is_default: true
         });
 
