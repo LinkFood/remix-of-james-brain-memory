@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { Brain, LogOut, Settings, Menu, RefreshCw, Search } from "lucide-react";
+import { Brain, LogOut, Settings, Menu, RefreshCw, Search, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -11,6 +11,7 @@ import AssistantChat from "@/components/AssistantChat";
 import EntryView from "@/components/EntryView";
 import GlobalSearch from "@/components/GlobalSearch";
 import OfflineBanner from "@/components/OfflineBanner";
+import { CalendarView } from "@/components/CalendarView";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import type { Entry } from "@/components/EntryCard";
@@ -26,6 +27,7 @@ const Dashboard = () => {
   const [refreshKey, setRefreshKey] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
+  const [calendarOpen, setCalendarOpen] = useState(false);
   const dumpInputRef = useRef<DumpInputHandle>(null);
   const isOnline = useOnlineStatus();
 
@@ -132,6 +134,17 @@ const Dashboard = () => {
                     variant="ghost"
                     className="justify-start"
                     onClick={() => {
+                      setCalendarOpen(true);
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    <Calendar className="w-4 h-4 mr-2" />
+                    Calendar
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="justify-start"
+                    onClick={() => {
                       navigate("/settings");
                       setMobileMenuOpen(false);
                     }}
@@ -173,6 +186,14 @@ const Dashboard = () => {
               <kbd className="hidden lg:inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
                 ⌘K
               </kbd>
+            </Button>
+            <Button
+              onClick={() => setCalendarOpen(true)}
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Calendar className="w-4 h-4" />
             </Button>
             <Button
               onClick={() => setRefreshKey((prev) => prev + 1)}
@@ -240,6 +261,16 @@ const Dashboard = () => {
           onEntryCreated={handleEntryCreatedFromAssistant}
           externalOpen={assistantOpen}
           onExternalOpenChange={setAssistantOpen}
+        />
+      )}
+
+      {/* Calendar View */}
+      {user?.id && (
+        <CalendarView
+          userId={user.id}
+          open={calendarOpen}
+          onOpenChange={setCalendarOpen}
+          onViewEntry={handleViewEntry}
         />
       )}
     </div>
