@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -6,8 +6,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
+import { Mail, RefreshCw } from 'lucide-react';
 
 type AuthMode = 'login' | 'signup' | 'forgot' | 'reset';
+
+const RESEND_COOLDOWN = 60; // seconds
 
 const Auth = () => {
   const [searchParams] = useSearchParams();
@@ -17,6 +20,9 @@ const Auth = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [trackingConsent, setTrackingConsent] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [resetEmailSent, setResetEmailSent] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const cooldownRef = useRef<NodeJS.Timeout | null>(null);
   const navigate = useNavigate();
   const { toast } = useToast();
 
@@ -30,6 +36,26 @@ const Auth = () => {
       setMode('reset');
     }
   }, [searchParams]);
+
+  // Cleanup cooldown timer
+  useEffect(() => {
+    return () => {
+      if (cooldownRef.current) clearInterval(cooldownRef.current);
+    };
+  }, []);
+
+  const startCooldown = () => {
+    setResendCooldown(RESEND_COOLDOWN);
+    cooldownRef.current = setInterval(() => {
+      setResendCooldown((prev) => {
+        if (prev <= 1) {
+          if (cooldownRef.current) clearInterval(cooldownRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
 
   const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,8 +99,8 @@ const Auth = () => {
     }
   };
 
-  const handleForgotPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleForgotPassword = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!email.trim()) {
       toast({
         title: "Email required",
@@ -91,13 +117,16 @@ const Auth = () => {
       });
       if (error) throw error;
       
+      setResetEmailSent(true);
+      startCooldown();
+      
       toast({
-        title: "Check your email",
-        description: "We sent a password reset link to your email.",
+        title: "Reset link sent!",
+        description: `We sent a password reset link to ${email}`,
       });
     } catch (error: any) {
       toast({
-        title: "Error",
+        title: "Error sending reset email",
         description: error.message,
         variant: "destructive",
       });
@@ -170,35 +199,87 @@ const Auth = () => {
 
         {/* Forgot Password Form */}
         {mode === 'forgot' && (
-          <form onSubmit={handleForgotPassword} className="space-y-4">
-            <div>
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                disabled={isLoading}
-                placeholder="Enter your email address"
-              />
-            </div>
+          <div className="space-y-4">
+            {resetEmailSent ? (
+              <div className="space-y-4">
+                <div className="bg-muted/50 border border-border rounded-lg p-6 text-center space-y-3">
+                  <div className="w-12 h-12 bg-primary/10 rounded-full flex items-center justify-center mx-auto">
+                    <Mail className="w-6 h-6 text-primary" />
+                  </div>
+                  <h3 className="font-medium">Check your inbox</h3>
+                  <p className="text-sm text-muted-foreground">
+                    We sent a password reset link to:
+                  </p>
+                  <p className="text-sm font-medium">{email}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Click the link in the email to reset your password. Check your spam folder if you don't see it.
+                  </p>
+                </div>
 
-            <Button type="submit" className="w-full" disabled={isLoading}>
-              {isLoading ? 'Sending...' : 'Send Reset Link'}
-            </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full"
+                  disabled={isLoading || resendCooldown > 0}
+                  onClick={() => handleForgotPassword()}
+                >
+                  {isLoading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                      Sending...
+                    </>
+                  ) : resendCooldown > 0 ? (
+                    `Resend in ${resendCooldown}s`
+                  ) : (
+                    'Resend Reset Link'
+                  )}
+                </Button>
 
-            <div className="text-center">
-              <button
-                type="button"
-                onClick={() => setMode('login')}
-                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                disabled={isLoading}
-              >
-                Back to Sign In
-              </button>
-            </div>
-          </form>
+                <div className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMode('login');
+                      setResetEmailSent(false);
+                    }}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    Back to Sign In
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleForgotPassword} className="space-y-4">
+                <div>
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    disabled={isLoading}
+                    placeholder="Enter your email address"
+                  />
+                </div>
+
+                <Button type="submit" className="w-full" disabled={isLoading}>
+                  {isLoading ? 'Sending...' : 'Send Reset Link'}
+                </Button>
+
+                <div className="text-center">
+                  <button
+                    type="button"
+                    onClick={() => setMode('login')}
+                    className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                    disabled={isLoading}
+                  >
+                    Back to Sign In
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
         )}
 
         {/* Reset Password Form */}
