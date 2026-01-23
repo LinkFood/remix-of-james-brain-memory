@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
-import { Brain, Key, ArrowLeft, Download, Trash2, Database } from "lucide-react";
+import { Brain, Key, ArrowLeft, Download, Trash2, Database, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
@@ -27,6 +27,8 @@ const Settings = () => {
   const [provider, setProvider] = useState<Provider>('openai');
   const [apiKey, setApiKey] = useState("");
   const [loading, setLoading] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [validationStatus, setValidationStatus] = useState<'idle' | 'valid' | 'invalid'>('idle');
   const [hasKey, setHasKey] = useState(false);
   const [exportFormat, setExportFormat] = useState<string>('json');
   const [exportLoading, setExportLoading] = useState(false);
@@ -79,28 +81,67 @@ const Settings = () => {
     }
   };
 
+  const validateApiKey = async (keyToValidate: string, providerToValidate: Provider): Promise<boolean> => {
+    setValidating(true);
+    setValidationStatus('idle');
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('validate-api-key', {
+        body: { apiKey: keyToValidate, provider: providerToValidate }
+      });
+
+      if (error) throw error;
+      
+      if (data?.valid) {
+        setValidationStatus('valid');
+        return true;
+      } else {
+        setValidationStatus('invalid');
+        toast.error(data?.error || "Invalid API key");
+        return false;
+      }
+    } catch (error: any) {
+      console.error("Validation error:", error);
+      setValidationStatus('invalid');
+      toast.error("Failed to validate API key");
+      return false;
+    } finally {
+      setValidating(false);
+    }
+  };
+
   const handleSaveKey = async (e: React.FormEvent) => {
     e.preventDefault();
+    
+    if (!apiKey.trim()) {
+      toast.error("Please enter an API key");
+      return;
+    }
+
+    // Validate the key first
+    const isValid = await validateApiKey(apiKey, provider);
+    if (!isValid) return;
+
     setLoading(true);
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      // Store the API key (Supabase will handle encryption via RLS)
       const { error } = await supabase
         .from('user_api_keys')
         .upsert({
           user_id: user.id,
           provider,
-          encrypted_key: apiKey, // In production, encrypt client-side before sending
+          encrypted_key: apiKey,
           is_default: true
         });
 
       if (error) throw error;
 
-      toast.success("API key saved successfully");
+      toast.success("API key validated and saved successfully!");
       setApiKey("");
+      setValidationStatus('idle');
       navigate("/dashboard");
     } catch (error: any) {
       toast.error(error.message || "Failed to save API key");
@@ -222,26 +263,51 @@ const Settings = () => {
 
           <div className="space-y-2">
             <Label htmlFor="apiKey">API Key</Label>
-            <Input
-              id="apiKey"
-              type="password"
-              placeholder="sk-..."
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              required
-              className="font-mono text-sm"
-            />
+            <div className="relative">
+              <Input
+                id="apiKey"
+                type="password"
+                placeholder="sk-..."
+                value={apiKey}
+                onChange={(e) => {
+                  setApiKey(e.target.value);
+                  setValidationStatus('idle');
+                }}
+                required
+                className="font-mono text-sm pr-10"
+              />
+              {validating && (
+                <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 animate-spin text-muted-foreground" />
+              )}
+              {validationStatus === 'valid' && !validating && (
+                <CheckCircle2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-success" />
+              )}
+              {validationStatus === 'invalid' && !validating && (
+                <XCircle className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-destructive" />
+              )}
+            </div>
             <p className="text-xs text-muted-foreground">
-              Your key is encrypted and only used to make requests on your behalf
+              Your key will be validated before saving
             </p>
           </div>
 
           <Button
             type="submit"
             className="w-full"
-            disabled={loading}
+            disabled={loading || validating || !apiKey.trim()}
           >
-            {loading ? "Saving..." : hasKey ? "Update Key" : "Save Key"}
+            {validating ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Validating...
+              </>
+            ) : loading ? (
+              "Saving..."
+            ) : hasKey ? (
+              "Validate & Update Key"
+            ) : (
+              "Validate & Save Key"
+            )}
           </Button>
         </form>
 
