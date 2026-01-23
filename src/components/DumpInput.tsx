@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useImperativeHandle, forwardRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -7,18 +7,42 @@ import { Send, Loader2, Sparkles, Check } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
+export interface DumpInputHandle {
+  setValue: (text: string) => void;
+  focus: () => void;
+}
+
 interface DumpInputProps {
   userId: string;
   onSaveSuccess?: (entry: any) => void;
-  inputRef?: React.RefObject<HTMLTextAreaElement>;
+  onOptimisticEntry?: (pendingEntry: any) => string; // Returns temp ID
+  onOptimisticComplete?: (tempId: string, realEntry: any) => void;
+  onOptimisticFail?: (tempId: string) => void;
+  className?: string;
 }
 
-const DumpInput = ({ userId, onSaveSuccess, inputRef: externalRef }: DumpInputProps) => {
+const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
+  userId,
+  onSaveSuccess,
+  onOptimisticEntry,
+  onOptimisticComplete,
+  onOptimisticFail,
+  className,
+}, ref) => {
   const [content, setContent] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const internalRef = useRef<HTMLTextAreaElement>(null);
-  const textareaRef = externalRef || internalRef;
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Expose methods to parent
+  useImperativeHandle(ref, () => ({
+    setValue: (text: string) => {
+      setContent(text);
+    },
+    focus: () => {
+      textareaRef.current?.focus();
+    },
+  }));
 
   // Auto-resize textarea
   useEffect(() => {
@@ -39,12 +63,36 @@ const DumpInput = ({ userId, onSaveSuccess, inputRef: externalRef }: DumpInputPr
   const handleDump = async () => {
     if (!content.trim() || loading) return;
 
+    const contentToSave = content.trim();
     setLoading(true);
+    setContent(""); // Clear immediately for better UX
+
+    // Create optimistic entry
+    let tempId: string | null = null;
+    if (onOptimisticEntry) {
+      tempId = onOptimisticEntry({
+        id: `temp-${Date.now()}`,
+        content: contentToSave,
+        title: contentToSave.slice(0, 50),
+        content_type: "note",
+        tags: [],
+        importance_score: null,
+        starred: false,
+        archived: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        user_id: userId,
+        source: "manual",
+        list_items: [],
+        extracted_data: {},
+        _pending: true,
+      });
+    }
 
     try {
       const { data, error } = await supabase.functions.invoke("smart-save", {
         body: {
-          content: content.trim(),
+          content: contentToSave,
           userId,
           source: "manual",
         },
@@ -58,19 +106,27 @@ const DumpInput = ({ userId, onSaveSuccess, inputRef: externalRef }: DumpInputPr
 
       // Success
       setSuccess(true);
-      setContent("");
       toast.success(data.summary || "Saved!", {
         description: data.classification?.type
           ? `Type: ${data.classification.type}${data.classification.subtype ? ` (${data.classification.subtype})` : ""}`
           : undefined,
       });
 
-      if (onSaveSuccess) {
+      if (tempId && onOptimisticComplete) {
+        onOptimisticComplete(tempId, data.entry);
+      } else if (onSaveSuccess) {
         onSaveSuccess(data.entry);
       }
     } catch (error: any) {
       console.error("Failed to save:", error);
       toast.error(error.message || "Failed to save. Please try again.");
+      
+      // Remove optimistic entry on failure
+      if (tempId && onOptimisticFail) {
+        onOptimisticFail(tempId);
+      }
+      // Restore content on failure
+      setContent(contentToSave);
     } finally {
       setLoading(false);
     }
@@ -87,7 +143,8 @@ const DumpInput = ({ userId, onSaveSuccess, inputRef: externalRef }: DumpInputPr
   return (
     <Card className={cn(
       "p-4 transition-all duration-300",
-      success && "ring-2 ring-green-500/50 bg-green-500/5"
+      success && "ring-2 ring-green-500/50 bg-green-500/5",
+      className
     )}>
       <div className="space-y-3">
         <div className="relative">
@@ -156,6 +213,8 @@ const DumpInput = ({ userId, onSaveSuccess, inputRef: externalRef }: DumpInputPr
       </div>
     </Card>
   );
-};
+});
+
+DumpInput.displayName = "DumpInput";
 
 export default DumpInput;
