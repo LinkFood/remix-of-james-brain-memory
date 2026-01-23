@@ -1,35 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { LandingChat } from '@/components/LandingChat';
-import { LandingConversationSidebar } from '@/components/LandingConversationSidebar';
 import { Button } from '@/components/ui/button';
-import { Download } from 'lucide-react';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
-import { useToast } from '@/hooks/use-toast';
-
-type Message = {
-  role: 'user' | 'assistant';
-  content: string;
-};
-
-const getStorageKey = (conversationId: string) => `landing_chat_messages_${conversationId}`;
+import { Card } from '@/components/ui/card';
+import { Brain, Zap, Search, List, Code, Lightbulb, ArrowRight } from 'lucide-react';
 
 const Landing = () => {
   const navigate = useNavigate();
-  const { toast } = useToast();
-  const [currentConversationId, setCurrentConversationId] = useState<string>(() => {
-    return localStorage.getItem('landing_current_conversation') || `conv_${Date.now()}`;
-  });
-  
-  const [messages, setMessages] = useState<Message[]>(() => {
-    try {
-      const stored = localStorage.getItem(getStorageKey(currentConversationId));
-      return stored ? JSON.parse(stored) : [];
-    } catch {
-      return [];
-    }
-  });
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -39,142 +16,133 @@ const Landing = () => {
     });
   }, [navigate]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(getStorageKey(currentConversationId), JSON.stringify(messages));
-      localStorage.setItem('landing_current_conversation', currentConversationId);
-    } catch (error) {
-      console.error('Failed to save messages to localStorage:', error);
-    }
-  }, [messages, currentConversationId]);
-
-  const handleNewChat = () => {
-    const newId = `conv_${Date.now()}`;
-    setCurrentConversationId(newId);
-    setMessages([]);
-  };
-
-  const handleSelectConversation = (conversationId: string) => {
-    setCurrentConversationId(conversationId);
-    try {
-      const stored = localStorage.getItem(getStorageKey(conversationId));
-      setMessages(stored ? JSON.parse(stored) : []);
-    } catch {
-      setMessages([]);
-    }
-  };
-
-  const downloadChat = (format: 'json' | 'markdown' | 'txt') => {
-    if (messages.length === 0) {
-      toast({
-        title: "No messages yet",
-        description: "Start a conversation to download your data",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    const timestamp = new Date().toISOString().split('T')[0];
-    let content = '';
-    let filename = '';
-    let mimeType = '';
-
-    switch (format) {
-      case 'json':
-        content = JSON.stringify({ 
-          exportedAt: new Date().toISOString(),
-          messageCount: messages.length,
-          messages 
-        }, null, 2);
-        filename = `jamesbrain-chat-${timestamp}.json`;
-        mimeType = 'application/json';
-        break;
-      
-      case 'markdown':
-        content = `# James Brain Chat\n\nExported: ${new Date().toLocaleString()}\nMessages: ${messages.length}\n\n---\n\n`;
-        content += messages.map(msg => {
-          const role = msg.role === 'user' ? '**You**' : '**Assistant**';
-          return `${role}:\n\n${msg.content}\n\n---\n`;
-        }).join('\n');
-        filename = `jamesbrain-chat-${timestamp}.md`;
-        mimeType = 'text/markdown';
-        break;
-      
-      case 'txt':
-        content = `James Brain Chat\nExported: ${new Date().toLocaleString()}\nMessages: ${messages.length}\n\n${'='.repeat(50)}\n\n`;
-        content += messages.map(msg => {
-          const role = msg.role === 'user' ? 'You' : 'Assistant';
-          return `${role}:\n${msg.content}\n\n${'-'.repeat(50)}\n`;
-        }).join('\n');
-        filename = `jamesbrain-chat-${timestamp}.txt`;
-        mimeType = 'text/plain';
-        break;
-    }
-
-    const blob = new Blob([content], { type: mimeType });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-
-    toast({
-      title: "Chat downloaded",
-      description: "This is YOUR data. Take it anywhere."
-    });
-  };
-
   return (
-    <div className="h-screen flex flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex-shrink-0 border-b border-border/50 px-4 sm:px-6 py-3 bg-background/80 backdrop-blur-xl z-50">
-        <div className="max-w-7xl mx-auto flex justify-between items-center gap-4">
-          <h1 className="text-base sm:text-lg font-semibold tracking-tight">JAMESBRAIN</h1>
-          <div className="flex items-center gap-2 sm:gap-3">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button size="sm" className="gap-2">
-                  <Download className="w-4 h-4" />
-                  <span className="hidden sm:inline">Download Data</span>
-                  <span className="sm:hidden">Download</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="bg-popover">
-                <DropdownMenuItem onClick={() => downloadChat('json')}>
-                  Download as JSON
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => downloadChat('markdown')}>
-                  Download as Markdown
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => downloadChat('txt')}>
-                  Download as Text
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-            <Button onClick={() => navigate('/auth')} size="sm" variant="ghost">
-              Sign In
-            </Button>
+    <div className="min-h-screen bg-gradient-bg">
+      {/* Header */}
+      <header className="border-b border-border/50 px-4 sm:px-6 py-4 bg-background/80 backdrop-blur-xl">
+        <div className="max-w-5xl mx-auto flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center">
+              <Brain className="w-5 h-5 text-primary" />
+            </div>
+            <span className="text-lg font-bold">Brain Dump</span>
           </div>
+          <Button onClick={() => navigate('/auth')} variant="outline">
+            Sign In
+          </Button>
         </div>
       </header>
 
-      <div className="flex-1 flex overflow-hidden">
-        <LandingConversationSidebar
-          currentConversationId={currentConversationId}
-          onNewChat={handleNewChat}
-          onSelectConversation={handleSelectConversation}
-        />
-        
-        {/* Main Chat Area */}
-        <LandingChat 
-          messages={messages} 
-          setMessages={setMessages}
-          conversationId={currentConversationId}
-          onSignupClick={() => navigate('/auth')}
-        />
-      </div>
+      {/* Hero Section */}
+      <main className="max-w-5xl mx-auto px-4 sm:px-6 py-16 sm:py-24">
+        <div className="text-center mb-16">
+          <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold tracking-tight mb-6">
+            Stop organizing.
+            <br />
+            <span className="text-primary">Start dumping.</span>
+          </h1>
+          <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto mb-8">
+            One input. Dump anything. AI organizes automatically.
+            <br className="hidden sm:block" />
+            Your second brain that actually works.
+          </p>
+          <Button
+            size="lg"
+            onClick={() => navigate('/auth')}
+            className="text-lg px-8 py-6 h-auto"
+          >
+            Get Started Free
+            <ArrowRight className="ml-2 w-5 h-5" />
+          </Button>
+        </div>
+
+        {/* How It Works */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-16">
+          <Card className="p-6 text-center">
+            <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center mx-auto mb-4">
+              <Zap className="w-6 h-6 text-primary" />
+            </div>
+            <h3 className="font-semibold text-lg mb-2">1. Dump Anything</h3>
+            <p className="text-sm text-muted-foreground">
+              Code, ideas, lists, links, notes - paste anything into one simple input.
+            </p>
+          </Card>
+
+          <Card className="p-6 text-center">
+            <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center mx-auto mb-4">
+              <Brain className="w-6 h-6 text-primary" />
+            </div>
+            <h3 className="font-semibold text-lg mb-2">2. AI Organizes</h3>
+            <p className="text-sm text-muted-foreground">
+              Automatic classification, tagging, and importance scoring. No folders. No questions.
+            </p>
+          </Card>
+
+          <Card className="p-6 text-center">
+            <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center mx-auto mb-4">
+              <Search className="w-6 h-6 text-primary" />
+            </div>
+            <h3 className="font-semibold text-lg mb-2">3. Ask & Find</h3>
+            <p className="text-sm text-muted-foreground">
+              Your AI assistant knows everything you've dumped. Just ask.
+            </p>
+          </Card>
+        </div>
+
+        {/* What You Can Dump */}
+        <div className="mb-16">
+          <h2 className="text-2xl font-bold text-center mb-8">Dump Anything</h2>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <Card className="p-4 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-purple-500/10">
+                <Code className="w-5 h-5 text-purple-500" />
+              </div>
+              <span className="font-medium">Code</span>
+            </Card>
+            <Card className="p-4 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-blue-500/10">
+                <List className="w-5 h-5 text-blue-500" />
+              </div>
+              <span className="font-medium">Lists</span>
+            </Card>
+            <Card className="p-4 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-yellow-500/10">
+                <Lightbulb className="w-5 h-5 text-yellow-500" />
+              </div>
+              <span className="font-medium">Ideas</span>
+            </Card>
+            <Card className="p-4 flex items-center gap-3">
+              <div className="p-2 rounded-lg bg-green-500/10">
+                <Brain className="w-5 h-5 text-green-500" />
+              </div>
+              <span className="font-medium">Notes</span>
+            </Card>
+          </div>
+        </div>
+
+        {/* Demo Input */}
+        <Card className="p-8 text-center bg-muted/30 border-dashed">
+          <p className="text-muted-foreground mb-4">
+            No databases. No templates. No organizing.
+            <br />
+            Just dump and let AI handle the rest.
+          </p>
+          <Button
+            size="lg"
+            onClick={() => navigate('/auth')}
+          >
+            Try It Now
+            <ArrowRight className="ml-2 w-4 h-4" />
+          </Button>
+        </Card>
+      </main>
+
+      {/* Footer */}
+      <footer className="border-t border-border/50 py-8 px-4">
+        <div className="max-w-5xl mx-auto text-center text-sm text-muted-foreground">
+          <p>Brain Dump - Your AI-powered second brain</p>
+        </div>
+      </footer>
     </div>
   );
 };
