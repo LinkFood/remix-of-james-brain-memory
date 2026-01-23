@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -20,14 +20,19 @@ import {
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import EntryCard, { Entry } from "./EntryCard";
-import DumpInput from "./DumpInput";
+import DumpInput, { DumpInputHandle } from "./DumpInput";
 import { parseListItems } from "@/lib/parseListItems";
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
+
+// Extended Entry type for pending entries
+interface PendingEntry extends Entry {
+  _pending?: boolean;
+}
 
 interface DashboardProps {
   userId: string;
   onViewEntry: (entry: Entry) => void;
-  inputRef?: React.RefObject<HTMLTextAreaElement>;
+  dumpInputRef?: React.RefObject<DumpInputHandle>;
 }
 
 interface DashboardStats {
@@ -37,15 +42,20 @@ interface DashboardStats {
   byType: Record<string, number>;
 }
 
-const Dashboard = ({ userId, onViewEntry, inputRef }: DashboardProps) => {
-  const [entries, setEntries] = useState<Entry[]>([]);
+const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
+  const [entries, setEntries] = useState<PendingEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [stats, setStats] = useState<DashboardStats>({
     total: 0,
     today: 0,
     important: 0,
     byType: {},
   });
+  const internalDumpRef = useRef<DumpInputHandle>(null);
+  const dumpRef = dumpInputRef || internalDumpRef;
+  const PAGE_SIZE = 50;
 
   // Collapsible sections
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
@@ -64,48 +74,71 @@ const Dashboard = ({ userId, onViewEntry, inputRef }: DashboardProps) => {
     }));
   };
 
-  const fetchEntries = useCallback(async () => {
+  const fetchEntries = useCallback(async (cursor?: string) => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from("entries")
         .select("*")
         .eq("user_id", userId)
         .eq("archived", false)
         .order("created_at", { ascending: false })
-        .limit(100);
+        .limit(PAGE_SIZE);
+
+      if (cursor) {
+        query = query.lt("created_at", cursor);
+      }
+
+      const { data, error } = await query;
 
       if (error) throw error;
 
       // Transform Supabase data to Entry type with proper list_items parsing
-      const entriesData: Entry[] = (data || []).map((item) => ({
+      const entriesData: PendingEntry[] = (data || []).map((item) => ({
         ...item,
         tags: item.tags || [],
         extracted_data: (item.extracted_data as Record<string, unknown>) || {},
         list_items: parseListItems(item.list_items),
       }));
-      setEntries(entriesData);
 
-      // Calculate stats
-      const now = new Date();
-      const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      setHasMore(entriesData.length === PAGE_SIZE);
 
-      const stats: DashboardStats = {
-        total: entriesData.length,
-        today: entriesData.filter((e) => new Date(e.created_at) >= todayStart).length,
-        important: entriesData.filter((e) => (e.importance_score ?? 0) >= 7).length,
-        byType: entriesData.reduce((acc, e) => {
-          acc[e.content_type] = (acc[e.content_type] || 0) + 1;
-          return acc;
-        }, {} as Record<string, number>),
-      };
-      setStats(stats);
+      if (cursor) {
+        // Appending more entries
+        setEntries((prev) => [...prev, ...entriesData]);
+      } else {
+        // Initial load
+        setEntries(entriesData);
+
+        // Calculate stats (only on initial load)
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+        const stats: DashboardStats = {
+          total: entriesData.length,
+          today: entriesData.filter((e) => new Date(e.created_at) >= todayStart).length,
+          important: entriesData.filter((e) => (e.importance_score ?? 0) >= 7).length,
+          byType: entriesData.reduce((acc, e) => {
+            acc[e.content_type] = (acc[e.content_type] || 0) + 1;
+            return acc;
+          }, {} as Record<string, number>),
+        };
+        setStats(stats);
+      }
     } catch (error: any) {
       console.error("Failed to fetch entries:", error);
       toast.error("Failed to load entries");
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
   }, [userId]);
+
+  const loadMore = async () => {
+    if (loadingMore || !hasMore || entries.length === 0) return;
+    setLoadingMore(true);
+    const lastEntry = entries[entries.length - 1];
+    await fetchEntries(lastEntry.created_at);
+  };
 
   useEffect(() => {
     fetchEntries();
@@ -163,8 +196,43 @@ const Dashboard = ({ userId, onViewEntry, inputRef }: DashboardProps) => {
     };
   }, [userId]);
 
+  // Optimistic update handlers
+  const handleOptimisticEntry = (pendingEntry: PendingEntry): string => {
+    setEntries((prev) => [pendingEntry, ...prev]);
+    return pendingEntry.id;
+  };
+
+  const handleOptimisticComplete = (tempId: string, realEntry: Entry) => {
+    setEntries((prev) =>
+      prev.map((e) =>
+        e.id === tempId
+          ? { ...realEntry, tags: realEntry.tags || [], list_items: parseListItems(realEntry.list_items), _pending: false }
+          : e
+      )
+    );
+    // Update stats
+    setStats((prev) => ({
+      ...prev,
+      total: prev.total + 1,
+      today: prev.today + 1,
+      important: (realEntry.importance_score ?? 0) >= 7 ? prev.important + 1 : prev.important,
+      byType: {
+        ...prev.byType,
+        [realEntry.content_type]: (prev.byType[realEntry.content_type] || 0) + 1,
+      },
+    }));
+  };
+
+  const handleOptimisticFail = (tempId: string) => {
+    setEntries((prev) => prev.filter((e) => e.id !== tempId));
+  };
+
   const handleSaveSuccess = (entry: Entry) => {
-    setEntries((prev) => [entry, ...prev]);
+    // Check if entry already exists (from realtime)
+    setEntries((prev) => {
+      if (prev.some((e) => e.id === entry.id)) return prev;
+      return [entry, ...prev];
+    });
     // Update stats
     setStats((prev) => ({
       ...prev,
@@ -357,8 +425,17 @@ const EmptyState = ({
 
   return (
     <div className="space-y-6">
-      {/* Dump Input - Always at top */}
-      <DumpInput userId={userId} onSaveSuccess={handleSaveSuccess} inputRef={inputRef} />
+      {/* Dump Input - Sticky on mobile */}
+      <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-background/95 backdrop-blur-sm md:static md:mx-0 md:px-0 md:py-0 md:bg-transparent md:backdrop-blur-none">
+        <DumpInput
+          ref={dumpRef}
+          userId={userId}
+          onOptimisticEntry={handleOptimisticEntry}
+          onOptimisticComplete={handleOptimisticComplete}
+          onOptimisticFail={handleOptimisticFail}
+          onSaveSuccess={handleSaveSuccess}
+        />
+      </div>
 
       {/* Quick Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -554,7 +631,7 @@ const EmptyState = ({
           />
           {expandedSections.recent && (
             <div className="px-3 pb-3 space-y-2">
-              {entries.slice(0, 10).map((entry) => (
+              {entries.slice(0, 20).map((entry) => (
                 <EntryCard
                   key={entry.id}
                   entry={entry}
@@ -565,6 +642,23 @@ const EmptyState = ({
                   onClick={onViewEntry}
                 />
               ))}
+              {hasMore && (
+                <Button
+                  variant="ghost"
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="w-full text-sm"
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Loading...
+                    </>
+                  ) : (
+                    `Load more entries`
+                  )}
+                </Button>
+              )}
             </div>
           )}
         </Card>
@@ -574,11 +668,9 @@ const EmptyState = ({
       {entries.length === 0 && (
         <EmptyState 
           onTryExample={(text) => {
-            if (inputRef?.current) {
-              inputRef.current.value = text;
-              inputRef.current.focus();
-              // Trigger resize
-              inputRef.current.dispatchEvent(new Event('input', { bubbles: true }));
+            if (dumpRef.current) {
+              dumpRef.current.setValue(text);
+              dumpRef.current.focus();
             }
           }}
           onLoadSampleData={async () => {

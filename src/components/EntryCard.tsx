@@ -42,6 +42,7 @@ export interface Entry {
   archived: boolean;
   created_at: string;
   updated_at: string;
+  _pending?: boolean; // For optimistic updates
 }
 
 interface EntryCardProps {
@@ -110,7 +111,8 @@ const EntryCard = ({
       className={cn(
         "group transition-all duration-200 hover:shadow-md",
         onClick && "cursor-pointer hover:border-primary/30",
-        entry.starred && "border-yellow-500/30 bg-yellow-500/5"
+        entry.starred && "border-yellow-500/30 bg-yellow-500/5",
+        entry._pending && "opacity-60 animate-pulse pointer-events-none"
       )}
       onClick={handleCardClick}
     >

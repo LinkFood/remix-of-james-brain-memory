@@ -12,6 +12,7 @@ import EntryView from "@/components/EntryView";
 import GlobalSearch from "@/components/GlobalSearch";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import type { Entry } from "@/components/EntryCard";
+import type { DumpInputHandle } from "@/components/DumpInput";
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -23,14 +24,13 @@ const Dashboard = () => {
   const [refreshKey, setRefreshKey] = useState(0);
   const [searchOpen, setSearchOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
-  const dumpInputRef = useRef<HTMLTextAreaElement>(null);
+  const dumpInputRef = useRef<DumpInputHandle>(null);
 
   // Keyboard shortcuts
   useKeyboardShortcuts({
     onOpenSearch: () => setSearchOpen(true),
     onFocusInput: () => {
       dumpInputRef.current?.focus();
-      dumpInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     },
     onToggleAssistant: () => setAssistantOpen((prev) => !prev),
   });
@@ -205,7 +205,7 @@ const Dashboard = () => {
           key={refreshKey}
           userId={user?.id ?? ""}
           onViewEntry={handleViewEntry}
-          inputRef={dumpInputRef}
+          dumpInputRef={dumpInputRef}
         />
       </main>
 
