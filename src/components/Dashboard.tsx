@@ -19,6 +19,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import EntryCard, { Entry } from "./EntryCard";
 import DumpInput from "./DumpInput";
+import { parseListItems } from "@/lib/parseListItems";
 
 interface DashboardProps {
   userId: string;
@@ -71,7 +72,13 @@ const Dashboard = ({ userId, onViewEntry }: DashboardProps) => {
 
       if (error) throw error;
 
-      const entriesData = (data || []) as Entry[];
+      // Transform Supabase data to Entry type with proper list_items parsing
+      const entriesData: Entry[] = (data || []).map((item) => ({
+        ...item,
+        tags: item.tags || [],
+        extracted_data: (item.extracted_data as Record<string, unknown>) || {},
+        list_items: parseListItems(item.list_items),
+      }));
       setEntries(entriesData);
 
       // Calculate stats
