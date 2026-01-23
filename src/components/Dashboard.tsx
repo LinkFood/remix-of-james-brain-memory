@@ -9,20 +9,15 @@
  * Keep it clean. Keep it fast. Keep it alive (realtime).
  */
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useState, useCallback, useRef, useMemo } from "react";
 import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp, Calendar } from "lucide-react";
-import { toast } from "sonner";
 import { Entry } from "./EntryCard";
 import DumpInput, { DumpInputHandle } from "./DumpInput";
 import { parseListItems } from "@/lib/parseListItems";
-import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { StatsGrid, EmptyState, EntrySection } from "./dashboard";
-
-// Extended Entry type for pending entries in Dashboard
-interface DashboardEntry extends Entry {
-  _pending?: boolean;
-}
+import { useEntries, type DashboardEntry } from "@/hooks/useEntries";
+import { useEntryActions } from "@/hooks/useEntryActions";
+import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 
 interface DashboardProps {
   userId: string;
@@ -30,27 +25,9 @@ interface DashboardProps {
   dumpInputRef?: React.RefObject<DumpInputHandle>;
 }
 
-interface DashboardStats {
-  total: number;
-  today: number;
-  important: number;
-  byType: Record<string, number>;
-}
-
 const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
-  const [entries, setEntries] = useState<DashboardEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
-  const [stats, setStats] = useState<DashboardStats>({
-    total: 0,
-    today: 0,
-    important: 0,
-    byType: {},
-  });
   const internalDumpRef = useRef<DumpInputHandle>(null);
   const dumpRef = dumpInputRef || internalDumpRef;
-  const PAGE_SIZE = 50;
 
   // Collapsible sections
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
@@ -70,128 +47,65 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
     }));
   };
 
-  const fetchEntries = useCallback(async (cursor?: string) => {
-    try {
-      let query = supabase
-        .from("entries")
-        .select("*")
-        .eq("user_id", userId)
-        .eq("archived", false)
-        .order("created_at", { ascending: false })
-        .limit(PAGE_SIZE);
+  // Use centralized entries hook
+  const {
+    entries,
+    setEntries,
+    loading,
+    loadingMore,
+    hasMore,
+    stats,
+    setStats,
+    fetchEntries,
+    loadMore,
+    updateEntry,
+    removeEntry,
+    addEntry,
+  } = useEntries({ userId });
 
-      if (cursor) {
-        query = query.lt("created_at", cursor);
+  // Use entry actions hook
+  const { toggleStar, toggleArchive, deleteEntry, toggleListItem } = useEntryActions({
+    onEntryUpdate: updateEntry,
+    onEntryRemove: removeEntry,
+    onStatsUpdate: (_, action) => {
+      if (action === 'delete') {
+        setStats((prev) => ({ ...prev, total: Math.max(0, prev.total - 1) }));
       }
-
-      const { data, error } = await query;
-
-      if (error) throw error;
-
-      // Transform Supabase data to Entry type with proper list_items parsing
-      const entriesData: DashboardEntry[] = (data || []).map((item) => ({
-        ...item,
-        tags: item.tags || [],
-        extracted_data: (item.extracted_data as Record<string, unknown>) || {},
-        list_items: parseListItems(item.list_items),
-      }));
-
-      setHasMore(entriesData.length === PAGE_SIZE);
-
-      if (cursor) {
-        // Appending more entries
-        setEntries((prev) => [...prev, ...entriesData]);
-      } else {
-        // Initial load
-        setEntries(entriesData);
-
-        // Calculate stats (only on initial load)
-        const now = new Date();
-        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-        const stats: DashboardStats = {
-          total: entriesData.length,
-          today: entriesData.filter((e) => new Date(e.created_at) >= todayStart).length,
-          important: entriesData.filter((e) => (e.importance_score ?? 0) >= 7).length,
-          byType: entriesData.reduce((acc, e) => {
-            acc[e.content_type] = (acc[e.content_type] || 0) + 1;
-            return acc;
-          }, {} as Record<string, number>),
-        };
-        setStats(stats);
-      }
-    } catch (error: any) {
-      console.error("Failed to fetch entries:", error);
-      toast.error("Failed to load entries");
-    } finally {
-      setLoading(false);
-      setLoadingMore(false);
-    }
-  }, [userId]);
-
-  const loadMore = async () => {
-    if (loadingMore || !hasMore || entries.length === 0) return;
-    setLoadingMore(true);
-    const lastEntry = entries[entries.length - 1];
-    await fetchEntries(lastEntry.created_at);
-  };
-
-  useEffect(() => {
-    fetchEntries();
-  }, [fetchEntries]);
+    },
+  });
 
   // Realtime subscription for live updates
-  useEffect(() => {
-    const channel = supabase
-      .channel('entries-realtime')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'entries',
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload: RealtimePostgresChangesPayload<Entry>) => {
-          if (payload.eventType === 'INSERT') {
-            const newEntry = payload.new as Entry;
-            setEntries((prev) => {
-              if (prev.some((e) => e.id === newEntry.id)) return prev;
-              return [{
-                ...newEntry,
-                tags: newEntry.tags || [],
-                extracted_data: (newEntry.extracted_data as Record<string, unknown>) || {},
-                list_items: parseListItems(newEntry.list_items),
-              }, ...prev];
-            });
-          } else if (payload.eventType === 'UPDATE') {
-            const updated = payload.new as Entry;
-            setEntries((prev) =>
-              prev.map((e) =>
-                e.id === updated.id
-                  ? {
-                      ...updated,
-                      tags: updated.tags || [],
-                      extracted_data: (updated.extracted_data as Record<string, unknown>) || {},
-                      list_items: parseListItems(updated.list_items),
-                    }
-                  : e
-              )
-            );
-          } else if (payload.eventType === 'DELETE') {
-            const deleted = payload.old as Entry;
-            setEntries((prev) => prev.filter((e) => e.id !== deleted.id));
-          }
-        }
-      )
-      .subscribe();
+  useRealtimeSubscription({
+    userId,
+    onInsert: useCallback((newEntry: Entry) => {
+      const processedEntry: DashboardEntry = {
+        ...newEntry,
+        tags: newEntry.tags || [],
+        extracted_data: (newEntry.extracted_data as Record<string, unknown>) || {},
+        list_items: parseListItems(newEntry.list_items),
+      };
+      addEntry(processedEntry);
+    }, [addEntry]),
+    onUpdate: useCallback((updated: Entry) => {
+      setEntries((prev) =>
+        prev.map((e) =>
+          e.id === updated.id
+            ? {
+                ...updated,
+                tags: updated.tags || [],
+                extracted_data: (updated.extracted_data as Record<string, unknown>) || {},
+                list_items: parseListItems(updated.list_items),
+              }
+            : e
+        )
+      );
+    }, [setEntries]),
+    onDelete: useCallback((deleted: Entry) => {
+      removeEntry(deleted.id);
+    }, [removeEntry]),
+  });
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [userId]);
-
-  // Optimistic update handlers - accepts generic record and casts to DashboardEntry
+  // Optimistic update handlers
   const handleOptimisticEntry = (pendingEntry: Record<string, unknown>): string => {
     setEntries((prev) => [pendingEntry as unknown as DashboardEntry, ...prev]);
     return pendingEntry.id as string;
@@ -218,14 +132,11 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
   };
 
   const handleOptimisticFail = (tempId: string) => {
-    setEntries((prev) => prev.filter((e) => e.id !== tempId));
+    removeEntry(tempId);
   };
 
   const handleSaveSuccess = (entry: Entry) => {
-    setEntries((prev) => {
-      if (prev.some((e) => e.id === entry.id)) return prev;
-      return [entry, ...prev];
-    });
+    addEntry(entry as DashboardEntry);
     setStats((prev) => ({
       ...prev,
       total: prev.total + 1,
@@ -238,81 +149,23 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
     }));
   };
 
+  // Wrapped handlers that include current entry data
   const handleToggleListItem = async (entryId: string, itemIndex: number, checked: boolean) => {
-    try {
-      const entry = entries.find((e) => e.id === entryId);
-      if (!entry) return;
-
-      const updatedItems = [...entry.list_items];
-      updatedItems[itemIndex] = { ...updatedItems[itemIndex], checked };
-
-      const { error } = await supabase
-        .from("entries")
-        .update({ list_items: JSON.parse(JSON.stringify(updatedItems)) })
-        .eq("id", entryId);
-
-      if (error) throw error;
-
-      setEntries((prev) =>
-        prev.map((e) =>
-          e.id === entryId ? { ...e, list_items: updatedItems } : e
-        )
-      );
-    } catch (error) {
-      console.error("Failed to update list item:", error);
-      toast.error("Failed to update item");
-    }
+    const entry = entries.find((e) => e.id === entryId);
+    if (!entry) return;
+    await toggleListItem(entryId, entry.list_items, itemIndex, checked);
   };
 
   const handleStar = async (entryId: string, starred: boolean) => {
-    try {
-      const { error } = await supabase
-        .from("entries")
-        .update({ starred })
-        .eq("id", entryId);
-
-      if (error) throw error;
-
-      setEntries((prev) =>
-        prev.map((e) => (e.id === entryId ? { ...e, starred } : e))
-      );
-      toast.success(starred ? "Starred" : "Unstarred");
-    } catch (error) {
-      toast.error("Failed to update");
-    }
+    await toggleStar(entryId, starred);
   };
 
   const handleArchive = async (entryId: string) => {
-    try {
-      const { error } = await supabase
-        .from("entries")
-        .update({ archived: true })
-        .eq("id", entryId);
-
-      if (error) throw error;
-
-      setEntries((prev) => prev.filter((e) => e.id !== entryId));
-      toast.success("Archived");
-    } catch (error) {
-      toast.error("Failed to archive");
-    }
+    await toggleArchive(entryId);
   };
 
   const handleDelete = async (entryId: string) => {
-    try {
-      const { error } = await supabase
-        .from("entries")
-        .delete()
-        .eq("id", entryId);
-
-      if (error) throw error;
-
-      setEntries((prev) => prev.filter((e) => e.id !== entryId));
-      setStats((prev) => ({ ...prev, total: Math.max(0, prev.total - 1) }));
-      toast.success("Deleted");
-    } catch (error) {
-      toast.error("Failed to delete");
-    }
+    await deleteEntry(entryId);
   };
 
   const handleTryExample = (text: string) => {
@@ -324,14 +177,17 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
 
   const handleLoadSampleData = async () => {
     try {
+      const { supabase } = await import("@/integrations/supabase/client");
       const { error } = await supabase.functions.invoke('insert-sample-data', {
         body: { user_id: userId },
       });
       if (error) throw error;
+      const { toast } = await import("sonner");
       toast.success("Sample data loaded!");
       fetchEntries();
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to load sample data:", err);
+      const { toast } = await import("sonner");
       toast.error("Failed to load sample data");
     }
   };
@@ -528,34 +384,35 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
         )}
 
         {/* Recent Timeline */}
-        <EntrySection
-          title="Recent"
-          icon={<Clock className="w-4 h-4 text-muted-foreground" />}
-          entries={entries}
-          section="recent"
-          expanded={expandedSections.recent}
-          onToggle={toggleSection}
-          limit={20}
-          compact
-          showContent={false}
-          showLoadMore
-          loadingMore={loadingMore}
-          hasMore={hasMore}
-          onLoadMore={loadMore}
-          onStar={handleStar}
-          onArchive={handleArchive}
-          onDelete={handleDelete}
-          onViewEntry={onViewEntry}
-        />
-      </div>
+        {entries.length > 0 && (
+          <EntrySection
+            title="Recent"
+            icon={<RefreshCw className="w-4 h-4 text-muted-foreground" />}
+            entries={entries.slice(0, 10)}
+            section="recent"
+            expanded={expandedSections.recent}
+            onToggle={toggleSection}
+            color="bg-muted"
+            compact
+            onToggleListItem={handleToggleListItem}
+            onStar={handleStar}
+            onArchive={handleArchive}
+            onDelete={handleDelete}
+            onViewEntry={onViewEntry}
+            showLoadMore={hasMore}
+            onLoadMore={loadMore}
+            loadingMore={loadingMore}
+          />
+        )}
 
-      {/* Empty State */}
-      {entries.length === 0 && (
-        <EmptyState 
-          onTryExample={handleTryExample}
-          onLoadSampleData={handleLoadSampleData}
-        />
-      )}
+        {/* Empty State */}
+        {entries.length === 0 && (
+          <EmptyState
+            onTryExample={handleTryExample}
+            onLoadSampleData={handleLoadSampleData}
+          />
+        )}
+      </div>
     </div>
   );
 };
