@@ -1,13 +1,12 @@
 /**
- * AssistantChat — Your Brain's Search Engine
+ * Jac — Your Brain's Voice
  * 
  * GOAL: "What was that thing..." → Found it.
  * 
- * This isn't ChatGPT. This isn't Claude. This is YOUR assistant.
- * It only knows what YOU dumped. That's the point.
+ * This is Jac. Your personal assistant.
+ * Jac only knows what YOU dumped. That's the point.
  * 
- * Show sources. Be fast. Stream responses. SPEAK back.
- * If users ask and we can't find it, we failed to save it right.
+ * Show sources. Be fast. Stream responses. Speak back (optional).
  */
 
 import { useState, useRef, useEffect, useCallback } from "react";
@@ -74,6 +73,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [autoSpeak, setAutoSpeak] = useState(false);
+  const [ttsLoading, setTtsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -111,9 +111,15 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
 
   // Speak text using ElevenLabs TTS
   const speakText = useCallback(async (text: string) => {
-    if (!text || isSpeaking) return;
+    if (!text || isSpeaking || ttsLoading) {
+      console.log('[Jac TTS] Skipping - already speaking or loading');
+      return;
+    }
 
+    console.log('[Jac TTS] Starting speech for:', text.substring(0, 50) + '...');
+    
     try {
+      setTtsLoading(true);
       setIsSpeaking(true);
 
       const { data: { session } } = await supabase.auth.getSession();
@@ -121,7 +127,8 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
         throw new Error("Not authenticated");
       }
 
-      // Use fetch instead of supabase.functions.invoke for binary data
+      console.log('[Jac TTS] Calling TTS endpoint...');
+      
       const response = await fetch(TTS_URL, {
         method: "POST",
         headers: {
@@ -131,12 +138,17 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
         body: JSON.stringify({ text }),
       });
 
+      console.log('[Jac TTS] Response status:', response.status);
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        console.error('[Jac TTS] Error response:', errorData);
         throw new Error(errorData.error || "Speech generation failed");
       }
 
       const audioBlob = await response.blob();
+      console.log('[Jac TTS] Got audio blob:', audioBlob.size, 'bytes');
+      
       const audioUrl = URL.createObjectURL(audioBlob);
       
       // Stop any existing audio
@@ -149,35 +161,46 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       audioRef.current = audio;
 
       audio.onended = () => {
+        console.log('[Jac TTS] Audio playback ended');
         setIsSpeaking(false);
+        setTtsLoading(false);
         URL.revokeObjectURL(audioUrl);
       };
 
-      audio.onerror = () => {
+      audio.onerror = (e) => {
+        console.error('[Jac TTS] Audio playback error:', e);
         setIsSpeaking(false);
+        setTtsLoading(false);
         URL.revokeObjectURL(audioUrl);
         toast.error("Failed to play audio");
       };
 
       await audio.play();
+      console.log('[Jac TTS] Audio playing');
+      setTtsLoading(false);
     } catch (error: any) {
-      console.error("TTS error:", error);
+      console.error("[Jac TTS] Error:", error);
       setIsSpeaking(false);
+      setTtsLoading(false);
       toast.error(error.message || "Failed to speak");
     }
-  }, [isSpeaking]);
+  }, [isSpeaking, ttsLoading]);
 
   // Stop speaking
   const stopSpeaking = useCallback(() => {
+    console.log('[Jac TTS] Stopping speech');
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
     }
     setIsSpeaking(false);
+    setTtsLoading(false);
   }, []);
 
   // Start voice recording
   const startRecording = useCallback(async () => {
+    console.log('[Jac STT] Starting recording...');
+    
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
@@ -187,35 +210,59 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
         }
       });
 
-      const mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      console.log('[Jac STT] Got microphone access');
+
+      // Try different mimeTypes for compatibility
+      let mimeType = 'audio/webm';
+      if (!MediaRecorder.isTypeSupported('audio/webm')) {
+        mimeType = 'audio/mp4';
+        if (!MediaRecorder.isTypeSupported('audio/mp4')) {
+          mimeType = 'audio/ogg';
+        }
+      }
+      console.log('[Jac STT] Using mimeType:', mimeType);
+
+      const mediaRecorder = new MediaRecorder(stream, { mimeType });
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
 
       mediaRecorder.ondataavailable = (event) => {
+        console.log('[Jac STT] Data available:', event.data.size, 'bytes');
         if (event.data.size > 0) {
           audioChunksRef.current.push(event.data);
         }
       };
 
       mediaRecorder.onstop = async () => {
+        console.log('[Jac STT] Recording stopped, chunks:', audioChunksRef.current.length);
         stream.getTracks().forEach(track => track.stop());
         
-        if (audioChunksRef.current.length === 0) return;
+        if (audioChunksRef.current.length === 0) {
+          console.log('[Jac STT] No audio chunks recorded');
+          return;
+        }
 
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
+        console.log('[Jac STT] Created blob:', audioBlob.size, 'bytes');
         await transcribeAudio(audioBlob);
       };
 
-      mediaRecorder.start();
+      mediaRecorder.start(1000); // Collect data every second
       setIsRecording(true);
+      toast.info("Listening... Tap mic again when done");
     } catch (error: any) {
-      console.error("Recording error:", error);
-      toast.error("Could not access microphone");
+      console.error("[Jac STT] Recording error:", error);
+      if (error.name === 'NotAllowedError') {
+        toast.error("Microphone access denied. Please allow microphone access.");
+      } else {
+        toast.error("Could not access microphone");
+      }
     }
   }, []);
 
   // Stop recording and transcribe
   const stopRecording = useCallback(() => {
+    console.log('[Jac STT] Stopping recording...');
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       mediaRecorderRef.current.stop();
     }
@@ -224,6 +271,8 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
 
   // Transcribe audio using ElevenLabs STT
   const transcribeAudio = async (audioBlob: Blob) => {
+    console.log('[Jac STT] Transcribing audio...');
+    
     try {
       setLoading(true);
 
@@ -235,6 +284,8 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       const formData = new FormData();
       formData.append('audio', audioBlob, 'recording.webm');
 
+      console.log('[Jac STT] Calling STT endpoint...');
+      
       const response = await fetch(STT_URL, {
         method: "POST",
         headers: {
@@ -243,22 +294,27 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
         body: formData,
       });
 
+      console.log('[Jac STT] Response status:', response.status);
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
+        console.error('[Jac STT] Error response:', errorData);
         throw new Error(errorData.error || "Transcription failed");
       }
 
       const { text } = await response.json();
+      console.log('[Jac STT] Transcribed text:', text);
 
       if (text && text.trim()) {
         setInput(text.trim());
-        // Auto-send after voice input
-        handleSend(text.trim());
+        // Don't auto-send, let user review first
+        toast.success("Got it! Press send or edit your message");
+        inputRef.current?.focus();
       } else {
         toast.error("Couldn't understand that. Try again.");
       }
     } catch (error: any) {
-      console.error("STT error:", error);
+      console.error("[Jac STT] Error:", error);
       toast.error(error.message || "Transcription failed");
     } finally {
       setLoading(false);
@@ -422,7 +478,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       }
 
     } catch (error: any) {
-      console.error("Assistant error:", error);
+      console.error("Jac error:", error);
       toast.error(error.message || "Failed to get response");
       // Update the placeholder message with error
       setMessages((prev) => {
@@ -494,10 +550,16 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
           <div className="p-1.5 rounded-md bg-primary/10">
             <Sparkles className="w-4 h-4 text-primary" />
           </div>
-          <span className="font-medium text-sm">Brain Assistant</span>
+          <span className="font-medium text-sm">Jac</span>
           {isSpeaking && (
             <Badge variant="secondary" className="text-xs animate-pulse">
               Speaking...
+            </Badge>
+          )}
+          {ttsLoading && !isSpeaking && (
+            <Badge variant="secondary" className="text-xs">
+              <Loader2 className="w-3 h-3 animate-spin mr-1" />
+              Loading...
             </Badge>
           )}
         </div>
@@ -510,6 +572,11 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
             onClick={(e) => {
               e.stopPropagation();
               setAutoSpeak(!autoSpeak);
+              if (autoSpeak) {
+                toast.info("Jac will stay quiet");
+              } else {
+                toast.info("Jac will speak responses");
+              }
               if (isSpeaking) stopSpeaking();
             }}
             title={autoSpeak ? "Disable auto-speak" : "Enable auto-speak"}
@@ -553,7 +620,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       {isMinimized && (
         <div className="p-3">
           <p className="text-xs text-muted-foreground">
-            Ask about your brain dump...
+            Ask Jac about your brain dump...
           </p>
         </div>
       )}
@@ -567,7 +634,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
               <div className="text-center py-6">
                 <Sparkles className="w-8 h-8 mx-auto text-muted-foreground/50 mb-3" />
                 <p className="text-sm text-muted-foreground mb-4">
-                  I know everything in your brain dump. Ask me anything!
+                  I'm Jac. I know everything in your brain dump. Ask me anything!
                 </p>
                 <div className="flex flex-wrap gap-2 justify-center">
                   {suggestedQueries.map((query) => (
@@ -605,7 +672,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
                   {msg.role === "assistant" && !msg.content && loading ? (
                     <div className="flex items-center gap-2 text-muted-foreground">
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-sm">Thinking...</span>
+                      <span className="text-sm">Jac is thinking...</span>
                     </div>
                   ) : (
                     <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
@@ -618,7 +685,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="h-6 w-6 p-0 mt-1"
+                      className="h-6 px-2 mt-1 text-xs"
                       onClick={() => {
                         if (isSpeaking) {
                           stopSpeaking();
@@ -626,13 +693,17 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
                           speakText(msg.content);
                         }
                       }}
-                      title={isSpeaking ? "Stop speaking" : "Speak this response"}
+                      disabled={ttsLoading}
+                      title={isSpeaking ? "Stop speaking" : "Have Jac speak this"}
                     >
-                      {isSpeaking ? (
-                        <VolumeX className="w-3 h-3" />
+                      {ttsLoading ? (
+                        <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                      ) : isSpeaking ? (
+                        <VolumeX className="w-3 h-3 mr-1" />
                       ) : (
-                        <Volume2 className="w-3 h-3" />
+                        <Volume2 className="w-3 h-3 mr-1" />
                       )}
+                      {isSpeaking ? "Stop" : "Speak"}
                     </Button>
                   )}
 
@@ -675,7 +746,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
               <Button
                 variant={isRecording ? "destructive" : "outline"}
                 size="icon"
-                className="shrink-0"
+                className={cn("shrink-0", isRecording && "animate-pulse")}
                 onClick={() => {
                   if (isRecording) {
                     stopRecording();
@@ -697,7 +768,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder={isRecording ? "Listening..." : "Ask your brain..."}
+                placeholder={isRecording ? "Listening..." : "Ask Jac..."}
                 disabled={loading || isRecording}
                 className="text-sm"
               />
