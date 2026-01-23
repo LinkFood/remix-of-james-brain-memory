@@ -56,47 +56,6 @@ export type Database = {
         }
         Relationships: []
       }
-      conversations: {
-        Row: {
-          archived: boolean | null
-          created_at: string
-          id: string
-          pinned: boolean | null
-          tags: string[] | null
-          title: string | null
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          archived?: boolean | null
-          created_at?: string
-          id?: string
-          pinned?: boolean | null
-          tags?: string[] | null
-          title?: string | null
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          archived?: boolean | null
-          created_at?: string
-          id?: string
-          pinned?: boolean | null
-          tags?: string[] | null
-          title?: string | null
-          updated_at?: string
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "conversations_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       entries: {
         Row: {
           archived: boolean
@@ -154,75 +113,6 @@ export type Database = {
         }
         Relationships: []
       }
-      messages: {
-        Row: {
-          content: string
-          conversation_id: string
-          created_at: string
-          edit_history: Json | null
-          edited: boolean | null
-          embedding: string | null
-          id: string
-          importance_score: number | null
-          model_used: string | null
-          provider: string | null
-          role: Database["public"]["Enums"]["message_role"]
-          starred: boolean | null
-          token_count: number | null
-          topic: string | null
-          user_id: string
-        }
-        Insert: {
-          content: string
-          conversation_id: string
-          created_at?: string
-          edit_history?: Json | null
-          edited?: boolean | null
-          embedding?: string | null
-          id?: string
-          importance_score?: number | null
-          model_used?: string | null
-          provider?: string | null
-          role: Database["public"]["Enums"]["message_role"]
-          starred?: boolean | null
-          token_count?: number | null
-          topic?: string | null
-          user_id: string
-        }
-        Update: {
-          content?: string
-          conversation_id?: string
-          created_at?: string
-          edit_history?: Json | null
-          edited?: boolean | null
-          embedding?: string | null
-          id?: string
-          importance_score?: number | null
-          model_used?: string | null
-          provider?: string | null
-          role?: Database["public"]["Enums"]["message_role"]
-          starred?: boolean | null
-          token_count?: number | null
-          topic?: string | null
-          user_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "messages_conversation_id_fkey"
-            columns: ["conversation_id"]
-            isOneToOne: false
-            referencedRelation: "conversations"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "messages_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       profiles: {
         Row: {
           created_at: string
@@ -241,36 +131,6 @@ export type Database = {
           id?: string
           updated_at?: string
           username?: string | null
-        }
-        Relationships: []
-      }
-      user_api_keys: {
-        Row: {
-          created_at: string
-          encrypted_key: string
-          id: string
-          is_default: boolean
-          provider: string
-          updated_at: string
-          user_id: string
-        }
-        Insert: {
-          created_at?: string
-          encrypted_key: string
-          id?: string
-          is_default?: boolean
-          provider: string
-          updated_at?: string
-          user_id: string
-        }
-        Update: {
-          created_at?: string
-          encrypted_key?: string
-          id?: string
-          is_default?: boolean
-          provider?: string
-          updated_at?: string
-          user_id?: string
         }
         Relationships: []
       }

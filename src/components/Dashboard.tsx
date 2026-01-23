@@ -24,6 +24,7 @@ import { parseListItems } from "@/lib/parseListItems";
 interface DashboardProps {
   userId: string;
   onViewEntry: (entry: Entry) => void;
+  inputRef?: React.RefObject<HTMLTextAreaElement>;
 }
 
 interface DashboardStats {
@@ -33,7 +34,7 @@ interface DashboardStats {
   byType: Record<string, number>;
 }
 
-const Dashboard = ({ userId, onViewEntry }: DashboardProps) => {
+const Dashboard = ({ userId, onViewEntry, inputRef }: DashboardProps) => {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<DashboardStats>({
@@ -235,7 +236,7 @@ const Dashboard = ({ userId, onViewEntry }: DashboardProps) => {
   return (
     <div className="space-y-6">
       {/* Dump Input - Always at top */}
-      <DumpInput userId={userId} onSaveSuccess={handleSaveSuccess} />
+      <DumpInput userId={userId} onSaveSuccess={handleSaveSuccess} inputRef={inputRef} />
 
       {/* Quick Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

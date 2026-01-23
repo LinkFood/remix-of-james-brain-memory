@@ -10,13 +10,15 @@ import { cn } from "@/lib/utils";
 interface DumpInputProps {
   userId: string;
   onSaveSuccess?: (entry: any) => void;
+  inputRef?: React.RefObject<HTMLTextAreaElement>;
 }
 
-const DumpInput = ({ userId, onSaveSuccess }: DumpInputProps) => {
+const DumpInput = ({ userId, onSaveSuccess, inputRef: externalRef }: DumpInputProps) => {
   const [content, setContent] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const internalRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = externalRef || internalRef;
 
   // Auto-resize textarea
   useEffect(() => {
