@@ -367,18 +367,16 @@ const Auth = () => {
               {isLoading ? 'Loading...' : mode === 'login' ? 'Sign In' : 'Create Account'}
             </Button>
 
-            {mode === 'login' && (
-              <div className="text-center">
-                <button
-                  type="button"
-                  onClick={() => setMode('forgot')}
-                  className="text-sm text-muted-foreground hover:text-foreground transition-colors"
-                  disabled={isLoading}
-                >
-                  Forgot your password?
-                </button>
-              </div>
-            )}
+            <div className="text-center">
+              <button
+                type="button"
+                onClick={() => setMode('forgot')}
+                className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+                disabled={isLoading}
+              >
+                Forgot your password?
+              </button>
+            </div>
 
             <div className="text-center">
               <button
