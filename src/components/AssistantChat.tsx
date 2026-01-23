@@ -110,15 +110,20 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
     setMessages((prev) => [...prev, { role: "assistant", content: "", sources: [] }]);
 
     try {
+      // Get user session token for proper authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Not authenticated");
+      }
+
       const response = await fetch(CHAT_URL, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY}`,
+          "Authorization": `Bearer ${session.access_token}`,
         },
         body: JSON.stringify({
           message: text,
-          userId,
           conversationHistory: messages.slice(-6).map((m) => ({
             role: m.role,
             content: m.content,
