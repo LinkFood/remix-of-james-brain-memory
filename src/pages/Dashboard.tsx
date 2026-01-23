@@ -10,7 +10,9 @@ import DashboardComponent from "@/components/Dashboard";
 import AssistantChat from "@/components/AssistantChat";
 import EntryView from "@/components/EntryView";
 import GlobalSearch from "@/components/GlobalSearch";
+import OfflineBanner from "@/components/OfflineBanner";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
+import { useOnlineStatus } from "@/hooks/use-online-status";
 import type { Entry } from "@/components/EntryCard";
 import type { DumpInputHandle } from "@/components/DumpInput";
 
@@ -25,6 +27,7 @@ const Dashboard = () => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const dumpInputRef = useRef<DumpInputHandle>(null);
+  const isOnline = useOnlineStatus();
 
   // Keyboard shortcuts
   useKeyboardShortcuts({
@@ -99,8 +102,10 @@ const Dashboard = () => {
 
   return (
     <div className="min-h-screen bg-gradient-bg">
+      {/* Offline Banner */}
+      {!isOnline && <OfflineBanner />}
       {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
+      <header className={`border-b border-border bg-card/50 backdrop-blur-sm sticky ${!isOnline ? 'top-10' : 'top-0'} z-40`}>
         <div className="container mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             {/* Mobile Menu */}

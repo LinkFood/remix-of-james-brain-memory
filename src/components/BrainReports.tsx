@@ -149,7 +149,7 @@ const BrainReports = ({ userId }: BrainReportsProps) => {
           </div>
           <div>
             <h2 className="text-2xl font-bold text-foreground">Brain Reports</h2>
-            <p className="text-sm text-muted-foreground">AI-powered analysis of your conversations</p>
+            <p className="text-sm text-muted-foreground">AI-powered analysis of your brain dumps</p>
           </div>
         </div>
 
@@ -252,11 +252,11 @@ const BrainReports = ({ userId }: BrainReportsProps) => {
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                   <div className="p-3 rounded-lg bg-muted/50">
                     <p className="text-lg font-bold text-foreground">{selectedReport.conversation_stats.total_messages}</p>
-                    <p className="text-xs text-muted-foreground">Messages</p>
+                    <p className="text-xs text-muted-foreground">Entries</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/50">
                     <p className="text-lg font-bold text-foreground">{selectedReport.conversation_stats.conversations}</p>
-                    <p className="text-xs text-muted-foreground">Conversations</p>
+                    <p className="text-xs text-muted-foreground">Dumps</p>
                   </div>
                   <div className="p-3 rounded-lg bg-muted/50">
                     <p className="text-lg font-bold text-foreground">{selectedReport.key_themes.length}</p>
@@ -264,7 +264,7 @@ const BrainReports = ({ userId }: BrainReportsProps) => {
                   </div>
                   <div className="p-3 rounded-lg bg-muted/50">
                     <p className="text-lg font-bold text-foreground">{selectedReport.conversation_stats.avg_messages_per_conversation}</p>
-                    <p className="text-xs text-muted-foreground">Avg/Conv</p>
+                    <p className="text-xs text-muted-foreground">Avg/Dump</p>
                   </div>
                 </div>
 
@@ -343,7 +343,7 @@ const BrainReports = ({ userId }: BrainReportsProps) => {
               <Brain className="w-16 h-16 text-muted-foreground mx-auto mb-4 opacity-50" />
               <p className="text-muted-foreground">Select a report to view details</p>
               <p className="text-sm text-muted-foreground mt-2">
-                Or generate a new report to analyze your conversations
+                Or generate a new report to analyze your brain dumps
               </p>
             </Card>
           )}
