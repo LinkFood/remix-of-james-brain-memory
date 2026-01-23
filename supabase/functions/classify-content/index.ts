@@ -35,13 +35,26 @@ serve(async (req) => {
   }
 
   try {
-    const { content, userId, imageUrl } = await req.json();
-
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
 
     const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // SECURITY FIX: Extract user ID from JWT instead of request body
+    const authHeader = req.headers.get('Authorization');
+    let userId: string | null = null;
+    
+    if (authHeader) {
+      const jwt = authHeader.replace('Bearer ', '');
+      const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
+      
+      if (!authError && user) {
+        userId = user.id;
+      }
+    }
+
+    const { content, imageUrl } = await req.json();
 
     // Fetch recent entries for context (to detect append opportunities)
     let recentEntries: Array<{ id: string; title: string; content_type: string; content: string }> = [];

@@ -27,6 +27,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { useSignedUrl } from "@/hooks/use-signed-url";
 
 export interface Entry {
   id: string;
@@ -95,6 +96,9 @@ const EntryCard = ({
 }: EntryCardProps) => {
   const icon = typeIcons[entry.content_type] || typeIcons.note;
   const colorClass = typeColors[entry.content_type] || typeColors.note;
+  
+  // Get signed URL for private storage images
+  const { signedUrl: imageUrl } = useSignedUrl(entry.image_url);
 
   const truncatedContent =
     entry.content.length > 150
@@ -202,10 +206,10 @@ const EntryCard = ({
         {showContent && (
           <div className="mt-2">
             {/* Image thumbnail */}
-            {entry.image_url && (
+            {imageUrl && (
               <div className="mb-2 rounded-md overflow-hidden border border-border">
                 <img 
-                  src={entry.image_url} 
+                  src={imageUrl} 
                   alt={entry.title || 'Uploaded image'}
                   className="w-full h-32 object-cover"
                   loading="lazy"
