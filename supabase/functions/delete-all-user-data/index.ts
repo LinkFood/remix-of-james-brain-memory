@@ -12,24 +12,50 @@ serve(async (req) => {
   }
 
   try {
-    const { userId } = await req.json();
+    // Extract userId from JWT instead of request body
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return new Response(
+        JSON.stringify({ error: 'Authorization required' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: claimsData, error: claimsError } = await supabaseClient.auth.getClaims(token);
+
+    if (claimsError || !claimsData?.claims) {
+      console.error('Auth error:', claimsError);
+      return new Response(
+        JSON.stringify({ error: 'Invalid token' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const userId = claimsData.claims.sub;
     if (!userId) {
       return new Response(
-        JSON.stringify({ error: 'userId is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'User ID not found in token' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     console.log(`Starting deletion of all data for user: ${userId}`);
 
-    const supabaseClient = createClient(
+    // Use service role for data deletion
+    const serviceClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
     // Delete entries (main brain dump content)
-    const { error: entriesError, count: entriesCount } = await supabaseClient
+    const { error: entriesError, count: entriesCount } = await serviceClient
       .from('entries')
       .delete({ count: 'exact' })
       .eq('user_id', userId);
@@ -41,7 +67,7 @@ serve(async (req) => {
     console.log(`Deleted ${entriesCount ?? 0} entries`);
 
     // Delete brain reports
-    const { error: reportsError, count: reportsCount } = await supabaseClient
+    const { error: reportsError, count: reportsCount } = await serviceClient
       .from('brain_reports')
       .delete({ count: 'exact' })
       .eq('user_id', userId);

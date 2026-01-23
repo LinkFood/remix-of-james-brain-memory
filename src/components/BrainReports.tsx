@@ -77,9 +77,9 @@ const BrainReports = ({ userId }: BrainReportsProps) => {
           break;
       }
 
+      // userId is extracted from JWT in the edge function - no longer passed in body
       const { data, error } = await supabase.functions.invoke("generate-brain-report", {
         body: {
-          userId,
           reportType: type,
           startDate: startDate.toISOString(),
           endDate: endDate.toISOString(),
