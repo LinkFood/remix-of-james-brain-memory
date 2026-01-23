@@ -250,11 +250,11 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
       throw new Error(`Upload failed: ${uploadError.message}`);
     }
 
-    const { data: { publicUrl } } = supabase.storage
-      .from('dumps')
-      .getPublicUrl(filePath);
-
-    return publicUrl;
+    // SECURITY FIX: Store the relative path, not a public URL
+    // The bucket is private - signed URLs are generated on-demand via useSignedUrl hook
+    // Format: "dumps/userId/filename.png" - the display components know how to handle this
+    const storagePath = `dumps/${filePath}`;
+    return storagePath;
   };
 
   const handleDump = async () => {
