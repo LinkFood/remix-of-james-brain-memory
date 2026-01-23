@@ -14,7 +14,7 @@ const RESEND_COOLDOWN = 60; // seconds
 
 const Auth = () => {
   const [searchParams] = useSearchParams();
-  const [mode, setMode] = useState<AuthMode>('signup');
+  const [mode, setMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
