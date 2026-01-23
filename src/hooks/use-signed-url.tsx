@@ -4,6 +4,10 @@ import { supabase } from "@/integrations/supabase/client";
 /**
  * Hook to get a signed URL for a private storage file.
  * Since the 'dumps' bucket is now private, we need signed URLs to display images.
+ * 
+ * Supports two formats:
+ * 1. Storage path: "dumps/userId/filename.png" (new format - bucket/path)
+ * 2. Full URL: "https://<project>.supabase.co/storage/v1/object/public/dumps/..." (legacy)
  */
 export function useSignedUrl(imageUrl: string | null | undefined) {
   const [signedUrl, setSignedUrl] = useState<string | null>(null);
@@ -16,32 +20,16 @@ export function useSignedUrl(imageUrl: string | null | undefined) {
       return;
     }
 
-    // Check if this is a Supabase storage URL that needs signing
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-    if (!imageUrl.includes(supabaseUrl) || !imageUrl.includes('/storage/v1/object/public/')) {
-      // Not a Supabase public URL, use as-is (could be external URL)
-      setSignedUrl(imageUrl);
-      return;
-    }
-
-    // Extract the bucket and path from the URL
-    // URL format: https://<project>.supabase.co/storage/v1/object/public/<bucket>/<path>
-    const publicPrefix = '/storage/v1/object/public/';
-    const publicIndex = imageUrl.indexOf(publicPrefix);
+    // Parse the image URL to extract bucket and path
+    const parsed = parseStorageUrl(imageUrl);
     
-    if (publicIndex === -1) {
+    if (!parsed) {
+      // Not a Supabase storage reference, use as-is (could be external URL or data URL)
       setSignedUrl(imageUrl);
       return;
     }
 
-    const pathPart = imageUrl.substring(publicIndex + publicPrefix.length);
-    const [bucket, ...pathParts] = pathPart.split('/');
-    const filePath = pathParts.join('/');
-
-    if (!bucket || !filePath) {
-      setSignedUrl(imageUrl);
-      return;
-    }
+    const { bucket, filePath } = parsed;
 
     setLoading(true);
     setError(null);
@@ -70,29 +58,64 @@ export function useSignedUrl(imageUrl: string | null | undefined) {
 }
 
 /**
+ * Parse a storage URL to extract bucket and file path.
+ * Returns null if not a valid storage reference.
+ */
+function parseStorageUrl(imageUrl: string): { bucket: string; filePath: string } | null {
+  // Format 1: Storage path like "dumps/userId/filename.png"
+  // Check if it starts with a known bucket name and contains a path
+  if (imageUrl.startsWith('dumps/')) {
+    const filePath = imageUrl.substring('dumps/'.length);
+    if (filePath) {
+      return { bucket: 'dumps', filePath };
+    }
+  }
+
+  // Format 2: Full Supabase URL
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  
+  // Check for public URL format
+  const publicPrefix = '/storage/v1/object/public/';
+  if (imageUrl.includes(supabaseUrl) && imageUrl.includes(publicPrefix)) {
+    const publicIndex = imageUrl.indexOf(publicPrefix);
+    const pathPart = imageUrl.substring(publicIndex + publicPrefix.length);
+    const [bucket, ...pathParts] = pathPart.split('/');
+    const filePath = pathParts.join('/');
+
+    if (bucket && filePath) {
+      return { bucket, filePath };
+    }
+  }
+
+  // Check for signed URL format (already signed, extract for re-signing if needed)
+  const signedPrefix = '/storage/v1/object/sign/';
+  if (imageUrl.includes(supabaseUrl) && imageUrl.includes(signedPrefix)) {
+    const signedIndex = imageUrl.indexOf(signedPrefix);
+    const pathPart = imageUrl.substring(signedIndex + signedPrefix.length);
+    // Remove query params (token, etc.)
+    const pathWithoutParams = pathPart.split('?')[0];
+    const [bucket, ...pathParts] = pathWithoutParams.split('/');
+    const filePath = pathParts.join('/');
+
+    if (bucket && filePath) {
+      return { bucket, filePath };
+    }
+  }
+
+  return null;
+}
+
+/**
  * Helper function to get a signed URL directly (for edge functions or one-off use)
  */
 export async function getSignedUrl(imageUrl: string): Promise<string> {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  const parsed = parseStorageUrl(imageUrl);
   
-  if (!imageUrl.includes(supabaseUrl) || !imageUrl.includes('/storage/v1/object/public/')) {
+  if (!parsed) {
     return imageUrl;
   }
 
-  const publicPrefix = '/storage/v1/object/public/';
-  const publicIndex = imageUrl.indexOf(publicPrefix);
-  
-  if (publicIndex === -1) {
-    return imageUrl;
-  }
-
-  const pathPart = imageUrl.substring(publicIndex + publicPrefix.length);
-  const [bucket, ...pathParts] = pathPart.split('/');
-  const filePath = pathParts.join('/');
-
-  if (!bucket || !filePath) {
-    return imageUrl;
-  }
+  const { bucket, filePath } = parsed;
 
   const { data, error } = await supabase.storage
     .from(bucket)
