@@ -37,6 +37,7 @@ serve(async (req) => {
       }
 
       case "anthropic": {
+        console.log("Testing Anthropic key, length:", apiKey.length);
         const response = await fetch("https://api.anthropic.com/v1/messages", {
           method: "POST",
           headers: {
@@ -50,11 +51,23 @@ serve(async (req) => {
             messages: [{ role: "user", content: "Hi" }],
           }),
         });
+        
+        const responseText = await response.text();
+        console.log("Anthropic response status:", response.status);
+        console.log("Anthropic response body:", responseText);
+        
+        let data: any = {};
+        try { data = JSON.parse(responseText); } catch {}
+        
         // Anthropic returns 200 for valid keys, 401 for invalid
-        isValid = response.ok || response.status === 400; // 400 means key is valid but request was bad
         if (response.status === 401) {
-          const data = await response.json().catch(() => ({}));
-          errorMessage = data.error?.message || "Invalid Anthropic API key";
+          errorMessage = data.error?.message || "Invalid API key - check it's still active in Anthropic console";
+          isValid = false;
+        } else if (response.ok || response.status === 400) {
+          // 400 means key is valid but request was bad (still validates the key)
+          isValid = true;
+        } else {
+          errorMessage = data.error?.message || `Unexpected response: ${response.status}`;
           isValid = false;
         }
         break;
