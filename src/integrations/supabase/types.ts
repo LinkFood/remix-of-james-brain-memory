@@ -97,6 +97,63 @@ export type Database = {
           },
         ]
       }
+      entries: {
+        Row: {
+          archived: boolean
+          content: string
+          content_subtype: string | null
+          content_type: string
+          created_at: string
+          embedding: string | null
+          extracted_data: Json | null
+          id: string
+          importance_score: number | null
+          list_items: Json | null
+          source: string
+          starred: boolean
+          tags: string[] | null
+          title: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          archived?: boolean
+          content: string
+          content_subtype?: string | null
+          content_type?: string
+          created_at?: string
+          embedding?: string | null
+          extracted_data?: Json | null
+          id?: string
+          importance_score?: number | null
+          list_items?: Json | null
+          source?: string
+          starred?: boolean
+          tags?: string[] | null
+          title?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          archived?: boolean
+          content?: string
+          content_subtype?: string | null
+          content_type?: string
+          created_at?: string
+          embedding?: string | null
+          extracted_data?: Json | null
+          id?: string
+          importance_score?: number | null
+          list_items?: Json | null
+          source?: string
+          starred?: boolean
+          tags?: string[] | null
+          title?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       messages: {
         Row: {
           content: string
