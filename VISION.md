@@ -1,195 +1,165 @@
-# James Brain OS - Ethos & Vision Document
+# Brain Dump - Vision & Ethos
 
-## The Problem We're Solving
+## The Problem
 
-Every conversation you have with ChatGPT, Claude, Gemini, or any other AI is ephemeral. When you close the tab, switch providers, or start a new conversation, the context is lost. Your insights, decisions, and accumulated knowledge vanish into the void.
+Your thoughts are scattered. Ideas pop up in the shower, tasks appear during meetings, code snippets get lost in Slack, grocery lists live on napkins. The cognitive load of organizing all this is exhausting.
 
-**You're forced to:**
-- Re-explain context in every new conversation
-- Rebuild knowledge that the AI "knew" yesterday
-- Start from zero when switching between providers
-- Accept that your AI interactions have no memory, no continuity, no compounding value
-
-**The data exists** — billions of words across millions of conversations — but it's locked away, siloed, inaccessible, and unusable.
+**Current tools fail you:**
+- Note apps require you to pick a folder, add tags, format correctly
+- AI assistants forget everything when you close the tab
+- Todo apps want you to fit your thoughts into their structure
+- You end up with 47 open tabs, 12 note apps, and still can't find that thing you wrote last week
 
 ---
 
-## The Solution: James Brain OS
+## The Solution: Brain Dump
 
-**James Brain OS is your universal AI memory system.**
+**Brain Dump is your reactive second brain.**
 
-It's not another chatbot. It's not a proprietary LLM. It's the missing layer between you and every AI you talk to — a persistent, portable, user-owned memory that makes every conversation smarter by learning from all your past conversations.
+Dump anything. We handle everything else.
 
 ### How It Works
 
-1. **You chat with any LLM** (OpenAI, Anthropic, Google, etc.) through James Brain OS
-2. **We capture, timestamp, and store** every message in your personal database
-3. **We analyze and score** your conversations for importance and semantic meaning
-4. **We inject relevant memories** into future conversations automatically
-5. **You control everything** — export, import, delete, or download your data anytime
+1. **You dump** — paste code, type "buy milk", jot an idea, drop a link
+2. **AI classifies** — instantly detects type, tags, and importance
+3. **We store** — with embeddings for semantic search
+4. **Dashboard surfaces** — categorized view of what matters
+5. **Assistant retrieves** — ask questions, get answers from your brain
 
 ---
 
 ## Core Principles
 
-### 1. **User Data Sovereignty**
-Your data is YOURS. Not ours. Not the LLM provider's. Yours.
-- You can export it in any format (JSON, CSV, Markdown, Excel)
-- You can delete it permanently at any time
-- You can import data from other platforms
-- You own the "brain" we help you build
+### 1. Reactive, Not Active
 
-### 2. **Radical Transparency**
-We tell you EXACTLY what we're doing with your data:
-- Every message is captured (we tell you upfront)
-- Every memory is scored and timestamped (you can see the scores)
-- Every memory injection is visible (you know what context the AI is using)
-- No hidden data mining, no selling your conversations, no training proprietary models
+The app responds to you. It never asks questions. It never demands organization.
 
-### 3. **Cross-Platform Portability**
-Your memory isn't locked to one LLM provider:
-- Use OpenAI today, switch to Anthropic tomorrow — your context travels with you
-- Conversations across providers compound into one unified memory
-- Provider-agnostic storage means you're never locked in
+- ❌ "Which folder should this go in?"
+- ❌ "Please add tags"
+- ❌ "What priority is this?"
+- ✅ Just save it and show me later
 
-### 4. **Compounding Intelligence**
-Every conversation makes the next one smarter:
-- High-importance memories are automatically injected into future chats
-- Semantic search finds relevant context even from months ago
-- Your "brain" grows over time, creating a dataset that makes LLMs more useful for YOU
+### 2. Zero Friction
 
-### 5. **Privacy as a Feature**
-We don't train models on your data. We don't sell insights. We don't share aggregated statistics.
-- Your conversations never leave your control
-- End-to-end encryption available for sensitive data (future feature)
-- GDPR/CCPA compliant by design
-- We make money by charging for storage/compute, not by exploiting your data
+One input box. Always visible. Dump anything.
 
----
+- No modes to switch
+- No forms to fill
+- No decisions to make
+- Paste and go
 
-## The Vision: Five Phases
+### 3. AI Handles Classification
 
-### **Phase 1: The Foundation (Now)**
-Build the core infrastructure:
-- Multi-provider chat interface
-- User API key management
-- Message capture, storage, and timestamping
-- Importance scoring and semantic embeddings
-- Memory injection system
-- Export/delete functionality
+Every entry is automatically:
+- **Typed**: code, list, idea, link, contact, event, reminder, note
+- **Tagged**: relevant topics extracted
+- **Scored**: importance 0-10
+- **Embedded**: for semantic search
 
-### **Phase 2: User Control & Transparency**
-Make memory visible and controllable:
-- Show users WHICH memories are injected in each conversation
-- Let users toggle memory injection on/off
-- Adjust memory selection parameters (quantity, importance threshold, similarity)
-- Enhanced export with metadata
-- Import functionality (bring data from ChatGPT, Claude, etc.)
+### 4. User Data Ownership
 
-### **Phase 3: Long-Term Data Strategy**
-Optimize for scale:
-- Smart memory selection (recency + importance + similarity + topic clustering)
-- Storage optimization (hot/cold data tiers)
-- Cross-provider context preservation
-- Memory analytics dashboard (show users their data patterns)
+Your brain is yours.
+- Export anytime (JSON, CSV, Markdown)
+- Delete everything with one click
+- No lock-in, no hostage data
+- We store your data, we don't own it
 
-### **Phase 4: Monetization**
-Sustainable business model:
-- Free tier: Limited storage, embeddings, and scoring
-- Paid tier: Unlimited storage, advanced memory injection, priority processing
-- Usage dashboard and cost transparency
-- Price tiers based on actual cloud costs (no data exploitation)
+### 5. Server-Side AI
 
-### **Phase 5: AI Memory Platform**
-Become the universal memory layer for AI:
-- Public launch with clear value proposition
-- Advanced features: Brain reports, timeline view, knowledge graph
-- Cross-conversation insights
-- API for third-party integrations
-- Enterprise features for teams/organizations
+No API keys to manage. No configuration. Just works.
+- Classification runs on our servers
+- Embeddings generated automatically
+- Assistant answers without setup
 
 ---
 
-## What James Brain OS Is NOT
+## Content Types
 
-❌ **Not another chatbot** — We're not competing with ChatGPT or Claude. We're the memory layer that makes them better.
-
-❌ **Not a proprietary LLM** — We let you use YOUR choice of AI provider with YOUR API key.
-
-❌ **Not a data mining operation** — We don't train models on your data. We don't sell insights. You're the product owner, not the product.
-
-❌ **Not ephemeral** — Unlike standard chat interfaces, your conversations compound into a valuable dataset over time.
-
----
-
-## What James Brain OS IS
-
-✅ **A universal interface** — Chat with any LLM through one platform
-
-✅ **Your personal AI memory** — Persistent context that travels with you across providers
-
-✅ **A data ownership revolution** — You control, export, import, and delete your data
-
-✅ **A compounding intelligence system** — Every conversation makes future ones smarter
-
-✅ **A transparency-first platform** — You always know what's happening with your data
+| Type | Examples |
+|------|----------|
+| `code` | Snippets, functions, configs |
+| `list` | Grocery, todos, checklists |
+| `idea` | Shower thoughts, startup concepts |
+| `link` | URLs with context |
+| `contact` | Names, emails, phone numbers |
+| `event` | Meetings, appointments |
+| `reminder` | Time-sensitive notes |
+| `note` | Everything else |
 
 ---
 
-## The Future We're Building
+## Architecture
 
-**Imagine:**
-- Years of AI conversations stored in one place, fully searchable
-- Switching between LLMs seamlessly while maintaining context
-- Exporting your entire AI interaction history as a portable dataset
-- Training future AI models on YOUR data (that you own) to create a truly personalized assistant
-- Importing your ChatGPT history, Claude conversations, and Gemini chats into one unified "brain"
-- Seeing patterns in your own thinking through memory analytics
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  DumpInput  │────▶│  smart-save │────▶│   entries   │
+│   (React)   │     │  (Edge Fn)  │     │  (Postgres) │
+└─────────────┘     └─────────────┘     └─────────────┘
+                           │
+                    ┌──────┴──────┐
+                    │  classify   │
+                    │  embed      │
+                    │  score      │
+                    └─────────────┘
+```
 
-**This is the future where:**
-- Users own their AI data
-- Memory compounds across conversations
-- Context isn't lost when you switch providers
-- Your AI interactions become a valuable personal asset
+### Key Tables
+- `entries`: All user content with embeddings, tags, importance scores
+- `brain_reports`: AI-generated summaries and insights
 
----
-
-## Guiding Questions for Every Decision
-
-When building features or making product decisions, ask:
-
-1. **Does this give users more control over their data?**
-2. **Does this make conversations smarter by leveraging past context?**
-3. **Does this increase transparency about what we're doing?**
-4. **Does this respect user privacy and data ownership?**
-5. **Does this compound value over time?**
-
-If the answer is "no" to these questions, reconsider the feature.
+### Edge Functions
+- `smart-save`: Orchestrates the save flow
+- `classify-content`: Detects type and extracts metadata
+- `generate-embedding`: Creates vector for semantic search
+- `calculate-importance`: Scores 0-10
+- `assistant-chat`: Answers questions from your brain
+- `search-memory`: Semantic + keyword search
 
 ---
 
-## The Tagline
+## What Brain Dump Is NOT
 
-**"Your AI memory. Your data. Your control."**
+❌ **Not a multi-provider chat app** — We're not ChatGPT with memory
 
-Or alternatively:
+❌ **Not a note-taking app with folders** — No hierarchy, no organization burden
 
-**"The brain behind every AI conversation you have."**
+❌ **Not a to-do app** — We don't nag you about deadlines
 
----
-
-## Call to Action
-
-James Brain OS is not just a product — it's a statement about how AI should work.
-
-- **For users:** Take back control of your AI conversations. Own your data. Build your brain.
-- **For developers:** Help us build the future where users own their AI memory.
-- **For investors:** This is the infrastructure layer for the next generation of AI interactions.
-
-Let's build the future of AI memory together.
+❌ **Not another AI wrapper** — We're the memory layer, not the model
 
 ---
 
-**Last Updated:** 2025-01-22  
-**Version:** 1.0  
-**Status:** Living Document (will evolve as the product matures)
+## What Brain Dump IS
+
+✅ **A capture tool** — Dump anything, instantly
+
+✅ **A classification engine** — AI organizes for you
+
+✅ **A retrieval system** — Semantic search finds what you need
+
+✅ **A second brain** — Remembers so you don't have to
+
+✅ **A privacy-first platform** — Your data, your control
+
+---
+
+## Guiding Questions
+
+When building features, ask:
+
+1. **Does this reduce friction?** If it adds a step, reconsider.
+2. **Does the AI handle it?** Users shouldn't need to think.
+3. **Is it reactive?** Don't prompt, don't ask, don't demand.
+4. **Does the user own their data?** Always exportable, deletable.
+5. **Does it compound value?** Every dump should make the brain smarter.
+
+---
+
+## Tagline
+
+**"Stop organizing. Start dumping."**
+
+---
+
+*Last Updated: 2025-01-23*  
+*Version: 2.0 (Brain Dump Architecture)*

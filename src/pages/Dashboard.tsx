@@ -1,14 +1,16 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { Brain, LogOut, Settings, Menu, RefreshCw } from "lucide-react";
+import { Brain, LogOut, Settings, Menu, RefreshCw, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import DashboardComponent from "@/components/Dashboard";
 import AssistantChat from "@/components/AssistantChat";
 import EntryView from "@/components/EntryView";
+import GlobalSearch from "@/components/GlobalSearch";
+import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import type { Entry } from "@/components/EntryCard";
 
 const Dashboard = () => {
@@ -19,6 +21,19 @@ const Dashboard = () => {
   const [selectedEntry, setSelectedEntry] = useState<Entry | null>(null);
   const [entryViewOpen, setEntryViewOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const dumpInputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Keyboard shortcuts
+  useKeyboardShortcuts({
+    onOpenSearch: () => setSearchOpen(true),
+    onFocusInput: () => {
+      dumpInputRef.current?.focus();
+      dumpInputRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    },
+    onToggleAssistant: () => setAssistantOpen((prev) => !prev),
+  });
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -65,9 +80,14 @@ const Dashboard = () => {
     }
   }, [selectedEntry]);
 
-  const handleEntryCreatedFromAssistant = useCallback((entry: Entry) => {
+  const handleEntryCreatedFromAssistant = useCallback(() => {
     setRefreshKey((prev) => prev + 1);
   }, []);
+
+  const handleSearchSelect = useCallback((entry: Entry) => {
+    setSearchOpen(false);
+    handleViewEntry(entry);
+  }, [handleViewEntry]);
 
   if (loading) {
     return (
@@ -92,6 +112,17 @@ const Dashboard = () => {
               </SheetTrigger>
               <SheetContent side="left" className="w-72 bg-card">
                 <div className="flex flex-col gap-2 mt-8">
+                  <Button
+                    variant="ghost"
+                    className="justify-start"
+                    onClick={() => {
+                      setSearchOpen(true);
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    <Search className="w-4 h-4 mr-2" />
+                    Search
+                  </Button>
                   <Button
                     variant="ghost"
                     className="justify-start"
@@ -126,6 +157,18 @@ const Dashboard = () => {
           </div>
 
           <div className="hidden md:flex items-center gap-2">
+            <Button
+              onClick={() => setSearchOpen(true)}
+              variant="outline"
+              size="sm"
+              className="text-muted-foreground gap-2"
+            >
+              <Search className="w-4 h-4" />
+              <span className="hidden lg:inline">Search</span>
+              <kbd className="hidden lg:inline-flex h-5 select-none items-center gap-1 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">
+                ⌘K
+              </kbd>
+            </Button>
             <Button
               onClick={() => setRefreshKey((prev) => prev + 1)}
               variant="ghost"
@@ -162,8 +205,19 @@ const Dashboard = () => {
           key={refreshKey}
           userId={user?.id ?? ""}
           onViewEntry={handleViewEntry}
+          inputRef={dumpInputRef}
         />
       </main>
+
+      {/* Global Search */}
+      {user?.id && (
+        <GlobalSearch
+          userId={user.id}
+          onSelectEntry={handleSearchSelect}
+          open={searchOpen}
+          onOpenChange={setSearchOpen}
+        />
+      )}
 
       {/* Entry Detail View */}
       <EntryView
@@ -179,6 +233,8 @@ const Dashboard = () => {
         <AssistantChat
           userId={user.id}
           onEntryCreated={handleEntryCreatedFromAssistant}
+          externalOpen={assistantOpen}
+          onExternalOpenChange={setAssistantOpen}
         />
       )}
     </div>
