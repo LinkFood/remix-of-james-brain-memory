@@ -28,6 +28,7 @@ import {
   X,
   Check,
   Clock,
+  Image as ImageIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -51,6 +52,7 @@ const typeIcons: Record<string, React.ReactNode> = {
   event: <Calendar className="w-5 h-5" />,
   reminder: <Bell className="w-5 h-5" />,
   note: <FileText className="w-5 h-5" />,
+  image: <ImageIcon className="w-5 h-5" />,
 };
 
 const typeColors: Record<string, string> = {
@@ -62,6 +64,7 @@ const typeColors: Record<string, string> = {
   event: "bg-orange-500/10 text-orange-500 border-orange-500/20",
   reminder: "bg-red-500/10 text-red-500 border-red-500/20",
   note: "bg-gray-500/10 text-gray-500 border-gray-500/20",
+  image: "bg-cyan-500/10 text-cyan-500 border-cyan-500/20",
 };
 
 // Helper to transform Supabase response to Entry type
@@ -317,6 +320,17 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
             </div>
           )}
 
+          {/* Image Display */}
+          {entry.image_url && (
+            <div className="mb-4 rounded-lg overflow-hidden border border-border">
+              <img 
+                src={entry.image_url} 
+                alt={entry.title || 'Uploaded image'}
+                className="w-full max-h-96 object-contain bg-muted/30"
+              />
+            </div>
+          )}
+
           {/* Main Content */}
           {isEditing ? (
             <Textarea
@@ -351,9 +365,9 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
                 {entry.content}
               </code>
             </pre>
-          ) : (
+          ) : entry.content ? (
             <div className="whitespace-pre-wrap text-sm">{entry.content}</div>
-          )}
+          ) : null}
 
           {/* Edit list items */}
           {isEditing && entry.content_type === "list" && (

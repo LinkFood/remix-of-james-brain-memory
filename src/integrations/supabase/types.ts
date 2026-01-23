@@ -66,6 +66,7 @@ export type Database = {
           embedding: string | null
           extracted_data: Json | null
           id: string
+          image_url: string | null
           importance_score: number | null
           list_items: Json | null
           source: string
@@ -84,6 +85,7 @@ export type Database = {
           embedding?: string | null
           extracted_data?: Json | null
           id?: string
+          image_url?: string | null
           importance_score?: number | null
           list_items?: Json | null
           source?: string
@@ -102,6 +104,7 @@ export type Database = {
           embedding?: string | null
           extracted_data?: Json | null
           id?: string
+          image_url?: string | null
           importance_score?: number | null
           list_items?: Json | null
           source?: string

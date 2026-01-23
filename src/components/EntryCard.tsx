@@ -16,6 +16,7 @@ import {
   Archive,
   MoreVertical,
   ExternalLink,
+  Image as ImageIcon,
 } from "lucide-react";
 import {
   DropdownMenu,
@@ -40,6 +41,7 @@ export interface Entry {
   source: string;
   starred: boolean;
   archived: boolean;
+  image_url?: string | null;
   created_at: string;
   updated_at: string;
   _pending?: boolean; // For optimistic updates
@@ -64,6 +66,7 @@ const typeIcons: Record<string, React.ReactNode> = {
   event: <Calendar className="w-4 h-4" />,
   reminder: <Bell className="w-4 h-4" />,
   note: <FileText className="w-4 h-4" />,
+  image: <ImageIcon className="w-4 h-4" />,
 };
 
 const typeColors: Record<string, string> = {
@@ -75,6 +78,7 @@ const typeColors: Record<string, string> = {
   event: "bg-orange-500/10 text-orange-500 border-orange-500/20",
   reminder: "bg-red-500/10 text-red-500 border-red-500/20",
   note: "bg-gray-500/10 text-gray-500 border-gray-500/20",
+  image: "bg-cyan-500/10 text-cyan-500 border-cyan-500/20",
 };
 
 const EntryCard = ({
@@ -187,6 +191,18 @@ const EntryCard = ({
         {/* Content */}
         {showContent && (
           <div className="mt-2">
+            {/* Image thumbnail */}
+            {entry.image_url && (
+              <div className="mb-2 rounded-md overflow-hidden border border-border">
+                <img 
+                  src={entry.image_url} 
+                  alt={entry.title || 'Uploaded image'}
+                  className="w-full h-32 object-cover"
+                  loading="lazy"
+                />
+              </div>
+            )}
+            
             {entry.content_type === "list" && entry.list_items?.length > 0 ? (
               <div className="space-y-1.5">
                 {entry.list_items.slice(0, compact ? 3 : 5).map((item, index) => (
@@ -225,6 +241,9 @@ const EntryCard = ({
                   {entry.content.length > 300 && !compact && "..."}
                 </code>
               </pre>
+            ) : entry.content_type === "image" && !entry.content ? (
+              // Image-only entry with no text content
+              null
             ) : (
               <p className="text-sm text-muted-foreground">
                 {compact ? truncatedContent : entry.content.slice(0, 300)}
