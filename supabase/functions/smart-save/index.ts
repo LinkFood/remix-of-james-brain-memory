@@ -51,6 +51,11 @@ interface ClassificationResult {
   listItems?: Array<{ text: string; checked: boolean }>;
   imageDescription?: string;
   documentText?: string; // Full extracted text from PDF
+  // Calendar/time fields
+  eventDate?: string;
+  eventTime?: string;
+  isRecurring?: boolean;
+  recurrencePattern?: 'daily' | 'weekly' | 'monthly' | 'yearly';
 }
 
 interface Entry {
@@ -256,7 +261,7 @@ serve(async (req) => {
         ? (content ? `${content}\n\n---\n\n${classification.documentText}` : classification.documentText)
         : (content || classification.imageDescription || '');
         
-      const entryData = {
+      const entryData: Record<string, unknown> = {
         user_id: userId,
         content: entryContent,
         title: classification.suggestedTitle,
@@ -274,6 +279,20 @@ serve(async (req) => {
         source,
         image_url: imageUrl || null,
       };
+      
+      // Add calendar fields if present
+      if (classification.eventDate) {
+        entryData.event_date = classification.eventDate;
+      }
+      if (classification.eventTime) {
+        entryData.event_time = classification.eventTime;
+      }
+      if (classification.isRecurring !== undefined) {
+        entryData.is_recurring = classification.isRecurring;
+      }
+      if (classification.recurrencePattern) {
+        entryData.recurrence_pattern = classification.recurrencePattern;
+      }
 
       const { data: newEntry, error: insertError } = await supabase
         .from('entries')

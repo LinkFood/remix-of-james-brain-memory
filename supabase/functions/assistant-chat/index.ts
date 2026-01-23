@@ -5,6 +5,8 @@
  * 
  * This streams responses word-by-word for instant feel.
  * Rate limited. Searches embeddings. Shows sources.
+ * 
+ * NOW WITH: Weather awareness + Pre-stream save execution
  */
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
@@ -49,6 +51,103 @@ interface Entry {
   list_items: Array<{ text: string; checked: boolean }>;
   created_at: string;
   similarity?: number;
+}
+
+interface WeatherData {
+  temperature: number;
+  weatherCode: number;
+  windSpeed: number;
+  description: string;
+  location: string;
+}
+
+// Weather code to description mapping (WMO codes)
+function getWeatherDescription(code: number): string {
+  const descriptions: Record<number, string> = {
+    0: 'Clear sky',
+    1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast',
+    45: 'Fog', 48: 'Depositing rime fog',
+    51: 'Light drizzle', 53: 'Moderate drizzle', 55: 'Dense drizzle',
+    56: 'Light freezing drizzle', 57: 'Dense freezing drizzle',
+    61: 'Slight rain', 63: 'Moderate rain', 65: 'Heavy rain',
+    66: 'Light freezing rain', 67: 'Heavy freezing rain',
+    71: 'Slight snow', 73: 'Moderate snow', 75: 'Heavy snow',
+    77: 'Snow grains',
+    80: 'Slight rain showers', 81: 'Moderate rain showers', 82: 'Violent rain showers',
+    85: 'Slight snow showers', 86: 'Heavy snow showers',
+    95: 'Thunderstorm', 96: 'Thunderstorm with slight hail', 99: 'Thunderstorm with heavy hail',
+  };
+  return descriptions[code] || 'Unknown';
+}
+
+// Check if snow is expected
+function isSnowExpected(code: number): boolean {
+  return [71, 73, 75, 77, 85, 86].includes(code);
+}
+
+// Fetch weather from Open-Meteo (free, no API key needed)
+async function fetchWeather(lat = 40.7128, lon = -74.0060, location = "New York"): Promise<WeatherData | null> {
+  try {
+    const response = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&temperature_unit=fahrenheit&timezone=auto`
+    );
+    
+    if (!response.ok) {
+      console.warn('Weather API failed:', response.status);
+      return null;
+    }
+    
+    const data = await response.json();
+    const current = data.current_weather;
+    
+    return {
+      temperature: Math.round(current.temperature),
+      weatherCode: current.weathercode,
+      windSpeed: Math.round(current.windspeed),
+      description: getWeatherDescription(current.weathercode),
+      location,
+    };
+  } catch (error) {
+    console.warn('Failed to fetch weather:', error);
+    return null;
+  }
+}
+
+// Detect if user is asking about weather
+function detectWeatherIntent(message: string): boolean {
+  const weatherKeywords = /\b(snow|snowing|rain|raining|weather|forecast|temperature|cold|hot|storm|sunny|cloudy|freeze|freezing|sleet|hail|wind|windy|humid|degrees)\b/i;
+  return weatherKeywords.test(message);
+}
+
+// Detect save intent and extract what to save
+function detectSaveIntent(message: string): { hasSaveIntent: boolean; contentToSave: string; listName?: string } {
+  const savePatterns = [
+    /\b(add|put)\s+(.+?)\s+(?:to|on)\s+(?:my\s+)?(.+?)\s*(?:list)?$/i,
+    /\b(add|put)\s+(.+?)\s+(?:to|on)\s+(.+?)$/i,
+    /\b(save|remember|note|dump|store)\s+(?:that\s+)?(.+)/i,
+    /\b(add)\s+(.+?)\s+(?:to\s+)?(?:my\s+)?(?:shopping|grocery|todo|to-do)/i,
+  ];
+
+  for (const pattern of savePatterns) {
+    const match = message.match(pattern);
+    if (match) {
+      if (pattern === savePatterns[0] || pattern === savePatterns[1]) {
+        return { hasSaveIntent: true, contentToSave: match[2].trim(), listName: match[3]?.trim() };
+      }
+      return { hasSaveIntent: true, contentToSave: match[2].trim() };
+    }
+  }
+
+  // Fallback: general save intent
+  const hasSaveIntent = /\b(save|add|remember|dump|store|note down)\b/i.test(message);
+  if (hasSaveIntent) {
+    const contentToSave = message
+      .replace(/\b(please\s+)?(save|add|remember|dump|store|note down|this|that|to my brain|to brain dump|for me)\b/gi, '')
+      .trim();
+    return { hasSaveIntent: contentToSave.length > 5, contentToSave };
+  }
+
+  return { hasSaveIntent: false, contentToSave: '' };
 }
 
 serve(async (req) => {
@@ -99,6 +198,57 @@ serve(async (req) => {
         JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
         { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
+    }
+
+    // === PRE-STREAM ACTIONS ===
+    
+    // 1. Check for save intent and execute BEFORE streaming
+    const saveIntent = detectSaveIntent(message);
+    let savedEntry: Entry | null = null;
+    let saveError: string | null = null;
+    
+    if (saveIntent.hasSaveIntent && saveIntent.contentToSave) {
+      console.log('Save intent detected, executing save before stream...');
+      try {
+        const saveResponse = await fetch(`${supabaseUrl}/functions/v1/smart-save`, {
+          method: 'POST',
+          headers: {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            content: saveIntent.listName 
+              ? `${saveIntent.contentToSave} (${saveIntent.listName})` 
+              : saveIntent.contentToSave,
+            source: 'assistant',
+          }),
+        });
+
+        if (saveResponse.ok) {
+          const saveData = await saveResponse.json();
+          if (saveData?.entry) {
+            savedEntry = saveData.entry;
+            console.log('Pre-stream save successful:', savedEntry?.id);
+          }
+        } else {
+          saveError = 'Failed to save';
+          console.warn('Pre-stream save failed:', await saveResponse.text());
+        }
+      } catch (err) {
+        saveError = 'Failed to save';
+        console.error('Pre-stream save error:', err);
+      }
+    }
+
+    // 2. Check for weather intent and fetch data
+    const weatherIntent = detectWeatherIntent(message);
+    let weatherData: WeatherData | null = null;
+    
+    if (weatherIntent) {
+      console.log('Weather intent detected, fetching weather...');
+      // TODO: In future, get user's location from profile
+      weatherData = await fetchWeather();
+      console.log('Weather data:', weatherData);
     }
 
     // Step 1: Generate embedding for the user's message
@@ -175,13 +325,33 @@ serve(async (req) => {
       })
       .join('\n\n');
 
+    // Build dynamic context for pre-executed actions
+    let actionContext = '';
+    
+    if (savedEntry) {
+      actionContext += `\n\n=== SAVE COMPLETED ===\nYou just saved "${saveIntent.contentToSave}" to "${savedEntry.title || savedEntry.content_type}". Confirm this briefly.\n`;
+    } else if (saveIntent.hasSaveIntent && saveError) {
+      actionContext += `\n\n=== SAVE FAILED ===\nFailed to save "${saveIntent.contentToSave}". Apologize briefly.\n`;
+    }
+    
+    if (weatherData) {
+      const snowWarning = isSnowExpected(weatherData.weatherCode) 
+        ? '\n⚠️ SNOW IS EXPECTED. Mention this proactively.' 
+        : '';
+      actionContext += `\n\n=== CURRENT WEATHER (${weatherData.location}) ===
+Temperature: ${weatherData.temperature}°F
+Conditions: ${weatherData.description}
+Wind: ${weatherData.windSpeed} mph${snowWarning}
+Use this info proactively in your response.\n`;
+    }
+
     // Step 5: Create system prompt - ACTION-ORIENTED, NO QUESTIONS
     const systemPrompt = `You are Jac, the user's personal brain assistant. You are OBEDIENT and ACTION-ORIENTED.
 
 === CRITICAL RULES ===
 1. NEVER ask follow-up questions. Ever. Not "Is there anything else?" Not "Would you like me to...?" Just act.
 2. NEVER ask for clarification. Infer from context. Make your best guess and execute.
-3. When the user wants something saved, added, or remembered - DO IT and confirm briefly.
+3. When the user wants something saved, added, or remembered - it's ALREADY DONE (see action context below). Just confirm briefly.
 4. Be CONCISE. One short confirmation. Done.
 5. You are aware and intelligent - infer what they mean from context.
 6. You are obedient - do exactly what they ask without questioning.
@@ -196,12 +366,16 @@ RIGHT: "Added to your Grocery List. ✓"
 WRONG: "I don't see a list for that. Should I create one?"
 RIGHT: "Created new Shopping List with: Salt ✓"
 
+=== WEATHER AWARENESS ===
+When you have weather data, share it proactively. Be helpful about weather-related tasks.
+If snow is expected and they're adding salt - connect the dots but stay brief.
+
 === YOUR CAPABILITIES ===
 - Search and retrieve from the user's brain dump
 - Help find things they've saved
 - Compile and summarize related entries
 - Surface connections between entries
-- When user asks to save/add/remember something, you'll do it
+- Saving/adding is handled BEFORE you respond - just confirm
 
 === LISTS ===
 Show items with: ✓ (done) or ○ (pending)
@@ -209,7 +383,7 @@ Be brief. No fluff.
 
 === IF YOU DON'T KNOW ===
 Say briefly: "Nothing in your brain about that." Don't apologize excessively.
-
+${actionContext}
 ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has no entries yet.'}`;
 
     // Step 6: Build conversation messages
@@ -266,14 +440,18 @@ ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has n
 
     // If streaming, return the stream directly with sources prepended
     if (stream && aiResponse.body) {
-      // Create a transform stream that prepends sources as first SSE event
+      // Create a transform stream that prepends sources and saved entry as first SSE event
       const encoder = new TextEncoder();
       
       const transformStream = new TransformStream({
         start(controller) {
-          // Send sources as first event
-          const sourcesEvent = `data: ${JSON.stringify({ sources: sourcesUsed })}\n\n`;
-          controller.enqueue(encoder.encode(sourcesEvent));
+          // Send sources and saved entry as first event
+          const metaEvent = `data: ${JSON.stringify({ 
+            sources: sourcesUsed,
+            savedEntry: savedEntry ? { id: savedEntry.id, title: savedEntry.title } : null,
+            weather: weatherData,
+          })}\n\n`;
+          controller.enqueue(encoder.encode(metaEvent));
         },
         transform(chunk, controller) {
           controller.enqueue(chunk);
@@ -296,49 +474,12 @@ ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has n
     const aiData = await aiResponse.json();
     const response = aiData.choices[0]?.message?.content || 'I encountered an error. Please try again.';
 
-    // Step 8: Check if the AI wants to create a new dump
-    let newDumpCreated = null;
-
-    // Simple heuristic: if user asks to "save", "add", "remember", or "dump" something
-    const saveIntent = /\b(save|add|remember|dump|store|note down)\b/i.test(message);
-    if (saveIntent) {
-      // Extract what to save from the message
-      const contentToSave = message
-        .replace(/\b(please\s+)?(save|add|remember|dump|store|note down|this|that|to my brain|to brain dump|for me)\b/gi, '')
-        .trim();
-
-      if (contentToSave.length > 5) {
-        try {
-          const saveResponse = await fetch(`${supabaseUrl}/functions/v1/smart-save`, {
-            method: 'POST',
-            headers: {
-              'Authorization': authHeader,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              content: contentToSave,
-              source: 'assistant',
-            }),
-          });
-
-          if (saveResponse.ok) {
-            const saveData = await saveResponse.json();
-            if (saveData?.entry) {
-              newDumpCreated = saveData.entry;
-              console.log('Created new entry from assistant:', newDumpCreated.id);
-            }
-          }
-        } catch (saveError) {
-          console.error('Failed to save from assistant:', saveError);
-        }
-      }
-    }
-
     return new Response(
       JSON.stringify({
         response,
         sourcesUsed,
-        newDumpCreated,
+        savedEntry: savedEntry ? { id: savedEntry.id, title: savedEntry.title } : null,
+        weather: weatherData,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
