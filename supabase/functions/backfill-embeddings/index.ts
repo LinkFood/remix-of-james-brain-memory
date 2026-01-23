@@ -12,21 +12,53 @@ serve(async (req) => {
   }
 
   try {
-    const { userId, batchSize = 50 } = await req.json();
-
-    if (!userId) {
-      throw new Error('User ID is required');
+    // Extract userId from JWT instead of request body
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return new Response(
+        JSON.stringify({ error: 'Authorization required' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
     }
+
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: claimsData, error: claimsError } = await supabaseClient.auth.getClaims(token);
+
+    if (claimsError || !claimsData?.claims) {
+      console.error('Auth error:', claimsError);
+      return new Response(
+        JSON.stringify({ error: 'Invalid token' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const userId = claimsData.claims.sub;
+    if (!userId) {
+      return new Response(
+        JSON.stringify({ error: 'User ID not found in token' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Parse batchSize from request body (userId is ignored if provided)
+    const { batchSize = 50 } = await req.json().catch(() => ({}));
 
     console.log(`Starting backfill for user ${userId}, batch size: ${batchSize}`);
 
-    const supabaseClient = createClient(
+    // Use service role for data access
+    const serviceClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
     // Fetch entries without embeddings
-    const { data: entries, error: fetchError } = await supabaseClient
+    const { data: entries, error: fetchError } = await serviceClient
       .from('entries')
       .select('id, content')
       .eq('user_id', userId)
@@ -92,7 +124,7 @@ serve(async (req) => {
             const embedding = `[${embeddingData.embedding.join(',')}]`;
 
             // Update entry with embedding
-            const { error: updateError } = await supabaseClient
+            const { error: updateError } = await serviceClient
               .from('entries')
               .update({ embedding })
               .eq('id', entry.id);
@@ -118,7 +150,7 @@ serve(async (req) => {
     }
 
     // Check if there are more entries to process
-    const { count: remainingCount } = await supabaseClient
+    const { count: remainingCount } = await serviceClient
       .from('entries')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId)

@@ -12,24 +12,53 @@ serve(async (req) => {
   }
 
   try {
-    const { userId, format = 'json' } = await req.json();
-
-    if (!userId) {
+    // Extract userId from JWT instead of request body
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
       return new Response(
-        JSON.stringify({ error: 'userId is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Authorization required' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    const supabaseClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
+    const token = authHeader.replace('Bearer ', '');
+    const { data: claimsData, error: claimsError } = await supabaseClient.auth.getClaims(token);
+
+    if (claimsError || !claimsData?.claims) {
+      console.error('Auth error:', claimsError);
+      return new Response(
+        JSON.stringify({ error: 'Invalid token' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const userId = claimsData.claims.sub;
+    if (!userId) {
+      return new Response(
+        JSON.stringify({ error: 'User ID not found in token' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Parse format from request body (userId is ignored if provided)
+    const { format = 'json' } = await req.json().catch(() => ({}));
+
     console.log(`Exporting data for user: ${userId} in format: ${format}`);
 
-    const supabaseClient = createClient(
+    // Use service role for data access
+    const serviceClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
     // Fetch all entries
-    const { data: entries, error: entriesError } = await supabaseClient
+    const { data: entries, error: entriesError } = await serviceClient
       .from('entries')
       .select('id, content, title, content_type, content_subtype, tags, extracted_data, importance_score, list_items, starred, archived, source, created_at, updated_at')
       .eq('user_id', userId)
@@ -41,7 +70,7 @@ serve(async (req) => {
     }
 
     // Fetch brain reports
-    const { data: brainReports, error: reportsError } = await supabaseClient
+    const { data: brainReports, error: reportsError } = await serviceClient
       .from('brain_reports')
       .select('id, report_type, summary, key_themes, decisions, insights, conversation_stats, start_date, end_date, created_at')
       .eq('user_id', userId)
@@ -53,7 +82,7 @@ serve(async (req) => {
     }
 
     // Fetch profile
-    const { data: profile, error: profileError } = await supabaseClient
+    const { data: profile, error: profileError } = await serviceClient
       .from('profiles')
       .select('username, created_at, updated_at')
       .eq('id', userId)

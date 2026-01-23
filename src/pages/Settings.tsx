@@ -67,11 +67,8 @@ const Settings = () => {
   const handleExport = async () => {
     setExportLoading(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error("No active session");
+      if (!session) throw new Error("Not authenticated");
 
       const response = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/export-all-data`,
@@ -81,7 +78,7 @@ const Settings = () => {
             'Authorization': `Bearer ${session.access_token}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ userId: user.id, format: exportFormat })
+          body: JSON.stringify({ format: exportFormat })
         }
       );
 
@@ -123,9 +120,9 @@ const Settings = () => {
 
       if (entriesError) throw entriesError;
 
-      // Delete via function for other data
+      // Delete via function for other data (userId extracted from JWT in function)
       const { error } = await supabase.functions.invoke('delete-all-user-data', {
-        body: { userId: user.id }
+        body: {}
       });
 
       if (error) throw error;
