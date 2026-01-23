@@ -3,18 +3,12 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Send, Loader2, AlertCircle, Copy, Star, Trash2, Edit2, Check, X, MoreVertical, Database, MessageSquare, Zap } from "lucide-react";
-import { MemoryInjectionBanner } from "@/components/MemoryInjectionBanner";
+import { Send, Loader2, AlertCircle, Database, MessageSquare, Zap } from "lucide-react";
 import { toast } from "sonner";
 import ConversationSidebar from "./ConversationSidebar";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { getImportanceLabel, getImportanceColor } from "./ImportanceFilter";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { useSwipeable } from "react-swipeable";
-import { cn } from "@/lib/utils";
+import { SwipeableMessage } from "./SwipeableMessage";
 
 interface Message {
   id: string;
@@ -421,120 +415,21 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
             <p>Start a conversation to build your memory vault...</p>
           </div>
         ) : (
-          messages.map((msg) => {
-            const swipeHandlers = useSwipeable({
-              onSwipedLeft: () => {
-                if (msg.role === "user" || msg.role === "assistant") {
-                  handleDeleteMessage(msg.id);
-                }
-              },
-              onSwipedRight: () => {
-                if (msg.role === "user" || msg.role === "assistant") {
-                  handleStarMessage(msg.id, msg.starred || false);
-                }
-              },
-              trackMouse: false,
-              delta: 50,
-            });
-
-            return (
-              <div key={msg.id} {...swipeHandlers}>
-                {msg.role === "assistant" && msg.memories && msg.memories.length > 0 && (
-                  <MemoryInjectionBanner memories={msg.memories} />
-                )}
-                <div
-                  className={cn(
-                    "flex group animate-fade-in",
-                    msg.role === "user" ? "justify-end" : "justify-start"
-                  )}
-                >
-                  <div
-                    className={cn(
-                      "max-w-[80%] rounded-2xl px-4 py-3 relative",
-                      msg.role === "user"
-                        ? "bg-primary text-primary-foreground shadow-glow"
-                        : "bg-secondary text-secondary-foreground"
-                    )}
-                  >
-                  {msg.starred && (
-                    <Star className="absolute -top-2 -right-2 h-4 w-4 text-primary fill-primary" />
-                  )}
-                  
-                  {editingMessageId === msg.id ? (
-                    <div className="space-y-2">
-                      <Input
-                        value={editContent}
-                        onChange={(e) => setEditContent(e.target.value)}
-                        className="min-h-[60px]"
-                        autoFocus
-                      />
-                      <div className="flex gap-1">
-                        <Button size="sm" onClick={() => saveEditMessage(msg.id)}>
-                          <Check className="h-4 w-4" />
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={cancelEditMessage}>
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <p className="text-sm leading-relaxed mb-2 whitespace-pre-wrap">{msg.content}</p>
-                      {msg.edited && (
-                        <Badge variant="outline" className="text-xs mr-2">
-                          Edited
-                        </Badge>
-                      )}
-                      {msg.importance_score !== null && msg.importance_score !== undefined && (
-                        <Badge 
-                          variant="outline" 
-                          className={`text-xs ${getImportanceColor(msg.importance_score)} mt-2`}
-                        >
-                          {msg.importance_score} - {getImportanceLabel(msg.importance_score)}
-                        </Badge>
-                      )}
-                    </>
-                  )}
-
-                  <div className="opacity-0 group-hover:opacity-100 transition-opacity absolute top-2 right-2">
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button size="icon" variant="ghost" className="h-6 w-6 touch-target">
-                          <MoreVertical className="h-4 w-4" />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end" className="bg-popover z-50">
-                        <DropdownMenuItem onClick={() => handleCopyMessage(msg.content)}>
-                          <Copy className="h-4 w-4 mr-2" />
-                          Copy
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => handleStarMessage(msg.id, msg.starred || false)}>
-                          <Star className="h-4 w-4 mr-2" />
-                          {msg.starred ? "Unstar" : "Star"}
-                        </DropdownMenuItem>
-                        {(msg.role === "user" || msg.role === "assistant") && (
-                          <>
-                            <DropdownMenuItem onClick={() => startEditMessage(msg.id, msg.content)}>
-                              <Edit2 className="h-4 w-4 mr-2" />
-                              Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem 
-                              onClick={() => handleDeleteMessage(msg.id)}
-                              className="text-destructive focus:text-destructive"
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete
-                            </DropdownMenuItem>
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                </div>
-                </div>
-              </div>
-            );
-          })
+          messages.map((msg) => (
+            <SwipeableMessage
+              key={msg.id}
+              message={msg}
+              editingMessageId={editingMessageId}
+              editContent={editContent}
+              setEditContent={setEditContent}
+              onDelete={handleDeleteMessage}
+              onStar={handleStarMessage}
+              onCopy={handleCopyMessage}
+              onStartEdit={startEditMessage}
+              onSaveEdit={saveEditMessage}
+              onCancelEdit={cancelEditMessage}
+            />
+          ))
         )}
         {loading && (
           <div className="flex justify-start animate-fade-in">
@@ -543,7 +438,7 @@ const ChatInterface = ({ userId, initialConversationId }: ChatInterfaceProps) =>
             </div>
           </div>
         )}
-          <div ref={messagesEndRef} />
+        <div ref={messagesEndRef} />
         </Card>
 
         <div className="flex gap-2 items-end">
