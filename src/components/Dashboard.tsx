@@ -9,7 +9,7 @@
  * Keep it clean. Keep it fast. Keep it alive (realtime).
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp, Calendar } from "lucide-react";
 import { toast } from "sonner";
@@ -19,8 +19,8 @@ import { parseListItems } from "@/lib/parseListItems";
 import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 import { StatsGrid, EmptyState, EntrySection } from "./dashboard";
 
-// Extended Entry type for pending entries
-interface PendingEntry extends Entry {
+// Extended Entry type for pending entries in Dashboard
+interface DashboardEntry extends Entry {
   _pending?: boolean;
 }
 
@@ -38,7 +38,7 @@ interface DashboardStats {
 }
 
 const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
-  const [entries, setEntries] = useState<PendingEntry[]>([]);
+  const [entries, setEntries] = useState<DashboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -89,7 +89,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
       if (error) throw error;
 
       // Transform Supabase data to Entry type with proper list_items parsing
-      const entriesData: PendingEntry[] = (data || []).map((item) => ({
+      const entriesData: DashboardEntry[] = (data || []).map((item) => ({
         ...item,
         tags: item.tags || [],
         extracted_data: (item.extracted_data as Record<string, unknown>) || {},
@@ -191,10 +191,10 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
     };
   }, [userId]);
 
-  // Optimistic update handlers
-  const handleOptimisticEntry = (pendingEntry: PendingEntry): string => {
-    setEntries((prev) => [pendingEntry, ...prev]);
-    return pendingEntry.id;
+  // Optimistic update handlers - accepts generic record and casts to DashboardEntry
+  const handleOptimisticEntry = (pendingEntry: Record<string, unknown>): string => {
+    setEntries((prev) => [pendingEntry as unknown as DashboardEntry, ...prev]);
+    return pendingEntry.id as string;
   };
 
   const handleOptimisticComplete = (tempId: string, realEntry: Entry) => {
@@ -336,28 +336,58 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
     }
   };
 
-  // Computed lists
-  const now = new Date();
-  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const todayStr = now.toISOString().split('T')[0];
+  // Memoized computed lists for performance
+  const todayStart = useMemo(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  }, []);
 
-  const todayEntries = entries.filter((e) => new Date(e.created_at) >= todayStart);
-  const importantEntries = entries.filter((e) => (e.importance_score ?? 0) >= 7);
-  const listEntries = entries.filter((e) => e.content_type === "list");
-  const codeEntries = entries.filter((e) => e.content_type === "code");
-  const ideaEntries = entries.filter((e) => e.content_type === "idea");
-  const starredCount = entries.filter((e) => e.starred).length;
+  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+
+  const todayEntries = useMemo(
+    () => entries.filter((e) => new Date(e.created_at) >= todayStart),
+    [entries, todayStart]
+  );
+
+  const importantEntries = useMemo(
+    () => entries.filter((e) => (e.importance_score ?? 0) >= 7),
+    [entries]
+  );
+
+  const listEntries = useMemo(
+    () => entries.filter((e) => e.content_type === "list"),
+    [entries]
+  );
+
+  const codeEntries = useMemo(
+    () => entries.filter((e) => e.content_type === "code"),
+    [entries]
+  );
+
+  const ideaEntries = useMemo(
+    () => entries.filter((e) => e.content_type === "idea"),
+    [entries]
+  );
+
+  const starredCount = useMemo(
+    () => entries.filter((e) => e.starred).length,
+    [entries]
+  );
   
   // Upcoming entries: events/reminders with future event_date
-  const upcomingEntries = entries.filter((e) => {
-    const eventDate = (e as any).event_date;
-    if (!eventDate) return false;
-    return eventDate >= todayStr;
-  }).sort((a, b) => {
-    const dateA = (a as any).event_date || '';
-    const dateB = (b as any).event_date || '';
-    return dateA.localeCompare(dateB);
-  });
+  const upcomingEntries = useMemo(() => {
+    return entries
+      .filter((e) => {
+        const eventDate = e.event_date;
+        if (!eventDate) return false;
+        return eventDate >= todayStr;
+      })
+      .sort((a, b) => {
+        const dateA = a.event_date || '';
+        const dateB = b.event_date || '';
+        return dateA.localeCompare(dateB);
+      });
+  }, [entries, todayStr]);
 
   if (loading) {
     return (
