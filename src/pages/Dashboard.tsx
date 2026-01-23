@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, lazy, Suspense } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
@@ -6,16 +6,26 @@ import { Brain, LogOut, Settings, Menu, RefreshCw, Search, Calendar } from "luci
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
 import DashboardComponent from "@/components/Dashboard";
-import AssistantChat from "@/components/AssistantChat";
-import EntryView from "@/components/EntryView";
-import GlobalSearch from "@/components/GlobalSearch";
 import OfflineBanner from "@/components/OfflineBanner";
-import { CalendarView } from "@/components/CalendarView";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import type { Entry } from "@/components/EntryCard";
 import type { DumpInputHandle } from "@/components/DumpInput";
+
+// Lazy load heavy components
+const AssistantChat = lazy(() => import("@/components/AssistantChat"));
+const EntryView = lazy(() => import("@/components/EntryView"));
+const GlobalSearch = lazy(() => import("@/components/GlobalSearch"));
+const CalendarView = lazy(() => import("@/components/CalendarView").then(m => ({ default: m.CalendarView })));
+
+// Fallback component for lazy loading
+const LazyFallback = () => (
+  <div className="p-4">
+    <Skeleton className="h-64 w-full rounded-lg" />
+  </div>
+);
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -235,43 +245,51 @@ const Dashboard = () => {
         />
       </main>
 
-      {/* Global Search */}
+      {/* Global Search - Lazy loaded */}
       {user?.id && (
-        <GlobalSearch
-          userId={user.id}
-          onSelectEntry={handleSearchSelect}
-          open={searchOpen}
-          onOpenChange={setSearchOpen}
-        />
+        <Suspense fallback={null}>
+          <GlobalSearch
+            userId={user.id}
+            onSelectEntry={handleSearchSelect}
+            open={searchOpen}
+            onOpenChange={setSearchOpen}
+          />
+        </Suspense>
       )}
 
-      {/* Entry Detail View */}
-      <EntryView
-        entry={selectedEntry}
-        open={entryViewOpen}
-        onClose={() => setEntryViewOpen(false)}
-        onUpdate={handleEntryUpdate}
-        onDelete={handleEntryDelete}
-      />
-
-      {/* Assistant Chat */}
-      {user?.id && (
-        <AssistantChat
-          userId={user.id}
-          onEntryCreated={handleEntryCreatedFromAssistant}
-          externalOpen={assistantOpen}
-          onExternalOpenChange={setAssistantOpen}
+      {/* Entry Detail View - Lazy loaded */}
+      <Suspense fallback={<LazyFallback />}>
+        <EntryView
+          entry={selectedEntry}
+          open={entryViewOpen}
+          onClose={() => setEntryViewOpen(false)}
+          onUpdate={handleEntryUpdate}
+          onDelete={handleEntryDelete}
         />
+      </Suspense>
+
+      {/* Assistant Chat - Lazy loaded */}
+      {user?.id && (
+        <Suspense fallback={null}>
+          <AssistantChat
+            userId={user.id}
+            onEntryCreated={handleEntryCreatedFromAssistant}
+            externalOpen={assistantOpen}
+            onExternalOpenChange={setAssistantOpen}
+          />
+        </Suspense>
       )}
 
-      {/* Calendar View */}
+      {/* Calendar View - Lazy loaded */}
       {user?.id && (
-        <CalendarView
-          userId={user.id}
-          open={calendarOpen}
-          onOpenChange={setCalendarOpen}
-          onViewEntry={handleViewEntry}
-        />
+        <Suspense fallback={<LazyFallback />}>
+          <CalendarView
+            userId={user.id}
+            open={calendarOpen}
+            onOpenChange={setCalendarOpen}
+            onViewEntry={handleViewEntry}
+          />
+        </Suspense>
       )}
     </div>
   );
