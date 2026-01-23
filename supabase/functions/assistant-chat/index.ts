@@ -1,3 +1,12 @@
+/**
+ * assistant-chat — Your Brain's Search Engine (Backend)
+ * 
+ * GOAL: "What was that thing..." → Found it.
+ * 
+ * This streams responses word-by-word for instant feel.
+ * Rate limited. Searches embeddings. Shows sources.
+ */
+
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
@@ -48,7 +57,7 @@ serve(async (req) => {
   }
 
   try {
-    const { message, userId, conversationHistory = [] } = await req.json();
+    const { message, userId, conversationHistory = [], stream = true } = await req.json();
 
     if (!message || !userId) {
       return new Response(
@@ -172,8 +181,16 @@ ${contextText ? `\n\nHere are relevant entries from the user's brain:\n\n${conte
       { role: 'user', content: message },
     ];
 
-    // Step 7: Call AI for response
-    console.log('Generating assistant response...');
+    // Prepare sources for response (send before streaming)
+    const sourcesUsed = contextEntries.map((e) => ({
+      id: e.id,
+      title: e.title,
+      content_type: e.content_type,
+      similarity: e.similarity,
+    }));
+
+    // Step 7: Call AI for response (streaming or non-streaming)
+    console.log(`Generating assistant response (stream: ${stream})...`);
     const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -183,7 +200,8 @@ ${contextText ? `\n\nHere are relevant entries from the user's brain:\n\n${conte
       body: JSON.stringify({
         model: 'google/gemini-2.5-flash',
         messages,
-        max_tokens: 1024,
+        max_tokens: 4096,
+        stream,
       }),
     });
 
@@ -198,9 +216,45 @@ ${contextText ? `\n\nHere are relevant entries from the user's brain:\n\n${conte
         );
       }
 
+      if (aiResponse.status === 402) {
+        return new Response(
+          JSON.stringify({ error: 'AI credits exhausted. Please add more credits.' }),
+          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
       throw new Error(`AI request failed: ${aiResponse.status}`);
     }
 
+    // If streaming, return the stream directly with sources prepended
+    if (stream && aiResponse.body) {
+      // Create a transform stream that prepends sources as first SSE event
+      const encoder = new TextEncoder();
+      
+      const transformStream = new TransformStream({
+        start(controller) {
+          // Send sources as first event
+          const sourcesEvent = `data: ${JSON.stringify({ sources: sourcesUsed })}\n\n`;
+          controller.enqueue(encoder.encode(sourcesEvent));
+        },
+        transform(chunk, controller) {
+          controller.enqueue(chunk);
+        },
+      });
+
+      const readableStream = aiResponse.body.pipeThrough(transformStream);
+
+      return new Response(readableStream, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
+
+    // Non-streaming fallback
     const aiData = await aiResponse.json();
     const response = aiData.choices[0]?.message?.content || 'I encountered an error. Please try again.';
 
@@ -217,17 +271,25 @@ ${contextText ? `\n\nHere are relevant entries from the user's brain:\n\n${conte
 
       if (contentToSave.length > 5) {
         try {
-          const { data, error } = await supabase.functions.invoke('smart-save', {
-            body: {
+          const saveResponse = await fetch(`${supabaseUrl}/functions/v1/smart-save`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${supabaseKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
               content: contentToSave,
               userId,
               source: 'assistant',
-            },
+            }),
           });
 
-          if (!error && data?.entry) {
-            newDumpCreated = data.entry;
-            console.log('Created new entry from assistant:', newDumpCreated.id);
+          if (saveResponse.ok) {
+            const saveData = await saveResponse.json();
+            if (saveData?.entry) {
+              newDumpCreated = saveData.entry;
+              console.log('Created new entry from assistant:', newDumpCreated.id);
+            }
           }
         } catch (saveError) {
           console.error('Failed to save from assistant:', saveError);
@@ -238,12 +300,7 @@ ${contextText ? `\n\nHere are relevant entries from the user's brain:\n\n${conte
     return new Response(
       JSON.stringify({
         response,
-        sourcesUsed: contextEntries.map((e) => ({
-          id: e.id,
-          title: e.title,
-          content_type: e.content_type,
-          similarity: e.similarity,
-        })),
+        sourcesUsed,
         newDumpCreated,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

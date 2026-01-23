@@ -195,16 +195,26 @@ serve(async (req) => {
         ? `${content || ''}\n\nImage description: ${classification.imageDescription}`.trim()
         : content || classification.suggestedTitle || '';
 
-      // Generate embedding
-      console.log('Generating embedding...');
-      const embeddingResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${supabaseKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: contentForEmbedding }),
-      });
+      // PARALLEL: Generate embedding and calculate importance at the same time
+      console.log('Generating embedding + calculating importance in parallel...');
+      const [embeddingResponse, importanceResponse] = await Promise.all([
+        fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ text: contentForEmbedding }),
+        }),
+        fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ content: contentForEmbedding, role: 'user' }),
+        }),
+      ]);
 
       let embedding = null;
       if (embeddingResponse.ok) {
@@ -214,17 +224,6 @@ serve(async (req) => {
       } else {
         console.warn('Failed to generate embedding, continuing without it');
       }
-
-      // Calculate importance
-      console.log('Calculating importance...');
-      const importanceResponse = await fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${supabaseKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content: contentForEmbedding, role: 'user' }),
-      });
 
       let importanceScore = null;
       if (importanceResponse.ok) {
