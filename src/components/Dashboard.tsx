@@ -14,12 +14,15 @@ import {
   RefreshCw,
   TrendingUp,
   Hash,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import EntryCard, { Entry } from "./EntryCard";
 import DumpInput from "./DumpInput";
 import { parseListItems } from "@/lib/parseListItems";
+import { RealtimePostgresChangesPayload } from "@supabase/supabase-js";
 
 interface DashboardProps {
   userId: string;
@@ -108,6 +111,58 @@ const Dashboard = ({ userId, onViewEntry, inputRef }: DashboardProps) => {
     fetchEntries();
   }, [fetchEntries]);
 
+  // Realtime subscription for live updates
+  useEffect(() => {
+    const channel = supabase
+      .channel('entries-realtime')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'entries',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload: RealtimePostgresChangesPayload<Entry>) => {
+          if (payload.eventType === 'INSERT') {
+            const newEntry = payload.new as Entry;
+            // Check if entry already exists (from optimistic update)
+            setEntries((prev) => {
+              if (prev.some((e) => e.id === newEntry.id)) return prev;
+              return [{
+                ...newEntry,
+                tags: newEntry.tags || [],
+                extracted_data: (newEntry.extracted_data as Record<string, unknown>) || {},
+                list_items: parseListItems(newEntry.list_items),
+              }, ...prev];
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updated = payload.new as Entry;
+            setEntries((prev) =>
+              prev.map((e) =>
+                e.id === updated.id
+                  ? {
+                      ...updated,
+                      tags: updated.tags || [],
+                      extracted_data: (updated.extracted_data as Record<string, unknown>) || {},
+                      list_items: parseListItems(updated.list_items),
+                    }
+                  : e
+              )
+            );
+          } else if (payload.eventType === 'DELETE') {
+            const deleted = payload.old as Entry;
+            setEntries((prev) => prev.filter((e) => e.id !== deleted.id));
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [userId]);
+
   const handleSaveSuccess = (entry: Entry) => {
     setEntries((prev) => [entry, ...prev]);
     // Update stats
@@ -183,7 +238,74 @@ const Dashboard = ({ userId, onViewEntry, inputRef }: DashboardProps) => {
     }
   };
 
-  // Filter entries by category
+// Empty State Component
+const EmptyState = ({
+  onTryExample,
+  onLoadSampleData,
+}: {
+  onTryExample: (text: string) => void;
+  onLoadSampleData: () => void;
+}) => {
+  const [loading, setLoading] = useState(false);
+
+  const examples = [
+    { label: "Grocery list", text: "Buy milk, eggs, bread, and butter" },
+    { label: "Code snippet", text: "const add = (a, b) => a + b;" },
+    { label: "App idea", text: "App idea: an alarm that only stops when you solve a puzzle" },
+  ];
+
+  return (
+    <Card className="p-8 text-center">
+      <div className="max-w-md mx-auto">
+        <Sparkles className="w-12 h-12 mx-auto text-primary/50 mb-4" />
+        <h3 className="text-lg font-medium mb-2">Your brain is empty</h3>
+        <p className="text-sm text-muted-foreground mb-6">
+          Start dumping anything and watch your second brain grow.
+        </p>
+
+        {/* Quick Try Examples */}
+        <div className="flex flex-wrap justify-center gap-2 mb-6">
+          {examples.map((ex) => (
+            <Button
+              key={ex.label}
+              variant="outline"
+              size="sm"
+              onClick={() => onTryExample(ex.text)}
+              className="text-xs"
+            >
+              Try: "{ex.label}"
+            </Button>
+          ))}
+        </div>
+
+        {/* Load Sample Data */}
+        <Button
+          variant="secondary"
+          onClick={async () => {
+            setLoading(true);
+            await onLoadSampleData();
+            setLoading(false);
+          }}
+          disabled={loading}
+        >
+          {loading ? (
+            <>
+              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              Loading...
+            </>
+          ) : (
+            <>
+              <Sparkles className="w-4 h-4 mr-2" />
+              Load Sample Data
+            </>
+          )}
+        </Button>
+      </div>
+    </Card>
+  );
+};
+
+
   const now = new Date();
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
@@ -450,15 +572,29 @@ const Dashboard = ({ userId, onViewEntry, inputRef }: DashboardProps) => {
 
       {/* Empty State */}
       {entries.length === 0 && (
-        <Card className="p-8 text-center">
-          <div className="max-w-sm mx-auto">
-            <Lightbulb className="w-12 h-12 mx-auto text-muted-foreground/50 mb-4" />
-            <h3 className="text-lg font-medium mb-2">Your brain is empty</h3>
-            <p className="text-sm text-muted-foreground mb-4">
-              Start dumping anything - code, ideas, lists, links - and watch your second brain grow.
-            </p>
-          </div>
-        </Card>
+        <EmptyState 
+          onTryExample={(text) => {
+            if (inputRef?.current) {
+              inputRef.current.value = text;
+              inputRef.current.focus();
+              // Trigger resize
+              inputRef.current.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          }}
+          onLoadSampleData={async () => {
+            try {
+              const { error } = await supabase.functions.invoke('insert-sample-data', {
+                body: { user_id: userId },
+              });
+              if (error) throw error;
+              toast.success("Sample data loaded!");
+              fetchEntries();
+            } catch (err: any) {
+              console.error("Failed to load sample data:", err);
+              toast.error("Failed to load sample data");
+            }
+          }}
+        />
       )}
     </div>
   );

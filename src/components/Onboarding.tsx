@@ -27,33 +27,33 @@ const Onboarding = ({ userId }: OnboardingProps) => {
   const steps = [
     {
       icon: Brain,
-      title: "Your AI Memory. Your Data. Your Control.",
-      description: "James Brain OS is the missing layer between you and every AI you talk to. We capture, score, and store your conversations—creating a persistent memory that makes every chat smarter by learning from all your past interactions.",
+      title: "Welcome to Brain Dump",
+      description: "Your second brain that actually works. Dump anything — ideas, code, lists, links — and let AI organize it all. No folders. No friction. Just dump.",
     },
     {
       icon: MessageSquare,
-      title: "Cross-Platform, Compounding Intelligence",
-      description: "Chat with OpenAI, Anthropic, Google, or any LLM through one interface. Your context travels with you—switch providers anytime while keeping your memory intact. Every conversation compounds into one unified brain.",
+      title: "Just Dump It",
+      description: "Paste code snippets, shopping lists, random thoughts, or URLs. One input handles everything. The AI figures out what it is and files it away.",
     },
     {
       icon: Database,
-      title: "You Own Your Data (For Real)",
-      description: "Unlike ChatGPT or Claude, YOU control everything. Export your entire history in any format. Delete it permanently with one click. Import chats from other platforms. It's your data—stored for you, not mined by us.",
+      title: "AI Does the Work",
+      description: "Every dump is automatically classified, tagged, and scored by importance. No manual organization needed — your brain grows smarter on its own.",
     },
     {
       icon: TrendingUp,
-      title: "Smart Memory Injection",
-      description: "High-importance memories are automatically injected into future conversations. The AI sees relevant context from weeks or months ago, making every response more personalized and accurate over time.",
+      title: "Ask Your Brain",
+      description: "Need something you dumped weeks ago? Just ask. Your AI assistant searches your entire brain and retrieves exactly what you need.",
     },
     {
       icon: Share2,
-      title: "Radical Transparency",
-      description: "We tell you exactly what we're doing: every message captured, every memory scored, every context injected. No hidden data mining, no selling your conversations, no training proprietary models on your data.",
+      title: "You Own Your Data",
+      description: "Export everything anytime. Delete it permanently with one click. Your brain, your rules. We store it for you, not for us.",
     },
     {
       icon: Settings,
-      title: "Ready to Build Your Brain?",
-      description: "Add your API key in Settings to start. Your conversations become a valuable, portable dataset that makes AI work better for YOU. Think of it as a USB drive of years of AI chats—except it actually makes the AI smarter.",
+      title: "Ready to Start?",
+      description: "Your first dump is waiting. No API keys needed. No setup required. Just start dumping and watch your second brain come to life.",
     },
   ];
 
