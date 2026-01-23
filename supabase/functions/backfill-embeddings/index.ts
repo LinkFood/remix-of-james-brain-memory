@@ -18,30 +18,36 @@ serve(async (req) => {
       throw new Error('User ID is required');
     }
 
+    console.log(`Starting backfill for user ${userId}, batch size: ${batchSize}`);
+
     const supabaseClient = createClient(
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    // Fetch messages without embeddings
-    const { data: messages, error: fetchError } = await supabaseClient
-      .from('messages')
+    // Fetch entries without embeddings
+    const { data: entries, error: fetchError } = await supabaseClient
+      .from('entries')
       .select('id, content')
       .eq('user_id', userId)
       .is('embedding', null)
+      .eq('archived', false)
       .limit(batchSize);
 
     if (fetchError) {
-      console.error('Error fetching messages:', fetchError);
+      console.error('Error fetching entries:', fetchError);
       throw fetchError;
     }
 
-    if (!messages || messages.length === 0) {
+    if (!entries || entries.length === 0) {
+      console.log('No entries to process');
       return new Response(
         JSON.stringify({ 
-          message: 'No messages to process',
+          message: 'No entries to process',
           processed: 0,
-          total: 0
+          failed: 0,
+          remaining: 0,
+          hasMore: false
         }),
         {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -49,16 +55,18 @@ serve(async (req) => {
       );
     }
 
+    console.log(`Found ${entries.length} entries to process`);
+
     let processed = 0;
     let failed = 0;
 
-    // Process messages in smaller batches to avoid rate limits
+    // Process entries in smaller batches to avoid rate limits
     const smallBatchSize = 10;
-    for (let i = 0; i < messages.length; i += smallBatchSize) {
-      const batch = messages.slice(i, i + smallBatchSize);
+    for (let i = 0; i < entries.length; i += smallBatchSize) {
+      const batch = entries.slice(i, i + smallBatchSize);
       
       await Promise.all(
-        batch.map(async (msg) => {
+        batch.map(async (entry) => {
           try {
             // Generate embedding
             const embeddingResponse = await fetch(
@@ -69,54 +77,59 @@ serve(async (req) => {
                   'Authorization': `Bearer ${Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')}`,
                   'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ text: msg.content }),
+                body: JSON.stringify({ text: entry.content }),
               }
             );
 
             if (!embeddingResponse.ok) {
-              console.error(`Failed to generate embedding for message ${msg.id}`);
+              console.error(`Failed to generate embedding for entry ${entry.id}`);
               failed++;
               return;
             }
 
             const embeddingData = await embeddingResponse.json();
-            const embedding = JSON.stringify(embeddingData.embedding);
+            // Format as Postgres vector literal
+            const embedding = `[${embeddingData.embedding.join(',')}]`;
 
-            // Update message with embedding
+            // Update entry with embedding
             const { error: updateError } = await supabaseClient
-              .from('messages')
+              .from('entries')
               .update({ embedding })
-              .eq('id', msg.id);
+              .eq('id', entry.id);
 
             if (updateError) {
-              console.error(`Failed to update message ${msg.id}:`, updateError);
+              console.error(`Failed to update entry ${entry.id}:`, updateError);
               failed++;
             } else {
               processed++;
+              console.log(`Processed entry ${entry.id}`);
             }
           } catch (err) {
-            console.error(`Error processing message ${msg.id}:`, err);
+            console.error(`Error processing entry ${entry.id}:`, err);
             failed++;
           }
         })
       );
 
       // Small delay between batches to avoid rate limits
-      if (i + smallBatchSize < messages.length) {
+      if (i + smallBatchSize < entries.length) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 
-    // Check if there are more messages to process
+    // Check if there are more entries to process
     const { count: remainingCount } = await supabaseClient
-      .from('messages')
+      .from('entries')
       .select('id', { count: 'exact', head: true })
       .eq('user_id', userId)
-      .is('embedding', null);
+      .is('embedding', null)
+      .eq('archived', false);
+
+    console.log(`Completed: ${processed} processed, ${failed} failed, ${remainingCount || 0} remaining`);
 
     return new Response(
       JSON.stringify({
-        message: `Processed ${processed} messages successfully, ${failed} failed`,
+        message: `Processed ${processed} entries successfully, ${failed} failed`,
         processed,
         failed,
         remaining: remainingCount || 0,

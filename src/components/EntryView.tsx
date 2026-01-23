@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { parseListItems } from "@/lib/parseListItems";
 import type { Entry } from "./EntryCard";
 
 interface EntryViewProps {
@@ -62,6 +63,14 @@ const typeColors: Record<string, string> = {
   reminder: "bg-red-500/10 text-red-500 border-red-500/20",
   note: "bg-gray-500/10 text-gray-500 border-gray-500/20",
 };
+
+// Helper to transform Supabase response to Entry type
+const toEntry = (data: any): Entry => ({
+  ...data,
+  tags: data.tags || [],
+  extracted_data: (data.extracted_data as Record<string, unknown>) || {},
+  list_items: parseListItems(data.list_items),
+});
 
 const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps) => {
   const [isEditing, setIsEditing] = useState(false);
@@ -113,8 +122,8 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
 
       toast.success("Entry updated");
       setIsEditing(false);
-      if (onUpdate) {
-        onUpdate(data as Entry);
+      if (onUpdate && data) {
+        onUpdate(toEntry(data));
       }
     } catch (error: any) {
       toast.error(error.message || "Failed to update");
@@ -137,8 +146,8 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
 
       if (error) throw error;
 
-      if (onUpdate) {
-        onUpdate(data as Entry);
+      if (onUpdate && data) {
+        onUpdate(toEntry(data));
       }
     } catch (error) {
       toast.error("Failed to update item");
@@ -157,8 +166,8 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
       if (error) throw error;
 
       toast.success(entry.starred ? "Unstarred" : "Starred");
-      if (onUpdate) {
-        onUpdate(data as Entry);
+      if (onUpdate && data) {
+        onUpdate(toEntry(data));
       }
     } catch (error) {
       toast.error("Failed to update");

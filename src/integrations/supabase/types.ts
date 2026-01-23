@@ -279,6 +279,28 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      search_entries_by_embedding: {
+        Args: {
+          filter_user_id: string
+          match_count?: number
+          match_threshold?: number
+          query_embedding: string
+        }
+        Returns: {
+          content: string
+          content_subtype: string
+          content_type: string
+          created_at: string
+          extracted_data: Json
+          id: string
+          importance_score: number
+          list_items: Json
+          similarity: number
+          starred: boolean
+          tags: string[]
+          title: string
+        }[]
+      }
       search_messages_by_embedding: {
         Args: {
           filter_user_id: string

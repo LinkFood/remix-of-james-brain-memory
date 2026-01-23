@@ -208,7 +208,7 @@ serve(async (req) => {
           content_subtype: classification.subtype || null,
           tags: classification.tags,
           extracted_data: classification.extractedData || {},
-          embedding: embedding || null,
+          embedding: embedding ? `[${embedding.join(',')}]` : null,
           importance_score: importanceScore,
           list_items: classification.listItems || [],
           source,
