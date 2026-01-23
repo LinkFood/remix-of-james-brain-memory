@@ -14,71 +14,6 @@ export type Database = {
   }
   public: {
     Tables: {
-      entries: {
-        Row: {
-          id: string
-          user_id: string
-          content: string
-          title: string | null
-          content_type: string
-          content_subtype: string | null
-          tags: string[]
-          extracted_data: Json
-          embedding: string | null
-          importance_score: number | null
-          list_items: Json
-          source: string
-          starred: boolean
-          archived: boolean
-          created_at: string
-          updated_at: string
-        }
-        Insert: {
-          id?: string
-          user_id: string
-          content: string
-          title?: string | null
-          content_type?: string
-          content_subtype?: string | null
-          tags?: string[]
-          extracted_data?: Json
-          embedding?: string | null
-          importance_score?: number | null
-          list_items?: Json
-          source?: string
-          starred?: boolean
-          archived?: boolean
-          created_at?: string
-          updated_at?: string
-        }
-        Update: {
-          id?: string
-          user_id?: string
-          content?: string
-          title?: string | null
-          content_type?: string
-          content_subtype?: string | null
-          tags?: string[]
-          extracted_data?: Json
-          embedding?: string | null
-          importance_score?: number | null
-          list_items?: Json
-          source?: string
-          starred?: boolean
-          archived?: boolean
-          created_at?: string
-          updated_at?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "entries_user_id_fkey"
-            columns: ["user_id"]
-            isOneToOne: false
-            referencedRelation: "profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       brain_reports: {
         Row: {
           conversation_stats: Json | null
@@ -287,28 +222,6 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      search_entries_by_embedding: {
-        Args: {
-          query_embedding: string
-          filter_user_id: string
-          match_count?: number
-          match_threshold?: number
-        }
-        Returns: {
-          id: string
-          content: string
-          title: string | null
-          content_type: string
-          content_subtype: string | null
-          tags: string[]
-          extracted_data: Json
-          importance_score: number | null
-          list_items: Json
-          starred: boolean
-          created_at: string
-          similarity: number
-        }[]
-      }
       search_messages_by_embedding: {
         Args: {
           filter_user_id: string
