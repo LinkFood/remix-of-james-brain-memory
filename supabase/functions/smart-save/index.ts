@@ -13,33 +13,11 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
-
-// Simple in-memory rate limiting (100 requests per minute per user)
-const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
-const RATE_LIMIT = 100;
-const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
-
-function checkRateLimit(userId: string): boolean {
-  const now = Date.now();
-  const userLimit = rateLimitMap.get(userId);
-
-  if (!userLimit || now > userLimit.resetTime) {
-    rateLimitMap.set(userId, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
-    return true;
-  }
-
-  if (userLimit.count >= RATE_LIMIT) {
-    return false;
-  }
-
-  userLimit.count++;
-  return true;
-}
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { extractUserId } from '../_shared/auth.ts';
+import { checkRateLimit, RATE_LIMIT_CONFIGS, getRateLimitHeaders } from '../_shared/rateLimit.ts';
+import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
+import { sanitizeString, validateContentLength, parseJsonBody } from '../_shared/validation.ts';
 
 interface ClassificationResult {
   type: string;
@@ -50,8 +28,7 @@ interface ClassificationResult {
   appendTo?: string;
   listItems?: Array<{ text: string; checked: boolean }>;
   imageDescription?: string;
-  documentText?: string; // Full extracted text from PDF
-  // Calendar/time fields
+  documentText?: string;
   eventDate?: string;
   eventTime?: string;
   isRecurring?: boolean;
@@ -74,56 +51,73 @@ interface Entry {
   updated_at: string;
 }
 
+interface SmartSaveRequest {
+  content?: string;
+  source?: string;
+  imageUrl?: string;
+}
+
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
+
+  const corsHeaders = getCorsHeaders(req);
 
   try {
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
-
-    // SECURITY FIX: Extract user ID from JWT instead of request body
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
-      return new Response(
-        JSON.stringify({ error: 'Authorization header required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const jwt = authHeader.replace('Bearer ', '');
-    const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
-    
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid or expired token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const userId = user.id;
-
-    const { content, source = 'manual', imageUrl } = await req.json();
-
-    // Content is optional if imageUrl is provided
-    if (!content && !imageUrl) {
-      return new Response(
-        JSON.stringify({ error: 'Either content or imageUrl is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+    // Authenticate user
+    const { userId, error: authError } = await extractUserId(req);
+    if (authError || !userId) {
+      return errorResponse(req, authError ?? 'Unauthorized', 401);
     }
 
     // Check rate limit
-    if (!checkRateLimit(userId)) {
+    const rateLimit = checkRateLimit(userId, RATE_LIMIT_CONFIGS.standard);
+    if (!rateLimit.allowed) {
       return new Response(
-        JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
-        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ 
+          error: 'Rate limit exceeded. Please try again later.',
+          retryAfter: Math.ceil(rateLimit.resetIn / 1000),
+        }),
+        { 
+          status: 429, 
+          headers: { 
+            ...corsHeaders, 
+            ...getRateLimitHeaders(rateLimit),
+            'Content-Type': 'application/json',
+          },
+        }
       );
     }
 
+    // Parse and validate request body
+    const { data: body, error: parseError } = await parseJsonBody<SmartSaveRequest>(req);
+    if (parseError || !body) {
+      return errorResponse(req, parseError ?? 'Invalid request body', 400);
+    }
+
+    const { source = 'manual', imageUrl } = body;
+    const content = body.content ? sanitizeString(body.content) : '';
+
+    // Content is optional if imageUrl is provided
+    if (!content && !imageUrl) {
+      return errorResponse(req, 'Either content or imageUrl is required', 400);
+    }
+
+    // Validate content length if provided
+    if (content) {
+      const contentValidation = validateContentLength(content, 100000);
+      if (!contentValidation.valid) {
+        return errorResponse(req, contentValidation.error ?? 'Content validation failed', 400);
+      }
+    }
+
     console.log(`[smart-save] Processing ${imageUrl ? 'image' : 'text'} dump for user ${userId}`);
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+    const authHeader = req.headers.get('Authorization') ?? '';
 
     // Step 1: Classify content (with vision if imageUrl provided)
     console.log('Step 1: Classifying content...');
@@ -316,22 +310,16 @@ serve(async (req) => {
         ? `Image saved: "${entry!.title}"`
         : `Saved: ${entry!.title || 'Untitled'} · ${classification.type}${entry!.importance_score ? ` · ${entry!.importance_score}/10` : ''}`;
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        entry: entry!,
-        action,
-        summary,
-        classification,
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return successResponse(req, {
+      success: true,
+      entry: entry!,
+      action,
+      summary,
+      classification,
+    }, 200, rateLimit);
 
   } catch (error) {
     console.error('Error in smart-save function:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error occurred' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return serverErrorResponse(req, error instanceof Error ? error : new Error('Unknown error'));
   }
 });
