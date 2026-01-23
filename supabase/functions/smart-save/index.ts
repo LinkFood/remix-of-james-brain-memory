@@ -50,6 +50,7 @@ interface ClassificationResult {
   appendTo?: string;
   listItems?: Array<{ text: string; checked: boolean }>;
   imageDescription?: string;
+  documentText?: string; // Full extracted text from PDF
 }
 
 interface Entry {
@@ -203,10 +204,12 @@ serve(async (req) => {
     if (action === 'created') {
       console.log('Step 3: Creating new entry...');
 
-      // Build the content to embed - include image description if available
-      const contentForEmbedding = classification.imageDescription 
-        ? `${content || ''}\n\nImage description: ${classification.imageDescription}`.trim()
-        : content || classification.suggestedTitle || '';
+      // Build the content to embed - include image description or document text if available
+      const contentForEmbedding = classification.documentText
+        ? `${content || ''}\n\nDocument content: ${classification.documentText}`.trim()
+        : classification.imageDescription 
+          ? `${content || ''}\n\nImage description: ${classification.imageDescription}`.trim()
+          : content || classification.suggestedTitle || '';
 
       // PARALLEL: Generate embedding and calculate importance at the same time
       console.log('Generating embedding + calculating importance in parallel...');
@@ -248,9 +251,14 @@ serve(async (req) => {
       }
 
       // Insert new entry
+      // For PDFs, store the extracted document text as the content for searchability
+      const entryContent = classification.documentText 
+        ? (content ? `${content}\n\n---\n\n${classification.documentText}` : classification.documentText)
+        : (content || classification.imageDescription || '');
+        
       const entryData = {
         user_id: userId,
-        content: content || classification.imageDescription || '',
+        content: entryContent,
         title: classification.suggestedTitle,
         content_type: classification.type,
         content_subtype: classification.subtype || null,
@@ -258,6 +266,7 @@ serve(async (req) => {
         extracted_data: {
           ...classification.extractedData,
           ...(classification.imageDescription && { imageDescription: classification.imageDescription }),
+          ...(classification.documentText && { documentText: classification.documentText }),
         },
         embedding: embedding ? `[${embedding.join(',')}]` : null,
         importance_score: importanceScore,

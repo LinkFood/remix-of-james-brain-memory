@@ -15,7 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
-import { Send, Loader2, Sparkles, Check, Upload, Image, X, Mic, MicOff } from "lucide-react";
+import { Send, Loader2, Sparkles, Check, Upload, Image, X, Mic, MicOff, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -56,8 +56,12 @@ interface DumpInputProps {
   className?: string;
 }
 
-const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+// Support images AND PDFs
+const ALLOWED_FILE_TYPES = [
+  'image/png', 'image/jpeg', 'image/webp', 'image/gif',
+  'application/pdf'
+];
+const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB for PDFs
 
 const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
   userId,
@@ -71,7 +75,7 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
-  const [previewImage, setPreviewImage] = useState<{ file: File; url: string } | null>(null);
+  const [previewFile, setPreviewFile] = useState<{ file: File; url: string; isPdf: boolean } | null>(null);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -152,18 +156,18 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
   // Cleanup preview URL on unmount
   useEffect(() => {
     return () => {
-      if (previewImage?.url) {
-        URL.revokeObjectURL(previewImage.url);
+      if (previewFile?.url && !previewFile.isPdf) {
+        URL.revokeObjectURL(previewFile.url);
       }
     };
-  }, [previewImage]);
+  }, [previewFile]);
 
   const validateFile = (file: File): string | null => {
-    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
-      return "Only images (PNG, JPG, WebP, GIF) are supported";
+    if (!ALLOWED_FILE_TYPES.includes(file.type)) {
+      return "Only images (PNG, JPG, WebP, GIF) and PDFs are supported";
     }
     if (file.size > MAX_FILE_SIZE) {
-      return "File too large. Max size is 10MB";
+      return "File too large. Max size is 20MB";
     }
     return null;
   };
@@ -176,21 +180,23 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
     }
     
     // Clean up previous preview
-    if (previewImage?.url) {
-      URL.revokeObjectURL(previewImage.url);
+    if (previewFile?.url && !previewFile.isPdf) {
+      URL.revokeObjectURL(previewFile.url);
     }
     
-    setPreviewImage({
+    const isPdf = file.type === 'application/pdf';
+    setPreviewFile({
       file,
-      url: URL.createObjectURL(file),
+      url: isPdf ? '' : URL.createObjectURL(file),
+      isPdf,
     });
   };
 
   const clearPreview = () => {
-    if (previewImage?.url) {
-      URL.revokeObjectURL(previewImage.url);
+    if (previewFile?.url && !previewFile.isPdf) {
+      URL.revokeObjectURL(previewFile.url);
     }
-    setPreviewImage(null);
+    setPreviewFile(null);
   };
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -221,7 +227,8 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
     if (!items) return;
 
     for (let i = 0; i < items.length; i++) {
-      if (items[i].type.startsWith('image/')) {
+      const type = items[i].type;
+      if (type.startsWith('image/') || type === 'application/pdf') {
         e.preventDefault();
         const file = items[i].getAsFile();
         if (file) {
@@ -258,10 +265,10 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
   };
 
   const handleDump = async () => {
-    if ((!content.trim() && !previewImage) || loading) return;
+    if ((!content.trim() && !previewFile) || loading) return;
 
     const contentToSave = content.trim();
-    const imageToUpload = previewImage;
+    const fileToUpload = previewFile;
     
     setLoading(true);
     setContent(""); // Clear immediately for better UX
@@ -270,11 +277,12 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
     // Create optimistic entry
     let tempId: string | null = null;
     if (onOptimisticEntry) {
+      const fileLabel = fileToUpload?.isPdf ? "[Processing PDF...]" : "[Processing image...]";
       tempId = onOptimisticEntry({
         id: `temp-${Date.now()}`,
-        content: contentToSave || (imageToUpload ? "[Processing image...]" : ""),
-        title: contentToSave?.slice(0, 50) || "Image",
-        content_type: imageToUpload ? "image" : "note",
+        content: contentToSave || (fileToUpload ? fileLabel : ""),
+        title: contentToSave?.slice(0, 50) || (fileToUpload?.isPdf ? "PDF Document" : "Image"),
+        content_type: fileToUpload?.isPdf ? "document" : (fileToUpload ? "image" : "note"),
         tags: [],
         importance_score: null,
         starred: false,
@@ -285,19 +293,21 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
         source: "manual",
         list_items: [],
         extracted_data: {},
-        image_url: imageToUpload?.url || null,
+        image_url: fileToUpload?.url || null,
         _pending: true,
       });
     }
 
     try {
-      let imageUrl: string | null = null;
+      let fileUrl: string | null = null;
       
-      // Upload image if present
-      if (imageToUpload) {
-        setUploadProgress("Uploading image...");
-        imageUrl = await uploadImage(imageToUpload.file);
-        setUploadProgress("Analyzing with AI...");
+      // Upload file if present
+      if (fileToUpload) {
+        const uploadLabel = fileToUpload.isPdf ? "Uploading PDF..." : "Uploading image...";
+        setUploadProgress(uploadLabel);
+        fileUrl = await uploadImage(fileToUpload.file);
+        const analyzeLabel = fileToUpload.isPdf ? "Extracting PDF content..." : "Analyzing with AI...";
+        setUploadProgress(analyzeLabel);
       }
 
       const { data, error } = await supabase.functions.invoke("smart-save", {
@@ -305,7 +315,7 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
           content: contentToSave || "",
           userId,
           source: "manual",
-          imageUrl,
+          imageUrl: fileUrl,
         },
       });
 
@@ -319,9 +329,11 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
       setSuccess(true);
       setUploadProgress(null);
       
-      const successMessage = imageUrl 
-        ? "Image analyzed and saved!" 
-        : (data.summary || "Saved!");
+      const successMessage = fileToUpload?.isPdf 
+        ? "PDF extracted and saved!"
+        : fileUrl 
+          ? "Image analyzed and saved!" 
+          : (data.summary || "Saved!");
       
       toast.success(successMessage, {
         description: data.classification?.type
@@ -345,8 +357,8 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
       }
       // Restore content on failure
       setContent(contentToSave);
-      if (imageToUpload) {
-        setPreviewImage(imageToUpload);
+      if (fileToUpload) {
+        setPreviewFile(fileToUpload);
       }
     } finally {
       setLoading(false);
@@ -361,12 +373,12 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
     }
   };
 
-  const hasContent = content.trim() || previewImage;
+  const hasContent = content.trim() || previewFile;
 
   return (
     <Card 
       className={cn(
-        "p-4 transition-all duration-300",
+        "p-4 transition-all duration-300 relative",
         success && "ring-2 ring-green-500/50 bg-green-500/5",
         isDragging && "ring-2 ring-primary border-primary bg-primary/5",
         className
@@ -381,16 +393,16 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
           <div className="absolute inset-0 flex items-center justify-center bg-primary/10 backdrop-blur-sm rounded-lg z-10 pointer-events-none">
             <div className="flex flex-col items-center gap-2 text-primary">
               <Upload className="w-8 h-8 animate-bounce" />
-              <span className="font-medium">Drop image here</span>
+              <span className="font-medium">Drop image or PDF here</span>
             </div>
           </div>
         )}
 
-        {/* Image preview */}
-        {previewImage && (
+        {/* File preview - Image */}
+        {previewFile && !previewFile.isPdf && (
           <div className="relative inline-block">
             <img 
-              src={previewImage.url} 
+              src={previewFile.url} 
               alt="Preview" 
               className="max-h-32 rounded-lg border border-border"
             />
@@ -406,6 +418,28 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
           </div>
         )}
 
+        {/* File preview - PDF */}
+        {previewFile?.isPdf && (
+          <div className="relative inline-flex items-center gap-3 p-3 bg-muted rounded-lg border border-border">
+            <FileText className="w-8 h-8 text-red-500 shrink-0" />
+            <div className="min-w-0">
+              <p className="font-medium text-sm truncate max-w-[200px]">{previewFile.file.name}</p>
+              <p className="text-xs text-muted-foreground">
+                {(previewFile.file.size / 1024 / 1024).toFixed(2)} MB
+              </p>
+            </div>
+            <Button
+              variant="destructive"
+              size="icon"
+              className="w-6 h-6 shrink-0"
+              onClick={clearPreview}
+              disabled={loading}
+            >
+              <X className="w-3 h-3" />
+            </Button>
+          </div>
+        )}
+
         <div className="relative">
           <Textarea
             ref={textareaRef}
@@ -413,7 +447,7 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
             onChange={(e) => setContent(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={previewImage ? "Add a note about this image (optional)..." : "Dump anything... text, ideas, or drop/paste images"}
+            placeholder={previewFile ? (previewFile.isPdf ? "Add a note about this PDF (optional)..." : "Add a note about this image (optional)...") : "Dump anything... text, ideas, images, or PDFs"}
             className={cn(
               "min-h-[100px] max-h-[300px] resize-none text-base",
               "bg-background/50 border-border/50",
@@ -441,11 +475,11 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
               <span className="sm:hidden">AI-powered</span>
             </div>
             
-            {/* Image upload button */}
+            {/* File upload button */}
             <input
               ref={fileInputRef}
               type="file"
-              accept={ALLOWED_IMAGE_TYPES.join(',')}
+              accept={ALLOWED_FILE_TYPES.join(',')}
               className="hidden"
               onChange={(e) => {
                 const file = e.target.files?.[0];
@@ -461,7 +495,7 @@ const DumpInput = forwardRef<DumpInputHandle, DumpInputProps>(({
               disabled={loading}
             >
               <Image className="w-4 h-4" />
-              <span className="hidden sm:inline ml-1">Image</span>
+              <span className="hidden sm:inline ml-1">File</span>
             </Button>
             
             {/* Voice input button */}

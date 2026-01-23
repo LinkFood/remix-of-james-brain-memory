@@ -19,7 +19,7 @@ const corsHeaders = {
 };
 
 interface ClassificationResult {
-  type: 'code' | 'list' | 'idea' | 'link' | 'contact' | 'event' | 'reminder' | 'note' | 'image';
+  type: 'code' | 'list' | 'idea' | 'link' | 'contact' | 'event' | 'reminder' | 'note' | 'image' | 'document';
   subtype?: string;
   suggestedTitle: string;
   tags: string[];
@@ -27,6 +27,7 @@ interface ClassificationResult {
   appendTo?: string;
   listItems?: Array<{ text: string; checked: boolean }>;
   imageDescription?: string;
+  documentText?: string; // Full extracted text from PDF
 }
 
 serve(async (req) => {
@@ -75,17 +76,18 @@ serve(async (req) => {
       ? `\n\nExisting lists the user has (consider appending to these if content matches):\n${recentEntries.map(e => `- ID: ${e.id}, Title: "${e.title || 'Untitled'}", Type: ${e.content_type}`).join('\n')}`
       : '';
 
-    const systemPrompt = `You are a content classifier for a "brain dump" app. Users paste anything - code, lists, ideas, links, notes, or images - and you classify it.
+    const systemPrompt = `You are a content classifier for a "brain dump" app. Users paste anything - code, lists, ideas, links, notes, images, or PDFs - and you classify it.
 
 Analyze the content and determine:
-1. TYPE: code | list | idea | link | contact | event | reminder | note | image
-2. SUBTYPE (optional): For lists: grocery, todo, shopping, reading, etc. For code: javascript, python, etc. For images: screenshot, diagram, photo, receipt, whiteboard, document
+1. TYPE: code | list | idea | link | contact | event | reminder | note | image | document
+2. SUBTYPE (optional): For lists: grocery, todo, shopping, reading, etc. For code: javascript, python, etc. For images: screenshot, diagram, photo, receipt, whiteboard. For documents: invoice, contract, report, article, manual, form, letter
 3. SUGGESTED TITLE: A short, descriptive title (max 60 chars)
 4. TAGS: Relevant tags for categorization (max 5)
 5. EXTRACTED DATA: Structured data based on type
 6. APPEND TO: If content should be added to an existing entry, provide the ID
 7. LIST ITEMS: If it's a list, extract individual items
 8. IMAGE DESCRIPTION: For images, perform FORENSIC-LEVEL extraction
+9. DOCUMENT TEXT: For PDFs, extract ALL text content preserving structure
 
 Guidelines:
 - CODE: Contains programming syntax, functions, variables, imports
@@ -97,6 +99,7 @@ Guidelines:
 - REMINDER: Tasks with "tomorrow", "remember to", deadlines
 - NOTE: Everything else - random thoughts, information
 - IMAGE: Photos, screenshots, diagrams, visual content
+- DOCUMENT: PDFs, scanned documents, multi-page content
 
 === CRITICAL: FORENSIC IMAGE EXTRACTION ===
 For ALL images, you MUST perform exhaustive data extraction:
@@ -146,6 +149,19 @@ This is the ONLY way users can search for this content later.
 OVER-EXTRACT. More data is ALWAYS better than less.
 If you see it, extract it.
 
+=== PDF DOCUMENT EXTRACTION ===
+For PDF documents, you MUST:
+1. Extract EVERY piece of text from the document
+2. Preserve document structure (headings, paragraphs, tables)
+3. Identify document type (invoice, contract, report, receipt, form, letter, manual, article)
+4. Extract key data points:
+   - For invoices/receipts: vendor, date, amounts, line items, total
+   - For contracts: parties involved, dates, key terms
+   - For reports: title, author, date, summary, key findings
+   - For forms: field names and values
+5. Store the full extracted text in documentText field
+6. Create a concise title that describes the document
+
 For lists, extract each item as a separate list_item with checked: false.
 ${recentListsContext}`;
 
@@ -154,24 +170,50 @@ ${recentListsContext}`;
       { role: 'system', content: systemPrompt },
     ];
 
-    // If we have an image, use vision capabilities
+    // Detect if this is a PDF by checking the file path
+    const isPdf = imageUrl && (imageUrl.endsWith('.pdf') || imageUrl.includes('.pdf'));
+    
+    // If we have an image or PDF, use vision capabilities
     if (imageUrl) {
-      console.log('[classify-content] Processing image with vision:', imageUrl);
+      console.log(`[classify-content] Processing ${isPdf ? 'PDF' : 'image'} with vision:`, imageUrl);
+      
+      // For PDFs stored in Supabase, we need to get a signed URL or download the content
+      let fileUrl = imageUrl;
+      if (imageUrl.startsWith('dumps/')) {
+        // Create signed URL for the file
+        const { data: signedData, error: signedError } = await supabase.storage
+          .from('dumps')
+          .createSignedUrl(imageUrl.replace('dumps/', ''), 300);
+        
+        if (signedError) {
+          console.error('[classify-content] Failed to create signed URL:', signedError);
+          throw new Error('Failed to access file');
+        }
+        fileUrl = signedData.signedUrl;
+      }
       
       const userContent: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
       
-      // Add the image
+      // Add the file (Gemini can handle both images and PDFs via URL)
       userContent.push({
         type: 'image_url',
-        image_url: { url: imageUrl },
+        image_url: { url: fileUrl },
       });
       
       // Add text instruction
-      let textPrompt = 'Analyze this image and classify it. ';
+      let textPrompt = isPdf 
+        ? 'Analyze this PDF document and extract ALL content. '
+        : 'Analyze this image and classify it. ';
+        
       if (content) {
         textPrompt += `The user also provided this context: "${content}"\n\n`;
       }
-      textPrompt += `IMPORTANT: Provide a detailed description of what's in the image in the imageDescription field. If it's a screenshot of text or code, extract the actual text/code. If it's a diagram, describe the structure. If it's a receipt, extract the amounts and vendor. This description is critical for making the image searchable later.`;
+      
+      if (isPdf) {
+        textPrompt += `IMPORTANT: This is a PDF document. Extract ALL text content, preserve structure (headings, paragraphs, tables, lists), identify the document type, and extract all key data. Store the full extracted text in the documentText field - this is critical for making the document fully searchable.`;
+      } else {
+        textPrompt += `IMPORTANT: Provide a detailed description of what's in the image in the imageDescription field. If it's a screenshot of text or code, extract the actual text/code. If it's a diagram, describe the structure. If it's a receipt, extract the amounts and vendor. This description is critical for making the image searchable later.`;
+      }
       
       userContent.push({ type: 'text', text: textPrompt });
       
@@ -190,9 +232,10 @@ ${recentListsContext}`;
       });
     }
 
-    // Use best vision model for images, fast model for text
+    // Use best vision model for images/PDFs, fast model for text
+    // Always use Pro for PDFs since they need thorough extraction
     const model = imageUrl ? 'google/gemini-2.5-pro' : 'google/gemini-2.5-flash';
-    console.log(`[classify-content] Using model: ${model}, hasImage: ${!!imageUrl}`);
+    console.log(`[classify-content] Using model: ${model}, hasFile: ${!!imageUrl}, isPdf: ${isPdf}`);
 
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
@@ -214,12 +257,12 @@ ${recentListsContext}`;
                 properties: {
                   type: {
                     type: 'string',
-                    enum: ['code', 'list', 'idea', 'link', 'contact', 'event', 'reminder', 'note', 'image'],
+                    enum: ['code', 'list', 'idea', 'link', 'contact', 'event', 'reminder', 'note', 'image', 'document'],
                     description: 'The primary content type'
                   },
                   subtype: {
                     type: 'string',
-                    description: 'More specific categorization (e.g., grocery, todo, javascript, screenshot, diagram)'
+                    description: 'More specific categorization (e.g., grocery, todo, javascript, screenshot, diagram, invoice, contract, report)'
                   },
                   suggestedTitle: {
                     type: 'string',
@@ -264,6 +307,10 @@ ${recentListsContext}`;
                   imageDescription: {
                     type: 'string',
                     description: 'For images: detailed description of what is visible, including any text, code, or structured content'
+                  },
+                  documentText: {
+                    type: 'string',
+                    description: 'For PDFs/documents: the full extracted text content, preserving structure'
                   }
                 },
                 required: ['type', 'suggestedTitle', 'tags'],
@@ -274,7 +321,7 @@ ${recentListsContext}`;
         ],
         tool_choice: { type: 'function', function: { name: 'classify_content' } },
         temperature: 0.3,
-        max_tokens: 1500
+        max_tokens: 4000 // Increased for PDF text extraction
       }),
     });
 
@@ -296,13 +343,14 @@ ${recentListsContext}`;
     console.log('Classification response:', JSON.stringify(aiResponse, null, 2));
 
     const toolCall = aiResponse.choices[0]?.message?.tool_calls?.[0];
+    
     if (!toolCall) {
       // Fallback if no tool call
       console.warn('[classify-content] No tool call in response, using fallback');
       const fallbackResult: ClassificationResult = {
-        type: imageUrl ? 'image' : 'note',
-        subtype: imageUrl ? 'photo' : undefined,
-        suggestedTitle: content?.slice(0, 50) || (imageUrl ? 'Uploaded Image' : 'Untitled'),
+        type: isPdf ? 'document' : (imageUrl ? 'image' : 'note'),
+        subtype: isPdf ? 'unknown' : (imageUrl ? 'photo' : undefined),
+        suggestedTitle: content?.slice(0, 50) || (isPdf ? 'PDF Document' : (imageUrl ? 'Uploaded Image' : 'Untitled')),
         tags: [],
         extractedData: {},
         listItems: [],
@@ -316,14 +364,15 @@ ${recentListsContext}`;
 
     // Ensure required fields have defaults
     const result: ClassificationResult = {
-      type: classification.type || (imageUrl ? 'image' : 'note'),
+      type: classification.type || (isPdf ? 'document' : (imageUrl ? 'image' : 'note')),
       subtype: classification.subtype,
-      suggestedTitle: classification.suggestedTitle || (imageUrl ? 'Uploaded Image' : 'Untitled'),
+      suggestedTitle: classification.suggestedTitle || (isPdf ? 'PDF Document' : (imageUrl ? 'Uploaded Image' : 'Untitled')),
       tags: classification.tags || [],
       extractedData: classification.extractedData || {},
       appendTo: classification.appendTo,
       listItems: classification.listItems || [],
-      imageDescription: classification.imageDescription
+      imageDescription: classification.imageDescription,
+      documentText: classification.documentText
     };
 
     console.log('Classification result:', result);
