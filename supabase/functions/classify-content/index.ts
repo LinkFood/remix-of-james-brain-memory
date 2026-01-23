@@ -10,13 +10,12 @@
  */
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { extractUserId } from '../_shared/auth.ts';
+import { checkRateLimit, getRateLimitHeaders, RATE_LIMIT_CONFIGS } from '../_shared/rateLimit.ts';
+import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
+import { sanitizeString, validateContentLength, parseJsonBody } from '../_shared/validation.ts';
 
 interface ClassificationResult {
   type: 'code' | 'list' | 'idea' | 'link' | 'contact' | 'event' | 'reminder' | 'note' | 'image' | 'document';
@@ -27,18 +26,24 @@ interface ClassificationResult {
   appendTo?: string;
   listItems?: Array<{ text: string; checked: boolean }>;
   imageDescription?: string;
-  documentText?: string; // Full extracted text from PDF
-  // Calendar/time fields
-  eventDate?: string; // ISO date string (YYYY-MM-DD)
-  eventTime?: string; // Time string (HH:MM)
+  documentText?: string;
+  eventDate?: string;
+  eventTime?: string;
   isRecurring?: boolean;
   recurrencePattern?: 'daily' | 'weekly' | 'monthly' | 'yearly';
 }
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+interface ClassifyRequest {
+  content?: string;
+  imageUrl?: string;
+}
+
+Deno.serve(async (req) => {
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
+
+  const corsHeaders = getCorsHeaders(req);
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -47,20 +52,31 @@ serve(async (req) => {
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // SECURITY FIX: Extract user ID from JWT instead of request body
-    const authHeader = req.headers.get('Authorization');
-    let userId: string | null = null;
-    
-    if (authHeader) {
-      const jwt = authHeader.replace('Bearer ', '');
-      const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
-      
-      if (!authError && user) {
-        userId = user.id;
+    // Extract user ID from JWT
+    const { userId, error: authError } = await extractUserId(req);
+
+    // Rate limiting (AI operations)
+    if (userId) {
+      const rateLimitResult = checkRateLimit(`classify:${userId}`, RATE_LIMIT_CONFIGS.ai);
+      if (!rateLimitResult.allowed) {
+        return new Response(
+          JSON.stringify({ error: 'Rate limit exceeded', retryAfter: Math.ceil(rateLimitResult.resetIn / 1000) }),
+          { 
+            status: 429,
+            headers: { ...corsHeaders, ...getRateLimitHeaders(rateLimitResult), 'Content-Type': 'application/json' } 
+          }
+        );
       }
     }
 
-    const { content, imageUrl } = await req.json();
+    // Parse and validate request
+    const { data: body, error: parseError } = await parseJsonBody<ClassifyRequest>(req);
+    if (parseError || !body) {
+      return errorResponse(req, parseError || 'Invalid request body', 400);
+    }
+
+    const content = body.content ? sanitizeString(body.content) : '';
+    const imageUrl = body.imageUrl ? sanitizeString(body.imageUrl) : undefined;
 
     // Fetch recent entries for context (to detect append opportunities)
     let recentEntries: Array<{ id: string; title: string; content_type: string; content: string }> = [];
@@ -136,80 +152,16 @@ RECURRING PATTERNS:
 - "every month", "monthly" → isRecurring: true, recurrencePattern: "monthly"
 - "every year", "yearly" → isRecurring: true, recurrencePattern: "yearly"
 
-Examples:
-- "Dentist appointment tomorrow at 3pm" → eventDate: tomorrow's date, eventTime: "15:00"
-- "Meeting with John next Monday morning" → eventDate: next Monday, eventTime: "09:00"
-- "Weekly standup every Tuesday at 10am" → eventDate: next Tuesday, eventTime: "10:00", isRecurring: true, recurrencePattern: "weekly"
-- "Remember to call mom on her birthday June 15th" → eventDate: "2026-06-15"
-
 Today's date is: ${new Date().toISOString().split('T')[0]}
 
 === CRITICAL: FORENSIC IMAGE EXTRACTION ===
-For ALL images, you MUST perform exhaustive data extraction:
-
-1. TEXT EXTRACTION (OCR-style):
-   - Extract EVERY piece of visible text, word-for-word
-   - Include ALL numbers, percentages, dates, symbols, ticker symbols
-   - Preserve structure (headers, labels, values, columns)
-   - Capture small text, watermarks, timestamps
-
-2. FINANCIAL/CHART IMAGES:
-   - Ticker symbols (TSLA, AAPL, BTC, etc.)
-   - Current prices, price changes, percentages
-   - Dates, timeframes, intervals
-   - Indicators (RSI, MACD, moving averages, volume)
-   - Support/resistance levels, trend lines
-   - Any visible order book data, bid/ask
-
-3. RECEIPTS/INVOICES/DOCUMENTS:
-   - Vendor/store name, logo text
-   - Date, time, transaction ID
-   - All line items with prices
-   - Subtotal, tax, tips, total
-   - Payment method, last 4 digits
-   - Address, phone numbers
-
-4. SCREENSHOTS OF APPS/WEBSITES:
-   - App name, page title, URL if visible
-   - ALL visible data: emails, names, numbers, addresses
-   - Button labels, menu items
-   - Notification text, error messages
-   - Form field contents
-
-5. PHOTOS WITH TEXT:
-   - Signs, labels, business names
-   - Handwritten notes (transcribe fully)
-   - Product names, model numbers
-   - Prices, barcodes if readable
-
-6. DIAGRAMS/WIREFRAMES:
-   - All labels, annotations, arrows
-   - Component names, flow directions
-   - Notes, comments, measurements
-
-The imageDescription field MUST contain ALL extracted data in structured format.
-This is the ONLY way users can search for this content later.
-OVER-EXTRACT. More data is ALWAYS better than less.
-If you see it, extract it.
-
-=== PDF DOCUMENT EXTRACTION ===
-For PDF documents, you MUST:
-1. Extract EVERY piece of text from the document
-2. Preserve document structure (headings, paragraphs, tables)
-3. Identify document type (invoice, contract, report, receipt, form, letter, manual, article)
-4. Extract key data points:
-   - For invoices/receipts: vendor, date, amounts, line items, total
-   - For contracts: parties involved, dates, key terms
-   - For reports: title, author, date, summary, key findings
-   - For forms: field names and values
-5. Store the full extracted text in documentText field
-6. Create a concise title that describes the document
+For ALL images, you MUST perform exhaustive data extraction including ALL visible text, numbers, financial data, receipts, screenshots, and diagrams.
 
 For lists, extract each item as a separate list_item with checked: false.
 ${recentListsContext}`;
 
     // Build messages array
-    const messages: Array<{ role: string; content: any }> = [
+    const messages: Array<{ role: string; content: unknown }> = [
       { role: 'system', content: systemPrompt },
     ];
 
@@ -220,30 +172,27 @@ ${recentListsContext}`;
     if (imageUrl) {
       console.log(`[classify-content] Processing ${isPdf ? 'PDF' : 'image'} with vision:`, imageUrl);
       
-      // For PDFs stored in Supabase, we need to get a signed URL or download the content
+      // For PDFs stored in Supabase, we need to get a signed URL
       let fileUrl = imageUrl;
       if (imageUrl.startsWith('dumps/')) {
-        // Create signed URL for the file
         const { data: signedData, error: signedError } = await supabase.storage
           .from('dumps')
           .createSignedUrl(imageUrl.replace('dumps/', ''), 300);
         
         if (signedError) {
           console.error('[classify-content] Failed to create signed URL:', signedError);
-          throw new Error('Failed to access file');
+          return serverErrorResponse(req, 'Failed to access file');
         }
         fileUrl = signedData.signedUrl;
       }
       
       const userContent: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
       
-      // Add the file (Gemini can handle both images and PDFs via URL)
       userContent.push({
         type: 'image_url',
         image_url: { url: fileUrl },
       });
       
-      // Add text instruction
       let textPrompt = isPdf 
         ? 'Analyze this PDF document and extract ALL content. '
         : 'Analyze this image and classify it. ';
@@ -253,9 +202,9 @@ ${recentListsContext}`;
       }
       
       if (isPdf) {
-        textPrompt += `IMPORTANT: This is a PDF document. Extract ALL text content, preserve structure (headings, paragraphs, tables, lists), identify the document type, and extract all key data. Store the full extracted text in the documentText field - this is critical for making the document fully searchable.`;
+        textPrompt += `IMPORTANT: This is a PDF document. Extract ALL text content, preserve structure (headings, paragraphs, tables, lists), identify the document type, and extract all key data.`;
       } else {
-        textPrompt += `IMPORTANT: Provide a detailed description of what's in the image in the imageDescription field. If it's a screenshot of text or code, extract the actual text/code. If it's a diagram, describe the structure. If it's a receipt, extract the amounts and vendor. This description is critical for making the image searchable later.`;
+        textPrompt += `IMPORTANT: Provide a detailed description of what's in the image in the imageDescription field.`;
       }
       
       userContent.push({ type: 'text', text: textPrompt });
@@ -264,11 +213,14 @@ ${recentListsContext}`;
     } else {
       // Text-only classification
       if (!content) {
-        return new Response(
-          JSON.stringify({ error: 'Content is required for text classification' }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse(req, 'Content is required for text classification', 400);
       }
+      
+      const validation = validateContentLength(content, 50000);
+      if (!validation.valid) {
+        return errorResponse(req, validation.error!, 400);
+      }
+      
       messages.push({
         role: 'user',
         content: `Classify this content:\n\n${content}`,
@@ -276,7 +228,6 @@ ${recentListsContext}`;
     }
 
     // Use best vision model for images/PDFs, fast model for text
-    // Always use Pro for PDFs since they need thorough extraction
     const model = imageUrl ? 'google/gemini-2.5-pro' : 'google/gemini-2.5-flash';
     console.log(`[classify-content] Using model: ${model}, hasFile: ${!!imageUrl}, isPdf: ${isPdf}`);
 
@@ -303,74 +254,29 @@ ${recentListsContext}`;
                     enum: ['code', 'list', 'idea', 'link', 'contact', 'event', 'reminder', 'note', 'image', 'document'],
                     description: 'The primary content type'
                   },
-                  subtype: {
-                    type: 'string',
-                    description: 'More specific categorization (e.g., grocery, todo, javascript, screenshot, diagram, invoice, contract, report)'
-                  },
-                  suggestedTitle: {
-                    type: 'string',
-                    description: 'A short, descriptive title for the content'
-                  },
-                  tags: {
-                    type: 'array',
-                    items: { type: 'string' },
-                    description: 'Relevant tags for categorization'
-                  },
-                  extractedData: {
-                    type: 'object',
-                    description: 'Structured data extracted from content',
-                    properties: {
-                      language: { type: 'string' },
-                      description: { type: 'string' },
-                      url: { type: 'string' },
-                      date: { type: 'string' },
-                      items: { type: 'array', items: { type: 'string' } },
-                      dueDate: { type: 'string' },
-                      task: { type: 'string' },
-                      amount: { type: 'number' },
-                      vendor: { type: 'string' }
-                    }
-                  },
-                  appendTo: {
-                    type: 'string',
-                    description: 'ID of existing entry to append to (if applicable)'
-                  },
+                  subtype: { type: 'string', description: 'More specific categorization' },
+                  suggestedTitle: { type: 'string', description: 'A short, descriptive title' },
+                  tags: { type: 'array', items: { type: 'string' }, description: 'Relevant tags' },
+                  extractedData: { type: 'object', description: 'Structured data extracted from content' },
+                  appendTo: { type: 'string', description: 'ID of existing entry to append to' },
                   listItems: {
                     type: 'array',
                     items: {
                       type: 'object',
-                      properties: {
-                        text: { type: 'string' },
-                        checked: { type: 'boolean' }
-                      },
+                      properties: { text: { type: 'string' }, checked: { type: 'boolean' } },
                       required: ['text', 'checked']
                     },
                     description: 'For list types, the individual items'
                   },
-                  imageDescription: {
-                    type: 'string',
-                    description: 'For images: detailed description of what is visible, including any text, code, or structured content'
-                  },
-                  documentText: {
-                    type: 'string',
-                    description: 'For PDFs/documents: the full extracted text content, preserving structure'
-                  },
-                  eventDate: {
-                    type: 'string',
-                    description: 'ISO date string (YYYY-MM-DD) for events, reminders, or any content with a date'
-                  },
-                  eventTime: {
-                    type: 'string',
-                    description: 'Time string (HH:MM) for events or reminders with a specific time'
-                  },
-                  isRecurring: {
-                    type: 'boolean',
-                    description: 'Whether this is a recurring event/reminder'
-                  },
+                  imageDescription: { type: 'string', description: 'For images: detailed description' },
+                  documentText: { type: 'string', description: 'For PDFs: full extracted text' },
+                  eventDate: { type: 'string', description: 'ISO date string (YYYY-MM-DD)' },
+                  eventTime: { type: 'string', description: 'Time string (HH:MM)' },
+                  isRecurring: { type: 'boolean', description: 'Whether this is recurring' },
                   recurrencePattern: {
                     type: 'string',
                     enum: ['daily', 'weekly', 'monthly', 'yearly'],
-                    description: 'Recurrence pattern for recurring events'
+                    description: 'Recurrence pattern'
                   }
                 },
                 required: ['type', 'suggestedTitle', 'tags'],
@@ -381,7 +287,7 @@ ${recentListsContext}`;
         ],
         tool_choice: { type: 'function', function: { name: 'classify_content' } },
         temperature: 0.3,
-        max_tokens: 4000 // Increased for PDF text extraction
+        max_tokens: 4000
       }),
     });
 
@@ -390,22 +296,21 @@ ${recentListsContext}`;
       console.error('AI classification error:', response.status, errorText);
 
       if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
-          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse(req, 'Rate limit exceeded. Please try again later.', 429);
+      }
+      if (response.status === 402) {
+        return errorResponse(req, 'AI credits exhausted', 402);
       }
 
-      throw new Error(`AI request failed: ${response.status}`);
+      return serverErrorResponse(req, `AI request failed: ${response.status}`);
     }
 
     const aiResponse = await response.json();
-    console.log('Classification response:', JSON.stringify(aiResponse, null, 2));
+    console.log('Classification response received');
 
     const toolCall = aiResponse.choices[0]?.message?.tool_calls?.[0];
     
     if (!toolCall) {
-      // Fallback if no tool call
       console.warn('[classify-content] No tool call in response, using fallback');
       const fallbackResult: ClassificationResult = {
         type: isPdf ? 'document' : (imageUrl ? 'image' : 'note'),
@@ -415,9 +320,7 @@ ${recentListsContext}`;
         extractedData: {},
         listItems: [],
       };
-      return new Response(JSON.stringify(fallbackResult), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+      return successResponse(req, fallbackResult);
     }
 
     const classification: ClassificationResult = JSON.parse(toolCall.function.arguments);
@@ -439,18 +342,12 @@ ${recentListsContext}`;
       recurrencePattern: classification.recurrencePattern,
     };
 
-    console.log('Classification result:', result);
+    console.log(`[classify-content] Result: type=${result.type}, title="${result.suggestedTitle}"`);
 
-    return new Response(
-      JSON.stringify(result),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return successResponse(req, result);
 
   } catch (error) {
-    console.error('Error in classify-content function:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error occurred' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    console.error('Error in classify-content:', error);
+    return serverErrorResponse(req, error instanceof Error ? error : 'Classification failed');
   }
 });

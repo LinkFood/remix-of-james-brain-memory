@@ -1,61 +1,57 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+/**
+ * Export All Data Edge Function
+ * 
+ * Exports all user data in various formats (JSON, CSV, Markdown, TXT).
+ * Includes entries, reports, and profile data.
+ */
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { extractUserId, createServiceClient } from '../_shared/auth.ts';
+import { checkRateLimit, getRateLimitHeaders } from '../_shared/rateLimit.ts';
+import { errorResponse, serverErrorResponse } from '../_shared/response.ts';
+import { parseJsonBody } from '../_shared/validation.ts';
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+interface ExportRequest {
+  format?: 'json' | 'csv' | 'markdown' | 'md' | 'txt';
+}
+
+Deno.serve(async (req) => {
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
+
+  const corsHeaders = getCorsHeaders(req);
 
   try {
-    // Extract userId from JWT instead of request body
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
+    // Authenticate user
+    const { userId, error: authError } = await extractUserId(req);
+    if (authError || !userId) {
+      return errorResponse(req, authError || 'Authorization required', 401);
+    }
+
+    // Rate limiting - limit exports (5 per hour)
+    const rateLimitResult = checkRateLimit(`export:${userId}`, { maxRequests: 5, windowMs: 3600000 });
+    if (!rateLimitResult.allowed) {
       return new Response(
-        JSON.stringify({ error: 'Authorization required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Export rate limit exceeded. Max 5 exports per hour.', retryAfter: Math.ceil(rateLimitResult.resetIn / 1000) }),
+        { 
+          status: 429, 
+          headers: { ...corsHeaders, ...getRateLimitHeaders(rateLimitResult), 'Content-Type': 'application/json' } 
+        }
       );
     }
 
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    );
-
-    const token = authHeader.replace('Bearer ', '');
-    const { data: claimsData, error: claimsError } = await supabaseClient.auth.getClaims(token);
-
-    if (claimsError || !claimsData?.claims) {
-      console.error('Auth error:', claimsError);
-      return new Response(
-        JSON.stringify({ error: 'Invalid token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const userId = claimsData.claims.sub;
-    if (!userId) {
-      return new Response(
-        JSON.stringify({ error: 'User ID not found in token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Parse format from request body (userId is ignored if provided)
-    const { format = 'json' } = await req.json().catch(() => ({}));
+    // Parse format from request body
+    const { data: body } = await parseJsonBody<ExportRequest>(req);
+    const format = body?.format || 'json';
 
     console.log(`Exporting data for user: ${userId} in format: ${format}`);
 
     // Use service role for data access
-    const serviceClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    const serviceClient = createServiceClient();
+    if (!serviceClient) {
+      return serverErrorResponse(req, 'Service configuration error');
+    }
 
     // Fetch all entries
     const { data: entries, error: entriesError } = await serviceClient
@@ -66,7 +62,7 @@ serve(async (req) => {
 
     if (entriesError) {
       console.error('Error fetching entries:', entriesError);
-      throw entriesError;
+      return serverErrorResponse(req, 'Failed to fetch entries');
     }
 
     // Fetch brain reports
@@ -78,19 +74,15 @@ serve(async (req) => {
 
     if (reportsError) {
       console.error('Error fetching brain_reports:', reportsError);
-      throw reportsError;
+      // Don't fail, continue without reports
     }
 
     // Fetch profile
-    const { data: profile, error: profileError } = await serviceClient
+    const { data: profile } = await serviceClient
       .from('profiles')
       .select('username, created_at, updated_at')
       .eq('id', userId)
       .single();
-
-    if (profileError && profileError.code !== 'PGRST116') {
-      console.error('Error fetching profile:', profileError);
-    }
 
     const exportData = {
       exportedAt: new Date().toISOString(),
@@ -117,7 +109,6 @@ serve(async (req) => {
 
     switch (format.toLowerCase()) {
       case 'csv':
-        // Export entries as CSV
         const csvHeaders = ['id', 'title', 'content_type', 'tags', 'importance_score', 'starred', 'created_at'];
         const csvRows = (entries || []).map(e => [
           e.id,
@@ -159,6 +150,7 @@ serve(async (req) => {
     return new Response(responseContent, {
       headers: {
         ...corsHeaders,
+        ...getRateLimitHeaders(rateLimitResult),
         'Content-Type': contentType,
         'Content-Disposition': `attachment; filename="${filename}"`,
       },
@@ -166,15 +158,11 @@ serve(async (req) => {
 
   } catch (error) {
     console.error('Error in export-all-data:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return serverErrorResponse(req, error instanceof Error ? error : 'Unknown error');
   }
 });
 
-function generateMarkdown(data: any): string {
+function generateMarkdown(data: { exportedAt: string; profile?: { username?: string } | null; stats: { totalEntries: number; starredCount: number; archivedCount: number; contentTypes: Record<string, number> }; entries: Array<{ title?: string; content_type: string; content_subtype?: string; importance_score?: number; tags?: string[]; created_at: string; content: string }>; brainReports: Array<{ report_type: string; start_date: string; end_date: string; summary: string }> }): string {
   let md = `# Brain Dump Export\n\n`;
   md += `**Exported:** ${data.exportedAt}\n\n`;
   
@@ -220,7 +208,7 @@ function generateMarkdown(data: any): string {
   return md;
 }
 
-function generatePlainText(data: any): string {
+function generatePlainText(data: { exportedAt: string; stats: { totalEntries: number; starredCount: number; archivedCount: number }; entries: Array<{ content_type: string; title?: string; importance_score?: number; tags?: string[]; created_at: string; content: string }> }): string {
   let txt = `BRAIN DUMP EXPORT\n`;
   txt += `==================\n\n`;
   txt += `Exported: ${data.exportedAt}\n\n`;

@@ -1,33 +1,41 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+/**
+ * Insert Sample Data Edge Function
+ * 
+ * Populates user account with sample entries for demonstration.
+ */
+
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { extractUserId } from '../_shared/auth.ts';
+import { checkRateLimit, getRateLimitHeaders } from '../_shared/rateLimit.ts';
+import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+Deno.serve(async (req) => {
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  const corsHeaders = getCorsHeaders(req);
 
   try {
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      {
-        global: {
-          headers: { Authorization: req.headers.get('Authorization')! },
-        },
-      }
-    );
-
-    const { data: { user } } = await supabaseClient.auth.getUser();
-    if (!user) {
-      throw new Error('Not authenticated');
+    // Authenticate user
+    const { userId, error: authError, supabase } = await extractUserId(req);
+    if (authError || !userId || !supabase) {
+      return errorResponse(req, authError || 'Authorization required', 401);
     }
 
-    const userId = user.id;
+    // Rate limiting - limit to prevent abuse
+    const rateLimitResult = checkRateLimit(`sample:${userId}`, { maxRequests: 3, windowMs: 3600000 });
+    if (!rateLimitResult.allowed) {
+      return new Response(
+        JSON.stringify({ error: 'Sample data can only be inserted 3 times per hour.', retryAfter: Math.ceil(rateLimitResult.resetIn / 1000) }),
+        { 
+          status: 429, 
+          headers: { ...corsHeaders, ...getRateLimitHeaders(rateLimitResult), 'Content-Type': 'application/json' } 
+        }
+      );
+    }
+
     console.log(`Inserting sample entries for user: ${userId}`);
 
     // Sample entries covering different content types
@@ -70,15 +78,15 @@ function fibMemo(n: number): number {
         tags: ['groceries', 'food', 'weekly'],
         importance_score: 5,
         list_items: [
-          { text: 'Eggs', completed: false },
-          { text: 'Milk (oat milk)', completed: false },
-          { text: 'Bread (sourdough)', completed: true },
-          { text: 'Avocados', completed: false },
-          { text: 'Cherry tomatoes', completed: false },
-          { text: 'Greek yogurt', completed: false },
-          { text: 'Bananas', completed: true },
-          { text: 'Coffee beans', completed: false },
-          { text: 'Olive oil', completed: false },
+          { text: 'Eggs', checked: false },
+          { text: 'Milk (oat milk)', checked: false },
+          { text: 'Bread (sourdough)', checked: true },
+          { text: 'Avocados', checked: false },
+          { text: 'Cherry tomatoes', checked: false },
+          { text: 'Greek yogurt', checked: false },
+          { text: 'Bananas', checked: true },
+          { text: 'Coffee beans', checked: false },
+          { text: 'Olive oil', checked: false },
         ],
         created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
       },
@@ -167,11 +175,11 @@ Follow up next week about partnership opportunity.`,
         tags: ['planning', 'roadmap', 'q1', 'milestones'],
         importance_score: 10,
         list_items: [
-          { text: 'Complete database migration', completed: true },
-          { text: 'Launch semantic search', completed: false },
-          { text: 'Mobile responsive redesign', completed: false },
-          { text: 'Public API beta', completed: false },
-          { text: 'Integration with 3rd party apps', completed: false },
+          { text: 'Complete database migration', checked: true },
+          { text: 'Launch semantic search', checked: false },
+          { text: 'Mobile responsive redesign', checked: false },
+          { text: 'Public API beta', checked: false },
+          { text: 'Integration with 3rd party apps', checked: false },
         ],
         created_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
       },
@@ -187,8 +195,9 @@ Follow up next week about partnership opportunity.`,
     ];
 
     // Insert entries
+    let successCount = 0;
     for (const entry of sampleEntries) {
-      const { error } = await supabaseClient
+      const { error } = await supabase
         .from('entries')
         .insert({
           user_id: userId,
@@ -198,27 +207,21 @@ Follow up next week about partnership opportunity.`,
 
       if (error) {
         console.error(`Error inserting entry "${entry.title}":`, error);
-        throw error;
+      } else {
+        successCount++;
       }
     }
 
-    console.log(`Successfully inserted ${sampleEntries.length} sample entries`);
+    console.log(`Successfully inserted ${successCount}/${sampleEntries.length} sample entries`);
 
-    return new Response(
-      JSON.stringify({ 
-        success: true, 
-        message: `Inserted ${sampleEntries.length} sample entries`,
-        entries: sampleEntries.map(e => ({ title: e.title, type: e.content_type }))
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return successResponse(req, { 
+      success: true, 
+      message: `Inserted ${successCount} sample entries`,
+      entries: sampleEntries.map(e => ({ title: e.title, type: e.content_type }))
+    }, 200, rateLimitResult);
 
   } catch (error) {
     console.error('Error inserting sample data:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return serverErrorResponse(req, error instanceof Error ? error : 'Unknown error');
   }
 });

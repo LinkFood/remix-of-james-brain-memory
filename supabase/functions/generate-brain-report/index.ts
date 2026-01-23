@@ -1,80 +1,81 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+/**
+ * Generate Brain Report Edge Function
+ * 
+ * Generates periodic summaries and insights from user's entries.
+ * Creates weekly/monthly/daily reports with themes, decisions, and analytics.
+ */
+
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { extractUserId, createServiceClient } from '../_shared/auth.ts';
+import { checkRateLimit, getRateLimitHeaders } from '../_shared/rateLimit.ts';
+import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
+import { parseJsonBody } from '../_shared/validation.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+interface ReportRequest {
+  reportType?: 'daily' | 'weekly' | 'monthly';
+  startDate?: string;
+  endDate?: string;
+}
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+Deno.serve(async (req) => {
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
+
+  const corsHeaders = getCorsHeaders(req);
 
   try {
-    // Extract userId from JWT instead of request body
-    const authHeader = req.headers.get('Authorization');
-    if (!authHeader?.startsWith('Bearer ')) {
+    // Authenticate user
+    const { userId, error: authError } = await extractUserId(req);
+    if (authError || !userId) {
+      return errorResponse(req, authError || 'Authorization required', 401);
+    }
+
+    // Rate limiting - heavy operation (10 per hour)
+    const rateLimitResult = checkRateLimit(`report:${userId}`, { maxRequests: 10, windowMs: 3600000 });
+    if (!rateLimitResult.allowed) {
       return new Response(
-        JSON.stringify({ error: 'Authorization required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        JSON.stringify({ error: 'Rate limit exceeded. Reports are limited to 10 per hour.', retryAfter: Math.ceil(rateLimitResult.resetIn / 1000) }),
+        { 
+          status: 429, 
+          headers: { ...corsHeaders, ...getRateLimitHeaders(rateLimitResult), 'Content-Type': 'application/json' } 
+        }
       );
     }
 
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-      { global: { headers: { Authorization: authHeader } } }
-    );
-
-    const token = authHeader.replace('Bearer ', '');
-    const { data: claimsData, error: claimsError } = await supabaseClient.auth.getClaims(token);
-
-    if (claimsError || !claimsData?.claims) {
-      console.error('Auth error:', claimsError);
-      return new Response(
-        JSON.stringify({ error: 'Invalid token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    const userId = claimsData.claims.sub;
-    if (!userId) {
-      return new Response(
-        JSON.stringify({ error: 'User ID not found in token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    // Parse other params from request body (userId is ignored if provided)
-    const { reportType = 'weekly', startDate, endDate } = await req.json().catch(() => ({}));
-
+    // Parse request body
+    const { data: body } = await parseJsonBody<ReportRequest>(req);
+    const reportType = body?.reportType || 'weekly';
+    
     console.log(`Generating ${reportType} report for user: ${userId}`);
 
     // Use service role for data access
-    const serviceClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
+    const serviceClient = createServiceClient();
+    if (!serviceClient) {
+      return serverErrorResponse(req, 'Service configuration error');
+    }
 
     // Calculate date range
     const now = new Date();
     let reportStartDate: Date;
-    let reportEndDate = endDate ? new Date(endDate) : now;
+    let reportEndDate = body?.endDate ? new Date(body.endDate) : now;
 
-    if (startDate) {
-      reportStartDate = new Date(startDate);
+    if (body?.startDate) {
+      reportStartDate = new Date(body.startDate);
     } else {
       switch (reportType) {
         case 'daily':
-          reportStartDate = new Date(now.setHours(0, 0, 0, 0));
+          reportStartDate = new Date(now);
+          reportStartDate.setHours(0, 0, 0, 0);
           break;
         case 'monthly':
           reportStartDate = new Date(now.getFullYear(), now.getMonth(), 1);
           break;
         case 'weekly':
         default:
-          reportStartDate = new Date(now.setDate(now.getDate() - 7));
+          reportStartDate = new Date(now);
+          reportStartDate.setDate(now.getDate() - 7);
           break;
       }
     }
@@ -91,18 +92,11 @@ serve(async (req) => {
 
     if (entriesError) {
       console.error('Error fetching entries:', entriesError);
-      throw entriesError;
+      return serverErrorResponse(req, 'Failed to fetch entries');
     }
 
     if (!entries || entries.length === 0) {
-      return new Response(
-        JSON.stringify({ 
-          error: 'No entries found in the specified date range',
-          startDate: reportStartDate.toISOString(),
-          endDate: reportEndDate.toISOString()
-        }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return errorResponse(req, 'No entries found in the specified date range', 404);
     }
 
     console.log(`Found ${entries.length} entries for report`);
@@ -120,10 +114,10 @@ serve(async (req) => {
       highPriorityCount: entries.filter(e => (e.importance_score || 0) >= 8).length
     };
 
-    // Generate AI summary using Lovable API
+    // Generate AI summary
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY');
     if (!lovableApiKey) {
-      throw new Error('LOVABLE_API_KEY not configured');
+      return serverErrorResponse(req, 'LOVABLE_API_KEY not configured');
     }
 
     const entrySummaries = entries.slice(0, 20).map(e => 
@@ -155,7 +149,7 @@ Generate a report with:
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'openai/gpt-5',
+        model: 'openai/gpt-5-mini',
         messages: [
           { role: 'system', content: 'You are an AI analyst helping users understand patterns in their brain dump entries. Be concise, insightful, and actionable.' },
           { role: 'user', content: prompt }
@@ -196,7 +190,7 @@ Generate a report with:
     if (!aiResponse.ok) {
       const errorText = await aiResponse.text();
       console.error('AI API error:', errorText);
-      throw new Error(`AI API error: ${aiResponse.status}`);
+      return serverErrorResponse(req, `AI API error: ${aiResponse.status}`);
     }
 
     const aiData = await aiResponse.json();
@@ -239,27 +233,20 @@ Generate a report with:
 
     if (saveError) {
       console.error('Error saving report:', saveError);
-      throw saveError;
+      return serverErrorResponse(req, 'Failed to save report');
     }
 
     console.log(`Report saved with ID: ${savedReport.id}`);
 
-    return new Response(
-      JSON.stringify({ success: true, report: savedReport }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return successResponse(req, { success: true, report: savedReport }, 200, rateLimitResult);
 
   } catch (error) {
     console.error('Error in generate-brain-report:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    return new Response(
-      JSON.stringify({ error: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return serverErrorResponse(req, error instanceof Error ? error : 'Unknown error');
   }
 });
 
-function getTopTags(entries: any[]): string[] {
+function getTopTags(entries: { tags?: string[] | null }[]): string[] {
   const tagCounts: Record<string, number> = {};
   for (const entry of entries) {
     for (const tag of (entry.tags || [])) {

@@ -1,38 +1,74 @@
-import "https://deno.land/x/xhr@0.1.0/mod.ts";
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+/**
+ * Calculate Importance Edge Function
+ * 
+ * Uses AI to calculate an importance score (0-10) for content.
+ * Can update an existing entry or return the score for new content.
+ */
+
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { extractUserId } from '../_shared/auth.ts';
+import { checkRateLimit, getRateLimitHeaders, RATE_LIMIT_CONFIGS } from '../_shared/rateLimit.ts';
+import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
+import { sanitizeString, validateContentLength, parseJsonBody, isValidUUID } from '../_shared/validation.ts';
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+interface ImportanceRequest {
+  messageId?: string;
+  content?: string;
+  role?: string;
+}
 
-serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+Deno.serve(async (req) => {
+  // Handle CORS preflight
+  const corsResponse = handleCors(req);
+  if (corsResponse) return corsResponse;
+
+  const corsHeaders = getCorsHeaders(req);
 
   try {
-    const { messageId, content, role } = await req.json();
-
-    if (!messageId && !content) {
-      return new Response(
-        JSON.stringify({ error: 'Either messageId or content is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
     
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    let messageContent = content;
-    let messageRole = role;
+    // Extract user ID from JWT (optional for this function)
+    const { userId } = await extractUserId(req);
+
+    // Rate limiting
+    const identifier = userId || 'anonymous';
+    const rateLimitResult = checkRateLimit(`importance:${identifier}`, RATE_LIMIT_CONFIGS.ai);
+    if (!rateLimitResult.allowed) {
+      return new Response(
+        JSON.stringify({ error: 'Rate limit exceeded', retryAfter: Math.ceil(rateLimitResult.resetIn / 1000) }),
+        { 
+          status: 429, 
+          headers: { ...corsHeaders, ...getRateLimitHeaders(rateLimitResult), 'Content-Type': 'application/json' }
+        }
+      );
+    }
+
+    // Parse request body
+    const { data: body, error: parseError } = await parseJsonBody<ImportanceRequest>(req);
+    if (parseError || !body) {
+      return errorResponse(req, parseError || 'Invalid request body', 400);
+    }
+
+    const { messageId, content: rawContent, role } = body;
+
+    if (!messageId && !rawContent) {
+      return errorResponse(req, 'Either messageId or content is required', 400);
+    }
+
+    let messageContent = rawContent ? sanitizeString(rawContent) : '';
+    let messageRole = role || 'user';
 
     // If messageId provided, fetch the message
     if (messageId) {
+      if (!isValidUUID(messageId)) {
+        return errorResponse(req, 'Invalid message ID format', 400);
+      }
+
       const { data: message, error: fetchError } = await supabase
         .from('messages')
         .select('content, role')
@@ -41,14 +77,17 @@ serve(async (req) => {
 
       if (fetchError) {
         console.error('Error fetching message:', fetchError);
-        return new Response(
-          JSON.stringify({ error: 'Message not found' }),
-          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse(req, 'Message not found', 404);
       }
 
       messageContent = message.content;
       messageRole = message.role;
+    }
+
+    // Validate content
+    const validation = validateContentLength(messageContent, 50000);
+    if (!validation.valid) {
+      return errorResponse(req, validation.error!, 400);
     }
 
     // Call Lovable AI to calculate importance score
@@ -113,34 +152,27 @@ Consider:
       console.error('Lovable AI error:', response.status, errorText);
       
       if (response.status === 429) {
-        return new Response(
-          JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
-          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse(req, 'Rate limit exceeded. Please try again later.', 429);
       }
-      
       if (response.status === 402) {
-        return new Response(
-          JSON.stringify({ error: 'AI credits exhausted. Please add credits to your workspace.' }),
-          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return errorResponse(req, 'AI credits exhausted.', 402);
       }
 
-      throw new Error(`AI request failed: ${response.status}`);
+      return serverErrorResponse(req, `AI request failed: ${response.status}`);
     }
 
     const aiResponse = await response.json();
-    console.log('AI Response:', JSON.stringify(aiResponse, null, 2));
+    console.log('AI Response received');
 
     // Extract the importance score from tool call
     const toolCall = aiResponse.choices[0]?.message?.tool_calls?.[0];
     if (!toolCall) {
-      throw new Error('No tool call in AI response');
+      return serverErrorResponse(req, 'No tool call in AI response');
     }
 
     const result = JSON.parse(toolCall.function.arguments);
-    const importanceScore = result.score;
-    const reasoning = result.reasoning;
+    const importanceScore = Math.max(0, Math.min(10, result.score));
+    const reasoning = sanitizeString(result.reasoning || '');
 
     console.log(`Calculated importance: ${importanceScore}/10 - ${reasoning}`);
 
@@ -153,24 +185,18 @@ Consider:
 
       if (updateError) {
         console.error('Error updating message:', updateError);
-        throw updateError;
+        // Don't fail the request, just log it
       }
     }
 
-    return new Response(
-      JSON.stringify({ 
-        importance_score: importanceScore,
-        reasoning,
-        success: true 
-      }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return successResponse(req, { 
+      importance_score: importanceScore,
+      reasoning,
+      success: true 
+    }, 200, rateLimitResult);
 
   } catch (error) {
     console.error('Error in calculate-importance function:', error);
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : 'Unknown error occurred' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return serverErrorResponse(req, error instanceof Error ? error : 'Unknown error occurred');
   }
 });
