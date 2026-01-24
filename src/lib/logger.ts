@@ -2,8 +2,10 @@
  * Logger utility for consistent logging across the application
  * 
  * In development, logs to console with formatting.
- * In production, can be extended to send to external services.
+ * In production, sends errors to Sentry for monitoring.
  */
+
+import { captureException, addBreadcrumb } from './sentry';
 
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -51,9 +53,10 @@ class Logger {
       return;
     }
 
-    // In production, could send to external service
-    // TODO: Integrate with Sentry or similar
-    // fetch('/api/logs', { method: 'POST', body: JSON.stringify(entry) });
+    // In production, add breadcrumbs for non-error logs
+    if (entry.level !== 'error') {
+      addBreadcrumb(entry.message, 'logger', entry.level === 'warn' ? 'warning' : entry.level);
+    }
   }
 
   /**
@@ -81,6 +84,7 @@ class Logger {
 
   /**
    * Log an error with optional Error object
+   * In production, also sends to Sentry
    */
   error(message: string, error?: Error | unknown, context?: LogContext) {
     const errorContext: LogContext = { ...context };
@@ -91,8 +95,14 @@ class Logger {
         message: error.message,
         stack: error.stack,
       };
+      
+      // Send to Sentry in production
+      captureException(error, { message, ...context });
     } else if (error !== undefined) {
       errorContext.error = String(error);
+      
+      // Create an Error for Sentry
+      captureException(new Error(message), { originalError: error, ...context });
     }
 
     this.send(this.formatEntry('error', message, errorContext));
