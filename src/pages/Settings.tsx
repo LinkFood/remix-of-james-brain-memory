@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
-import { Brain, ArrowLeft, Download, Trash2, Database, User, Bug, ChevronDown } from "lucide-react";
+import { Brain, ArrowLeft, Download, Trash2, Database, User } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
@@ -18,8 +18,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { captureException } from "@/lib/sentry";
 
 const Settings = () => {
   const navigate = useNavigate();
@@ -260,49 +258,6 @@ const Settings = () => {
             </Button>
           </div>
 
-          <Separator className="my-6" />
-
-          {/* Developer Tools */}
-          <Collapsible>
-            <CollapsibleTrigger asChild>
-              <Button variant="ghost" className="w-full justify-between text-muted-foreground">
-                <span className="flex items-center gap-2">
-                  <Bug className="w-4 h-4" />
-                  Developer Tools
-                </span>
-                <ChevronDown className="w-4 h-4" />
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="pt-3 space-y-3">
-              <p className="text-xs text-muted-foreground">
-                Test error tracking and monitoring integrations.
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    captureException(new Error("Manual Sentry Test"), {
-                      source: "settings-test-button",
-                      timestamp: new Date().toISOString(),
-                    });
-                    toast.success("Test event sent to Sentry");
-                  }}
-                >
-                  Send Test Event
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    throw new Error("Test ErrorBoundary");
-                  }}
-                >
-                  Test Error Boundary
-                </Button>
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
         </Card>
 
         {/* Footer */}
