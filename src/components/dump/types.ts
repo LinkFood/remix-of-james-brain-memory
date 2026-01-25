@@ -3,8 +3,22 @@
  */
 
 // Speech Recognition API types for browser compatibility
+export interface SpeechRecognitionResult {
+  readonly transcript: string;
+  readonly confidence: number;
+}
+
+export interface SpeechRecognitionResultList {
+  readonly length: number;
+  [index: number]: {
+    readonly isFinal: boolean;
+    readonly length: number;
+    [index: number]: SpeechRecognitionResult;
+  };
+}
+
 export interface SpeechRecognitionEvent extends Event {
-  results: SpeechRecognitionResultList;
+  readonly results: SpeechRecognitionResultList;
 }
 
 export interface SpeechRecognition extends EventTarget {
@@ -14,6 +28,7 @@ export interface SpeechRecognition extends EventTarget {
   onresult: ((event: SpeechRecognitionEvent) => void) | null;
   onend: (() => void) | null;
   onerror: ((event: Event) => void) | null;
+  onaudiostart: (() => void) | null;
   start: () => void;
   stop: () => void;
 }

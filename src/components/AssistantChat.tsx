@@ -42,8 +42,19 @@ import { retryWithBackoff } from "@/lib/retryWithBackoff";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 // Web Speech API types (browser-specific, not in TypeScript lib)
+interface WebSpeechRecognitionResult {
+  readonly isFinal: boolean;
+  readonly length: number;
+  [index: number]: { transcript: string; confidence: number };
+}
+
+interface WebSpeechRecognitionResultList {
+  readonly length: number;
+  [index: number]: WebSpeechRecognitionResult;
+}
+
 interface WebSpeechRecognitionEvent {
-  results: { [index: number]: { [index: number]: { transcript: string } } };
+  results: WebSpeechRecognitionResultList;
 }
 
 interface WebSpeechRecognitionErrorEvent {
@@ -57,6 +68,7 @@ interface WebSpeechRecognition {
   onresult: ((event: WebSpeechRecognitionEvent) => void) | null;
   onerror: ((event: WebSpeechRecognitionErrorEvent) => void) | null;
   onend: (() => void) | null;
+  onaudiostart: (() => void) | null;
   start: () => void;
   stop: () => void;
 }
@@ -325,9 +337,21 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
     
     const recognition = new SpeechRecognition() as unknown as WebSpeechRecognition;
     recognitionRef.current = recognition;
-    recognition.continuous = false;
+    // Enable continuous mode so pauses don't cut off speech
+    recognition.continuous = true;
     recognition.interimResults = true;
     recognition.lang = 'en-US';
+
+    // Track if audio capture has actually started
+    let audioStarted = false;
+
+    // Called when audio capture actually begins (mic is truly ready)
+    recognition.onaudiostart = () => {
+      audioStarted = true;
+      console.log('[Jac STT] Audio capture started - NOW ready to speak');
+      // Only now tell the user to speak
+      toast.success("Speak now!", { duration: 2000 });
+    };
 
     recognition.onresult = (event: WebSpeechRecognitionEvent) => {
       // Get the latest result
@@ -341,7 +365,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
         pendingTranscriptRef.current = transcript.trim();
       }
       
-      console.log('[Jac STT] Browser speech result:', transcript);
+      console.log('[Jac STT] Browser speech result:', transcript, 'isFinal:', result.isFinal);
     };
 
     recognition.onerror = (event: WebSpeechRecognitionErrorEvent) => {
@@ -350,7 +374,10 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       if (event.error === 'not-allowed') {
         toast.error("Microphone access denied");
       } else if (event.error === 'no-speech') {
-        toast.error("No speech detected. Try again.");
+        // Only show if audio actually started (mic was active)
+        if (audioStarted) {
+          toast.error("No speech detected. Try again.");
+        }
       } else if (event.error === 'aborted') {
         // User stopped, not an error
       } else {
@@ -382,7 +409,8 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       recognition.start();
       setVoiceState('listening');
       setIsRecording(true);
-      toast.info("Listening... Speak now");
+      // Show "preparing" first - "Speak now" will appear when onaudiostart fires
+      toast.info("Preparing mic...", { duration: 1500 });
     } catch (err) {
       console.error('[Jac STT] Failed to start browser speech:', err);
       toast.error("Could not start voice recognition");
