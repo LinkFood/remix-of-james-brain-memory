@@ -142,7 +142,7 @@ function detectSaveIntent(message: string): { hasSaveIntent: boolean; contentToS
   const hasSaveIntent = /\b(save|add|remember|dump|store|note down)\b/i.test(message);
   if (hasSaveIntent) {
     const contentToSave = message
-      .replace(/\b(please\s+)?(save|add|remember|dump|store|note down|this|that|to my brain|to brain dump|for me)\b/gi, '')
+      .replace(/\b(please\s+)?(save|add|remember|dump|store|note down|this|that|to my brain|to linkjac|for me)\b/gi, '')
       .trim();
     return { hasSaveIntent: contentToSave.length > 5, contentToSave };
   }
@@ -395,7 +395,7 @@ When you have weather data, share it proactively. Be helpful about weather-relat
 If snow is expected and they're adding salt - connect the dots but stay brief.
 
 === YOUR CAPABILITIES ===
-- Search and retrieve from the user's brain dump
+- Search and retrieve from the user's LinkJac
 - Help find things they've saved
 - Compile and summarize related entries
 - Surface connections between entries

@@ -14,7 +14,7 @@ const Terms = () => {
             <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center">
               <Brain className="w-5 h-5 text-primary" />
             </div>
-            <span className="text-lg font-bold">Brain Dump</span>
+            <span className="text-lg font-bold">LinkJac</span>
           </div>
           <Button onClick={() => navigate(-1)} variant="ghost" size="sm">
             <ArrowLeft className="w-4 h-4 mr-2" />
@@ -31,7 +31,7 @@ const Terms = () => {
           <section>
             <h2 className="text-xl font-semibold mb-3">1. Service Description</h2>
             <p className="text-muted-foreground leading-relaxed">
-              Brain Dump is an AI-powered personal knowledge management service that allows you to capture, organize, and retrieve information. By using our service, you can dump text, code, ideas, and notes which are then automatically classified, tagged, and stored using artificial intelligence.
+              LinkJac is an AI-powered personal knowledge management service that allows you to capture, organize, and retrieve information. By using our service, you can dump text, code, ideas, and notes which are then automatically classified, tagged, and stored using artificial intelligence.
             </p>
           </section>
 
@@ -51,7 +51,7 @@ const Terms = () => {
           <section>
             <h2 className="text-xl font-semibold mb-3">3. Data Ownership</h2>
             <p className="text-muted-foreground leading-relaxed">
-              You retain full ownership of all content you submit to Brain Dump. We do not claim any intellectual property rights over your data. You grant us a limited license to process, store, and analyze your content solely for the purpose of providing the service to you.
+              You retain full ownership of all content you submit to LinkJac. We do not claim any intellectual property rights over your data. You grant us a limited license to process, store, and analyze your content solely for the purpose of providing the service to you.
             </p>
           </section>
 
@@ -72,7 +72,7 @@ const Terms = () => {
           <section>
             <h2 className="text-xl font-semibold mb-3">6. Prohibited Uses</h2>
             <p className="text-muted-foreground leading-relaxed">
-              You may not use Brain Dump to:
+              You may not use LinkJac to:
             </p>
             <ul className="list-disc pl-6 text-muted-foreground space-y-2 mt-2">
               <li>Store or distribute illegal content</li>
@@ -93,7 +93,7 @@ const Terms = () => {
           <section>
             <h2 className="text-xl font-semibold mb-3">8. Limitation of Liability</h2>
             <p className="text-muted-foreground leading-relaxed">
-              Brain Dump is provided "as is" without warranties of any kind. We are not liable for any indirect, incidental, or consequential damages arising from your use of the service. Our total liability shall not exceed the amount you paid for the service in the past 12 months.
+              LinkJac is provided "as is" without warranties of any kind. We are not liable for any indirect, incidental, or consequential damages arising from your use of the service. Our total liability shall not exceed the amount you paid for the service in the past 12 months.
             </p>
           </section>
 
@@ -116,7 +116,7 @@ const Terms = () => {
       {/* Footer */}
       <footer className="border-t border-border/50 py-8 px-4">
         <div className="max-w-3xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-muted-foreground">
-          <p>© 2026 Brain Dump. All rights reserved.</p>
+          <p>© 2026 LinkJac. All rights reserved.</p>
           <div className="flex gap-6">
             <button onClick={() => navigate('/terms')} className="hover:text-foreground transition-colors">Terms</button>
             <button onClick={() => navigate('/privacy')} className="hover:text-foreground transition-colors">Privacy</button>

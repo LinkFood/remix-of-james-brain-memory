@@ -14,7 +14,7 @@ const Privacy = () => {
             <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center">
               <Brain className="w-5 h-5 text-primary" />
             </div>
-            <span className="text-lg font-bold">Brain Dump</span>
+            <span className="text-lg font-bold">LinkJac</span>
           </div>
           <Button onClick={() => navigate(-1)} variant="ghost" size="sm">
             <ArrowLeft className="w-4 h-4 mr-2" />
@@ -47,7 +47,7 @@ const Privacy = () => {
               We use your information to:
             </p>
             <ul className="list-disc pl-6 text-muted-foreground space-y-2 mt-2">
-              <li>Provide, maintain, and improve the Brain Dump service</li>
+              <li>Provide, maintain, and improve the LinkJac service</li>
               <li>Process your content using AI for classification and semantic search</li>
               <li>Authenticate your identity and secure your account</li>
               <li>Communicate with you about service updates (if you opt in)</li>
@@ -58,7 +58,7 @@ const Privacy = () => {
           <section>
             <h2 className="text-xl font-semibold mb-3">3. AI Processing</h2>
             <p className="text-muted-foreground leading-relaxed">
-              When you submit content to Brain Dump, it is processed by AI systems to:
+              When you submit content to LinkJac, it is processed by AI systems to:
             </p>
             <ul className="list-disc pl-6 text-muted-foreground space-y-2 mt-2">
               <li>Automatically classify content type (code, idea, list, note, etc.)</li>
@@ -133,7 +133,7 @@ const Privacy = () => {
           <section>
             <h2 className="text-xl font-semibold mb-3">9. Children's Privacy</h2>
             <p className="text-muted-foreground leading-relaxed">
-              Brain Dump is not intended for children under 13 years of age. We do not knowingly collect personal information from children. If we discover that a child has provided us with personal information, we will promptly delete it.
+              LinkJac is not intended for children under 13 years of age. We do not knowingly collect personal information from children. If we discover that a child has provided us with personal information, we will promptly delete it.
             </p>
           </section>
 
@@ -156,7 +156,7 @@ const Privacy = () => {
       {/* Footer */}
       <footer className="border-t border-border/50 py-8 px-4">
         <div className="max-w-3xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-muted-foreground">
-          <p>© 2026 Brain Dump. All rights reserved.</p>
+          <p>© 2026 LinkJac. All rights reserved.</p>
           <div className="flex gap-6">
             <button onClick={() => navigate('/terms')} className="hover:text-foreground transition-colors">Terms</button>
             <button onClick={() => navigate('/privacy')} className="hover:text-foreground transition-colors">Privacy</button>

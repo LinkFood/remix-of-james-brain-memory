@@ -14,7 +14,7 @@ interface OnboardingModalProps {
 const steps = [
   {
     icon: Brain,
-    title: "Welcome to Brain Dump",
+    title: "Welcome to LinkJac",
     description: "Your AI-powered second brain that organizes itself. No folders, no structure, no friction.",
   },
   {

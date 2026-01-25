@@ -100,7 +100,7 @@ const Pricing = () => {
             <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center">
               <Brain className="w-5 h-5 text-primary" />
             </div>
-            <span className="text-lg font-bold">Brain Dump</span>
+            <span className="text-lg font-bold">LinkJac</span>
           </button>
           <div className="flex items-center gap-3">
             <Button variant="ghost" onClick={() => navigate("/")}>
@@ -195,7 +195,7 @@ const Pricing = () => {
       {/* Footer */}
       <footer className="border-t border-border/50 py-8 px-4">
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-muted-foreground">
-          <p>© 2026 Brain Dump. All rights reserved.</p>
+          <p>© 2026 LinkJac. All rights reserved.</p>
           <div className="flex gap-6">
             <button
               onClick={() => navigate("/terms")}

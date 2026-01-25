@@ -97,7 +97,7 @@ Deno.serve(async (req) => {
       ? `\n\nExisting lists the user has (consider appending to these if content matches):\n${recentEntries.map(e => `- ID: ${e.id}, Title: "${e.title || 'Untitled'}", Type: ${e.content_type}`).join('\n')}`
       : '';
 
-    const systemPrompt = `You are a content classifier for a "brain dump" app. Users paste anything - code, lists, ideas, links, notes, images, or PDFs - and you classify it.
+    const systemPrompt = `You are a content classifier for the "LinkJac" app. Users paste anything - code, lists, ideas, links, notes, images, or PDFs - and you classify it.
 
 Analyze the content and determine:
 1. TYPE: code | list | idea | link | contact | event | reminder | note | image | document
