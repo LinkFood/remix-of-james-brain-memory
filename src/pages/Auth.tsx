@@ -343,7 +343,7 @@ const Auth = () => {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={isLoading}
-                minLength={8}
+                minLength={mode === 'signup' ? 8 : undefined}
               />
             </div>
 
