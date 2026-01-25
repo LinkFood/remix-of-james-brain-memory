@@ -139,8 +139,12 @@ const Landing = () => {
 
       {/* Footer */}
       <footer className="border-t border-border/50 py-8 px-4">
-        <div className="max-w-5xl mx-auto text-center text-sm text-muted-foreground">
-          <p>Brain Dump - Your AI-powered second brain</p>
+        <div className="max-w-5xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-muted-foreground">
+          <p>© 2026 Brain Dump. All rights reserved.</p>
+          <div className="flex gap-6">
+            <button onClick={() => navigate('/terms')} className="hover:text-foreground transition-colors">Terms</button>
+            <button onClick={() => navigate('/privacy')} className="hover:text-foreground transition-colors">Privacy</button>
+          </div>
         </div>
       </footer>
     </div>

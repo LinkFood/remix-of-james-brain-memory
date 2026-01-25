@@ -145,10 +145,10 @@ const Auth = () => {
       });
       return;
     }
-    if (password.length < 6) {
+    if (password.length < 8) {
       toast({
         title: "Password too short",
-        description: "Password must be at least 6 characters.",
+        description: "Password must be at least 8 characters.",
         variant: "destructive",
       });
       return;
@@ -294,7 +294,7 @@ const Auth = () => {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={isLoading}
-                minLength={6}
+                minLength={8}
                 placeholder="Enter new password"
               />
             </div>
@@ -308,7 +308,7 @@ const Auth = () => {
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 required
                 disabled={isLoading}
-                minLength={6}
+                minLength={8}
                 placeholder="Confirm new password"
               />
             </div>
@@ -343,7 +343,7 @@ const Auth = () => {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 disabled={isLoading}
-                minLength={6}
+                minLength={8}
               />
             </div>
 
@@ -391,13 +391,17 @@ const Auth = () => {
           </form>
         )}
 
-        <div className="text-center">
+        <div className="text-center space-y-3">
           <button
             onClick={() => navigate('/')}
             className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             Back to home
           </button>
+          <div className="flex justify-center gap-4 text-xs text-muted-foreground">
+            <button onClick={() => navigate('/terms')} className="hover:text-foreground transition-colors">Terms</button>
+            <button onClick={() => navigate('/privacy')} className="hover:text-foreground transition-colors">Privacy</button>
+          </div>
         </div>
       </div>
     </div>
