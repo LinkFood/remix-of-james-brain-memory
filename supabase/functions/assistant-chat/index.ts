@@ -473,11 +473,19 @@ ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has n
       { role: 'user', content: message },
     ];
 
-    // Prepare sources for response (send before streaming)
+    // Prepare sources for response (send before streaming) - include full data for clickable sources
     const sourcesUsed = contextEntries.map((e) => ({
       id: e.id,
       title: e.title,
+      content: e.content,
       content_type: e.content_type,
+      content_subtype: e.content_subtype,
+      tags: e.tags || [],
+      importance_score: e.importance_score,
+      created_at: e.created_at,
+      event_date: e.event_date,
+      event_time: e.event_time,
+      list_items: e.list_items,
       similarity: e.similarity,
     }));
 

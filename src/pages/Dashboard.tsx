@@ -397,6 +397,7 @@ const Dashboard = () => {
           <AssistantChat
             userId={user.id}
             onEntryCreated={handleEntryCreatedFromAssistant}
+            onViewEntry={handleViewEntry}
             externalOpen={assistantOpen}
             onExternalOpenChange={setAssistantOpen}
           />
