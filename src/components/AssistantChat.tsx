@@ -230,9 +230,18 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
 
   // Start voice recording
   const startRecording = useCallback(async () => {
+    // Prevent double-clicks while requesting permissions
+    if (isRecording) {
+      console.log('[Jac STT] Already recording, ignoring');
+      return;
+    }
+    
     console.log('[Jac STT] Starting recording...');
     
     try {
+      // Set recording state BEFORE async call to prevent double-clicks
+      setIsRecording(true);
+      
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
@@ -279,17 +288,18 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       };
 
       mediaRecorder.start(1000); // Collect data every second
-      setIsRecording(true);
       toast.info("Listening... Tap mic again when done");
     } catch (error: any) {
       console.error("[Jac STT] Recording error:", error);
+      // Reset recording state on error
+      setIsRecording(false);
       if (error.name === 'NotAllowedError') {
         toast.error("Microphone access denied. Please allow microphone access.");
       } else {
         toast.error("Could not access microphone");
       }
     }
-  }, []);
+  }, [isRecording]);
 
   // Stop recording and transcribe
   const stopRecording = useCallback(() => {
