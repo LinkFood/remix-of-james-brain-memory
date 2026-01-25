@@ -1,10 +1,10 @@
 /**
- * search-memory — Semantic + Keyword Search
+ * search-memory — Keyword + Tag Search
  * 
  * GOAL: Find anything in the user's brain.
  * 
- * Uses embeddings for semantic search, falls back to keyword search.
- * Filters by date, type, tags, importance.
+ * Uses PostgreSQL keyword matching and tag filtering.
+ * No external API keys required.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -17,7 +17,7 @@ import { validateSearchQuery, escapeForLike, parseNumber, parseJsonBody } from '
 
 interface SearchRequest {
   query: string;
-  useSemanticSearch?: boolean;
+  useSemanticSearch?: boolean; // Now means "smart search" - expanded keyword matching
   startDate?: string;
   endDate?: string;
   contentType?: string;
@@ -86,7 +86,7 @@ serve(async (req) => {
 
     const query = queryValidation.sanitized;
     const {
-      useSemanticSearch = true,
+      useSemanticSearch = true, // "Smart search" mode
       startDate,
       endDate,
       contentType,
@@ -96,7 +96,7 @@ serve(async (req) => {
     } = body;
     const limit = parseNumber(body.limit, { min: 1, max: 100, default: 50 }) ?? 50;
 
-    console.log('Search request:', { query: query.substring(0, 50), userId, useSemanticSearch, contentType, tags });
+    console.log('Search request:', { query: query.substring(0, 50), userId, smartSearch: useSemanticSearch, contentType, tags });
 
     // Initialize Supabase client
     const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
@@ -104,71 +104,84 @@ serve(async (req) => {
     const supabaseClient = createClient(supabaseUrl, supabaseKey);
 
     let entries: SearchResult[] = [];
+    const escapedQuery = escapeForLike(query);
 
-    // Use semantic search if requested
     if (useSemanticSearch) {
-      try {
-        console.log('Attempting semantic search...');
+      // "Smart search" - search across multiple fields and expand to word-level matching
+      console.log('Using smart search (expanded keyword matching)...');
+      
+      // Split query into individual words for broader matching
+      const searchWords = query.toLowerCase().split(/\s+/).filter(w => w.length >= 2);
+      
+      // Build OR conditions for each word across content and title
+      // Also search in tags array
+      const { data: keywordResults, error: keywordError } = await supabaseClient
+        .from('entries')
+        .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
+        .eq('user_id', userId)
+        .eq('archived', false)
+        .or(`content.ilike.%${escapedQuery}%,title.ilike.%${escapedQuery}%`)
+        .order('importance_score', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false })
+        .limit(limit * 2);
 
-        // Generate embedding for the search query
-        const embeddingResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ text: query }),
-        });
-
-        if (!embeddingResponse.ok) {
-          console.error('Failed to generate query embedding, falling back to keyword search');
-          throw new Error('Embedding generation failed');
-        }
-
-        const embeddingData = await embeddingResponse.json();
-        const queryEmbedding = embeddingData.embedding;
-
-        console.log('Generated query embedding, searching...');
-
-        // Use the semantic search function
-        const { data: semanticResults, error: semanticError } = await supabaseClient.rpc(
-          'search_entries_by_embedding',
-          {
-            query_embedding: `[${queryEmbedding.join(',')}]`,
-            filter_user_id: userId,
-            match_count: limit * 2,
-            match_threshold: 0.3,
+      if (keywordError) throw keywordError;
+      
+      // If no results from exact match, try word-level matching
+      if (!keywordResults || keywordResults.length === 0) {
+        console.log('No exact match, trying word-level search...');
+        
+        // Try searching for individual words
+        for (const word of searchWords.slice(0, 3)) { // Limit to first 3 words
+          const escapedWord = escapeForLike(word);
+          const { data: wordResults, error: wordError } = await supabaseClient
+            .from('entries')
+            .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
+            .eq('user_id', userId)
+            .eq('archived', false)
+            .or(`content.ilike.%${escapedWord}%,title.ilike.%${escapedWord}%`)
+            .order('importance_score', { ascending: false, nullsFirst: false })
+            .order('created_at', { ascending: false })
+            .limit(limit);
+          
+          if (!wordError && wordResults) {
+            // Add unique results
+            for (const result of wordResults) {
+              if (!entries.find(e => e.id === result.id)) {
+                entries.push(result);
+              }
+            }
           }
-        );
-
-        if (semanticError) {
-          console.error('Semantic search RPC error:', semanticError);
-          throw semanticError;
         }
-
-        console.log(`Semantic search returned ${semanticResults?.length ?? 0} results`);
-        entries = semanticResults ?? [];
-      } catch (semanticError) {
-        console.error('Semantic search failed, falling back to keyword search:', semanticError);
-
-        // Fall back to keyword search with escaped query
-        const escapedQuery = escapeForLike(query);
-        const { data: keywordResults, error: keywordError } = await supabaseClient
+      } else {
+        entries = keywordResults;
+      }
+      
+      // Also check for tag matches
+      if (searchWords.length > 0) {
+        const { data: tagResults, error: tagError } = await supabaseClient
           .from('entries')
           .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
           .eq('user_id', userId)
           .eq('archived', false)
-          .or(`content.ilike.%${escapedQuery}%,title.ilike.%${escapedQuery}%`)
-          .order('created_at', { ascending: false })
-          .limit(limit * 2);
-
-        if (keywordError) throw keywordError;
-        entries = keywordResults ?? [];
+          .contains('tags', searchWords)
+          .order('importance_score', { ascending: false, nullsFirst: false })
+          .limit(limit);
+        
+        if (!tagError && tagResults) {
+          // Add unique tag results to the front (they're more relevant)
+          for (const result of tagResults) {
+            if (!entries.find(e => e.id === result.id)) {
+              entries.unshift(result);
+            }
+          }
+        }
       }
+      
+      console.log(`Smart search returned ${entries.length} results`);
     } else {
-      // Standard keyword search with escaped query
+      // Standard keyword search - exact phrase matching only
       console.log('Using keyword search...');
-      const escapedQuery = escapeForLike(query);
       const { data: keywordResults, error: keywordError } = await supabaseClient
         .from('entries')
         .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')

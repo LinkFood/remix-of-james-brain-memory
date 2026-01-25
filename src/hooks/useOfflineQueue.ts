@@ -16,7 +16,7 @@ interface QueuedEntry {
   retryCount: number;
 }
 
-const QUEUE_KEY = "brain-dump-offline-queue";
+const QUEUE_KEY = "linkjac-offline-queue";
 const MAX_RETRIES = 5;
 
 function getQueue(): QueuedEntry[] {

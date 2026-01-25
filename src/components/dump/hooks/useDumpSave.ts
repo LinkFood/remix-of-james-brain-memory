@@ -196,10 +196,20 @@ export function useDumpSave({
       // Reset success after animation
       setTimeout(() => setSuccess(false), 2000);
     } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to save. Please try again.";
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
       const isNetworkError = errorMessage.includes('Failed to fetch') || 
                              errorMessage.includes('Failed to send a request') ||
-                             errorMessage.includes('NetworkError');
+                             errorMessage.includes('NetworkError') ||
+                             errorMessage.includes('network');
+      const isRateLimitError = errorMessage.includes('Rate limit') || 
+                                errorMessage.includes('429') ||
+                                errorMessage.includes('too many');
+      const isContentError = errorMessage.includes('Content too long') ||
+                              errorMessage.includes('too large') ||
+                              errorMessage.includes('100000');
+      const isTimeoutError = errorMessage.includes('timeout') ||
+                              errorMessage.includes('timed out') ||
+                              errorMessage.includes('AbortError');
       
       console.error("Failed to save:", error);
       toast.dismiss("retry-toast");
@@ -212,11 +222,32 @@ export function useDumpSave({
           source: "manual",
           imageUrl: fileUrl,
         });
-        toast.info("Saved offline - will sync when connection is restored", {
-          description: "Your entry is safely queued",
+        toast.info("Saved offline", {
+          description: "Will sync when connection is restored",
+        });
+      } else if (isRateLimitError) {
+        toast.error("Saving too quickly", {
+          description: "Wait a moment and try again",
+        });
+      } else if (isContentError) {
+        toast.error("Entry too long", {
+          description: "Try breaking it into smaller pieces",
+        });
+      } else if (isTimeoutError) {
+        // Queue for later since server might be busy
+        addToQueue({
+          content: contentToSave,
+          userId,
+          source: "manual",
+          imageUrl: fileUrl,
+        });
+        toast.info("Server busy - queued for later", {
+          description: "Will sync automatically",
         });
       } else {
-        toast.error(errorMessage);
+        toast.error("Failed to save", {
+          description: errorMessage.slice(0, 100),
+        });
       }
       
       setUploadProgress(null);

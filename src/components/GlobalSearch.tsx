@@ -1,5 +1,5 @@
 /**
- * GlobalSearch - Brain search dialog with semantic/keyword toggle
+ * GlobalSearch - Search dialog with smart/keyword toggle
  * 
  * Uses the centralized useSearch hook for debounced searching.
  */
@@ -75,9 +75,9 @@ const GlobalSearch = ({ userId, onSelectEntry, open, onOpenChange }: GlobalSearc
   const SearchContent = ({ autoFocus = false }: { autoFocus?: boolean }) => (
     <>
       <DialogHeader>
-        <DialogTitle>Search Your Brain</DialogTitle>
+        <DialogTitle>Search</DialogTitle>
         <DialogDescription>
-          Search across all your entries using AI-powered semantic search
+          Find anything in your LinkJac
         </DialogDescription>
       </DialogHeader>
 
@@ -90,13 +90,13 @@ const GlobalSearch = ({ userId, onSelectEntry, open, onOpenChange }: GlobalSearc
           />
           <Label htmlFor="semantic-search" className="flex items-center gap-2 cursor-pointer">
             <Sparkles className="w-4 h-4 text-primary" />
-            <span className="text-sm">Semantic Search</span>
+            <span className="text-sm">Smart search</span>
           </Label>
         </div>
         <span className="text-xs text-muted-foreground">
           {useSemanticSearch 
-            ? "AI understands meaning and context" 
-            : "Exact keyword matching"}
+            ? "Searches content, titles, and tags" 
+            : "Exact phrase matching"}
         </span>
       </div>
 
@@ -107,8 +107,8 @@ const GlobalSearch = ({ userId, onSelectEntry, open, onOpenChange }: GlobalSearc
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={useSemanticSearch 
-              ? "e.g., 'What did I save about groceries?'" 
-              : "e.g., 'milk' or 'project ideas'"}
+              ? "e.g., 'groceries' or 'project ideas'" 
+              : "e.g., 'buy milk' or 'meeting notes'"}
             className="bg-input border-border flex-1"
             autoFocus={autoFocus}
           />
@@ -125,7 +125,7 @@ const GlobalSearch = ({ userId, onSelectEntry, open, onOpenChange }: GlobalSearc
       <div className="flex-1 overflow-y-auto space-y-4 mt-4">
         {results.length === 0 ? (
           <div className="text-center text-muted-foreground py-8">
-            {query ? "No results found" : "Enter a search query to find your memories"}
+            {query ? "No results found" : "Enter a search query to find your entries"}
           </div>
         ) : (
           results.map((result) => (
@@ -186,7 +186,7 @@ const GlobalSearch = ({ userId, onSelectEntry, open, onOpenChange }: GlobalSearc
       <DialogTrigger asChild>
         <Button variant="outline" className="border-border hover:bg-secondary">
           <Search className="w-4 h-4 mr-2" />
-          Search Brain
+          Search
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-3xl max-h-[80vh] flex flex-col bg-card border-border">
