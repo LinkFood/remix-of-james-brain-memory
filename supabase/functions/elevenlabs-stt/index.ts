@@ -84,6 +84,15 @@ Deno.serve(async (req) => {
       const errorText = await response.text();
       console.error('[elevenlabs-stt] ElevenLabs API error:', response.status, errorText);
 
+      // Parse upstream error for details
+      let upstreamError = errorText;
+      try {
+        const parsed = JSON.parse(errorText);
+        upstreamError = parsed.detail?.message || parsed.error || errorText;
+      } catch {
+        // Keep raw text
+      }
+
       // Pass through rate limit errors so client can use fallback
       if (response.status === 429) {
         return errorResponse(req, 'Voice service rate limit. Try again in a moment.', 429);
@@ -94,7 +103,18 @@ Deno.serve(async (req) => {
         return errorResponse(req, 'Voice service unavailable. Please try browser speech.', 401);
       }
 
-      return serverErrorResponse(req, 'Transcription failed');
+      // Return 502 Bad Gateway with upstream details instead of generic 500
+      return new Response(
+        JSON.stringify({ 
+          error: 'Upstream transcription failed', 
+          upstream_status: response.status,
+          upstream_error: upstreamError.substring(0, 500)
+        }),
+        { 
+          status: 502, 
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
+        }
+      );
     }
 
     const transcription = await response.json();
