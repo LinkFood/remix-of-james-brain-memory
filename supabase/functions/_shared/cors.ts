@@ -26,6 +26,7 @@ export function getCorsHeaders(request: Request): Record<string, string> {
     ALLOWED_ORIGINS.includes(origin) ||
     origin.endsWith('.lovable.app') ||
     origin.endsWith('.lovable.dev') ||
+    origin.endsWith('.lovableproject.com') ||
     (isDevelopment && (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')));
 
   return {
