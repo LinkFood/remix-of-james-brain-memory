@@ -221,8 +221,8 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
   };
 
   return (
-    <Dialog open={open} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col">
+    <Dialog open={open} onOpenChange={(open) => !open && onClose()} modal={false}>
+      <DialogContent className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col" allowOverlayPassthrough>
         <DialogHeader className="shrink-0">
           <div className="flex items-start justify-between gap-4">
             <div className="flex items-center gap-3">
