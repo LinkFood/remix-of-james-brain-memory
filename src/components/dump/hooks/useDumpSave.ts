@@ -9,6 +9,40 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { PreviewFile, PendingEntry } from "../types";
 
+// Retry with exponential backoff for transient network errors
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxRetries = 3,
+  baseDelayMs = 1000
+): Promise<T> {
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // Only retry on network errors, not on validation/auth errors
+      const isNetworkError = 
+        lastError.message.includes('Failed to fetch') ||
+        lastError.message.includes('NetworkError') ||
+        lastError.message.includes('Failed to send a request');
+      
+      if (!isNetworkError || attempt === maxRetries - 1) {
+        throw lastError;
+      }
+      
+      // Exponential backoff: 1s, 2s, 4s
+      const delay = baseDelayMs * Math.pow(2, attempt);
+      console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+  
+  throw lastError;
+}
+
 interface UseDumpSaveOptions {
   userId: string;
   onSaveSuccess?: (entry: unknown) => void;
@@ -103,13 +137,23 @@ export function useDumpSave({
         setUploadProgress(analyzeLabel);
       }
 
-      const { data, error } = await supabase.functions.invoke("smart-save", {
-        body: {
-          content: contentToSave || "",
-          userId,
-          source: "manual",
-          imageUrl: fileUrl,
-        },
+      // Call smart-save with retry logic for network resilience
+      const { data, error } = await retryWithBackoff(async () => {
+        const result = await supabase.functions.invoke("smart-save", {
+          body: {
+            content: contentToSave || "",
+            userId,
+            source: "manual",
+            imageUrl: fileUrl,
+          },
+        });
+        
+        // Treat FunctionsError as retriable network issue
+        if (result.error?.message?.includes('Failed to send a request')) {
+          throw new Error(result.error.message);
+        }
+        
+        return result;
       });
 
       if (error) throw error;
@@ -144,8 +188,18 @@ export function useDumpSave({
       setTimeout(() => setSuccess(false), 2000);
     } catch (error: unknown) {
       const errorMessage = error instanceof Error ? error.message : "Failed to save. Please try again.";
+      const isNetworkError = errorMessage.includes('Failed to fetch') || 
+                             errorMessage.includes('Failed to send a request') ||
+                             errorMessage.includes('NetworkError');
+      
       console.error("Failed to save:", error);
-      toast.error(errorMessage);
+      
+      if (isNetworkError) {
+        toast.error("Network issue - please check your connection and try again");
+      } else {
+        toast.error(errorMessage);
+      }
+      
       setUploadProgress(null);
       
       // Remove optimistic entry on failure
