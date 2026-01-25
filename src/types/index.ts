@@ -111,11 +111,20 @@ export interface ClassificationResult {
 
 /**
  * Source reference in assistant chat responses
+ * Contains full entry data for clickable sources
  */
 export interface Source {
   id: string;
   title: string | null;
+  content: string;
   content_type: string;
+  content_subtype?: string | null;
+  tags: string[];
+  importance_score?: number | null;
+  created_at: string;
+  event_date?: string | null;
+  event_time?: string | null;
+  list_items?: ListItem[];
   similarity?: number;
 }
 
@@ -322,6 +331,7 @@ export interface CalendarViewProps {
 export interface AssistantChatProps {
   userId: string;
   onEntryCreated?: (entry: Entry) => void;
+  onViewEntry?: (entry: Entry) => void;
   externalOpen?: boolean;
   onExternalOpenChange?: (open: boolean) => void;
 }

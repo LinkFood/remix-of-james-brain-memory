@@ -75,7 +75,15 @@ interface WebSpeechRecognition {
 interface Source {
   id: string;
   title: string | null;
+  content: string;
   content_type: string;
+  content_subtype?: string | null;
+  tags: string[];
+  importance_score?: number | null;
+  created_at: string;
+  event_date?: string | null;
+  event_time?: string | null;
+  list_items?: Array<{ text: string; checked: boolean }>;
   similarity?: number;
 }
 
@@ -88,6 +96,7 @@ interface Message {
 interface AssistantChatProps {
   userId: string;
   onEntryCreated?: (entry: any) => void;
+  onViewEntry?: (entry: any) => void;
   externalOpen?: boolean;
   onExternalOpenChange?: (open: boolean) => void;
 }
@@ -122,7 +131,7 @@ const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs: nu
   }
 };
 
-const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenChange }: AssistantChatProps) => {
+const AssistantChat = ({ userId, onEntryCreated, onViewEntry, externalOpen, onExternalOpenChange }: AssistantChatProps) => {
   const [internalOpen, setInternalOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -787,18 +796,46 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
                 </Button>
               )}
 
-              {/* Sources */}
+              {/* Sources - clickable to open entry */}
               {msg.sources && msg.sources.length > 0 && (
                 <div className="mt-2 pt-2 border-t border-border/50">
                   <p className="text-xs text-muted-foreground mb-1">
-                    Sources:
+                    Sources (click to view):
                   </p>
                   <div className="flex flex-wrap gap-1">
                     {msg.sources.slice(0, 3).map((source) => (
                       <Badge
                         key={source.id}
                         variant="secondary"
-                        className="text-xs"
+                        className={cn(
+                          "text-xs transition-colors",
+                          onViewEntry && "cursor-pointer hover:bg-primary/20 hover:text-primary"
+                        )}
+                        onClick={() => {
+                          if (onViewEntry && source.content) {
+                            // Convert source to Entry format
+                            const entryFromSource = {
+                              id: source.id,
+                              user_id: userId,
+                              content: source.content,
+                              title: source.title,
+                              content_type: source.content_type,
+                              content_subtype: source.content_subtype || null,
+                              tags: source.tags || [],
+                              extracted_data: {},
+                              importance_score: source.importance_score ?? null,
+                              list_items: source.list_items || [],
+                              source: 'manual',
+                              starred: false,
+                              archived: false,
+                              event_date: source.event_date || null,
+                              event_time: source.event_time || null,
+                              created_at: source.created_at,
+                              updated_at: source.created_at,
+                            };
+                            onViewEntry(entryFromSource);
+                          }
+                        }}
                       >
                         <FileText className="w-3 h-3 mr-1" />
                         {source.title || source.content_type}
