@@ -63,6 +63,10 @@ const EntryCard = ({
   entry,
   compact = false,
   showContent = true,
+  highlighted = false,
+  isSelecting = false,
+  isSelected = false,
+  onToggleSelect,
   onToggleListItem,
   onStar,
   onArchive,
@@ -81,7 +85,11 @@ const EntryCard = ({
       : entry.content;
 
   const handleCardClick = () => {
-    onClick?.(entry);
+    if (isSelecting) {
+      onToggleSelect?.();
+    } else {
+      onClick?.(entry);
+    }
   };
 
   const handleListItemToggle = (index: number, checked: boolean) => {
@@ -92,17 +100,33 @@ const EntryCard = ({
 
   return (
     <Card
+      id={`entry-${entry.id}`}
+      data-entry-id={entry.id}
+      data-selected={isSelected ? "true" : "false"}
       className={cn(
         "group transition-all duration-200 hover:shadow-md",
         onClick && "cursor-pointer hover:border-primary/30",
         entry.starred && "border-yellow-500/30 bg-yellow-500/5",
-        isPending && "opacity-60 animate-pulse pointer-events-none"
+        isPending && "opacity-60 animate-pulse pointer-events-none",
+        highlighted && "ring-2 ring-primary ring-offset-2 ring-offset-background animate-pulse",
+        isSelected && "ring-2 ring-primary/50 bg-primary/5"
       )}
       onClick={handleCardClick}
     >
-      <div className={cn("p-4", compact && "p-3")}>
+      <div className={cn("p-4 relative", compact && "p-3")}>
+        {/* Selection checkbox overlay */}
+        {isSelecting && (
+          <div className="absolute top-2 left-2 z-10">
+            <Checkbox
+              checked={isSelected}
+              onCheckedChange={() => onToggleSelect?.()}
+              onClick={(e) => e.stopPropagation()}
+              className="h-5 w-5"
+            />
+          </div>
+        )}
         {/* Header */}
-        <div className="flex items-start justify-between gap-2 mb-2">
+        <div className={cn("flex items-start justify-between gap-2 mb-2", isSelecting && "ml-7")}>
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <div className={cn("p-1.5 rounded-md border", colorClass)} data-testid="content-type-badge">
               {icon}

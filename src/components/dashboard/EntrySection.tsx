@@ -18,7 +18,11 @@ interface EntrySectionProps {
   showLoadMore?: boolean;
   loadingMore?: boolean;
   hasMore?: boolean;
+  highlightedEntryId?: string | null;
+  isSelecting?: boolean;
+  selectedIds?: Set<string>;
   onLoadMore?: () => void;
+  onToggleSelect?: (entryId: string) => void;
   onToggleListItem?: (entryId: string, itemIndex: number, checked: boolean) => void;
   onStar?: (entryId: string, starred: boolean) => void;
   onArchive?: (entryId: string) => void;
@@ -40,7 +44,11 @@ const EntrySection = ({
   showLoadMore = false,
   loadingMore = false,
   hasMore = false,
+  highlightedEntryId,
+  isSelecting = false,
+  selectedIds,
   onLoadMore,
+  onToggleSelect,
   onToggleListItem,
   onStar,
   onArchive,
@@ -69,6 +77,10 @@ const EntrySection = ({
               entry={entry}
               compact={compact}
               showContent={showContent}
+              highlighted={entry.id === highlightedEntryId}
+              isSelecting={isSelecting}
+              isSelected={selectedIds?.has(entry.id) ?? false}
+              onToggleSelect={() => onToggleSelect?.(entry.id)}
               onToggleListItem={onToggleListItem}
               onStar={onStar}
               onArchive={onArchive}

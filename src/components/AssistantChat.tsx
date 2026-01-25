@@ -31,6 +31,8 @@ import {
   VolumeX,
   Mic,
   MicOff,
+  ExternalLink,
+  CheckSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -97,6 +99,9 @@ interface AssistantChatProps {
   userId: string;
   onEntryCreated?: (entry: any) => void;
   onViewEntry?: (entry: any) => void;
+  onFilterByTag?: (tag: string) => void;
+  onScrollToEntry?: (entryId: string) => void;
+  onSelectEntries?: (entryIds: string[]) => void;
   externalOpen?: boolean;
   onExternalOpenChange?: (open: boolean) => void;
 }
@@ -131,7 +136,7 @@ const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs: nu
   }
 };
 
-const AssistantChat = ({ userId, onEntryCreated, onViewEntry, externalOpen, onExternalOpenChange }: AssistantChatProps) => {
+const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onScrollToEntry, onSelectEntries, externalOpen, onExternalOpenChange }: AssistantChatProps) => {
   const [internalOpen, setInternalOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -802,44 +807,60 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, externalOpen, onEx
                   <p className="text-xs text-muted-foreground mb-1">
                     Sources (click to view):
                   </p>
-                  <div className="flex flex-wrap gap-1">
+                  <div className="flex flex-wrap gap-1.5">
                     {msg.sources.slice(0, 3).map((source) => (
-                      <Badge
-                        key={source.id}
-                        variant="secondary"
-                        className={cn(
-                          "text-xs transition-colors",
-                          onViewEntry && "cursor-pointer hover:bg-primary/20 hover:text-primary"
+                      <div key={source.id} className="flex items-center gap-0.5">
+                        <Badge
+                          variant="secondary"
+                          className={cn(
+                            "text-xs transition-colors",
+                            onViewEntry && "cursor-pointer hover:bg-primary/20 hover:text-primary"
+                          )}
+                          onClick={() => {
+                            if (onViewEntry && source.content) {
+                              // Convert source to Entry format
+                              const entryFromSource = {
+                                id: source.id,
+                                user_id: userId,
+                                content: source.content,
+                                title: source.title,
+                                content_type: source.content_type,
+                                content_subtype: source.content_subtype || null,
+                                tags: source.tags || [],
+                                extracted_data: {},
+                                importance_score: source.importance_score ?? null,
+                                list_items: source.list_items || [],
+                                source: 'manual',
+                                starred: false,
+                                archived: false,
+                                event_date: source.event_date || null,
+                                event_time: source.event_time || null,
+                                created_at: source.created_at,
+                                updated_at: source.created_at,
+                              };
+                              onViewEntry(entryFromSource);
+                            }
+                          }}
+                        >
+                          <FileText className="w-3 h-3 mr-1" />
+                          {source.title || source.content_type}
+                        </Badge>
+                        {/* Scroll-to button */}
+                        {onScrollToEntry && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 text-muted-foreground hover:text-primary"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onScrollToEntry(source.id);
+                            }}
+                            title="Scroll to entry on dashboard"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                          </Button>
                         )}
-                        onClick={() => {
-                          if (onViewEntry && source.content) {
-                            // Convert source to Entry format
-                            const entryFromSource = {
-                              id: source.id,
-                              user_id: userId,
-                              content: source.content,
-                              title: source.title,
-                              content_type: source.content_type,
-                              content_subtype: source.content_subtype || null,
-                              tags: source.tags || [],
-                              extracted_data: {},
-                              importance_score: source.importance_score ?? null,
-                              list_items: source.list_items || [],
-                              source: 'manual',
-                              starred: false,
-                              archived: false,
-                              event_date: source.event_date || null,
-                              event_time: source.event_time || null,
-                              created_at: source.created_at,
-                              updated_at: source.created_at,
-                            };
-                            onViewEntry(entryFromSource);
-                          }
-                        }}
-                      >
-                        <FileText className="w-3 h-3 mr-1" />
-                        {source.title || source.content_type}
-                      </Badge>
+                      </div>
                     ))}
                     {msg.sources.length > 3 && (
                       <Badge variant="secondary" className="text-xs">
@@ -847,6 +868,44 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, externalOpen, onEx
                       </Badge>
                     )}
                   </div>
+                  
+                  {/* Unique tags from sources - clickable to filter dashboard */}
+                  {(() => {
+                    const allTags = msg.sources?.flatMap(s => s.tags || []) || [];
+                    const uniqueTags = [...new Set(allTags)].slice(0, 5);
+                    if (uniqueTags.length === 0) return null;
+                    
+                    return (
+                      <div className="mt-1.5 flex flex-wrap gap-1 items-center">
+                        <span className="text-xs text-muted-foreground">Filter by:</span>
+                        {uniqueTags.map((tag) => (
+                          <Badge
+                            key={tag}
+                            variant="outline"
+                            className="text-xs cursor-pointer hover:bg-accent transition-colors"
+                            onClick={() => onFilterByTag?.(tag)}
+                          >
+                            #{tag}
+                          </Badge>
+                        ))}
+                      </div>
+                    );
+                  })()}
+                  
+                  {/* Bulk select button when multiple sources */}
+                  {msg.sources.length > 1 && onSelectEntries && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-2 text-xs w-full"
+                      onClick={() => {
+                        onSelectEntries(msg.sources!.map(s => s.id));
+                      }}
+                    >
+                      <CheckSquare className="w-3 h-3 mr-1" />
+                      Select {msg.sources.length} entries
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
