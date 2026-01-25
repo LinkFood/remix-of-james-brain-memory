@@ -176,17 +176,30 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
   const [isDragging, setIsDragging] = useState(false);
   const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number } | null>(null);
   const hasDraggedRef = useRef(false);
+  const lastTapRef = useRef<number>(0);
 
   const isMobile = useIsMobile();
 
-  // Restore position from localStorage
+  // Restore position from localStorage with validation
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
-        setPosition(JSON.parse(saved));
+        const parsed = JSON.parse(saved);
+        // Validate position is within reasonable bounds
+        // Position uses right/bottom offsets, so negative = moved left/up from corner
+        const maxValidOffset = Math.max(window.innerWidth, window.innerHeight);
+        
+        if (typeof parsed.x !== 'number' || typeof parsed.y !== 'number' ||
+            Math.abs(parsed.x) > maxValidOffset || Math.abs(parsed.y) > maxValidOffset) {
+          // Invalid position - reset
+          localStorage.removeItem(STORAGE_KEY);
+          setPosition({ x: 0, y: 0 });
+        } else {
+          setPosition(parsed);
+        }
       } catch {
-        // Ignore invalid data
+        localStorage.removeItem(STORAGE_KEY);
       }
     }
   }, []);
@@ -222,18 +235,31 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
     }
     
     // Calculate new position with bounds checking
+    // Positive x = moved left from right edge, negative x = moved right (off screen)
+    // Positive y = moved up from bottom edge, negative y = moved down (off screen)
     const newX = dragRef.current.initialX - deltaX;
     const newY = dragRef.current.initialY - deltaY;
     
-    // Keep within viewport (allow some padding)
-    const maxX = window.innerWidth - 80;
-    const maxY = window.innerHeight - 80;
+    // FAB is 64px (h-16), keep at least 32px visible on each edge
+    const fabSize = 64;
+    const minVisible = 32;
+    
+    // Max we can move left = viewport width - minVisible (so 32px still shows on right)
+    const maxMoveLeft = window.innerWidth - minVisible;
+    // Max we can move right = keep 32px from right edge
+    const maxMoveRight = -16; // Don't go past right edge
+    
+    // Max we can move up = viewport height - minVisible - mobile nav space
+    const bottomOffset = isMobile ? 80 : 16;
+    const maxMoveUp = window.innerHeight - minVisible - bottomOffset;
+    // Max we can move down = keep within bottom nav area
+    const maxMoveDown = -bottomOffset;
     
     setPosition({
-      x: Math.max(-maxX + 80, Math.min(maxX - 80, newX)),
-      y: Math.max(-maxY + 80, Math.min(maxY - 80, newY))
+      x: Math.max(maxMoveRight, Math.min(maxMoveLeft, newX)),
+      y: Math.max(maxMoveDown, Math.min(maxMoveUp, newY))
     });
-  }, [isDragging]);
+  }, [isDragging, isMobile]);
 
   const handleDragEnd = useCallback(() => {
     if (isDragging) {
@@ -1081,6 +1107,19 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
   // Floating button when closed
   if (!isOpen) {
     const handleFabClick = () => {
+      // Double-tap detection for position reset
+      const now = Date.now();
+      if (now - lastTapRef.current < 300) {
+        // Double-tap detected - reset position
+        setPosition({ x: 0, y: 0 });
+        localStorage.removeItem(STORAGE_KEY);
+        toast.success("Jac returned to corner");
+        lastTapRef.current = 0;
+        return;
+      }
+      lastTapRef.current = now;
+      
+      // Normal tap - open chat (if not dragged)
       if (!hasDraggedRef.current) {
         toggleOpen();
       }
@@ -1092,7 +1131,7 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
         onTouchStart={handleDragStart}
         onClick={handleFabClick}
         className={cn(
-          "fixed z-[100] rounded-full shadow-lg bg-sky-400/10 hover:bg-sky-400/20 border border-sky-400/30 transition-transform",
+          "fixed z-[100] rounded-full shadow-lg bg-primary/10 hover:bg-primary/20 border border-primary/30 transition-transform",
           "h-16 w-16", // Bigger FAB
           isDragging ? "cursor-grabbing scale-105 opacity-90 shadow-2xl" : "cursor-grab"
         )}
@@ -1105,7 +1144,7 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
         <LinkJacBrainIcon className="w-10 h-10" />
         {/* Context indicator - shows when viewing an entry */}
         {currentContext && (
-          <span className="absolute -top-1 -right-1 w-4 h-4 bg-sky-400 rounded-full animate-pulse ring-2 ring-background" />
+          <span className="absolute -top-1 -right-1 w-4 h-4 bg-primary rounded-full animate-pulse ring-2 ring-background" />
         )}
       </Button>
     );
