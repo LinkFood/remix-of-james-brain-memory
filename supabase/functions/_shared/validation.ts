@@ -5,14 +5,15 @@
  */
 
 /**
- * Sanitize a string input by removing null bytes and control characters
+ * Sanitize a string input by removing null bytes and dangerous control characters.
+ * Preserves valid Unicode including emojis, accented characters, and code snippets.
  */
 export function sanitizeString(input: unknown): string {
   if (typeof input !== 'string') return '';
 
   return input
-    .replace(/\0/g, '') // Remove null bytes
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '') // Remove control characters
+    .replace(/\0/g, '') // Remove null bytes only
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '') // Remove control chars (keep \x7F-\xFF for extended ASCII)
     .trim();
 }
 
