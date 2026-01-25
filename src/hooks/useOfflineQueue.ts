@@ -17,14 +17,37 @@ interface QueuedEntry {
 }
 
 const QUEUE_KEY = "linkjac-offline-queue";
+const OLD_QUEUE_KEY = "brain-dump-offline-queue"; // Legacy key to migrate/clear
 const MAX_RETRIES = 5;
+
+// One-time migration: clear old localStorage key
+function migrateOldQueue(): void {
+  try {
+    if (localStorage.getItem(OLD_QUEUE_KEY)) {
+      localStorage.removeItem(OLD_QUEUE_KEY);
+      console.log("[OfflineQueue] Cleared legacy queue key");
+    }
+  } catch {
+    // Ignore
+  }
+}
 
 function getQueue(): QueuedEntry[] {
   try {
+    migrateOldQueue();
     const stored = localStorage.getItem(QUEUE_KEY);
     return stored ? JSON.parse(stored) : [];
   } catch {
     return [];
+  }
+}
+
+function clearQueue(): void {
+  try {
+    localStorage.removeItem(QUEUE_KEY);
+    console.log("[OfflineQueue] Queue cleared");
+  } catch {
+    // Ignore
   }
 }
 
@@ -53,9 +76,16 @@ export function useOfflineQueue(
 ): {
   queueLength: number;
   flushQueue: () => Promise<void>;
+  clearStuckEntries: () => void;
 } {
   const isFlushing = useRef(false);
   const [queueLength, setQueueLength] = useState(getQueue().length);
+
+  const clearStuckEntries = useCallback(() => {
+    clearQueue();
+    setQueueLength(0);
+    toast.info("Cleared stuck entries from queue");
+  }, []);
   
   // Keep queue length in sync
   useEffect(() => {
@@ -145,5 +175,6 @@ export function useOfflineQueue(
   return {
     queueLength,
     flushQueue,
+    clearStuckEntries,
   };
 }
