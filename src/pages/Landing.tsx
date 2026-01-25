@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Zap, Search, List, Code, Lightbulb, ArrowRight, Play, Quote, Users, Brain } from 'lucide-react';
+import { Zap, Search, List, Code, Lightbulb, ArrowRight, Play, Brain } from 'lucide-react';
 import { LinkJacLogo } from "@/components/LinkJacLogo";
 import {
   Accordion,
@@ -11,27 +11,6 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-
-const testimonials = [
-  {
-    name: "Alex K.",
-    role: "Software Developer",
-    quote: "LinkJac changed how I capture ideas. No more lost snippets of code or forgotten thoughts. It just works.",
-    avatar: null,
-  },
-  {
-    name: "Sarah M.",
-    role: "Product Manager",
-    quote: "I dumped 6 months of scattered notes and the AI organized everything instantly. Mind-blowing.",
-    avatar: null,
-  },
-  {
-    name: "James T.",
-    role: "Founder",
-    quote: "Finally, a second brain that doesn't require a PhD to set up. Paste and forget — it remembers for you.",
-    avatar: null,
-  },
-];
 
 const faqs = [
   {
@@ -101,7 +80,7 @@ const Landing = () => {
             <br className="hidden sm:block" />
             Your second brain that actually works.
           </p>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
+          <div className="flex justify-center">
             <Button
               size="lg"
               onClick={() => navigate('/auth')}
@@ -110,10 +89,6 @@ const Landing = () => {
               Get Started Free
               <ArrowRight className="ml-2 w-5 h-5" />
             </Button>
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Users className="w-4 h-4" />
-              <span>Join 1,000+ users</span>
-            </div>
           </div>
         </div>
 
@@ -201,31 +176,6 @@ const Landing = () => {
           </div>
         </div>
 
-        {/* Testimonials */}
-        <div className="mb-20">
-          <h2 className="text-2xl font-bold text-center mb-8">What users are saying</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {testimonials.map((testimonial, index) => (
-              <Card key={index} className="p-6">
-                <Quote className="w-8 h-8 text-primary/30 mb-4" />
-                <p className="text-sm text-muted-foreground mb-4 italic">
-                  "{testimonial.quote}"
-                </p>
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center">
-                    <span className="text-sm font-semibold text-primary">
-                      {testimonial.name.charAt(0)}
-                    </span>
-                  </div>
-                  <div>
-                    <p className="font-medium text-sm">{testimonial.name}</p>
-                    <p className="text-xs text-muted-foreground">{testimonial.role}</p>
-                  </div>
-                </div>
-              </Card>
-            ))}
-          </div>
-        </div>
 
         {/* FAQ Section */}
         <div className="mb-20 max-w-2xl mx-auto">

@@ -41,22 +41,6 @@ const tiers = [
     cta: "Start Pro Trial",
     highlighted: true,
   },
-  {
-    name: "Team",
-    price: "$29",
-    period: "/month",
-    description: "Collaborate with your team",
-    features: [
-      "Everything in Pro",
-      "Up to 5 team members",
-      "Shared brain",
-      "Admin controls",
-      "Team analytics",
-      "Dedicated support",
-    ],
-    cta: "Contact Sales",
-    highlighted: false,
-  },
 ];
 
 const faqs = [
@@ -73,16 +57,12 @@ const faqs = [
     answer: "Yes, Pro comes with a 14-day free trial. No credit card required.",
   },
   {
-    question: "How does team sharing work?",
-    answer: "Team members can share dumps to a shared brain space while keeping personal dumps private. Admins control permissions.",
-  },
-  {
     question: "Can I export my data?",
-    answer: "Absolutely. Export your entire brain in JSON, CSV, or Markdown format anytime from Settings.",
+    answer: "Absolutely. Export your entire LinkJac data in JSON, CSV, or Markdown format anytime from Settings.",
   },
   {
     question: "What payment methods do you accept?",
-    answer: "We accept all major credit cards through Stripe. For Team plans, we also offer invoicing.",
+    answer: "We accept all major credit cards through Stripe.",
   },
 ];
 
@@ -122,7 +102,7 @@ const Pricing = () => {
         </div>
 
         {/* Pricing Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-20">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-20 max-w-2xl mx-auto">
           {tiers.map((tier) => (
             <Card
               key={tier.name}
