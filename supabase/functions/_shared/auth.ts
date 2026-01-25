@@ -39,10 +39,29 @@ export async function extractUserId(request: Request): Promise<AuthResult> {
       global: { headers: { Authorization: authHeader } },
     });
 
+    // Prefer signing-keys compatible verification via getClaims()
+    // This avoids "session not found" failures that can happen with getUser().
+    const authAny = supabase.auth as unknown as {
+      getClaims?: (jwt: string) => Promise<{ data: { claims?: { sub?: string } } | null; error: { message: string } | null }>;
+    };
+
+    if (typeof authAny.getClaims === 'function') {
+      const { data, error } = await authAny.getClaims(token);
+      const userId = data?.claims?.sub ?? null;
+
+      if (error || !userId) {
+        console.error('Auth claims error:', error?.message);
+        return { userId: null, error: 'Invalid or expired token', supabase: null };
+      }
+
+      return { userId, error: null, supabase };
+    }
+
+    // Fallback for older clients
     const { data, error } = await supabase.auth.getUser(token);
 
     if (error || !data.user) {
-      console.error('Auth error:', error?.message);
+      console.error('Auth user error:', error?.message);
       return { userId: null, error: 'Invalid or expired token', supabase: null };
     }
 
