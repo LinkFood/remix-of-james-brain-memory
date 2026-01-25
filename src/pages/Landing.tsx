@@ -15,7 +15,7 @@ const testimonials = [
   {
     name: "Alex K.",
     role: "Software Developer",
-    quote: "Brain Dump changed how I capture ideas. No more lost snippets of code or forgotten thoughts. It just works.",
+    quote: "LinkJac changed how I capture ideas. No more lost snippets of code or forgotten thoughts. It just works.",
     avatar: null,
   },
   {
@@ -34,8 +34,8 @@ const testimonials = [
 
 const faqs = [
   {
-    question: "What is Brain Dump?",
-    answer: "Brain Dump is an AI-powered second brain that organizes itself. You paste or type anything — code, ideas, lists, links, notes — and our AI automatically classifies, tags, and scores it by importance. No folders, no manual organization.",
+    question: "What is LinkJac?",
+    answer: "LinkJac is an AI-powered second brain that organizes itself. You paste or type anything — code, ideas, lists, links, notes — and our AI automatically classifies, tags, and scores it by importance. No folders, no manual organization.",
   },
   {
     question: "How does the AI organize my content?",
@@ -55,7 +55,7 @@ const faqs = [
   },
   {
     question: "Is there a mobile app?",
-    answer: "Brain Dump is a progressive web app (PWA) that works great on mobile browsers. Add it to your home screen for an app-like experience. Native apps are on our roadmap.",
+    answer: "LinkJac is a progressive web app (PWA) that works great on mobile browsers. Add it to your home screen for an app-like experience. Native apps are on our roadmap.",
   },
 ];
 
@@ -79,7 +79,7 @@ const Landing = () => {
             <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center">
               <Brain className="w-5 h-5 text-primary" />
             </div>
-            <span className="text-lg font-bold">Brain Dump</span>
+            <span className="text-lg font-bold">LinkJac</span>
           </div>
           <div className="flex items-center gap-3">
             <Button variant="ghost" onClick={() => navigate('/pricing')} className="hidden sm:inline-flex">
@@ -158,7 +158,7 @@ const Landing = () => {
         <div className="mb-20">
           <div className="text-center mb-8">
             <h2 className="text-2xl font-bold mb-2">See it in action</h2>
-            <p className="text-muted-foreground">Watch how Brain Dump works in 60 seconds</p>
+            <p className="text-muted-foreground">Watch how LinkJac works in 60 seconds</p>
           </div>
           <Card className="aspect-video max-w-3xl mx-auto overflow-hidden bg-muted/30 border-dashed relative group cursor-pointer">
             <div className="absolute inset-0 flex items-center justify-center">
@@ -268,7 +268,7 @@ const Landing = () => {
       {/* Footer */}
       <footer className="border-t border-border/50 py-8 px-4">
         <div className="max-w-5xl mx-auto flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-muted-foreground">
-          <p>© 2026 Brain Dump. All rights reserved.</p>
+          <p>© 2026 LinkJac. All rights reserved.</p>
           <div className="flex gap-6">
             <button onClick={() => navigate('/pricing')} className="hover:text-foreground transition-colors">Pricing</button>
             <button onClick={() => navigate('/terms')} className="hover:text-foreground transition-colors">Terms</button>

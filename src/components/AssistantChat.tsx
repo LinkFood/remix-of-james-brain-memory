@@ -715,7 +715,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
           <div className="text-center py-6">
             <Sparkles className="w-8 h-8 mx-auto text-muted-foreground/50 mb-3" />
             <p className="text-sm text-muted-foreground mb-4">
-              I'm Jac. I know everything in your brain dump. Ask me anything!
+              I'm Jac. I know everything in your LinkJac. Ask me anything!
             </p>
             <div className="flex flex-wrap gap-2 justify-center">
               {suggestedQueries.map((query) => (

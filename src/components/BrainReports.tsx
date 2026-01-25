@@ -149,7 +149,7 @@ const BrainReports = ({ userId }: BrainReportsProps) => {
           </div>
           <div>
             <h2 className="text-2xl font-bold text-foreground">Brain Reports</h2>
-            <p className="text-sm text-muted-foreground">AI-powered analysis of your brain dumps</p>
+            <p className="text-sm text-muted-foreground">AI-powered analysis of your LinkJac entries</p>
           </div>
         </div>
 

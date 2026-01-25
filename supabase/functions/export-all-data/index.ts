@@ -163,7 +163,7 @@ Deno.serve(async (req) => {
 });
 
 function generateMarkdown(data: { exportedAt: string; profile?: { username?: string } | null; stats: { totalEntries: number; starredCount: number; archivedCount: number; contentTypes: Record<string, number> }; entries: Array<{ title?: string; content_type: string; content_subtype?: string; importance_score?: number; tags?: string[]; created_at: string; content: string }>; brainReports: Array<{ report_type: string; start_date: string; end_date: string; summary: string }> }): string {
-  let md = `# Brain Dump Export\n\n`;
+  let md = `# LinkJac Export\n\n`;
   md += `**Exported:** ${data.exportedAt}\n\n`;
   
   if (data.profile) {
@@ -209,7 +209,7 @@ function generateMarkdown(data: { exportedAt: string; profile?: { username?: str
 }
 
 function generatePlainText(data: { exportedAt: string; stats: { totalEntries: number; starredCount: number; archivedCount: number }; entries: Array<{ content_type: string; title?: string; importance_score?: number; tags?: string[]; created_at: string; content: string }> }): string {
-  let txt = `BRAIN DUMP EXPORT\n`;
+  let txt = `LINKJAC EXPORT\n`;
   txt += `==================\n\n`;
   txt += `Exported: ${data.exportedAt}\n\n`;
 

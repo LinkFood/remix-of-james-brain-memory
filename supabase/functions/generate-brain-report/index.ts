@@ -124,7 +124,7 @@ Deno.serve(async (req) => {
       `[${e.content_type}${e.importance_score ? ` importance:${e.importance_score}` : ''}] ${e.title || 'Untitled'}: ${e.content.substring(0, 200)}...`
     ).join('\n');
 
-    const prompt = `Analyze this user's brain dump entries from the past ${reportType === 'daily' ? 'day' : reportType === 'monthly' ? 'month' : 'week'} and generate a structured report.
+    const prompt = `Analyze this user's LinkJac entries from the past ${reportType === 'daily' ? 'day' : reportType === 'monthly' ? 'month' : 'week'} and generate a structured report.
 
 Stats:
 - Total entries: ${stats.totalEntries}
@@ -151,7 +151,7 @@ Generate a report with:
       body: JSON.stringify({
         model: 'openai/gpt-5-mini',
         messages: [
-          { role: 'system', content: 'You are an AI analyst helping users understand patterns in their brain dump entries. Be concise, insightful, and actionable.' },
+          { role: 'system', content: 'You are an AI analyst helping users understand patterns in their LinkJac entries. Be concise, insightful, and actionable.' },
           { role: 'user', content: prompt }
         ],
         tools: [{

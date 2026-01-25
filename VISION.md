@@ -1,4 +1,4 @@
-# Brain Dump - Vision & Ethos
+# LinkJac - Vision & Ethos
 
 ## The Problem
 
@@ -12,9 +12,9 @@ Your thoughts are scattered. Ideas pop up in the shower, tasks appear during mee
 
 ---
 
-## The Solution: Brain Dump
+## The Solution: LinkJac
 
-**Brain Dump is your reactive second brain.**
+**LinkJac is your reactive second brain.**
 
 Dump anything. We handle everything else.
 
@@ -117,7 +117,7 @@ No API keys to manage. No configuration. Just works.
 
 ---
 
-## What Brain Dump Is NOT
+## What LinkJac Is NOT
 
 ❌ **Not a multi-provider chat app** — We're not ChatGPT with memory
 
@@ -129,7 +129,7 @@ No API keys to manage. No configuration. Just works.
 
 ---
 
-## What Brain Dump IS
+## What LinkJac IS
 
 ✅ **A capture tool** — Dump anything, instantly
 
