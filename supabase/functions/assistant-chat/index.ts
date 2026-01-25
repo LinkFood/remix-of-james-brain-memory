@@ -294,8 +294,25 @@ serve(async (req) => {
       .filter((w: string) => w.length >= 2 && !/^(the|and|or|is|it|to|a|an|in|on|at|for|of|my|i|me|do|what|how|when|where|why)$/i.test(w))
       .slice(0, 5);
     
+    // Generate stemmed/partial variations for better matching (e.g., "grocery" matches "groceries")
+    const searchVariations = searchWords.flatMap((word: string) => {
+      const variations = [word];
+      // Add common suffixes/prefixes removed
+      if (word.endsWith('ies')) variations.push(word.slice(0, -3) + 'y'); // groceries -> grocery
+      if (word.endsWith('es')) variations.push(word.slice(0, -2)); // dishes -> dish
+      if (word.endsWith('s') && !word.endsWith('ss')) variations.push(word.slice(0, -1)); // items -> item
+      if (word.endsWith('ing')) variations.push(word.slice(0, -3)); // shopping -> shop
+      if (word.endsWith('ed')) variations.push(word.slice(0, -2)); // added -> add
+      // Add common suffixes
+      if (!word.endsWith('s')) variations.push(word + 's'); // item -> items
+      if (!word.endsWith('ies') && word.endsWith('y')) variations.push(word.slice(0, -1) + 'ies'); // grocery -> groceries
+      return [...new Set(variations)];
+    });
+    
+    console.log('Search words:', searchWords, 'Variations:', searchVariations);
+    
     if (searchWords.length > 0) {
-      // Search content and title using ilike
+      // Search content and title using ilike with first variation
       const searchPattern = `%${searchWords[0]}%`;
       
       const { data: contentResults, error: searchError } = await supabase
@@ -309,31 +326,34 @@ serve(async (req) => {
 
       if (!searchError && contentResults) {
         relevantEntries = contentResults as Entry[];
-        console.log(`Found ${relevantEntries.length} entries via keyword search`);
+        console.log(`Found ${relevantEntries.length} entries via keyword search for "${searchWords[0]}"`);
       } else {
         console.warn('Keyword search failed:', searchError);
       }
       
-      // Also search by tags if we have any results gap
+      // Also search by tags using variations for partial matching
       if (relevantEntries.length < 10) {
-        const { data: tagResults } = await supabase
-          .from('entries')
-          .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
-          .eq('user_id', userId)
-          .eq('archived', false)
-          .contains('tags', searchWords)
-          .order('importance_score', { ascending: false, nullsFirst: false })
-          .limit(10);
-          
-        if (tagResults) {
-          // Merge, avoiding duplicates
-          for (const entry of tagResults) {
-            if (!relevantEntries.find((e) => e.id === entry.id)) {
-              relevantEntries.push(entry as Entry);
+        // Search with each variation
+        for (const variation of searchVariations.slice(0, 3)) {
+          const { data: tagResults } = await supabase
+            .from('entries')
+            .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
+            .eq('user_id', userId)
+            .eq('archived', false)
+            .contains('tags', [variation])
+            .order('importance_score', { ascending: false, nullsFirst: false })
+            .limit(10);
+            
+          if (tagResults) {
+            // Merge, avoiding duplicates
+            for (const entry of tagResults) {
+              if (!relevantEntries.find((e) => e.id === entry.id)) {
+                relevantEntries.push(entry as Entry);
+              }
             }
           }
-          console.log(`After tag search: ${relevantEntries.length} total entries`);
         }
+        console.log(`After tag search with variations: ${relevantEntries.length} total entries`);
       }
     } else {
       console.log('No meaningful search words found in message');

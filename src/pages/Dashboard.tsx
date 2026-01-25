@@ -210,19 +210,23 @@ const Dashboard = () => {
   }, []);
 
   const handleSelectEntries = useCallback((entryIds: string[]) => {
-    // Enter selection mode if not already
-    if (!isSelecting) {
-      toggleSelecting();
-    }
-    // Select the entries
-    selectAll(entryIds);
-    
-    // Close assistant on mobile
+    // Close assistant first on mobile to avoid state conflicts
     if (window.innerWidth < 768) {
       setAssistantOpen(false);
     }
     
-    toast.info(`Selected ${entryIds.length} entries`);
+    // Use requestAnimationFrame to ensure state updates don't cascade
+    requestAnimationFrame(() => {
+      // Enter selection mode if not already
+      if (!isSelecting) {
+        toggleSelecting();
+      }
+      // Select the entries after a tick to avoid race condition
+      setTimeout(() => {
+        selectAll(entryIds);
+        toast.info(`Selected ${entryIds.length} entries`);
+      }, 0);
+    });
   }, [isSelecting, toggleSelecting, selectAll]);
 
   if (loading) {
