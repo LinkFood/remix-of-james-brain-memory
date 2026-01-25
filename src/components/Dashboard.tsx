@@ -16,6 +16,7 @@ import { Entry } from "./EntryCard";
 import DumpInput, { DumpInputHandle } from "./DumpInput";
 import { parseListItems } from "@/lib/parseListItems";
 import { StatsGrid, EmptyState, EntrySection } from "./dashboard";
+import { QuickStats } from "./dashboard/QuickStats";
 import TagFilter from "./TagFilter";
 import { useEntries, type DashboardEntry } from "@/hooks/useEntries";
 import { useEntryActions } from "@/hooks/useEntryActions";
@@ -299,7 +300,10 @@ const Dashboard = ({
         />
       </div>
 
-      {/* Quick Stats */}
+      {/* Quick Stats Banner */}
+      <QuickStats entries={entries} />
+
+      {/* Stats Grid */}
       <StatsGrid stats={stats} starredCount={starredCount} />
 
       {/* Tag Filter */}
