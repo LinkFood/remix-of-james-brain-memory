@@ -42,6 +42,7 @@ interface EntryViewProps {
   onClose: () => void;
   onUpdate?: (entry: Entry) => void;
   onDelete?: (entryId: string) => void;
+  isAssistantOpen?: boolean;
 }
 
 const typeIcons: Record<string, React.ReactNode> = {
@@ -76,7 +77,7 @@ const toEntry = (data: any): Entry => ({
   list_items: parseListItems(data.list_items),
 });
 
-const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps) => {
+const EntryView = ({ entry, open, onClose, onUpdate, onDelete, isAssistantOpen }: EntryViewProps) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
@@ -223,7 +224,13 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete }: EntryViewProps)
   return (
     <Dialog open={open} onOpenChange={(open) => !open && onClose()} modal={false}>
       <DialogContent 
-        className="max-w-2xl max-h-[85vh] overflow-hidden flex flex-col" 
+        className={cn(
+          "max-h-[85vh] overflow-hidden flex flex-col transition-all duration-300",
+          // Side-by-side mode when assistant is open
+          isAssistantOpen 
+            ? "!left-[25%] !translate-x-0 !max-w-[45vw]"  // Left half
+            : "max-w-2xl"  // Centered (default)
+        )}
         allowOverlayPassthrough
         onInteractOutside={(e) => e.preventDefault()}
         onPointerDownOutside={(e) => e.preventDefault()}

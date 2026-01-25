@@ -216,7 +216,7 @@ serve(async (req) => {
       userId = user.id;
     }
 
-    const { message, conversationHistory = [], stream = true } = await req.json();
+    const { message, conversationHistory = [], stream = true, entryContext = null } = await req.json();
 
     if (!message) {
       return new Response(
@@ -446,6 +446,21 @@ Wind: ${weatherData.windSpeed} mph${snowWarning}
 Use this info proactively in your response.\n`;
     }
 
+    // Build context for currently viewed entry
+    let viewingContext = '';
+    if (entryContext) {
+      viewingContext = `
+=== ENTRY YOU'RE VIEWING ===
+The user is currently viewing this specific entry. Answer questions about IT specifically:
+Type: ${entryContext.content_type}
+Title: ${entryContext.title || 'Untitled'}
+Content: ${entryContext.content}
+
+If they ask "what is this?" or "tell me about this" or reference "this entry" - they mean THIS entry.
+Answer questions about this entry first, then provide additional context from their brain if relevant.
+`;
+    }
+
     // Step 5: Create system prompt - ACTION-ORIENTED, NO QUESTIONS
     const systemPrompt = `You are Jac, the user's personal brain assistant. You are OBEDIENT and ACTION-ORIENTED.
 
@@ -485,6 +500,7 @@ Be brief. No fluff.
 === IF YOU DON'T KNOW ===
 Say briefly: "Nothing in your brain about that." Don't apologize excessively.
 ${actionContext}
+${viewingContext}
 ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has no entries yet.'}`;
 
     // Step 6: Build conversation messages

@@ -117,6 +117,7 @@ interface AssistantChatProps {
   externalOpen?: boolean;
   onExternalOpenChange?: (open: boolean) => void;
   currentContext?: EntryContext | null;
+  isEntryViewOpen?: boolean;
 }
 
 const suggestedQueries = [
@@ -151,7 +152,7 @@ const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs: nu
 
 const STORAGE_KEY = 'jac-position';
 
-const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onScrollToEntry, onSelectEntries, externalOpen, onExternalOpenChange, currentContext }: AssistantChatProps) => {
+const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onScrollToEntry, onSelectEntries, externalOpen, onExternalOpenChange, currentContext, isEntryViewOpen }: AssistantChatProps) => {
   const [internalOpen, setInternalOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -647,6 +648,13 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
                 content: m.content,
               })),
               stream: true,
+              // Pass the current entry context if viewing one
+              entryContext: currentContext ? {
+                id: currentContext.id,
+                title: currentContext.title,
+                content: currentContext.content,
+                content_type: currentContext.content_type,
+              } : null,
             }),
           });
 
@@ -1195,14 +1203,18 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
     );
   }
 
-  // Desktop: Card (original behavior)
+  // Desktop: Card (original behavior) - expands to right panel when viewing entry
+  const isRightPanelMode = isEntryViewOpen && !isMinimized;
+  
   return (
     <Card
       className={cn(
         "fixed z-[100] transition-all duration-300 shadow-xl",
-        isMinimized ? "w-72" : "w-96 h-[500px]"
+        isMinimized ? "w-72" : "w-96 h-[500px]",
+        // Full right-side panel mode when viewing an entry
+        isRightPanelMode && "!w-[45vw] !h-[85vh] !right-4 !bottom-auto !top-[7.5vh]"
       )}
-      style={{
+      style={isRightPanelMode ? undefined : {
         right: `calc(1rem + ${position.x}px)`,
         bottom: `calc(1rem + ${position.y}px)`
       }}
@@ -1212,24 +1224,31 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
         className="flex items-center justify-between p-3 border-b cursor-pointer"
         onClick={toggleOpen}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
           <div className="p-1.5 rounded-md bg-sky-400/10">
             <LinkJacBrainIcon isThinking={loading || isTranscribing} className="w-5 h-5" />
           </div>
           <span className="font-bold text-sm text-sky-400">Jac</span>
+          {/* Context indicator - shows when Jac knows about current entry */}
+          {currentContext && (
+            <Badge variant="outline" className="text-xs max-w-[120px] truncate shrink-0 border-primary/30 text-primary/80">
+              <FileText className="w-3 h-3 mr-1 shrink-0" />
+              <span className="truncate">{currentContext.title || 'Viewing entry'}</span>
+            </Badge>
+          )}
           {isSpeaking && (
-            <Badge variant="secondary" className="text-xs animate-pulse">
+            <Badge variant="secondary" className="text-xs animate-pulse shrink-0">
               Speaking...
             </Badge>
           )}
           {ttsLoading && !isSpeaking && (
-            <Badge variant="secondary" className="text-xs">
+            <Badge variant="secondary" className="text-xs shrink-0">
               <Loader2 className="w-3 h-3 animate-spin mr-1" />
               Loading...
             </Badge>
           )}
           {isTranscribing && (
-            <Badge variant="secondary" className="text-xs">
+            <Badge variant="secondary" className="text-xs shrink-0">
               <Loader2 className="w-3 h-3 animate-spin mr-1" />
               Processing...
             </Badge>
