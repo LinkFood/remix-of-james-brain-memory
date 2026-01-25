@@ -402,10 +402,24 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
     let finalContent = "";
 
     try {
-      // Get user session token for proper authentication
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        throw new Error("Not authenticated");
+      // Get fresh session - force refresh if token might be stale
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+      
+      if (sessionError || !session) {
+        // Session is invalid, try to refresh
+        const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError || !refreshData.session) {
+          toast.error("Session expired. Please sign in again.");
+          await supabase.auth.signOut();
+          return;
+        }
+      }
+      
+      // Get the current session after potential refresh
+      const { data: { session: currentSession } } = await supabase.auth.getSession();
+      if (!currentSession) {
+        toast.error("Not authenticated. Please sign in.");
+        return;
       }
 
       const response = await retryWithBackoff(
@@ -414,7 +428,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
             method: "POST",
             headers: {
               "Content-Type": "application/json",
-              "Authorization": `Bearer ${session.access_token}`,
+              "Authorization": `Bearer ${currentSession.access_token}`,
             },
             body: JSON.stringify({
               message: text,
@@ -428,6 +442,12 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
 
           if (!res.ok) {
             const errorData = await res.json().catch(() => ({}));
+            // Handle auth errors specifically - don't retry, sign out
+            if (res.status === 401) {
+              toast.error("Session expired. Please sign in again.");
+              await supabase.auth.signOut();
+              throw new Error("Session expired");
+            }
             throw new Error(errorData.error || `Request failed: ${res.status}`);
           }
           return res;
