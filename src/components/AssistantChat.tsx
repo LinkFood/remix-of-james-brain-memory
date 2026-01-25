@@ -411,14 +411,13 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
       setIsRecording(false);
       recognitionRef.current = null;
       
-      // Auto-send if we have a transcript - mark as voice input
+      // Auto-send if we have a transcript - mark as voice input (immediate, no delay)
       const transcript = pendingTranscriptRef.current;
       if (transcript && transcript.trim()) {
-        console.log('[Jac STT] Auto-sending transcript:', transcript.trim());
+        console.log('[Jac STT] Auto-sending transcript immediately:', transcript.trim());
         lastInputWasVoiceRef.current = true; // Mark for auto-speak
-        setTimeout(() => {
-          handleSend(transcript.trim());
-        }, 100);
+        // Send immediately - no delay needed
+        handleSend(transcript.trim());
       }
       pendingTranscriptRef.current = null;
     };

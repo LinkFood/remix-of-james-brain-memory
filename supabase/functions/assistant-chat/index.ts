@@ -383,14 +383,14 @@ serve(async (req) => {
       console.warn('Calendar query failed:', calendarError);
     }
 
-    // Step 4: Fetch more recent entries for broader context
+    // Step 4: Fetch more recent entries for broader context (reduced for speed)
     const { data: recentEntries } = await supabase
       .from('entries')
       .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time, image_url')
       .eq('user_id', userId)
       .eq('archived', false)
       .order('created_at', { ascending: false })
-      .limit(15);
+      .limit(8);
 
     // Combine and deduplicate entries (calendar entries first for priority)
     const allEntries = [...calendarEntries, ...relevantEntries];
@@ -402,8 +402,8 @@ serve(async (req) => {
       }
     }
 
-    // Step 5: Build context from entries
-    const contextEntries = allEntries.slice(0, 15);
+    // Step 5: Build context from entries (reduced for speed)
+    const contextEntries = allEntries.slice(0, 10);
     const contextText = contextEntries
       .map((entry) => {
         let entryText = `[${entry.content_type}${entry.content_subtype ? `/${entry.content_subtype}` : ''}] `;
