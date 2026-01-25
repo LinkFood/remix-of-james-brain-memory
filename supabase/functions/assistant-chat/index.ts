@@ -283,77 +283,93 @@ serve(async (req) => {
       console.log('Weather data:', weatherData);
     }
 
-    // Step 1: Generate embedding for the user's message
-    console.log('Generating embedding for query...');
-    const embeddingResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${supabaseKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ text: message }),
-    });
-
+    // Step 1: Keyword-based search (embedding generation not available in Lovable AI)
+    console.log('Performing keyword search for:', message);
     let relevantEntries: Entry[] = [];
-
-    if (embeddingResponse.ok) {
-      const { embedding } = await embeddingResponse.json();
-
-      // Step 2: Search for relevant entries
-      console.log('Searching for relevant entries...');
-      const { data: searchResults, error: searchError } = await supabase.rpc(
-        'search_entries_by_embedding',
-        {
-          query_embedding: embedding,
-          filter_user_id: userId,
-          match_count: 10,
-          match_threshold: 0.5,
-        }
-      );
-
-      if (!searchError && searchResults) {
-        relevantEntries = searchResults;
-        console.log(`Found ${relevantEntries.length} relevant entries`);
-      } else {
-        console.warn('Semantic search failed:', searchError);
-      }
-    } else {
-      console.warn('Failed to generate embedding, proceeding without semantic search');
-    }
-
-    // Step 3: Check for calendar intent and fetch calendar entries
-    let calendarEntries: Entry[] = [];
-    if (detectCalendarIntent(message)) {
-      console.log('Calendar intent detected, fetching calendar entries...');
+    
+    // Extract search words from message (2+ chars, lowercased)
+    const searchWords = message
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((w: string) => w.length >= 2 && !/^(the|and|or|is|it|to|a|an|in|on|at|for|of|my|i|me|do|what|how|when|where|why)$/i.test(w))
+      .slice(0, 5);
+    
+    if (searchWords.length > 0) {
+      // Search content and title using ilike
+      const searchPattern = `%${searchWords[0]}%`;
       
-      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-      
-      const { data: upcomingEvents, error: calendarError } = await supabase
+      const { data: contentResults, error: searchError } = await supabase
         .from('entries')
         .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
         .eq('user_id', userId)
         .eq('archived', false)
-        .not('event_date', 'is', null)
-        .gte('event_date', today)
-        .order('event_date', { ascending: true })
-        .limit(10);
+        .or(`content.ilike.${searchPattern},title.ilike.${searchPattern}`)
+        .order('importance_score', { ascending: false, nullsFirst: false })
+        .limit(15);
 
-      if (!calendarError && upcomingEvents) {
-        calendarEntries = upcomingEvents as Entry[];
-        console.log(`Found ${calendarEntries.length} calendar entries`);
-      } else if (calendarError) {
-        console.warn('Calendar query failed:', calendarError);
+      if (!searchError && contentResults) {
+        relevantEntries = contentResults as Entry[];
+        console.log(`Found ${relevantEntries.length} entries via keyword search`);
+      } else {
+        console.warn('Keyword search failed:', searchError);
       }
+      
+      // Also search by tags if we have any results gap
+      if (relevantEntries.length < 10) {
+        const { data: tagResults } = await supabase
+          .from('entries')
+          .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
+          .eq('user_id', userId)
+          .eq('archived', false)
+          .contains('tags', searchWords)
+          .order('importance_score', { ascending: false, nullsFirst: false })
+          .limit(10);
+          
+        if (tagResults) {
+          // Merge, avoiding duplicates
+          for (const entry of tagResults) {
+            if (!relevantEntries.find((e) => e.id === entry.id)) {
+              relevantEntries.push(entry as Entry);
+            }
+          }
+          console.log(`After tag search: ${relevantEntries.length} total entries`);
+        }
+      }
+    } else {
+      console.log('No meaningful search words found in message');
     }
 
-    // Step 4: Also fetch recent entries for context
+    // Step 3: ALWAYS fetch upcoming calendar entries (not just on intent detection)
+    // This ensures Jac is always aware of scheduled items
+    let calendarEntries: Entry[] = [];
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+    console.log('Fetching upcoming calendar entries...');
+    
+    const { data: upcomingEvents, error: calendarError } = await supabase
+      .from('entries')
+      .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
+      .eq('user_id', userId)
+      .eq('archived', false)
+      .not('event_date', 'is', null)
+      .gte('event_date', today)
+      .order('event_date', { ascending: true })
+      .limit(15);
+
+    if (!calendarError && upcomingEvents) {
+      calendarEntries = upcomingEvents as Entry[];
+      console.log(`Found ${calendarEntries.length} calendar entries`);
+    } else if (calendarError) {
+      console.warn('Calendar query failed:', calendarError);
+    }
+
+    // Step 4: Fetch more recent entries for broader context
     const { data: recentEntries } = await supabase
       .from('entries')
       .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
       .eq('user_id', userId)
       .eq('archived', false)
       .order('created_at', { ascending: false })
-      .limit(5);
+      .limit(15);
 
     // Combine and deduplicate entries (calendar entries first for priority)
     const allEntries = [...calendarEntries, ...relevantEntries];
