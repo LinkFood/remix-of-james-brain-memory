@@ -278,8 +278,15 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       setIsSpeaking(false);
       setTtsLoading(false);
       // Don't show toast for session expired - already handled
+      // For voice service issues, show a subtle message (not blocking)
       if (error.message !== "Session expired") {
-        toast.error(error.message || "Failed to speak");
+        const msg = error.message || "Voice unavailable";
+        // Only show toast for unexpected errors, not service unavailability
+        if (!msg.includes("unavailable") && !msg.includes("API key")) {
+          toast.error(msg);
+        } else {
+          console.log("[Jac TTS] Voice service unavailable - continuing silently");
+        }
       }
     }
   }, [isSpeaking, ttsLoading]);
