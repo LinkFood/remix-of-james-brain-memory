@@ -128,6 +128,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recognitionRef = useRef<WebSpeechRecognition | null>(null);
+  const pendingTranscriptRef = useRef<string | null>(null);
 
   const isMobile = useIsMobile();
 
@@ -293,18 +294,17 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       const transcript = result[0].transcript;
       
       // Update input with results for live feedback
-      if (transcript) {
-        setInput(transcript);
+      if (transcript && transcript.trim()) {
+        setInput(transcript.trim());
+        pendingTranscriptRef.current = transcript.trim();
       }
       
       console.log('[Jac STT] Browser speech result:', transcript);
-      if (transcript && transcript.trim()) {
-        setInput(transcript.trim());
-      }
     };
 
     recognition.onerror = (event: WebSpeechRecognitionErrorEvent) => {
       console.error('[Jac STT] Browser speech error:', event.error);
+      pendingTranscriptRef.current = null; // Clear on error - no auto-send
       if (event.error === 'not-allowed') {
         toast.error("Microphone access denied");
       } else if (event.error === 'no-speech') {
@@ -323,6 +323,16 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       setVoiceState('idle');
       setIsRecording(false);
       recognitionRef.current = null;
+      
+      // Auto-send if we have a transcript
+      const transcript = pendingTranscriptRef.current;
+      if (transcript && transcript.trim()) {
+        console.log('[Jac STT] Auto-sending transcript:', transcript.trim());
+        setTimeout(() => {
+          handleSend(transcript.trim());
+        }, 100);
+      }
+      pendingTranscriptRef.current = null;
     };
 
     try {
