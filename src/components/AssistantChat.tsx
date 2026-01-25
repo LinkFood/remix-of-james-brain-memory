@@ -21,13 +21,11 @@ import {
   DrawerTitle,
 } from "@/components/ui/drawer";
 import {
-  MessageSquare,
   Send,
   Loader2,
   ChevronUp,
   ChevronDown,
   X,
-  Sparkles,
   FileText,
   Volume2,
   VolumeX,
@@ -40,6 +38,7 @@ import ReactMarkdown from "react-markdown";
 import { supabase } from "@/integrations/supabase/client";
 import { retryWithBackoff } from "@/lib/retryWithBackoff";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { LinkJacBrainIcon } from "@/components/LinkJacLogo";
 
 // Web Speech API types (browser-specific, not in TypeScript lib)
 interface WebSpeechRecognitionResult {
@@ -713,7 +712,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       )}>
         {messages.length === 0 && (
           <div className="text-center py-6">
-            <Sparkles className="w-8 h-8 mx-auto text-muted-foreground/50 mb-3" />
+            <LinkJacBrainIcon className="w-8 h-8 mx-auto text-sky-400/50 mb-3" />
             <p className="text-sm text-muted-foreground mb-4">
               I'm Jac. I know everything in your LinkJac. Ask me anything!
             </p>
@@ -879,14 +878,14 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       <Button
         onClick={toggleOpen}
         className={cn(
-          "fixed z-50 rounded-full shadow-lg",
+          "fixed z-50 rounded-full shadow-lg bg-sky-400/10 hover:bg-sky-400/20 border border-sky-400/30",
           isMobile 
             ? "bottom-20 right-4 h-14 w-14" // Above mobile nav
             : "bottom-4 right-4 h-14 w-14"
         )}
         size="icon"
       >
-        <MessageSquare className="w-6 h-6" />
+        <LinkJacBrainIcon className="w-7 h-7" />
       </Button>
     );
   }
@@ -899,10 +898,10 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
           <DrawerHeader className="border-b pb-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <div className="p-1.5 rounded-md bg-primary/10">
-                  <Sparkles className="w-4 h-4 text-primary" />
+                <div className="p-1.5 rounded-md bg-sky-400/10">
+                  <LinkJacBrainIcon isThinking={loading || isTranscribing} className="w-5 h-5" />
                 </div>
-                <DrawerTitle className="text-base">Jac</DrawerTitle>
+                <DrawerTitle className="text-base text-sky-400 font-bold">Jac</DrawerTitle>
                 {isSpeaking && (
                   <Badge variant="secondary" className="text-xs animate-pulse">
                     Speaking...
@@ -960,10 +959,10 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
         onClick={toggleOpen}
       >
         <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-md bg-primary/10">
-            <Sparkles className="w-4 h-4 text-primary" />
+          <div className="p-1.5 rounded-md bg-sky-400/10">
+            <LinkJacBrainIcon isThinking={loading || isTranscribing} className="w-5 h-5" />
           </div>
-          <span className="font-medium text-sm">Jac</span>
+          <span className="font-bold text-sm text-sky-400">Jac</span>
           {isSpeaking && (
             <Badge variant="secondary" className="text-xs animate-pulse">
               Speaking...

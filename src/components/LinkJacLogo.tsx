@@ -1,10 +1,10 @@
-import { Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface LinkJacLogoProps {
   size?: "sm" | "md" | "lg" | "xl";
   showIcon?: boolean;
   className?: string;
+  isThinking?: boolean;
 }
 
 const sizeConfig = {
@@ -13,51 +13,121 @@ const sizeConfig = {
     icon: "w-6 h-6",
     iconBg: "w-7 h-7 rounded-md",
     text: "text-base",
-    accent: "text-sm",
   },
   md: {
     container: "gap-2",
     icon: "w-5 h-5",
     iconBg: "w-9 h-9 rounded-lg",
     text: "text-lg",
-    accent: "text-base",
   },
   lg: {
     container: "gap-2.5",
     icon: "w-7 h-7",
     iconBg: "w-11 h-11 rounded-xl",
     text: "text-2xl",
-    accent: "text-xl",
   },
   xl: {
     container: "gap-3",
     icon: "w-9 h-9",
     iconBg: "w-14 h-14 rounded-2xl",
     text: "text-3xl",
-    accent: "text-2xl",
   },
 };
+
+// Standalone brain icon with thinking animation
+export function LinkJacBrainIcon({ 
+  isThinking = false, 
+  className 
+}: { 
+  isThinking?: boolean; 
+  className?: string;
+}) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      className={cn(className, isThinking && "brain-thinking")}
+      aria-label="LinkJac brain"
+    >
+      {/* Brain outline */}
+      <path
+        d="M12 4.5C9.5 4.5 7.5 6.5 7.5 9C7.5 9.8 7.7 10.5 8.1 11.1C6.4 11.5 5 13 5 14.8C5 16.8 6.4 18.4 8.3 18.8C8 19.3 7.8 19.9 7.8 20.5C7.8 21.9 9 23 10.4 23H13.6C15 23 16.2 21.9 16.2 20.5C16.2 19.9 16 19.3 15.7 18.8C17.6 18.4 19 16.8 19 14.8C19 13 17.6 11.5 15.9 11.1C16.3 10.5 16.5 9.8 16.5 9C16.5 6.5 14.5 4.5 12 4.5Z"
+        fill="currentColor"
+        className="text-sky-400"
+      />
+      
+      {/* Neuron dots - these animate */}
+      <circle 
+        cx="9.5" 
+        cy="12" 
+        r="1.5" 
+        fill="hsl(var(--background))" 
+        className="neuron-1"
+      />
+      <circle 
+        cx="14.5" 
+        cy="12" 
+        r="1.5" 
+        fill="hsl(var(--background))" 
+        className="neuron-2"
+      />
+      
+      {/* Synapse line - animates */}
+      <path
+        d="M12 13V17"
+        stroke="hsl(var(--background))"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        className="synapse"
+      />
+      
+      {/* Small connector dots */}
+      <circle 
+        cx="10.5" 
+        cy="15" 
+        r="0.8" 
+        fill="hsl(var(--background))" 
+        className="neuron-1"
+      />
+      <circle 
+        cx="13.5" 
+        cy="15" 
+        r="0.8" 
+        fill="hsl(var(--background))" 
+        className="neuron-2"
+      />
+    </svg>
+  );
+}
 
 export function LinkJacLogo({ 
   size = "md", 
   showIcon = true,
-  className 
+  className,
+  isThinking = false
 }: LinkJacLogoProps) {
   const config = sizeConfig[size];
 
   return (
-    <div className={cn("flex items-center", config.container, className)}>
+    <div className={cn("flex items-center group", config.container, className)}>
       {showIcon && (
         <div className={cn(
-          "bg-primary/10 flex items-center justify-center",
-          config.iconBg
+          "bg-sky-400/10 flex items-center justify-center transition-all duration-300",
+          config.iconBg,
+          !isThinking && "group-hover:[&_.neuron-1]:animate-[brain-neuron-pulse_2s_ease-in-out_infinite]",
+          !isThinking && "group-hover:[&_.neuron-2]:animate-[brain-neuron-pulse_2s_ease-in-out_infinite_0.4s]",
+          !isThinking && "group-hover:[&_.synapse]:animate-[brain-synapse-flow_2.5s_ease-in-out_infinite_0.2s]"
         )}>
-          <Brain className={cn("text-primary", config.icon)} />
+          <LinkJacBrainIcon 
+            isThinking={isThinking} 
+            className={config.icon} 
+          />
         </div>
       )}
       <span className={cn("font-bold tracking-tight", config.text)}>
         <span className="text-foreground">Link</span>
-        <span className="text-primary">Jac</span>
+        <span className="text-sky-400">Jac</span>
       </span>
     </div>
   );
@@ -74,28 +144,23 @@ export function LinkJacLogoSVG({ size = 32 }: { size?: number }) {
       xmlns="http://www.w3.org/2000/svg"
       aria-label="LinkJac logo"
     >
-      {/* Background circle */}
+      {/* Background */}
       <rect
         width="32"
         height="32"
         rx="8"
-        fill="currentColor"
-        className="text-primary/10"
+        fill="#38bdf8"
+        fillOpacity="0.1"
       />
-      {/* Brain icon simplified */}
-      <g transform="translate(6, 6)" className="text-primary">
+      {/* Brain icon */}
+      <g transform="translate(4, 4)">
         <path
-          d="M10 2C7.5 2 5.5 4 5.5 6.5C5.5 7.5 5.8 8.4 6.3 9.1C4.4 9.6 3 11.3 3 13.3C3 15.5 4.6 17.3 6.7 17.8C6.3 18.4 6 19.1 6 20C6 21.7 7.3 23 9 23H11C12.7 23 14 21.7 14 20C14 19.1 13.7 18.4 13.3 17.8C15.4 17.3 17 15.5 17 13.3C17 11.3 15.6 9.6 13.7 9.1C14.2 8.4 14.5 7.5 14.5 6.5C14.5 4 12.5 2 10 2Z"
-          fill="currentColor"
+          d="M12 4.5C9.5 4.5 7.5 6.5 7.5 9C7.5 9.8 7.7 10.5 8.1 11.1C6.4 11.5 5 13 5 14.8C5 16.8 6.4 18.4 8.3 18.8C8 19.3 7.8 19.9 7.8 20.5C7.8 21.9 9 23 10.4 23H13.6C15 23 16.2 21.9 16.2 20.5C16.2 19.9 16 19.3 15.7 18.8C17.6 18.4 19 16.8 19 14.8C19 13 17.6 11.5 15.9 11.1C16.3 10.5 16.5 9.8 16.5 9C16.5 6.5 14.5 4.5 12 4.5Z"
+          fill="#38bdf8"
         />
-        <circle cx="8" cy="10" r="1.5" fill="hsl(var(--background))" />
-        <circle cx="12" cy="10" r="1.5" fill="hsl(var(--background))" />
-        <path
-          d="M10 12V16"
-          stroke="hsl(var(--background))"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        />
+        <circle cx="9.5" cy="12" r="1.5" fill="white" />
+        <circle cx="14.5" cy="12" r="1.5" fill="white" />
+        <path d="M12 13V17" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
       </g>
     </svg>
   );
