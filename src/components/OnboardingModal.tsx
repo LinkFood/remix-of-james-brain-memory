@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Brain, Zap, Search, Shield, ArrowRight, X } from "lucide-react";
+import { Brain, Zap, Search, Shield, MessageSquare, ArrowRight, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,7 +25,12 @@ const steps = [
   {
     icon: Search,
     title: "AI Does the Work",
-    description: "Automatic classification, tagging, and importance scoring. Ask the assistant anything about your brain.",
+    description: "Automatic classification, tagging, and importance scoring. Everything organized automatically.",
+  },
+  {
+    icon: MessageSquare,
+    title: "Meet Jac, Your Assistant",
+    description: "Ask anything about your brain. 'Show me my code', 'What ideas did I save?', 'Find that grocery list'.",
   },
   {
     icon: Shield,
