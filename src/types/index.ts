@@ -1,5 +1,5 @@
 /**
- * Comprehensive Type Definitions for Brain Dump
+ * Comprehensive Type Definitions for LinkJac
  *
  * This file contains all shared types used across the application.
  * Import types from here rather than defining them inline in components.
@@ -47,7 +47,7 @@ export interface ListItem {
 }
 
 /**
- * The main Entry type representing a single brain dump entry
+ * The main Entry type representing a single LinkJac entry
  */
 export interface Entry {
   id: string;

@@ -122,7 +122,7 @@ const Settings = () => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `brain-dump-${new Date().toISOString().split('T')[0]}.${exportFormat}`;
+      a.download = `linkjac-export-${new Date().toISOString().split('T')[0]}.${exportFormat}`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -307,7 +307,7 @@ const Settings = () => {
           <div className="space-y-3 mb-6">
             <Label>Export All Data</Label>
             <p className="text-xs text-muted-foreground">
-              Download your entire brain dump. Your data, your control.
+              Download all your data from LinkJac. Your data, your control.
             </p>
             <div className="flex gap-2">
               <Select value={exportFormat} onValueChange={setExportFormat}>
@@ -377,7 +377,7 @@ const Settings = () => {
 
         {/* Footer */}
         <div className="mt-6 text-center text-xs text-muted-foreground">
-          <p>Brain Dump - Your AI-powered second brain</p>
+          <p>LinkJac - Your AI-powered second brain</p>
         </div>
       </div>
 
@@ -387,7 +387,7 @@ const Settings = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete All Data?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete all <strong>{dataStats.entries} entries</strong> from your brain dump.
+              This will permanently delete all <strong>{dataStats.entries} entries</strong> from your LinkJac account.
               <br /><br />
               <strong>This action cannot be undone.</strong> Consider exporting your data first.
             </AlertDialogDescription>

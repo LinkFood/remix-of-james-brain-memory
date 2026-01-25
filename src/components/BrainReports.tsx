@@ -343,7 +343,7 @@ const BrainReports = ({ userId }: BrainReportsProps) => {
               <Brain className="w-16 h-16 text-muted-foreground mx-auto mb-4 opacity-50" />
               <p className="text-muted-foreground">Select a report to view details</p>
               <p className="text-sm text-muted-foreground mt-2">
-                Or generate a new report to analyze your brain dumps
+                Or generate a new report to analyze your entries
               </p>
             </Card>
           )}

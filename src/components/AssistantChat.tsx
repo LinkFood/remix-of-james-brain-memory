@@ -1030,7 +1030,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       {isMinimized && (
         <div className="p-3">
           <p className="text-xs text-muted-foreground">
-            Ask Jac about your brain dump...
+            Ask Jac anything...
           </p>
         </div>
       )}
