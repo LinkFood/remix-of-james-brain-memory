@@ -121,9 +121,9 @@ function detectWeatherIntent(message: string): boolean {
   return weatherKeywords.test(message);
 }
 
-// Detect if user is asking about calendar/schedule
+// Detect if user is asking about calendar/schedule (typo-forgiving)
 function detectCalendarIntent(message: string): boolean {
-  const calendarKeywords = /\b(calendar|schedule|scheduled|upcoming|events?|appointments?|plans?|what('s| is) (on|in) my|this week|next week|tomorrow|today|weekend|when am i|when do i|what do i have)\b/i;
+  const calendarKeywords = /\b(cal[ae]nd[ae]r|schedule|scheduled|upcoming|events?|appointments?|plans?|this week|next week|tomorrow|today|weekend|when am i|when do i|what do i have|what'?s? (on|in) my)\b/i;
   return calendarKeywords.test(message);
 }
 
