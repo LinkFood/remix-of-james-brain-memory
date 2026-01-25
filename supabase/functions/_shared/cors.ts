@@ -8,6 +8,8 @@
 const ALLOWED_ORIGINS = [
   'https://lovable.dev',
   'https://www.lovable.dev',
+  'https://linkjac.cloud',
+  'https://www.linkjac.cloud',
 ];
 
 // Check if we're in development mode
