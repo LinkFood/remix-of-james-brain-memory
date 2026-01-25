@@ -2,13 +2,14 @@ import { useEffect, useState, useCallback, useRef, lazy, Suspense } from "react"
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { Brain, LogOut, Settings, Menu, RefreshCw, Search, Calendar } from "lucide-react";
+import { Brain, LogOut, Settings, Menu, RefreshCw, Search, Calendar, Network } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import DashboardComponent from "@/components/Dashboard";
 import OfflineBanner from "@/components/OfflineBanner";
+import ThemeToggle from "@/components/ThemeToggle";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import type { Entry } from "@/components/EntryCard";
@@ -19,6 +20,9 @@ const AssistantChat = lazy(() => import("@/components/AssistantChat"));
 const EntryView = lazy(() => import("@/components/EntryView"));
 const GlobalSearch = lazy(() => import("@/components/GlobalSearch"));
 const CalendarView = lazy(() => import("@/components/CalendarView").then(m => ({ default: m.CalendarView })));
+const KnowledgeGraph = lazy(() => import("@/components/KnowledgeGraph"));
+const OnboardingModal = lazy(() => import("@/components/OnboardingModal"));
+const TimelineView = lazy(() => import("@/components/TimelineView"));
 
 // Fallback component for lazy loading
 const LazyFallback = () => (
@@ -38,6 +42,9 @@ const Dashboard = () => {
   const [searchOpen, setSearchOpen] = useState(false);
   const [assistantOpen, setAssistantOpen] = useState(false);
   const [calendarOpen, setCalendarOpen] = useState(false);
+  const [graphOpen, setGraphOpen] = useState(false);
+  const [timelineOpen, setTimelineOpen] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const dumpInputRef = useRef<DumpInputHandle>(null);
   const isOnline = useOnlineStatus();
 
@@ -50,14 +57,34 @@ const Dashboard = () => {
     onToggleAssistant: () => setAssistantOpen((prev) => !prev),
   });
 
+  // Check auth and onboarding status
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
+    const checkAuthAndOnboarding = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      
       if (!session?.user) {
         navigate("/");
+        setLoading(false);
+        return;
       }
+      
+      setUser(session.user);
+      
+      // Check onboarding status
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("onboarding_completed")
+        .eq("id", session.user.id)
+        .single();
+      
+      if (profile && !profile.onboarding_completed) {
+        setShowOnboarding(true);
+      }
+      
       setLoading(false);
-    });
+    };
+    
+    checkAuthAndOnboarding();
 
     const {
       data: { subscription },
@@ -70,6 +97,18 @@ const Dashboard = () => {
 
     return () => subscription.unsubscribe();
   }, [navigate]);
+
+  const handleOnboardingComplete = useCallback(async () => {
+    if (!user?.id) return;
+    
+    // Update profile
+    await supabase
+      .from("profiles")
+      .update({ onboarding_completed: true })
+      .eq("id", user.id);
+    
+    setShowOnboarding(false);
+  }, [user?.id]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();
@@ -144,12 +183,34 @@ const Dashboard = () => {
                     variant="ghost"
                     className="justify-start"
                     onClick={() => {
+                      setTimelineOpen(true);
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    <Calendar className="w-4 h-4 mr-2" />
+                    Timeline
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="justify-start"
+                    onClick={() => {
                       setCalendarOpen(true);
                       setMobileMenuOpen(false);
                     }}
                   >
                     <Calendar className="w-4 h-4 mr-2" />
                     Calendar
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="justify-start"
+                    onClick={() => {
+                      setGraphOpen(true);
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    <Network className="w-4 h-4 mr-2" />
+                    Knowledge Graph
                   </Button>
                   <Button
                     variant="ghost"
@@ -198,12 +259,31 @@ const Dashboard = () => {
               </kbd>
             </Button>
             <Button
+              onClick={() => setTimelineOpen(true)}
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground"
+              title="Timeline"
+            >
+              <Calendar className="w-4 h-4" />
+            </Button>
+            <Button
               onClick={() => setCalendarOpen(true)}
               variant="ghost"
               size="icon"
               className="text-muted-foreground hover:text-foreground"
+              title="Calendar"
             >
               <Calendar className="w-4 h-4" />
+            </Button>
+            <Button
+              onClick={() => setGraphOpen(true)}
+              variant="ghost"
+              size="icon"
+              className="text-muted-foreground hover:text-foreground"
+              title="Knowledge Graph"
+            >
+              <Network className="w-4 h-4" />
             </Button>
             <Button
               onClick={() => setRefreshKey((prev) => prev + 1)}
@@ -213,6 +293,7 @@ const Dashboard = () => {
             >
               <RefreshCw className="w-4 h-4" />
             </Button>
+            <ThemeToggle />
             <Button
               onClick={() => navigate("/settings")}
               variant="ghost"
@@ -288,6 +369,39 @@ const Dashboard = () => {
             open={calendarOpen}
             onOpenChange={setCalendarOpen}
             onViewEntry={handleViewEntry}
+          />
+        </Suspense>
+      )}
+
+      {/* Timeline View - Lazy loaded */}
+      {user?.id && (
+        <Suspense fallback={<LazyFallback />}>
+          <TimelineView
+            userId={user.id}
+            open={timelineOpen}
+            onOpenChange={setTimelineOpen}
+            onViewEntry={handleViewEntry}
+          />
+        </Suspense>
+      )}
+
+      {/* Knowledge Graph - Lazy loaded */}
+      {user?.id && graphOpen && (
+        <Suspense fallback={<LazyFallback />}>
+          <Sheet open={graphOpen} onOpenChange={setGraphOpen}>
+            <SheetContent side="right" className="w-full sm:max-w-4xl p-0">
+              <KnowledgeGraph userId={user.id} />
+            </SheetContent>
+          </Sheet>
+        </Suspense>
+      )}
+
+      {/* Onboarding Modal - Lazy loaded */}
+      {user?.id && (
+        <Suspense fallback={null}>
+          <OnboardingModal
+            open={showOnboarding}
+            onComplete={handleOnboardingComplete}
           />
         </Suspense>
       )}
