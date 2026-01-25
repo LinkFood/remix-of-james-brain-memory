@@ -3,11 +3,13 @@
  * 
  * GOAL: Take anything, figure it out, save it, done.
  * 
- * Flow: Content → Classify → Embed → Score → Save
+ * Flow: Content → Classify → Score → Save
  * 
  * User should never know this exists. They dump. We work.
  * Speed matters. Parallelize where possible.
  * Fail gracefully. Never lose user data.
+ * 
+ * NOTE: Embedding generation removed - using keyword search instead.
  */
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
@@ -120,15 +122,30 @@ serve(async (req) => {
     const authHeader = req.headers.get('Authorization') ?? '';
 
     // Step 1: Classify content (with vision if imageUrl provided)
-    console.log('Step 1: Classifying content...');
-    const classifyResponse = await fetch(`${supabaseUrl}/functions/v1/classify-content`, {
-      method: 'POST',
-      headers: {
-        'Authorization': authHeader,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ content: content || '', imageUrl }),
-    });
+    // Step 2: Calculate importance score
+    // Run in parallel for speed
+    console.log('Step 1 & 2: Classifying content and calculating importance in parallel...');
+    
+    const contentForAnalysis = content || '';
+    
+    const [classifyResponse, importanceResponse] = await Promise.all([
+      fetch(`${supabaseUrl}/functions/v1/classify-content`, {
+        method: 'POST',
+        headers: {
+          'Authorization': authHeader,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: contentForAnalysis, imageUrl }),
+      }),
+      fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: contentForAnalysis, role: 'user' }),
+      }),
+    ]);
 
     let classification: ClassificationResult;
     if (!classifyResponse.ok) {
@@ -149,12 +166,21 @@ serve(async (req) => {
     
     console.log('Classification result:', classification);
 
-    // Step 2: Check if we should append to an existing entry
+    let importanceScore = null;
+    if (importanceResponse.ok) {
+      const importanceData = await importanceResponse.json();
+      importanceScore = importanceData.importance_score;
+      console.log('Importance calculated:', importanceScore);
+    } else {
+      console.warn('Failed to calculate importance, continuing without it');
+    }
+
+    // Step 3: Check if we should append to an existing entry
     let action: 'created' | 'appended' = 'created';
     let entry: Entry;
 
     if (classification.appendTo) {
-      console.log('Step 2: Attempting to append to existing entry:', classification.appendTo);
+      console.log('Step 3: Attempting to append to existing entry:', classification.appendTo);
 
       const { data: existingEntry, error: fetchError } = await supabase
         .from('entries')
@@ -199,55 +225,9 @@ serve(async (req) => {
       }
     }
 
-    // Step 3: Create new entry if not appending
+    // Step 4: Create new entry if not appending
     if (action === 'created') {
-      console.log('Step 3: Creating new entry...');
-
-      // Build the content to embed - include image description or document text if available
-      const contentForEmbedding = classification.documentText
-        ? `${content || ''}\n\nDocument content: ${classification.documentText}`.trim()
-        : classification.imageDescription 
-          ? `${content || ''}\n\nImage description: ${classification.imageDescription}`.trim()
-          : content || classification.suggestedTitle || '';
-
-      // PARALLEL: Generate embedding and calculate importance at the same time
-      console.log('Generating embedding + calculating importance in parallel...');
-      const [embeddingResponse, importanceResponse] = await Promise.all([
-        fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ text: contentForEmbedding }),
-        }),
-        fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ content: contentForEmbedding, role: 'user' }),
-        }),
-      ]);
-
-      let embedding = null;
-      if (embeddingResponse.ok) {
-        const embeddingData = await embeddingResponse.json();
-        embedding = embeddingData.embedding;
-        console.log('Embedding generated successfully');
-      } else {
-        console.warn('Failed to generate embedding, continuing without it');
-      }
-
-      let importanceScore = null;
-      if (importanceResponse.ok) {
-        const importanceData = await importanceResponse.json();
-        importanceScore = importanceData.importance_score;
-        console.log('Importance calculated:', importanceScore);
-      } else {
-        console.warn('Failed to calculate importance, continuing without it');
-      }
+      console.log('Step 4: Creating new entry...');
 
       // Insert new entry
       // For PDFs, store the extracted document text as the content for searchability
@@ -267,7 +247,7 @@ serve(async (req) => {
           ...(classification.imageDescription && { imageDescription: classification.imageDescription }),
           ...(classification.documentText && { documentText: classification.documentText }),
         },
-        embedding: embedding ? `[${embedding.join(',')}]` : null,
+        embedding: null, // No longer generating embeddings - using keyword search
         importance_score: importanceScore,
         list_items: classification.listItems || [],
         source,
