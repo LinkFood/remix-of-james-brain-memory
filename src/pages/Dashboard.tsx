@@ -144,6 +144,21 @@ const Dashboard = () => {
       .eq("id", user.id);
     
     setShowOnboarding(false);
+    
+    // Insert sample data for new users
+    try {
+      const { error } = await supabase.functions.invoke('insert-sample-data');
+      if (!error) {
+        toast.success("Sample data loaded! Try asking Jac 'What's in my brain?'");
+        setRefreshKey(prev => prev + 1);
+        // Open assistant with a delay to show the demo
+        setTimeout(() => {
+          setAssistantOpen(true);
+        }, 1500);
+      }
+    } catch (err) {
+      console.error('Failed to insert sample data:', err);
+    }
   }, [user?.id]);
 
   const handleSignOut = async () => {

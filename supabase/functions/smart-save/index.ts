@@ -59,6 +59,9 @@ interface SmartSaveRequest {
   imageUrl?: string;
 }
 
+const FREE_TIER_LIMIT = 50;
+const BILLING_CYCLE_DAYS = 30;
+
 serve(async (req) => {
   // Handle CORS preflight
   const corsResponse = handleCors(req);
@@ -92,6 +95,59 @@ serve(async (req) => {
       );
     }
 
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseKey);
+
+    // Check subscription limits
+    const { data: subscription, error: subError } = await supabase
+      .from('subscriptions')
+      .select('tier, monthly_dump_count, billing_cycle_start')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (subError) {
+      console.error('Error fetching subscription:', subError);
+    }
+
+    // Check if billing cycle needs reset
+    if (subscription) {
+      const cycleStart = new Date(subscription.billing_cycle_start);
+      const now = new Date();
+      const daysSinceCycleStart = Math.floor((now.getTime() - cycleStart.getTime()) / (1000 * 60 * 60 * 24));
+      
+      if (daysSinceCycleStart >= BILLING_CYCLE_DAYS) {
+        // Reset the billing cycle
+        await supabase
+          .from('subscriptions')
+          .update({
+            monthly_dump_count: 0,
+            billing_cycle_start: now.toISOString(),
+          })
+          .eq('user_id', userId);
+        
+        subscription.monthly_dump_count = 0;
+        console.log(`[smart-save] Reset billing cycle for user ${userId}`);
+      }
+
+      // Check free tier limit
+      if (subscription.tier === 'free' && subscription.monthly_dump_count >= FREE_TIER_LIMIT) {
+        return new Response(
+          JSON.stringify({ 
+            error: 'Free tier limit reached',
+            message: `You've used all ${FREE_TIER_LIMIT} dumps this month. Upgrade to Pro for unlimited dumps!`,
+            code: 'LIMIT_REACHED',
+            currentCount: subscription.monthly_dump_count,
+            limit: FREE_TIER_LIMIT,
+          }),
+          { 
+            status: 403, 
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          }
+        );
+      }
+    }
+
     // Parse and validate request body
     const { data: body, error: parseError } = await parseJsonBody<SmartSaveRequest>(req);
     if (parseError || !body) {
@@ -116,9 +172,6 @@ serve(async (req) => {
 
     console.log(`[smart-save] Processing ${imageUrl ? 'image' : 'text'} dump for user ${userId}`);
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
     const authHeader = req.headers.get('Authorization') ?? '';
 
     // Step 1: Classify content (with vision if imageUrl provided)
@@ -281,6 +334,18 @@ serve(async (req) => {
 
       entry = newEntry;
       console.log('New entry created:', entry.id);
+    }
+
+    // Increment the dump count for the user's subscription
+    if (subscription && action === 'created') {
+      const { error: updateError } = await supabase
+        .from('subscriptions')
+        .update({ monthly_dump_count: (subscription.monthly_dump_count || 0) + 1 })
+        .eq('user_id', userId);
+      
+      if (updateError) {
+        console.warn('Failed to increment dump count:', updateError);
+      }
     }
 
     // Generate summary for the response

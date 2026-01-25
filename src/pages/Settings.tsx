@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
-import { Brain, ArrowLeft, Download, Trash2, Database, User, Tag, AlertTriangle } from "lucide-react";
+import { Brain, ArrowLeft, Download, Trash2, Database, User, Tag, AlertTriangle, Crown, Zap } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
@@ -20,6 +21,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
 import TagManager from "@/components/TagManager";
+import { useSubscription } from "@/hooks/useSubscription";
 import type { Entry } from "@/components/EntryCard";
 
 const Settings = () => {
@@ -36,6 +38,9 @@ const Settings = () => {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
+  
+  // Subscription hook
+  const { subscription, loading: subLoading, dumpsRemaining, dumpLimit } = useSubscription(userId || null);
 
   useEffect(() => {
     checkAuth();
@@ -252,6 +257,72 @@ const Settings = () => {
                 Sign Out
               </Button>
             </div>
+          </div>
+
+          <Separator className="my-6" />
+
+          {/* Your Plan */}
+          <div className="space-y-4 mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                {subscription?.tier === 'pro' ? (
+                  <Crown className="w-5 h-5 text-primary" />
+                ) : (
+                  <Zap className="w-5 h-5 text-primary" />
+                )}
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold">Your Plan</h2>
+                <p className="text-xs text-muted-foreground">
+                  {subscription?.tier === 'pro' ? 'Pro Member' : 'Free Tier'}
+                </p>
+              </div>
+            </div>
+
+            <Card className="p-4 bg-muted/30 border-border">
+              {subLoading ? (
+                <div className="animate-pulse h-16 bg-muted rounded" />
+              ) : subscription?.tier === 'pro' ? (
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-primary">Unlimited Dumps</p>
+                  <p className="text-xs text-muted-foreground">
+                    You have full access to all Pro features.
+                  </p>
+                  <Button variant="outline" size="sm" className="mt-2">
+                    Manage Subscription
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex justify-between text-sm">
+                    <span>Dumps this month</span>
+                    <span className="font-medium">
+                      {subscription?.monthly_dump_count ?? 0} / {dumpLimit === Infinity ? '∞' : dumpLimit}
+                    </span>
+                  </div>
+                  <Progress 
+                    value={((subscription?.monthly_dump_count ?? 0) / 50) * 100} 
+                    className="h-2"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {dumpsRemaining === Infinity 
+                      ? 'Unlimited dumps available'
+                      : dumpsRemaining > 0 
+                        ? `${dumpsRemaining} dumps remaining this month`
+                        : 'Limit reached - upgrade for unlimited dumps'
+                    }
+                  </p>
+                  <Button 
+                    onClick={() => navigate("/pricing")} 
+                    className="w-full mt-2"
+                    size="sm"
+                  >
+                    <Crown className="w-4 h-4 mr-2" />
+                    Upgrade to Pro - $9/month
+                  </Button>
+                </div>
+              )}
+            </Card>
           </div>
 
           <Separator className="my-6" />
