@@ -11,7 +11,7 @@
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 // Simple in-memory rate limiting (100 requests per minute per user)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -158,13 +158,14 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
     const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     // SECURITY FIX: Extract user ID from JWT instead of request body
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) {
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return new Response(
         JSON.stringify({ error: 'Authorization header required' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -172,16 +173,39 @@ serve(async (req) => {
     }
 
     const jwt = authHeader.replace('Bearer ', '');
-    const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
-    
-    if (authError || !user) {
-      return new Response(
-        JSON.stringify({ error: 'Invalid or expired token' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
 
-    const userId = user.id;
+    // Validate JWT using signing-keys compatible getClaims()
+    // (avoids "session not found" failures that can occur with getUser())
+    const authClient = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    const authAny = authClient.auth as unknown as {
+      getClaims?: (token: string) => Promise<{ data: { claims?: { sub?: string } } | null; error: { message: string } | null }>;
+    };
+
+    let userId: string | null = null;
+
+    if (typeof authAny.getClaims === 'function') {
+      const { data, error } = await authAny.getClaims(jwt);
+      userId = data?.claims?.sub ?? null;
+      if (error || !userId) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid or expired token' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    } else {
+      // Fallback for older clients
+      const { data: { user }, error: authError } = await authClient.auth.getUser(jwt);
+      if (authError || !user) {
+        return new Response(
+          JSON.stringify({ error: 'Invalid or expired token' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      userId = user.id;
+    }
 
     const { message, conversationHistory = [], stream = true } = await req.json();
 
