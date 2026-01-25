@@ -52,6 +52,7 @@ interface Entry {
   created_at: string;
   event_date?: string;
   event_time?: string;
+  image_url?: string | null;
   similarity?: number;
 }
 
@@ -317,7 +318,7 @@ serve(async (req) => {
       
       const { data: contentResults, error: searchError } = await supabase
         .from('entries')
-        .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
+        .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time, image_url')
         .eq('user_id', userId)
         .eq('archived', false)
         .or(`content.ilike.${searchPattern},title.ilike.${searchPattern}`)
@@ -337,7 +338,7 @@ serve(async (req) => {
         for (const variation of searchVariations.slice(0, 3)) {
           const { data: tagResults } = await supabase
             .from('entries')
-            .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
+            .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time, image_url')
             .eq('user_id', userId)
             .eq('archived', false)
             .contains('tags', [variation])
@@ -367,7 +368,7 @@ serve(async (req) => {
     
     const { data: upcomingEvents, error: calendarError } = await supabase
       .from('entries')
-      .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
+      .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time, image_url')
       .eq('user_id', userId)
       .eq('archived', false)
       .not('event_date', 'is', null)
@@ -385,7 +386,7 @@ serve(async (req) => {
     // Step 4: Fetch more recent entries for broader context
     const { data: recentEntries } = await supabase
       .from('entries')
-      .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
+      .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time, image_url')
       .eq('user_id', userId)
       .eq('archived', false)
       .order('created_at', { ascending: false })
@@ -506,6 +507,7 @@ ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has n
       event_date: e.event_date,
       event_time: e.event_time,
       list_items: e.list_items,
+      image_url: e.image_url,
       similarity: e.similarity,
     }));
 

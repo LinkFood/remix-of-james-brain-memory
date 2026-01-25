@@ -125,6 +125,7 @@ export interface Source {
   event_date?: string | null;
   event_time?: string | null;
   list_items?: ListItem[];
+  image_url?: string | null;
   similarity?: number;
 }
 
