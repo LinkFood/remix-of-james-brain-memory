@@ -99,8 +99,14 @@ Deno.serve(async (req) => {
       if (response.status === 429) {
         return errorResponse(req, 'Voice service rate limit. Try again in a moment.', 429);
       }
+      
+      // Handle API key issues (401 from ElevenLabs = blocked/invalid key)
+      if (response.status === 401) {
+        console.error('[elevenlabs-tts] API key issue - blocked or invalid');
+        return errorResponse(req, 'Voice service unavailable. API key issue.', 503);
+      }
 
-      return serverErrorResponse(req, 'Voice generation failed');
+      return errorResponse(req, 'Voice generation temporarily unavailable', 503);
     }
 
     const audioBuffer = await response.arrayBuffer();
