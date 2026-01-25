@@ -485,6 +485,7 @@ const Dashboard = () => {
           onClose={() => setEntryViewOpen(false)}
           onUpdate={handleEntryUpdate}
           onDelete={handleEntryDelete}
+          isAssistantOpen={assistantOpen}
         />
       </Suspense>
 
@@ -506,6 +507,7 @@ const Dashboard = () => {
               content: selectedEntry.content,
               content_type: selectedEntry.content_type
             } : null}
+            isEntryViewOpen={entryViewOpen}
           />
         </Suspense>
       )}
