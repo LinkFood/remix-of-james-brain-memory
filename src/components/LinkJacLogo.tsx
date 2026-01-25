@@ -1,3 +1,4 @@
+import { Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface LinkJacLogoProps {
@@ -43,61 +44,13 @@ export function LinkJacBrainIcon({
   className?: string;
 }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      className={cn(className, isThinking && "brain-thinking")}
-      aria-label="LinkJac brain"
-    >
-      {/* Brain outline */}
-      <path
-        d="M12 4.5C9.5 4.5 7.5 6.5 7.5 9C7.5 9.8 7.7 10.5 8.1 11.1C6.4 11.5 5 13 5 14.8C5 16.8 6.4 18.4 8.3 18.8C8 19.3 7.8 19.9 7.8 20.5C7.8 21.9 9 23 10.4 23H13.6C15 23 16.2 21.9 16.2 20.5C16.2 19.9 16 19.3 15.7 18.8C17.6 18.4 19 16.8 19 14.8C19 13 17.6 11.5 15.9 11.1C16.3 10.5 16.5 9.8 16.5 9C16.5 6.5 14.5 4.5 12 4.5Z"
-        fill="currentColor"
-        className="text-sky-400"
-      />
-      
-      {/* Neuron dots - these animate */}
-      <circle 
-        cx="9.5" 
-        cy="12" 
-        r="1.5" 
-        fill="hsl(var(--background))" 
-        className="neuron-1"
-      />
-      <circle 
-        cx="14.5" 
-        cy="12" 
-        r="1.5" 
-        fill="hsl(var(--background))" 
-        className="neuron-2"
-      />
-      
-      {/* Synapse line - animates */}
-      <path
-        d="M12 13V17"
-        stroke="hsl(var(--background))"
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        className="synapse"
-      />
-      
-      {/* Small connector dots */}
-      <circle 
-        cx="10.5" 
-        cy="15" 
-        r="0.8" 
-        fill="hsl(var(--background))" 
-        className="neuron-1"
-      />
-      <circle 
-        cx="13.5" 
-        cy="15" 
-        r="0.8" 
-        fill="hsl(var(--background))" 
-        className="neuron-2"
-      />
-    </svg>
+    <Brain 
+      className={cn(
+        "text-sky-400 transition-all duration-300",
+        isThinking && "animate-pulse",
+        className
+      )} 
+    />
   );
 }
 
@@ -114,14 +67,15 @@ export function LinkJacLogo({
       {showIcon && (
         <div className={cn(
           "bg-sky-400/10 flex items-center justify-center transition-all duration-300",
-          config.iconBg,
-          !isThinking && "group-hover:[&_.neuron-1]:animate-[brain-neuron-pulse_2s_ease-in-out_infinite]",
-          !isThinking && "group-hover:[&_.neuron-2]:animate-[brain-neuron-pulse_2s_ease-in-out_infinite_0.4s]",
-          !isThinking && "group-hover:[&_.synapse]:animate-[brain-synapse-flow_2.5s_ease-in-out_infinite_0.2s]"
+          config.iconBg
         )}>
-          <LinkJacBrainIcon 
-            isThinking={isThinking} 
-            className={config.icon} 
+          <Brain 
+            className={cn(
+              "text-sky-400 transition-all duration-300",
+              config.icon,
+              isThinking && "animate-pulse",
+              !isThinking && "group-hover:scale-110 group-hover:animate-pulse"
+            )} 
           />
         </div>
       )}
@@ -152,15 +106,13 @@ export function LinkJacLogoSVG({ size = 32 }: { size?: number }) {
         fill="#38bdf8"
         fillOpacity="0.1"
       />
-      {/* Brain icon */}
-      <g transform="translate(4, 4)">
-        <path
-          d="M12 4.5C9.5 4.5 7.5 6.5 7.5 9C7.5 9.8 7.7 10.5 8.1 11.1C6.4 11.5 5 13 5 14.8C5 16.8 6.4 18.4 8.3 18.8C8 19.3 7.8 19.9 7.8 20.5C7.8 21.9 9 23 10.4 23H13.6C15 23 16.2 21.9 16.2 20.5C16.2 19.9 16 19.3 15.7 18.8C17.6 18.4 19 16.8 19 14.8C19 13 17.6 11.5 15.9 11.1C16.3 10.5 16.5 9.8 16.5 9C16.5 6.5 14.5 4.5 12 4.5Z"
-          fill="#38bdf8"
-        />
-        <circle cx="9.5" cy="12" r="1.5" fill="white" />
-        <circle cx="14.5" cy="12" r="1.5" fill="white" />
-        <path d="M12 13V17" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+      {/* Brain icon (simplified Lucide brain path) */}
+      <g transform="translate(4, 4)" fill="none" stroke="#38bdf8" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+        <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>
+        <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/>
+        <path d="M12 18v4"/>
+        <path d="M8 18h8"/>
       </g>
     </svg>
   );
