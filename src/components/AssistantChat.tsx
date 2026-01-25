@@ -149,6 +149,8 @@ const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs: nu
   }
 };
 
+const STORAGE_KEY = 'jac-position';
+
 const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onScrollToEntry, onSelectEntries, externalOpen, onExternalOpenChange, currentContext }: AssistantChatProps) => {
   const [internalOpen, setInternalOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(true);
@@ -169,7 +171,95 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
   const lastInputWasVoiceRef = useRef<boolean>(false);
   const sessionExpiredRef = useRef<boolean>(false); // Prevent cascading auth failures
 
+  // Draggable state
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const dragRef = useRef<{ startX: number; startY: number; initialX: number; initialY: number } | null>(null);
+  const hasDraggedRef = useRef(false);
+
   const isMobile = useIsMobile();
+
+  // Restore position from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        setPosition(JSON.parse(saved));
+      } catch {
+        // Ignore invalid data
+      }
+    }
+  }, []);
+
+  // Drag handlers
+  const handleDragStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
+    e.preventDefault();
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
+    setIsDragging(true);
+    hasDraggedRef.current = false;
+    dragRef.current = {
+      startX: clientX,
+      startY: clientY,
+      initialX: position.x,
+      initialY: position.y
+    };
+  }, [position]);
+
+  const handleDragMove = useCallback((e: MouseEvent | TouchEvent) => {
+    if (!isDragging || !dragRef.current) return;
+    
+    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+    
+    const deltaX = clientX - dragRef.current.startX;
+    const deltaY = clientY - dragRef.current.startY;
+    
+    // Mark as dragged if moved more than 5px
+    if (Math.abs(deltaX) > 5 || Math.abs(deltaY) > 5) {
+      hasDraggedRef.current = true;
+    }
+    
+    // Calculate new position with bounds checking
+    const newX = dragRef.current.initialX - deltaX;
+    const newY = dragRef.current.initialY - deltaY;
+    
+    // Keep within viewport (allow some padding)
+    const maxX = window.innerWidth - 80;
+    const maxY = window.innerHeight - 80;
+    
+    setPosition({
+      x: Math.max(-maxX + 80, Math.min(maxX - 80, newX)),
+      y: Math.max(-maxY + 80, Math.min(maxY - 80, newY))
+    });
+  }, [isDragging]);
+
+  const handleDragEnd = useCallback(() => {
+    if (isDragging) {
+      setIsDragging(false);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(position));
+    }
+    dragRef.current = null;
+  }, [isDragging, position]);
+
+  // Attach global listeners for drag
+  useEffect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handleDragMove);
+      window.addEventListener('mouseup', handleDragEnd);
+      window.addEventListener('touchmove', handleDragMove);
+      window.addEventListener('touchend', handleDragEnd);
+      
+      return () => {
+        window.removeEventListener('mousemove', handleDragMove);
+        window.removeEventListener('mouseup', handleDragEnd);
+        window.removeEventListener('touchmove', handleDragMove);
+        window.removeEventListener('touchend', handleDragEnd);
+      };
+    }
+  }, [isDragging, handleDragMove, handleDragEnd]);
+
 
   // Sync with external open state
   const isOpen = externalOpen !== undefined ? externalOpen : internalOpen;
@@ -990,21 +1080,32 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
 
   // Floating button when closed
   if (!isOpen) {
+    const handleFabClick = () => {
+      if (!hasDraggedRef.current) {
+        toggleOpen();
+      }
+    };
+    
     return (
       <Button
-        onClick={toggleOpen}
+        onMouseDown={handleDragStart}
+        onTouchStart={handleDragStart}
+        onClick={handleFabClick}
         className={cn(
-          "fixed z-[100] rounded-full shadow-lg bg-sky-400/10 hover:bg-sky-400/20 border border-sky-400/30",
-          isMobile 
-            ? "bottom-20 right-4 h-14 w-14" // Above mobile nav
-            : "bottom-4 right-4 h-14 w-14"
+          "fixed z-[100] rounded-full shadow-lg bg-sky-400/10 hover:bg-sky-400/20 border border-sky-400/30 transition-transform",
+          "h-16 w-16", // Bigger FAB
+          isDragging ? "cursor-grabbing scale-105 opacity-90 shadow-2xl" : "cursor-grab"
         )}
+        style={{
+          right: `calc(1rem - ${position.x}px)`,
+          bottom: isMobile ? `calc(5rem - ${position.y}px)` : `calc(1rem - ${position.y}px)`
+        }}
         size="icon"
       >
-        <LinkJacBrainIcon className="w-7 h-7" />
+        <LinkJacBrainIcon className="w-10 h-10" />
         {/* Context indicator - shows when viewing an entry */}
         {currentContext && (
-          <span className="absolute -top-1 -right-1 w-3 h-3 bg-sky-400 rounded-full animate-pulse ring-2 ring-background" />
+          <span className="absolute -top-1 -right-1 w-4 h-4 bg-sky-400 rounded-full animate-pulse ring-2 ring-background" />
         )}
       </Button>
     );
@@ -1069,9 +1170,13 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
   return (
     <Card
       className={cn(
-        "fixed bottom-4 right-4 z-[100] transition-all duration-300 shadow-xl",
+        "fixed z-[100] transition-all duration-300 shadow-xl",
         isMinimized ? "w-72" : "w-96 h-[500px]"
       )}
+      style={{
+        right: `calc(1rem - ${position.x}px)`,
+        bottom: `calc(1rem - ${position.y}px)`
+      }}
     >
       {/* Header */}
       <div
