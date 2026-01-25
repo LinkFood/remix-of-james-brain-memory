@@ -48,39 +48,40 @@ export function TagFilter({ entries, selectedTags, onTagsChange }: TagFilterProp
   };
 
   return (
-    <div className="mb-4">
+    <div className="mb-4 overflow-hidden max-w-full">
       <div className="flex items-center gap-2 mb-2">
-        <Tag className="w-4 h-4 text-muted-foreground" />
+        <Tag className="w-4 h-4 text-muted-foreground shrink-0" />
         <span className="text-sm text-muted-foreground">Filter by tags</span>
         {selectedTags.length > 0 && (
           <Button
             variant="ghost"
             size="sm"
             onClick={clearTags}
-            className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground"
+            className="h-6 px-2 text-xs text-muted-foreground hover:text-foreground shrink-0"
           >
             <X className="w-3 h-3 mr-1" />
             Clear
           </Button>
         )}
       </div>
-      <ScrollArea className="w-full whitespace-nowrap">
-        <div className="flex gap-2 pb-2">
+      <ScrollArea className="w-full max-w-full">
+        <div className="flex gap-2 pb-2 pr-4">
           {allTags.map((tag) => {
             const isSelected = selectedTags.includes(tag);
             return (
               <Badge
                 key={tag}
                 variant={isSelected ? "default" : "secondary"}
-                className={`cursor-pointer transition-colors shrink-0 ${
+                className={`cursor-pointer transition-colors shrink-0 max-w-[150px] truncate ${
                   isSelected
                     ? "bg-primary text-primary-foreground hover:bg-primary/90"
                     : "hover:bg-accent"
                 }`}
                 onClick={() => toggleTag(tag)}
+                title={tag}
               >
-                {tag}
-                <span className="ml-1 text-xs opacity-70">{tagCounts[tag]}</span>
+                <span className="truncate">{tag}</span>
+                <span className="ml-1 text-xs opacity-70 shrink-0">{tagCounts[tag]}</span>
               </Badge>
             );
           })}
