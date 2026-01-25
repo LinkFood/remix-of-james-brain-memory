@@ -2,53 +2,18 @@
  * useDumpSave - Smart save hook
  * 
  * Handles the core save logic with optimistic updates
+ * Uses longer timeouts (30s) to handle edge function cold starts
  */
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { addToQueue } from "@/hooks/useOfflineQueue";
-import type { PreviewFile, PendingEntry } from "../types";
+import { retryWithBackoff } from "@/lib/retryWithBackoff";
+import type { PreviewFile } from "../types";
 
-// Retry with exponential backoff for transient network errors
-async function retryWithBackoff<T>(
-  fn: () => Promise<T>,
-  maxRetries = 5,
-  baseDelayMs = 2000,
-  onRetry?: (attempt: number, maxRetries: number) => void
-): Promise<T> {
-  let lastError: Error | null = null;
-  
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      
-      // Only retry on network errors, not on validation/auth errors
-      const isNetworkError = 
-        lastError.message.includes('Failed to fetch') ||
-        lastError.message.includes('NetworkError') ||
-        lastError.message.includes('Failed to send a request');
-      
-      if (!isNetworkError || attempt === maxRetries - 1) {
-        throw lastError;
-      }
-      
-      // Notify about retry
-      if (onRetry) {
-        onRetry(attempt + 1, maxRetries);
-      }
-      
-      // Exponential backoff: 2s, 4s, 8s, 16s, 32s
-      const delay = baseDelayMs * Math.pow(2, attempt);
-      console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-  
-  throw lastError;
-}
+const SMART_SAVE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/smart-save`;
+const COLD_START_TIMEOUT = 30000; // 30 seconds for cold starts
 
 interface UseDumpSaveOptions {
   userId: string;
@@ -145,33 +110,60 @@ export function useDumpSave({
         setUploadProgress(analyzeLabel);
       }
 
-      // Call smart-save with retry logic for network resilience
-      const { data, error } = await retryWithBackoff(
+      // Get auth session for custom fetch
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Not authenticated");
+      }
+
+      // Call smart-save with 30s timeout and retry logic for cold starts
+      const response = await retryWithBackoff(
         async () => {
-          const result = await supabase.functions.invoke("smart-save", {
-            body: {
-              content: contentToSave || "",
-              userId,
-              source: "manual",
-              imageUrl: fileUrl,
-            },
-          });
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), COLD_START_TIMEOUT);
           
-          // Treat FunctionsError as retriable network issue
-          if (result.error?.message?.includes('Failed to send a request')) {
-            throw new Error(result.error.message);
+          try {
+            const res = await fetch(SMART_SAVE_URL, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${session.access_token}`,
+                "apikey": import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+              },
+              body: JSON.stringify({
+                content: contentToSave || "",
+                userId,
+                source: "manual",
+                imageUrl: fileUrl,
+              }),
+              signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            
+            if (!res.ok) {
+              const errorData = await res.json().catch(() => ({}));
+              throw new Error(errorData.error || `Request failed: ${res.status}`);
+            }
+            
+            return res.json();
+          } catch (err: any) {
+            clearTimeout(timeoutId);
+            if (err.name === 'AbortError') {
+              throw new Error('Request timed out - server may be starting up');
+            }
+            throw err;
           }
-          
-          return result;
         },
-        5, // maxRetries
-        2000, // baseDelayMs
-        (attempt, max) => {
-          toast.loading(`Connection issue - retrying... (${attempt}/${max})`, {
-            id: "retry-toast",
-          });
+        {
+          maxRetries: 5,
+          baseDelayMs: 2000,
+          toastId: "retry-toast",
+          showToast: true,
         }
       );
+
+      const data = response;
+      const error = data?.error ? new Error(data.error) : null;
 
       if (error) throw error;
 

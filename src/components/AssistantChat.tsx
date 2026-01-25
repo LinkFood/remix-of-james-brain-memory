@@ -64,6 +64,25 @@ const suggestedQueries = [
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/assistant-chat`;
 const TTS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/elevenlabs-tts`;
 const STT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/elevenlabs-stt`;
+const COLD_START_TIMEOUT = 30000; // 30 seconds for cold starts
+
+// Helper to create fetch with timeout
+const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs: number = COLD_START_TIMEOUT) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    clearTimeout(timeoutId);
+    return response;
+  } catch (err: any) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('Request timed out - server may be starting up');
+    }
+    throw err;
+  }
+};
 
 const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenChange }: AssistantChatProps) => {
   const [internalOpen, setInternalOpen] = useState(false);
@@ -132,7 +151,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       
       const response = await retryWithBackoff(
         async () => {
-          const res = await fetch(TTS_URL, {
+          const res = await fetchWithTimeout(TTS_URL, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
@@ -300,7 +319,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       
       const response = await retryWithBackoff(
         async () => {
-          const res = await fetch(STT_URL, {
+          const res = await fetchWithTimeout(STT_URL, {
             method: "POST",
             headers: {
               "Authorization": `Bearer ${session.access_token}`,
@@ -367,7 +386,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
 
       const response = await retryWithBackoff(
         async () => {
-          const res = await fetch(CHAT_URL, {
+          const res = await fetchWithTimeout(CHAT_URL, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

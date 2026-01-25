@@ -2,7 +2,7 @@
  * useOfflineQueue - Persist failed saves and retry when online
  */
 
-import { useEffect, useCallback, useRef } from "react";
+import { useEffect, useCallback, useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -55,7 +55,16 @@ export function useOfflineQueue(
   flushQueue: () => Promise<void>;
 } {
   const isFlushing = useRef(false);
-  const queueLengthRef = useRef(getQueue().length);
+  const [queueLength, setQueueLength] = useState(getQueue().length);
+  
+  // Keep queue length in sync
+  useEffect(() => {
+    const checkQueue = () => setQueueLength(getQueue().length);
+    checkQueue();
+    // Check periodically in case of external changes
+    const interval = setInterval(checkQueue, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   const flushQueue = useCallback(async () => {
     if (isFlushing.current) return;
@@ -102,7 +111,7 @@ export function useOfflineQueue(
     }
 
     saveQueue(remainingQueue);
-    queueLengthRef.current = remainingQueue.length;
+    setQueueLength(remainingQueue.length);
     isFlushing.current = false;
 
     if (successCount > 0) {
@@ -134,7 +143,7 @@ export function useOfflineQueue(
   }, [flushQueue]);
 
   return {
-    queueLength: queueLengthRef.current,
+    queueLength,
     flushQueue,
   };
 }
