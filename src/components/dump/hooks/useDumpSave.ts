@@ -13,7 +13,8 @@ import { retryWithBackoff } from "@/lib/retryWithBackoff";
 import type { PreviewFile } from "../types";
 
 const SMART_SAVE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/smart-save`;
-const COLD_START_TIMEOUT = 30000; // 30 seconds for cold starts
+const COLD_START_TIMEOUT = 45000; // 45 seconds for cold starts (increased for first request)
+const WARMUP_TIMEOUT = 5000; // 5 seconds for warmup ping
 
 interface UseDumpSaveOptions {
   userId: string;
@@ -116,7 +117,15 @@ export function useDumpSave({
         throw new Error("Not authenticated");
       }
 
-      // Call smart-save with 30s timeout and retry logic for cold starts
+      // Warmup ping to reduce cold start failures (fire-and-forget with short timeout)
+      const warmupController = new AbortController();
+      const warmupTimeoutId = setTimeout(() => warmupController.abort(), WARMUP_TIMEOUT);
+      fetch(SMART_SAVE_URL, { 
+        method: "OPTIONS",
+        signal: warmupController.signal,
+      }).catch(() => {}).finally(() => clearTimeout(warmupTimeoutId));
+
+      // Call smart-save with 45s timeout and retry logic for cold starts
       const response = await retryWithBackoff(
         async () => {
           const controller = new AbortController();
@@ -156,7 +165,7 @@ export function useDumpSave({
         },
         {
           maxRetries: 5,
-          baseDelayMs: 2000,
+          baseDelayMs: 3000, // Increased from 2000 to 3000 for cold start buffer
           toastId: "retry-toast",
           showToast: true,
         }
