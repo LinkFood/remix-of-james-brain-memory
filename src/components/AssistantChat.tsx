@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "@/integrations/supabase/client";
+import { retryWithBackoff } from "@/lib/retryWithBackoff";
 
 interface Source {
   id: string;
@@ -129,22 +130,33 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
 
       console.log('[Jac TTS] Calling TTS endpoint...');
       
-      const response = await fetch(TTS_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`,
+      const response = await retryWithBackoff(
+        async () => {
+          const res = await fetch(TTS_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({ text }),
+          });
+
+          console.log('[Jac TTS] Response status:', res.status);
+
+          if (!res.ok) {
+            const errorData = await res.json().catch(() => ({}));
+            console.error('[Jac TTS] Error response:', errorData);
+            throw new Error(errorData.error || "Speech generation failed");
+          }
+          return res;
         },
-        body: JSON.stringify({ text }),
-      });
-
-      console.log('[Jac TTS] Response status:', response.status);
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error('[Jac TTS] Error response:', errorData);
-        throw new Error(errorData.error || "Speech generation failed");
-      }
+        {
+          maxRetries: 3,
+          baseDelayMs: 1000,
+          toastId: "jac-tts-retry",
+          showToast: true,
+        }
+      );
 
       const audioBlob = await response.blob();
       console.log('[Jac TTS] Got audio blob:', audioBlob.size, 'bytes');
@@ -286,21 +298,32 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
 
       console.log('[Jac STT] Calling STT endpoint...');
       
-      const response = await fetch(STT_URL, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${session.access_token}`,
+      const response = await retryWithBackoff(
+        async () => {
+          const res = await fetch(STT_URL, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${session.access_token}`,
+            },
+            body: formData,
+          });
+
+          console.log('[Jac STT] Response status:', res.status);
+
+          if (!res.ok) {
+            const errorData = await res.json().catch(() => ({}));
+            console.error('[Jac STT] Error response:', errorData);
+            throw new Error(errorData.error || "Transcription failed");
+          }
+          return res;
         },
-        body: formData,
-      });
-
-      console.log('[Jac STT] Response status:', response.status);
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error('[Jac STT] Error response:', errorData);
-        throw new Error(errorData.error || "Transcription failed");
-      }
+        {
+          maxRetries: 3,
+          baseDelayMs: 1000,
+          toastId: "jac-stt-retry",
+          showToast: true,
+        }
+      );
 
       const { text } = await response.json();
       console.log('[Jac STT] Transcribed text:', text);
@@ -342,26 +365,37 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
         throw new Error("Not authenticated");
       }
 
-      const response = await fetch(CHAT_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${session.access_token}`,
-        },
-        body: JSON.stringify({
-          message: text,
-          conversationHistory: messages.slice(-6).map((m) => ({
-            role: m.role,
-            content: m.content,
-          })),
-          stream: true,
-        }),
-      });
+      const response = await retryWithBackoff(
+        async () => {
+          const res = await fetch(CHAT_URL, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${session.access_token}`,
+            },
+            body: JSON.stringify({
+              message: text,
+              conversationHistory: messages.slice(-6).map((m) => ({
+                role: m.role,
+                content: m.content,
+              })),
+              stream: true,
+            }),
+          });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Request failed: ${response.status}`);
-      }
+          if (!res.ok) {
+            const errorData = await res.json().catch(() => ({}));
+            throw new Error(errorData.error || `Request failed: ${res.status}`);
+          }
+          return res;
+        },
+        {
+          maxRetries: 3,
+          baseDelayMs: 1000,
+          toastId: "jac-chat-retry",
+          showToast: true,
+        }
+      );
 
       if (!response.body) {
         throw new Error("No response body");
