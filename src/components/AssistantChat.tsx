@@ -100,6 +100,13 @@ interface Message {
   sources?: Source[];
 }
 
+interface EntryContext {
+  id: string;
+  title?: string | null;
+  content: string;
+  content_type: string;
+}
+
 interface AssistantChatProps {
   userId: string;
   onEntryCreated?: (entry: any) => void;
@@ -109,6 +116,7 @@ interface AssistantChatProps {
   onSelectEntries?: (entryIds: string[]) => void;
   externalOpen?: boolean;
   onExternalOpenChange?: (open: boolean) => void;
+  currentContext?: EntryContext | null;
 }
 
 const suggestedQueries = [
@@ -141,7 +149,7 @@ const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs: nu
   }
 };
 
-const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onScrollToEntry, onSelectEntries, externalOpen, onExternalOpenChange }: AssistantChatProps) => {
+const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onScrollToEntry, onSelectEntries, externalOpen, onExternalOpenChange, currentContext }: AssistantChatProps) => {
   const [internalOpen, setInternalOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -986,7 +994,7 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
       <Button
         onClick={toggleOpen}
         className={cn(
-          "fixed z-50 rounded-full shadow-lg bg-sky-400/10 hover:bg-sky-400/20 border border-sky-400/30",
+          "fixed z-[100] rounded-full shadow-lg bg-sky-400/10 hover:bg-sky-400/20 border border-sky-400/30",
           isMobile 
             ? "bottom-20 right-4 h-14 w-14" // Above mobile nav
             : "bottom-4 right-4 h-14 w-14"
@@ -994,6 +1002,10 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
         size="icon"
       >
         <LinkJacBrainIcon className="w-7 h-7" />
+        {/* Context indicator - shows when viewing an entry */}
+        {currentContext && (
+          <span className="absolute -top-1 -right-1 w-3 h-3 bg-sky-400 rounded-full animate-pulse ring-2 ring-background" />
+        )}
       </Button>
     );
   }
@@ -1057,7 +1069,7 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
   return (
     <Card
       className={cn(
-        "fixed bottom-4 right-4 z-50 transition-all duration-300 shadow-xl",
+        "fixed bottom-4 right-4 z-[100] transition-all duration-300 shadow-xl",
         isMinimized ? "w-72" : "w-96 h-[500px]"
       )}
     >

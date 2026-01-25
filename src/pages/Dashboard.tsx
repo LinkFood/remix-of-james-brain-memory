@@ -500,6 +500,12 @@ const Dashboard = () => {
             onSelectEntries={handleSelectEntries}
             externalOpen={assistantOpen}
             onExternalOpenChange={setAssistantOpen}
+            currentContext={entryViewOpen && selectedEntry ? {
+              id: selectedEntry.id,
+              title: selectedEntry.title,
+              content: selectedEntry.content,
+              content_type: selectedEntry.content_type
+            } : null}
           />
         </Suspense>
       )}
