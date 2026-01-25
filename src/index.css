@@ -141,6 +141,44 @@ All colors MUST be HSL.
     animation: fade-in 0.4s ease-out;
   }
 
+  /* Brain thinking animation - neurons pulse */
+  @keyframes brain-neuron-pulse {
+    0%, 100% { 
+      opacity: 0.6; 
+      transform: scale(1);
+    }
+    50% { 
+      opacity: 1; 
+      transform: scale(1.15);
+    }
+  }
+
+  @keyframes brain-synapse-flow {
+    0%, 100% { 
+      opacity: 0.5;
+      stroke-dashoffset: 8;
+    }
+    50% { 
+      opacity: 1;
+      stroke-dashoffset: 0;
+    }
+  }
+
+  .brain-thinking .neuron-1 {
+    animation: brain-neuron-pulse 2s ease-in-out infinite;
+    transform-origin: center;
+  }
+
+  .brain-thinking .neuron-2 {
+    animation: brain-neuron-pulse 2s ease-in-out infinite 0.4s;
+    transform-origin: center;
+  }
+
+  .brain-thinking .synapse {
+    animation: brain-synapse-flow 2.5s ease-in-out infinite 0.2s;
+    stroke-dasharray: 8;
+  }
+
   /* Touch-friendly styles */
   .touch-target {
     min-height: 48px;
