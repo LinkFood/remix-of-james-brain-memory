@@ -11,7 +11,7 @@
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 
 // Simple in-memory rate limiting (100 requests per minute per user)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();

@@ -8,7 +8,7 @@
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.84.0";
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { checkRateLimit, RATE_LIMIT_CONFIGS, getRateLimitHeaders } from '../_shared/rateLimit.ts';
 import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
@@ -49,16 +49,32 @@ serve(async (req) => {
       userId = 'service_role_internal';
       console.log('Service role call detected - trusted internal request');
     } else {
-      // Regular user call - validate JWT
-      const supabase = createClient(supabaseUrl, supabaseAnonKey);
-      const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
+      // Regular user call - validate JWT via claims (does not depend on session records)
+      const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: authHeader } },
+      });
 
-      if (authError || !user) {
-        console.error('Invalid token:', authError?.message);
-        return errorResponse(req, 'Invalid authentication token', 401);
+      const authAny = supabase.auth as unknown as {
+        getClaims?: (token: string) => Promise<{ data: { claims?: { sub?: string } } | null; error: { message: string } | null }>;
+      };
+
+      if (typeof authAny.getClaims === 'function') {
+        const { data, error } = await authAny.getClaims(jwt);
+        const sub = data?.claims?.sub ?? null;
+        if (error || !sub) {
+          console.error('Invalid token (claims):', error?.message);
+          return errorResponse(req, 'Invalid authentication token', 401);
+        }
+        userId = sub;
+      } else {
+        const { data: { user }, error: authError } = await supabase.auth.getUser(jwt);
+        if (authError || !user) {
+          console.error('Invalid token (user):', authError?.message);
+          return errorResponse(req, 'Invalid authentication token', 401);
+        }
+        userId = user.id;
       }
 
-      userId = user.id;
       console.log(`Authenticated user: ${userId}`);
     }
 

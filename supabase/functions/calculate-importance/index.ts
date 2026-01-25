@@ -5,7 +5,7 @@
  * Can update an existing entry or return the score for new content.
  */
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserId } from '../_shared/auth.ts';
 import { checkRateLimit, getRateLimitHeaders, RATE_LIMIT_CONFIGS } from '../_shared/rateLimit.ts';
@@ -32,11 +32,26 @@ Deno.serve(async (req) => {
     
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Extract user ID from JWT (optional for this function)
-    const { userId } = await extractUserId(req);
+    // Auth: allow trusted internal calls (service role), otherwise require a valid user JWT.
+    const authHeader = req.headers.get('Authorization');
+    if (!authHeader) {
+      return errorResponse(req, 'Authorization required', 401);
+    }
+
+    const token = authHeader.replace('Bearer ', '');
+    const isServiceRoleCall = token === supabaseKey;
+
+    let userId: string | null = null;
+    if (!isServiceRoleCall) {
+      const auth = await extractUserId(req);
+      if (auth.error || !auth.userId) {
+        return errorResponse(req, auth.error || 'Invalid or expired token', 401);
+      }
+      userId = auth.userId;
+    }
 
     // Rate limiting
-    const identifier = userId || 'anonymous';
+    const identifier = isServiceRoleCall ? 'service_role_internal' : (userId || 'anonymous');
     const rateLimitResult = checkRateLimit(`importance:${identifier}`, RATE_LIMIT_CONFIGS.ai);
     if (!rateLimitResult.allowed) {
       return new Response(

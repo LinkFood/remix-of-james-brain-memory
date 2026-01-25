@@ -6,32 +6,41 @@ verify_jwt = false
 [functions.chat]
 verify_jwt = true
 
+[functions.assistant-chat]
+verify_jwt = false
+
 [functions.search-memory]
-verify_jwt = true
+verify_jwt = false
 
 [functions.generate-embedding]
-verify_jwt = true
+verify_jwt = false
 
 [functions.backfill-embeddings]
-verify_jwt = true
+verify_jwt = false
 
 [functions.calculate-importance]
-verify_jwt = true
+verify_jwt = false
+
+[functions.classify-content]
+verify_jwt = false
+
+[functions.smart-save]
+verify_jwt = false
 
 [functions.generate-brain-report]
-verify_jwt = true
+verify_jwt = false
 
 [functions.export-all-data]
-verify_jwt = true
+verify_jwt = false
 
 [functions.delete-all-user-data]
-verify_jwt = true
+verify_jwt = false
 
 [functions.insert-sample-data]
-verify_jwt = true
+verify_jwt = false
 
 [functions.elevenlabs-tts]
-verify_jwt = true
+verify_jwt = false
 
 [functions.elevenlabs-stt]
-verify_jwt = true
+verify_jwt = false
