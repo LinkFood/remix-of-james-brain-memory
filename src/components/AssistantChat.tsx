@@ -119,7 +119,6 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
   const [loading, setLoading] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [autoSpeak, setAutoSpeak] = useState(false);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -129,6 +128,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
   const audioChunksRef = useRef<Blob[]>([]);
   const recognitionRef = useRef<WebSpeechRecognition | null>(null);
   const pendingTranscriptRef = useRef<string | null>(null);
+  const lastInputWasVoiceRef = useRef<boolean>(false);
 
   const isMobile = useIsMobile();
 
@@ -324,10 +324,11 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       setIsRecording(false);
       recognitionRef.current = null;
       
-      // Auto-send if we have a transcript
+      // Auto-send if we have a transcript - mark as voice input
       const transcript = pendingTranscriptRef.current;
       if (transcript && transcript.trim()) {
         console.log('[Jac STT] Auto-sending transcript:', transcript.trim());
+        lastInputWasVoiceRef.current = true; // Mark for auto-speak
         setTimeout(() => {
           handleSend(transcript.trim());
         }, 100);
@@ -569,10 +570,13 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
         }
       }
 
-      // Auto-speak if enabled
-      if (autoSpeak && finalContent) {
+      // Smart auto-speak: only speak if input was from voice
+      if (lastInputWasVoiceRef.current && finalContent) {
+        console.log('[Jac TTS] Voice input detected, speaking response');
         speakText(finalContent);
       }
+      // Reset the voice flag for next interaction
+      lastInputWasVoiceRef.current = false;
 
     } catch (error: any) {
       console.error("Jac error:", error);
@@ -832,27 +836,18 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
               </div>
               <div className="flex items-center gap-1">
                 {/* Auto-speak toggle */}
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-9 w-9"
-                  onClick={() => {
-                    setAutoSpeak(!autoSpeak);
-                    if (autoSpeak) {
-                      toast.info("Jac will stay quiet");
-                    } else {
-                      toast.info("Jac will speak responses");
-                    }
-                    if (isSpeaking) stopSpeaking();
-                  }}
-                  title={autoSpeak ? "Disable auto-speak" : "Enable auto-speak"}
-                >
-                  {autoSpeak ? (
-                    <Volume2 className="w-5 h-5 text-primary" />
-                  ) : (
-                    <VolumeX className="w-5 h-5 text-muted-foreground" />
-                  )}
-                </Button>
+                {/* Speaking indicator - shows when Jac is talking */}
+                {isSpeaking && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9"
+                    onClick={stopSpeaking}
+                    title="Stop speaking"
+                  >
+                    <Volume2 className="w-5 h-5 text-primary animate-pulse" />
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -907,29 +902,21 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
           )}
         </div>
         <div className="flex items-center gap-1">
-          {/* Auto-speak toggle */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-7 w-7"
-            onClick={(e) => {
-              e.stopPropagation();
-              setAutoSpeak(!autoSpeak);
-              if (autoSpeak) {
-                toast.info("Jac will stay quiet");
-              } else {
-                toast.info("Jac will speak responses");
-              }
-              if (isSpeaking) stopSpeaking();
-            }}
-            title={autoSpeak ? "Disable auto-speak" : "Enable auto-speak"}
-          >
-            {autoSpeak ? (
-              <Volume2 className="w-4 h-4 text-primary" />
-            ) : (
-              <VolumeX className="w-4 h-4 text-muted-foreground" />
-            )}
-          </Button>
+          {/* Speaking indicator - shows when Jac is talking */}
+          {isSpeaking && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-7 w-7"
+              onClick={(e) => {
+                e.stopPropagation();
+                stopSpeaking();
+              }}
+              title="Stop speaking"
+            >
+              <Volume2 className="w-4 h-4 text-primary animate-pulse" />
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon"
