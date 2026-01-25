@@ -9,7 +9,10 @@
  * Speed matters. Parallelize where possible.
  * Fail gracefully. Never lose user data.
  * 
- * NOTE: Embedding generation removed - using keyword search instead.
+ * SPEED OPTIMIZATIONS:
+ * - Local regex classification for simple patterns (URLs, lists, code)
+ * - Skip importance scoring for short content
+ * - Fast flash model for classification
  */
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
@@ -61,6 +64,61 @@ interface SmartSaveRequest {
 
 const FREE_TIER_LIMIT = 50;
 const BILLING_CYCLE_DAYS = 30;
+
+// Fast local classification for simple patterns (skips AI entirely)
+function tryLocalClassification(content: string): ClassificationResult | null {
+  if (!content || content.length >= 150) return null;
+  
+  const trimmed = content.trim();
+  
+  // URL detection
+  if (/^https?:\/\/\S+$/i.test(trimmed)) {
+    try {
+      return {
+        type: 'link',
+        suggestedTitle: new URL(trimmed).hostname,
+        tags: ['link'],
+        extractedData: { url: trimmed },
+        listItems: [],
+      };
+    } catch {
+      // Invalid URL, continue
+    }
+  }
+  
+  // List detection (bullet points, numbered items)
+  if (/^[-•*]\s|\n[-•*]\s|^\d+\.\s|\n\d+\.\s/.test(content)) {
+    const items = content
+      .split(/\n/)
+      .map(line => line.replace(/^[-•*\d.]+\s*/, '').trim())
+      .filter(Boolean)
+      .map(text => ({ text, checked: false }));
+    
+    if (items.length > 0) {
+      return {
+        type: 'list',
+        subtype: 'todo',
+        suggestedTitle: items[0]?.text.slice(0, 40) || 'List',
+        tags: ['list'],
+        extractedData: {},
+        listItems: items,
+      };
+    }
+  }
+  
+  // Code detection
+  if (/^(import |const |let |var |function |class |def |async |=>)/m.test(content)) {
+    return {
+      type: 'code',
+      suggestedTitle: 'Code snippet',
+      tags: ['code'],
+      extractedData: {},
+      listItems: [],
+    };
+  }
+  
+  return null;
+}
 
 serve(async (req) => {
   // Handle CORS preflight
@@ -117,7 +175,6 @@ serve(async (req) => {
       const daysSinceCycleStart = Math.floor((now.getTime() - cycleStart.getTime()) / (1000 * 60 * 60 * 24));
       
       if (daysSinceCycleStart >= BILLING_CYCLE_DAYS) {
-        // Reset the billing cycle
         await supabase
           .from('subscriptions')
           .update({
@@ -130,7 +187,6 @@ serve(async (req) => {
         console.log(`[smart-save] Reset billing cycle for user ${userId}`);
       }
 
-      // Check free tier limit
       if (subscription.tier === 'free' && subscription.monthly_dump_count >= FREE_TIER_LIMIT) {
         return new Response(
           JSON.stringify({ 
@@ -157,12 +213,10 @@ serve(async (req) => {
     const { source = 'manual', imageUrl } = body;
     const content = body.content ? sanitizeString(body.content) : '';
 
-    // Content is optional if imageUrl is provided
     if (!content && !imageUrl) {
       return errorResponse(req, 'Either content or imageUrl is required', 400);
     }
 
-    // Validate content length if provided
     if (content) {
       const contentValidation = validateContentLength(content, 100000);
       if (!contentValidation.valid) {
@@ -174,58 +228,73 @@ serve(async (req) => {
 
     const authHeader = req.headers.get('Authorization') ?? '';
 
-    // Step 1: Classify content (with vision if imageUrl provided)
-    // Step 2: Calculate importance score
-    // Run in parallel for speed
-    console.log('Step 1 & 2: Classifying content and calculating importance in parallel...');
-    
-    const contentForAnalysis = content || '';
-    
-    const [classifyResponse, importanceResponse] = await Promise.all([
-      fetch(`${supabaseUrl}/functions/v1/classify-content`, {
-        method: 'POST',
-        headers: {
-          'Authorization': authHeader,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content: contentForAnalysis, imageUrl }),
-      }),
-      fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${supabaseKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ content: contentForAnalysis, role: 'user' }),
-      }),
-    ]);
-
+    // SPEED OPTIMIZATION: Try local classification first (for simple text without images)
     let classification: ClassificationResult;
-    if (!classifyResponse.ok) {
-      const errorText = await classifyResponse.text();
-      console.error('Classification failed:', errorText);
-      // Fallback classification for images
-      classification = {
-        type: imageUrl ? 'image' : 'note',
-        subtype: imageUrl ? 'photo' : undefined,
-        suggestedTitle: content?.slice(0, 50) || (imageUrl ? 'Uploaded Image' : 'Untitled'),
-        tags: [],
-        extractedData: {},
-        listItems: [],
-      };
-    } else {
-      classification = await classifyResponse.json();
-    }
+    let importanceScore: number | null = null;
     
-    console.log('Classification result:', classification);
-
-    let importanceScore = null;
-    if (importanceResponse.ok) {
-      const importanceData = await importanceResponse.json();
-      importanceScore = importanceData.importance_score;
-      console.log('Importance calculated:', importanceScore);
+    const localResult = !imageUrl ? tryLocalClassification(content) : null;
+    
+    if (localResult) {
+      // Fast path: use local classification
+      classification = localResult;
+      importanceScore = 5; // Default importance for fast-path
+      console.log(`[smart-save] Fast path: ${classification.type}`);
     } else {
-      console.warn('Failed to calculate importance, continuing without it');
+      // AI path: call classify-content and optionally calculate-importance
+      console.log('[smart-save] AI classification path...');
+      
+      const shouldCalculateImportance = content.length > 200 || !!imageUrl;
+      
+      const fetchPromises: Promise<Response>[] = [
+        fetch(`${supabaseUrl}/functions/v1/classify-content`, {
+          method: 'POST',
+          headers: {
+            'Authorization': authHeader,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ content, imageUrl }),
+        }),
+      ];
+      
+      if (shouldCalculateImportance) {
+        fetchPromises.push(
+          fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${supabaseKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ content, role: 'user' }),
+          })
+        );
+      }
+
+      const responses = await Promise.all(fetchPromises);
+      const classifyResponse = responses[0];
+      const importanceResponseMaybe = responses[1];
+
+      if (!classifyResponse.ok) {
+        const errorText = await classifyResponse.text();
+        console.error('Classification failed:', errorText);
+        classification = {
+          type: imageUrl ? 'image' : 'note',
+          subtype: imageUrl ? 'photo' : undefined,
+          suggestedTitle: content?.slice(0, 50) || (imageUrl ? 'Uploaded Image' : 'Untitled'),
+          tags: [],
+          extractedData: {},
+          listItems: [],
+        };
+      } else {
+        classification = await classifyResponse.json();
+      }
+      
+      console.log('Classification result:', classification);
+
+      if (importanceResponseMaybe?.ok) {
+        const importanceData = await importanceResponseMaybe.json();
+        importanceScore = importanceData.importance_score;
+        console.log('Importance calculated:', importanceScore);
+      }
     }
 
     // Step 3: Check if we should append to an existing entry
@@ -233,7 +302,7 @@ serve(async (req) => {
     let entry: Entry;
 
     if (classification.appendTo) {
-      console.log('Step 3: Attempting to append to existing entry:', classification.appendTo);
+      console.log('Attempting to append to existing entry:', classification.appendTo);
 
       const { data: existingEntry, error: fetchError } = await supabase
         .from('entries')
@@ -243,7 +312,6 @@ serve(async (req) => {
         .single();
 
       if (existingEntry && !fetchError) {
-        // Append to existing entry
         const existingListItems = (existingEntry.list_items as Array<{ text: string; checked: boolean }>) || [];
         const newListItems = classification.listItems || [];
         const combinedListItems = [...existingListItems, ...newListItems];
@@ -272,7 +340,6 @@ serve(async (req) => {
         action = 'appended';
         console.log('Successfully appended to existing entry');
       } else {
-        // Entry not found, create new
         console.log('Entry to append not found, creating new entry');
         classification.appendTo = undefined;
       }
@@ -280,10 +347,8 @@ serve(async (req) => {
 
     // Step 4: Create new entry if not appending
     if (action === 'created') {
-      console.log('Step 4: Creating new entry...');
+      console.log('Creating new entry...');
 
-      // Insert new entry
-      // For PDFs, store the extracted document text as the content for searchability
       const entryContent = classification.documentText 
         ? (content ? `${content}\n\n---\n\n${classification.documentText}` : classification.documentText)
         : (content || classification.imageDescription || '');
@@ -300,14 +365,13 @@ serve(async (req) => {
           ...(classification.imageDescription && { imageDescription: classification.imageDescription }),
           ...(classification.documentText && { documentText: classification.documentText }),
         },
-        embedding: null, // No longer generating embeddings - using keyword search
+        embedding: null,
         importance_score: importanceScore,
         list_items: classification.listItems || [],
         source,
         image_url: imageUrl || null,
       };
       
-      // Add calendar fields if present
       if (classification.eventDate) {
         entryData.event_date = classification.eventDate;
       }
@@ -348,7 +412,6 @@ serve(async (req) => {
       }
     }
 
-    // Generate summary for the response
     const summary = action === 'appended'
       ? `Added to ${entry!.title || 'list'}`
       : imageUrl 

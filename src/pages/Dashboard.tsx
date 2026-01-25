@@ -67,15 +67,27 @@ const Dashboard = () => {
     toggleItem,
   } = useBulkSelection();
 
-  // Pre-warm edge functions on mount to reduce cold starts
+  // Pre-warm ALL edge functions on mount to reduce cold starts
   useEffect(() => {
     const warmUp = async () => {
       const baseUrl = import.meta.env.VITE_SUPABASE_URL;
-      const functions = ["smart-save", "assistant-chat"];
+      // Warm up all critical functions for faster responses
+      const functions = [
+        "smart-save",
+        "assistant-chat", 
+        "classify-content",
+        "calculate-importance",
+        "elevenlabs-tts"
+      ];
       
-      // Fire-and-forget OPTIONS requests to warm up functions
+      // Fire-and-forget OPTIONS requests to warm up functions with timeout
       functions.forEach((fn) => {
-        fetch(`${baseUrl}/functions/v1/${fn}`, { method: "OPTIONS" }).catch(() => {});
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), 3000); // 3s timeout
+        fetch(`${baseUrl}/functions/v1/${fn}`, { 
+          method: "OPTIONS",
+          signal: controller.signal 
+        }).catch(() => {});
       });
     };
     
