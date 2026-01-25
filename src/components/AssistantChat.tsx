@@ -259,218 +259,123 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
     setTtsLoading(false);
   }, []);
 
-  // Web Speech API fallback for voice input
-  const startWebSpeechRecognition = useCallback(() => {
+  // Voice state machine: 'idle' | 'listening' | 'transcribing'
+  type VoiceState = 'idle' | 'listening' | 'transcribing';
+  const [voiceState, setVoiceState] = useState<VoiceState>('idle');
+
+  // Check if browser supports SpeechRecognition
+  const isSpeechSupported = typeof window !== 'undefined' && 
+    (!!window.SpeechRecognition || !!window.webkitSpeechRecognition);
+
+  // Browser-first voice input (matches Dump behavior)
+  const startBrowserSpeech = useCallback(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     
     if (!SpeechRecognition) {
       toast.error("Voice input not supported in this browser");
+      setVoiceState('idle');
       setIsRecording(false);
       return;
     }
 
-    console.log('[Jac STT] Using Web Speech API fallback');
+    console.log('[Jac STT] Starting browser speech recognition');
     
     const recognition = new SpeechRecognition() as unknown as WebSpeechRecognition;
     recognitionRef.current = recognition;
     recognition.continuous = false;
-    recognition.interimResults = false;
+    recognition.interimResults = true;
     recognition.lang = 'en-US';
 
     recognition.onresult = (event: WebSpeechRecognitionEvent) => {
-      const text = event.results[0][0].transcript;
-      console.log('[Jac STT] Web Speech result:', text);
-      if (text && text.trim()) {
-        setInput(text.trim());
-        toast.success("Got it! Press send or edit your message");
-        inputRef.current?.focus();
+      // Get the latest result
+      const lastResultIndex = Object.keys(event.results).length - 1;
+      const result = event.results[lastResultIndex];
+      const transcript = result[0].transcript;
+      
+      // Update input with results for live feedback
+      if (transcript) {
+        setInput(transcript);
       }
-      setIsRecording(false);
+      
+      console.log('[Jac STT] Browser speech result:', transcript);
+      if (transcript && transcript.trim()) {
+        setInput(transcript.trim());
+      }
     };
 
     recognition.onerror = (event: WebSpeechRecognitionErrorEvent) => {
-      console.error('[Jac STT] Web Speech error:', event.error);
+      console.error('[Jac STT] Browser speech error:', event.error);
       if (event.error === 'not-allowed') {
         toast.error("Microphone access denied");
       } else if (event.error === 'no-speech') {
         toast.error("No speech detected. Try again.");
+      } else if (event.error === 'aborted') {
+        // User stopped, not an error
       } else {
         toast.error("Voice recognition failed");
       }
+      setVoiceState('idle');
       setIsRecording(false);
     };
 
     recognition.onend = () => {
-      console.log('[Jac STT] Web Speech ended');
+      console.log('[Jac STT] Browser speech ended');
+      setVoiceState('idle');
       setIsRecording(false);
+      recognitionRef.current = null;
     };
 
     try {
       recognition.start();
+      setVoiceState('listening');
+      setIsRecording(true);
       toast.info("Listening... Speak now");
     } catch (err) {
-      console.error('[Jac STT] Failed to start Web Speech:', err);
+      console.error('[Jac STT] Failed to start browser speech:', err);
       toast.error("Could not start voice recognition");
+      setVoiceState('idle');
       setIsRecording(false);
     }
   }, []);
 
-  // Transcribe audio using ElevenLabs STT with Web Speech fallback
-  const transcribeAudio = async (audioBlob: Blob) => {
-    console.log('[Jac STT] Transcribing audio...');
+  // Stop voice input
+  const stopVoice = useCallback(() => {
+    console.log('[Jac STT] Stopping voice input');
     
-    try {
-      setIsTranscribing(true);
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        throw new Error("Not authenticated");
+    // Stop Web Speech recognition if active
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        // Ignore errors when stopping
       }
-
-      const formData = new FormData();
-      formData.append('audio', audioBlob, 'recording.webm');
-
-      console.log('[Jac STT] Calling STT endpoint...');
-      
-      const response = await fetchWithTimeout(STT_URL, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${session.access_token}`,
-        },
-        body: formData,
-      }, 15000); // 15s timeout for STT
-
-      console.log('[Jac STT] Response status:', response.status);
-
-      // If ElevenLabs fails (401 = rate limit, 500 = error), fallback to Web Speech
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        console.error('[Jac STT] ElevenLabs error:', response.status, errorData);
-        
-        // Show specific message for rate limiting
-        if (response.status === 401) {
-          toast.error("Voice service busy. Using browser speech...");
-        } else {
-          toast.error("Voice service unavailable. Using browser speech...");
-        }
-        
-        // Trigger Web Speech API fallback
-        setIsTranscribing(false);
-        startWebSpeechRecognition();
-        return;
-      }
-
-      const { text } = await response.json();
-      console.log('[Jac STT] Transcribed text:', text);
-
-      if (text && text.trim()) {
-        setInput(text.trim());
-        toast.success("Got it! Press send or edit your message");
-        inputRef.current?.focus();
-      } else {
-        toast.error("Couldn't understand that. Try again.");
-      }
-    } catch (error: any) {
-      console.error("[Jac STT] Error:", error);
-      
-      // On any error, try Web Speech fallback
-      toast.error("Voice service failed. Using browser speech...");
-      startWebSpeechRecognition();
-    } finally {
-      setIsTranscribing(false);
-    }
-  };
-
-  // Start voice recording with ElevenLabs + Web Speech fallback
-  const startRecording = useCallback(async () => {
-    // Prevent double-clicks while requesting permissions
-    if (isRecording) {
-      console.log('[Jac STT] Already recording, ignoring');
-      return;
+      recognitionRef.current = null;
     }
     
-    console.log('[Jac STT] Starting recording...');
-    setIsRecording(true);
-    
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        }
-      });
-
-      console.log('[Jac STT] Got microphone access');
-
-      // Try different mimeTypes for compatibility
-      let mimeType = 'audio/webm';
-      if (!MediaRecorder.isTypeSupported('audio/webm')) {
-        mimeType = 'audio/mp4';
-        if (!MediaRecorder.isTypeSupported('audio/mp4')) {
-          mimeType = 'audio/ogg';
-        }
-      }
-      console.log('[Jac STT] Using mimeType:', mimeType);
-
-      const mediaRecorder = new MediaRecorder(stream, { mimeType });
-      mediaRecorderRef.current = mediaRecorder;
-      audioChunksRef.current = [];
-
-      mediaRecorder.ondataavailable = (event) => {
-        console.log('[Jac STT] Data available:', event.data.size, 'bytes');
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        console.log('[Jac STT] Recording stopped, chunks:', audioChunksRef.current.length);
-        stream.getTracks().forEach(track => track.stop());
-        
-        if (audioChunksRef.current.length === 0) {
-          console.log('[Jac STT] No audio chunks recorded');
-          return;
-        }
-
-        const audioBlob = new Blob(audioChunksRef.current, { type: mimeType });
-        console.log('[Jac STT] Created blob:', audioBlob.size, 'bytes');
-        await transcribeAudio(audioBlob);
-      };
-
-      mediaRecorder.start(1000); // Collect data every second
-      toast.info("Listening... Tap mic again when done");
-    } catch (error: any) {
-      console.error("[Jac STT] Recording error:", error);
-      setIsRecording(false);
-      
-      if (error.name === 'NotAllowedError') {
-        toast.error("Microphone access denied. Please allow microphone access.");
-      } else {
-        // If MediaRecorder fails, try direct Web Speech
-        toast.error("Recording failed. Trying voice recognition...");
-        startWebSpeechRecognition();
-      }
-    }
-  }, [isRecording, startWebSpeechRecognition]);
-
-  // Stop recording and transcribe
-  const stopRecording = useCallback(() => {
-    console.log('[Jac STT] Stopping recording...');
-    
-    // Stop MediaRecorder if active
+    // Stop MediaRecorder if active (legacy fallback)
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       mediaRecorderRef.current.stop();
     }
     
-    // Stop Web Speech recognition if active
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
-    }
-    
+    setVoiceState('idle');
     setIsRecording(false);
   }, []);
+
+  // Toggle voice input - browser speech first (like Dump)
+  const toggleVoice = useCallback(() => {
+    if (voiceState !== 'idle' || isRecording) {
+      // Stop if already active
+      stopVoice();
+      return;
+    }
+
+    // Use browser speech directly (matching Dump behavior)
+    if (isSpeechSupported) {
+      startBrowserSpeech();
+    } else {
+      toast.error("Voice input not supported in this browser");
+    }
+  }, [voiceState, isRecording, isSpeechSupported, startBrowserSpeech, stopVoice]);
 
   const handleSend = async (messageText?: string) => {
     const text = messageText || input.trim();
@@ -808,26 +713,20 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
         <div className="flex gap-2">
           {/* Voice input button */}
           <Button
-            variant={isRecording ? "destructive" : "outline"}
+            variant={voiceState !== 'idle' ? "destructive" : "outline"}
             size="icon"
             className={cn(
               "shrink-0",
-              isRecording && "animate-pulse",
+              voiceState === 'listening' && "animate-pulse",
               isMobile && "h-12 w-12" // Larger touch target on mobile
             )}
-            onClick={() => {
-              if (isRecording) {
-                stopRecording();
-              } else {
-                startRecording();
-              }
-            }}
-            disabled={loading || isTranscribing}
-            title={isRecording ? "Stop recording" : "Voice input"}
+            onClick={toggleVoice}
+            disabled={loading || voiceState === 'transcribing'}
+            title={voiceState !== 'idle' ? "Stop listening" : "Voice input"}
           >
-            {isTranscribing ? (
+            {voiceState === 'transcribing' ? (
               <Loader2 className={cn("animate-spin", isMobile ? "w-5 h-5" : "w-4 h-4")} />
-            ) : isRecording ? (
+            ) : voiceState === 'listening' ? (
               <MicOff className={cn(isMobile ? "w-5 h-5" : "w-4 h-4")} />
             ) : (
               <Mic className={cn(isMobile ? "w-5 h-5" : "w-4 h-4")} />
