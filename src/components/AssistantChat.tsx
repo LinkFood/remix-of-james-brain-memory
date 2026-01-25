@@ -180,19 +180,19 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
 
   const isMobile = useIsMobile();
 
-  // Restore position from localStorage with validation
+  // Restore position from localStorage with strict validation
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        // Validate position is within reasonable bounds
-        // Position uses right/bottom offsets, so negative = moved left/up from corner
-        const maxValidOffset = Math.max(window.innerWidth, window.innerHeight);
+        const maxX = window.innerWidth - 80;
+        const maxY = window.innerHeight - 80;
         
+        // Reject if not numbers, negative, or out of viewport
         if (typeof parsed.x !== 'number' || typeof parsed.y !== 'number' ||
-            Math.abs(parsed.x) > maxValidOffset || Math.abs(parsed.y) > maxValidOffset) {
-          // Invalid position - reset
+            parsed.x < 0 || parsed.y < 0 ||
+            parsed.x > maxX || parsed.y > maxY) {
           localStorage.removeItem(STORAGE_KEY);
           setPosition({ x: 0, y: 0 });
         } else {
@@ -200,6 +200,7 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
         }
       } catch {
         localStorage.removeItem(STORAGE_KEY);
+        setPosition({ x: 0, y: 0 });
       }
     }
   }, []);
@@ -234,30 +235,19 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
       hasDraggedRef.current = true;
     }
     
-    // Calculate new position with bounds checking
-    // Positive x = moved left from right edge, negative x = moved right (off screen)
-    // Positive y = moved up from bottom edge, negative y = moved down (off screen)
-    const newX = dragRef.current.initialX - deltaX;
-    const newY = dragRef.current.initialY - deltaY;
+    // Calculate new position - positive values move away from default corner
+    // Dragging left increases X (moves away from right edge)
+    // Dragging up increases Y (moves away from bottom edge)
+    const newX = dragRef.current.initialX + deltaX;
+    const newY = dragRef.current.initialY + deltaY;
     
-    // FAB is 64px (h-16), keep at least 32px visible on each edge
-    const fabSize = 64;
-    const minVisible = 32;
-    
-    // Max we can move left = viewport width - minVisible (so 32px still shows on right)
-    const maxMoveLeft = window.innerWidth - minVisible;
-    // Max we can move right = keep 32px from right edge
-    const maxMoveRight = -16; // Don't go past right edge
-    
-    // Max we can move up = viewport height - minVisible - mobile nav space
-    const bottomOffset = isMobile ? 80 : 16;
-    const maxMoveUp = window.innerHeight - minVisible - bottomOffset;
-    // Max we can move down = keep within bottom nav area
-    const maxMoveDown = -bottomOffset;
+    // Clamp to valid bounds (0 = default corner, positive = moved away)
+    const maxX = window.innerWidth - 80;  // Don't go past left edge
+    const maxY = window.innerHeight - (isMobile ? 140 : 80);  // Account for mobile nav
     
     setPosition({
-      x: Math.max(maxMoveRight, Math.min(maxMoveLeft, newX)),
-      y: Math.max(maxMoveDown, Math.min(maxMoveUp, newY))
+      x: Math.max(0, Math.min(maxX, newX)),
+      y: Math.max(0, Math.min(maxY, newY))
     });
   }, [isDragging, isMobile]);
 
@@ -1136,8 +1126,8 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
           isDragging ? "cursor-grabbing scale-105 opacity-90 shadow-2xl" : "cursor-grab"
         )}
         style={{
-          right: `calc(1rem - ${position.x}px)`,
-          bottom: isMobile ? `calc(5rem - ${position.y}px)` : `calc(1rem - ${position.y}px)`
+          right: `calc(1rem + ${position.x}px)`,
+          bottom: isMobile ? `calc(5rem + ${position.y}px)` : `calc(1rem + ${position.y}px)`
         }}
         size="icon"
       >
@@ -1213,8 +1203,8 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
         isMinimized ? "w-72" : "w-96 h-[500px]"
       )}
       style={{
-        right: `calc(1rem - ${position.x}px)`,
-        bottom: `calc(1rem - ${position.y}px)`
+        right: `calc(1rem + ${position.x}px)`,
+        bottom: `calc(1rem + ${position.y}px)`
       }}
     >
       {/* Header */}
