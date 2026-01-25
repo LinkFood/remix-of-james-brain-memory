@@ -4,16 +4,18 @@
  * Handles the core save logic with optimistic updates
  */
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { addToQueue } from "@/hooks/useOfflineQueue";
 import type { PreviewFile, PendingEntry } from "../types";
 
 // Retry with exponential backoff for transient network errors
 async function retryWithBackoff<T>(
   fn: () => Promise<T>,
-  maxRetries = 3,
-  baseDelayMs = 1000
+  maxRetries = 5,
+  baseDelayMs = 2000,
+  onRetry?: (attempt: number, maxRetries: number) => void
 ): Promise<T> {
   let lastError: Error | null = null;
   
@@ -33,7 +35,12 @@ async function retryWithBackoff<T>(
         throw lastError;
       }
       
-      // Exponential backoff: 1s, 2s, 4s
+      // Notify about retry
+      if (onRetry) {
+        onRetry(attempt + 1, maxRetries);
+      }
+      
+      // Exponential backoff: 2s, 4s, 8s, 16s, 32s
       const delay = baseDelayMs * Math.pow(2, attempt);
       console.log(`Retry attempt ${attempt + 1}/${maxRetries} after ${delay}ms`);
       await new Promise(resolve => setTimeout(resolve, delay));
@@ -125,8 +132,9 @@ export function useDumpSave({
       });
     }
 
+    let fileUrl: string | null = null;
+    
     try {
-      let fileUrl: string | null = null;
       
       // Upload file if present
       if (fileToUpload) {
@@ -138,23 +146,32 @@ export function useDumpSave({
       }
 
       // Call smart-save with retry logic for network resilience
-      const { data, error } = await retryWithBackoff(async () => {
-        const result = await supabase.functions.invoke("smart-save", {
-          body: {
-            content: contentToSave || "",
-            userId,
-            source: "manual",
-            imageUrl: fileUrl,
-          },
-        });
-        
-        // Treat FunctionsError as retriable network issue
-        if (result.error?.message?.includes('Failed to send a request')) {
-          throw new Error(result.error.message);
+      const { data, error } = await retryWithBackoff(
+        async () => {
+          const result = await supabase.functions.invoke("smart-save", {
+            body: {
+              content: contentToSave || "",
+              userId,
+              source: "manual",
+              imageUrl: fileUrl,
+            },
+          });
+          
+          // Treat FunctionsError as retriable network issue
+          if (result.error?.message?.includes('Failed to send a request')) {
+            throw new Error(result.error.message);
+          }
+          
+          return result;
+        },
+        5, // maxRetries
+        2000, // baseDelayMs
+        (attempt, max) => {
+          toast.loading(`Connection issue - retrying... (${attempt}/${max})`, {
+            id: "retry-toast",
+          });
         }
-        
-        return result;
-      });
+      );
 
       if (error) throw error;
 
@@ -193,9 +210,19 @@ export function useDumpSave({
                              errorMessage.includes('NetworkError');
       
       console.error("Failed to save:", error);
+      toast.dismiss("retry-toast");
       
       if (isNetworkError) {
-        toast.error("Network issue - please check your connection and try again");
+        // Queue for later sync instead of losing the data
+        addToQueue({
+          content: contentToSave,
+          userId,
+          source: "manual",
+          imageUrl: fileUrl,
+        });
+        toast.info("Saved offline - will sync when connection is restored", {
+          description: "Your entry is safely queued",
+        });
       } else {
         toast.error(errorMessage);
       }
