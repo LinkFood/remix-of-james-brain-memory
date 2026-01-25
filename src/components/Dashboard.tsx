@@ -11,6 +11,7 @@
 
 import { useState, useCallback, useRef, useMemo } from "react";
 import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp, Calendar } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { Entry } from "./EntryCard";
 import DumpInput, { DumpInputHandle } from "./DumpInput";
 import { parseListItems } from "@/lib/parseListItems";
@@ -24,9 +25,25 @@ interface DashboardProps {
   userId: string;
   onViewEntry: (entry: Entry) => void;
   dumpInputRef?: React.RefObject<DumpInputHandle>;
+  externalFilterTags?: string[];
+  onClearExternalFilter?: () => void;
+  highlightedEntryId?: string | null;
+  isSelecting?: boolean;
+  selectedIds?: Set<string>;
+  onToggleSelect?: (entryId: string) => void;
 }
 
-const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
+const Dashboard = ({ 
+  userId, 
+  onViewEntry, 
+  dumpInputRef,
+  externalFilterTags,
+  onClearExternalFilter,
+  highlightedEntryId,
+  isSelecting = false,
+  selectedIds,
+  onToggleSelect,
+}: DashboardProps) => {
   const internalDumpRef = useRef<DumpInputHandle>(null);
   const dumpRef = dumpInputRef || internalDumpRef;
 
@@ -204,13 +221,16 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
 
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
-  // Filter entries by selected tags
+  // Use external filter if provided, else use local filter
+  const activeFilterTags = externalFilterTags?.length ? externalFilterTags : selectedTags;
+
+  // Filter entries by active tags
   const filteredEntries = useMemo(() => {
-    if (selectedTags.length === 0) return entries;
+    if (activeFilterTags.length === 0) return entries;
     return entries.filter((e) =>
-      selectedTags.some((tag) => (e.tags || []).includes(tag))
+      activeFilterTags.some((tag) => (e.tags || []).includes(tag))
     );
-  }, [entries, selectedTags]);
+  }, [entries, activeFilterTags]);
 
   const todayEntries = useMemo(
     () => filteredEntries.filter((e) => new Date(e.created_at) >= todayStart),
@@ -283,11 +303,23 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
       <StatsGrid stats={stats} starredCount={starredCount} />
 
       {/* Tag Filter */}
-      <TagFilter
-        entries={entries}
-        selectedTags={selectedTags}
-        onTagsChange={setSelectedTags}
-      />
+      <div className="flex items-center gap-2">
+        <TagFilter
+          entries={entries}
+          selectedTags={activeFilterTags}
+          onTagsChange={setSelectedTags}
+        />
+        {externalFilterTags && externalFilterTags.length > 0 && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClearExternalFilter}
+            className="text-xs text-muted-foreground"
+          >
+            Clear Jac filter
+          </Button>
+        )}
+      </div>
 
       {/* Sections */}
       <div className="space-y-4">
@@ -302,6 +334,10 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             onToggle={toggleSection}
             color="bg-green-500/10"
             compact
+            highlightedEntryId={highlightedEntryId}
+            isSelecting={isSelecting}
+            selectedIds={selectedIds}
+            onToggleSelect={onToggleSelect}
             onToggleListItem={handleToggleListItem}
             onStar={handleStar}
             onArchive={handleArchive}
@@ -321,6 +357,10 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             onToggle={toggleSection}
             color="bg-blue-500/10"
             compact
+            highlightedEntryId={highlightedEntryId}
+            isSelecting={isSelecting}
+            selectedIds={selectedIds}
+            onToggleSelect={onToggleSelect}
             onToggleListItem={handleToggleListItem}
             onStar={handleStar}
             onArchive={handleArchive}
@@ -340,6 +380,10 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             onToggle={toggleSection}
             color="bg-orange-500/10"
             compact
+            highlightedEntryId={highlightedEntryId}
+            isSelecting={isSelecting}
+            selectedIds={selectedIds}
+            onToggleSelect={onToggleSelect}
             onToggleListItem={handleToggleListItem}
             onStar={handleStar}
             onArchive={handleArchive}
@@ -358,6 +402,10 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             expanded={expandedSections.lists}
             onToggle={toggleSection}
             color="bg-blue-500/10"
+            highlightedEntryId={highlightedEntryId}
+            isSelecting={isSelecting}
+            selectedIds={selectedIds}
+            onToggleSelect={onToggleSelect}
             onToggleListItem={handleToggleListItem}
             onStar={handleStar}
             onArchive={handleArchive}
@@ -377,6 +425,10 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             onToggle={toggleSection}
             color="bg-purple-500/10"
             compact
+            highlightedEntryId={highlightedEntryId}
+            isSelecting={isSelecting}
+            selectedIds={selectedIds}
+            onToggleSelect={onToggleSelect}
             onStar={handleStar}
             onArchive={handleArchive}
             onDelete={handleDelete}
@@ -395,6 +447,10 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             onToggle={toggleSection}
             color="bg-yellow-500/10"
             compact
+            highlightedEntryId={highlightedEntryId}
+            isSelecting={isSelecting}
+            selectedIds={selectedIds}
+            onToggleSelect={onToggleSelect}
             onStar={handleStar}
             onArchive={handleArchive}
             onDelete={handleDelete}
@@ -413,6 +469,10 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
             onToggle={toggleSection}
             color="bg-muted"
             compact
+            highlightedEntryId={highlightedEntryId}
+            isSelecting={isSelecting}
+            selectedIds={selectedIds}
+            onToggleSelect={onToggleSelect}
             onToggleListItem={handleToggleListItem}
             onStar={handleStar}
             onArchive={handleArchive}

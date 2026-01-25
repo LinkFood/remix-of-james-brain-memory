@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, lazy, Suspense } from "react";
+import { useEffect, useState, useCallback, useRef, lazy, Suspense, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
@@ -15,6 +15,7 @@ import { LinkJacLogo } from "@/components/LinkJacLogo";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { useOfflineQueue } from "@/hooks/useOfflineQueue";
+import { useBulkSelection } from "@/hooks/useBulkSelection";
 import type { Entry } from "@/components/EntryCard";
 import type { DumpInputHandle } from "@/components/DumpInput";
 
@@ -26,6 +27,7 @@ const CalendarView = lazy(() => import("@/components/CalendarView").then(m => ({
 const KnowledgeGraph = lazy(() => import("@/components/KnowledgeGraph"));
 const OnboardingModal = lazy(() => import("@/components/OnboardingModal"));
 const TimelineView = lazy(() => import("@/components/TimelineView"));
+const BulkToolbar = lazy(() => import("@/components/BulkToolbar"));
 
 // Fallback component for lazy loading
 const LazyFallback = () => (
@@ -48,9 +50,22 @@ const Dashboard = () => {
   const [graphOpen, setGraphOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [dashboardFilterTags, setDashboardFilterTags] = useState<string[]>([]);
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
+  const [allEntryIds, setAllEntryIds] = useState<string[]>([]);
   const dumpInputRef = useRef<DumpInputHandle>(null);
   const isOnline = useOnlineStatus();
   const { queueLength, flushQueue, clearStuckEntries } = useOfflineQueue();
+  
+  // Bulk selection
+  const {
+    selectedIds,
+    isSelecting,
+    toggleSelecting,
+    selectAll,
+    clearSelection,
+    toggleItem,
+  } = useBulkSelection();
 
   // Pre-warm edge functions on mount to reduce cold starts
   useEffect(() => {
@@ -163,6 +178,52 @@ const Dashboard = () => {
     setSearchOpen(false);
     handleViewEntry(entry);
   }, [handleViewEntry]);
+
+  // Jac interaction handlers
+  const handleFilterByTag = useCallback((tag: string) => {
+    setDashboardFilterTags([tag]);
+    setAssistantOpen(false);
+    toast.info(`Filtered to #${tag}`);
+  }, []);
+
+  const handleClearExternalFilter = useCallback(() => {
+    setDashboardFilterTags([]);
+  }, []);
+
+  const handleScrollToEntry = useCallback((entryId: string) => {
+    // Close assistant on mobile for better visibility
+    if (window.innerWidth < 768) {
+      setAssistantOpen(false);
+    }
+    
+    // Scroll to entry
+    const element = document.getElementById(`entry-${entryId}`);
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      setHighlightedEntryId(entryId);
+      
+      // Clear highlight after 3 seconds
+      setTimeout(() => setHighlightedEntryId(null), 3000);
+    } else {
+      toast.info("Entry not visible in current view");
+    }
+  }, []);
+
+  const handleSelectEntries = useCallback((entryIds: string[]) => {
+    // Enter selection mode if not already
+    if (!isSelecting) {
+      toggleSelecting();
+    }
+    // Select the entries
+    selectAll(entryIds);
+    
+    // Close assistant on mobile
+    if (window.innerWidth < 768) {
+      setAssistantOpen(false);
+    }
+    
+    toast.info(`Selected ${entryIds.length} entries`);
+  }, [isSelecting, toggleSelecting, selectAll]);
 
   if (loading) {
     return (
@@ -358,13 +419,18 @@ const Dashboard = () => {
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="container mx-auto px-4 py-6 max-w-4xl">
         <DashboardComponent
           key={refreshKey}
           userId={user?.id ?? ""}
           onViewEntry={handleViewEntry}
           dumpInputRef={dumpInputRef}
+          externalFilterTags={dashboardFilterTags}
+          onClearExternalFilter={handleClearExternalFilter}
+          highlightedEntryId={highlightedEntryId}
+          isSelecting={isSelecting}
+          selectedIds={selectedIds}
+          onToggleSelect={toggleItem}
         />
       </main>
 
@@ -398,6 +464,9 @@ const Dashboard = () => {
             userId={user.id}
             onEntryCreated={handleEntryCreatedFromAssistant}
             onViewEntry={handleViewEntry}
+            onFilterByTag={handleFilterByTag}
+            onScrollToEntry={handleScrollToEntry}
+            onSelectEntries={handleSelectEntries}
             externalOpen={assistantOpen}
             onExternalOpenChange={setAssistantOpen}
           />
@@ -445,6 +514,20 @@ const Dashboard = () => {
           <OnboardingModal
             open={showOnboarding}
             onComplete={handleOnboardingComplete}
+          />
+        </Suspense>
+      )}
+
+      {/* Bulk Selection Toolbar - Lazy loaded */}
+      {isSelecting && (
+        <Suspense fallback={null}>
+          <BulkToolbar
+            selectedCount={selectedIds.size}
+            allIds={allEntryIds}
+            onSelectAll={selectAll}
+            onClearSelection={clearSelection}
+            onExitSelectionMode={toggleSelecting}
+            onBulkComplete={() => setRefreshKey(prev => prev + 1)}
           />
         </Suspense>
       )}

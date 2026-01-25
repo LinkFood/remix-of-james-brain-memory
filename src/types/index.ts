@@ -258,6 +258,10 @@ export interface EntryCardProps {
   entry: Entry;
   compact?: boolean;
   showContent?: boolean;
+  highlighted?: boolean;
+  isSelecting?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: () => void;
   onToggleListItem?: (entryId: string, itemIndex: number, checked: boolean) => void;
   onStar?: (entryId: string, starred: boolean) => void;
   onArchive?: (entryId: string) => void;
@@ -332,6 +336,9 @@ export interface AssistantChatProps {
   userId: string;
   onEntryCreated?: (entry: Entry) => void;
   onViewEntry?: (entry: Entry) => void;
+  onFilterByTag?: (tag: string) => void;
+  onScrollToEntry?: (entryId: string) => void;
+  onSelectEntries?: (entryIds: string[]) => void;
   externalOpen?: boolean;
   onExternalOpenChange?: (open: boolean) => void;
 }
@@ -352,7 +359,11 @@ export interface EntrySectionProps {
   showLoadMore?: boolean;
   hasMore?: boolean;
   loadingMore?: boolean;
+  highlightedEntryId?: string | null;
+  isSelecting?: boolean;
+  selectedIds?: Set<string>;
   onLoadMore?: () => void;
+  onToggleSelect?: (entryId: string) => void;
   onToggleListItem?: (entryId: string, itemIndex: number, checked: boolean) => void;
   onStar?: (entryId: string, starred: boolean) => void;
   onArchive?: (entryId: string) => void;
