@@ -15,6 +15,12 @@ import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
+  Drawer,
+  DrawerContent,
+  DrawerHeader,
+  DrawerTitle,
+} from "@/components/ui/drawer";
+import {
   MessageSquare,
   Send,
   Loader2,
@@ -33,6 +39,27 @@ import { cn } from "@/lib/utils";
 import ReactMarkdown from "react-markdown";
 import { supabase } from "@/integrations/supabase/client";
 import { retryWithBackoff } from "@/lib/retryWithBackoff";
+import { useIsMobile } from "@/hooks/use-mobile";
+
+// Web Speech API types (browser-specific, not in TypeScript lib)
+interface WebSpeechRecognitionEvent {
+  results: { [index: number]: { [index: number]: { transcript: string } } };
+}
+
+interface WebSpeechRecognitionErrorEvent {
+  error: string;
+}
+
+interface WebSpeechRecognition {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: WebSpeechRecognitionEvent) => void) | null;
+  onerror: ((event: WebSpeechRecognitionErrorEvent) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
 
 interface Source {
   id: string;
@@ -94,11 +121,15 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
   const [isRecording, setIsRecording] = useState(false);
   const [autoSpeak, setAutoSpeak] = useState(false);
   const [ttsLoading, setTtsLoading] = useState(false);
+  const [isTranscribing, setIsTranscribing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const recognitionRef = useRef<WebSpeechRecognition | null>(null);
+
+  const isMobile = useIsMobile();
 
   // Sync with external open state
   const isOpen = externalOpen !== undefined ? externalOpen : internalOpen;
@@ -228,7 +259,129 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
     setTtsLoading(false);
   }, []);
 
-  // Start voice recording
+  // Web Speech API fallback for voice input
+  const startWebSpeechRecognition = useCallback(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+      toast.error("Voice input not supported in this browser");
+      setIsRecording(false);
+      return;
+    }
+
+    console.log('[Jac STT] Using Web Speech API fallback');
+    
+    const recognition = new SpeechRecognition() as unknown as WebSpeechRecognition;
+    recognitionRef.current = recognition;
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event: WebSpeechRecognitionEvent) => {
+      const text = event.results[0][0].transcript;
+      console.log('[Jac STT] Web Speech result:', text);
+      if (text && text.trim()) {
+        setInput(text.trim());
+        toast.success("Got it! Press send or edit your message");
+        inputRef.current?.focus();
+      }
+      setIsRecording(false);
+    };
+
+    recognition.onerror = (event: WebSpeechRecognitionErrorEvent) => {
+      console.error('[Jac STT] Web Speech error:', event.error);
+      if (event.error === 'not-allowed') {
+        toast.error("Microphone access denied");
+      } else if (event.error === 'no-speech') {
+        toast.error("No speech detected. Try again.");
+      } else {
+        toast.error("Voice recognition failed");
+      }
+      setIsRecording(false);
+    };
+
+    recognition.onend = () => {
+      console.log('[Jac STT] Web Speech ended');
+      setIsRecording(false);
+    };
+
+    try {
+      recognition.start();
+      toast.info("Listening... Speak now");
+    } catch (err) {
+      console.error('[Jac STT] Failed to start Web Speech:', err);
+      toast.error("Could not start voice recognition");
+      setIsRecording(false);
+    }
+  }, []);
+
+  // Transcribe audio using ElevenLabs STT with Web Speech fallback
+  const transcribeAudio = async (audioBlob: Blob) => {
+    console.log('[Jac STT] Transcribing audio...');
+    
+    try {
+      setIsTranscribing(true);
+
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        throw new Error("Not authenticated");
+      }
+
+      const formData = new FormData();
+      formData.append('audio', audioBlob, 'recording.webm');
+
+      console.log('[Jac STT] Calling STT endpoint...');
+      
+      const response = await fetchWithTimeout(STT_URL, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${session.access_token}`,
+        },
+        body: formData,
+      }, 15000); // 15s timeout for STT
+
+      console.log('[Jac STT] Response status:', response.status);
+
+      // If ElevenLabs fails (401 = rate limit, 500 = error), fallback to Web Speech
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('[Jac STT] ElevenLabs error:', response.status, errorData);
+        
+        // Show specific message for rate limiting
+        if (response.status === 401) {
+          toast.error("Voice service busy. Using browser speech...");
+        } else {
+          toast.error("Voice service unavailable. Using browser speech...");
+        }
+        
+        // Trigger Web Speech API fallback
+        setIsTranscribing(false);
+        startWebSpeechRecognition();
+        return;
+      }
+
+      const { text } = await response.json();
+      console.log('[Jac STT] Transcribed text:', text);
+
+      if (text && text.trim()) {
+        setInput(text.trim());
+        toast.success("Got it! Press send or edit your message");
+        inputRef.current?.focus();
+      } else {
+        toast.error("Couldn't understand that. Try again.");
+      }
+    } catch (error: any) {
+      console.error("[Jac STT] Error:", error);
+      
+      // On any error, try Web Speech fallback
+      toast.error("Voice service failed. Using browser speech...");
+      startWebSpeechRecognition();
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  // Start voice recording with ElevenLabs + Web Speech fallback
   const startRecording = useCallback(async () => {
     // Prevent double-clicks while requesting permissions
     if (isRecording) {
@@ -237,11 +390,9 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
     }
     
     console.log('[Jac STT] Starting recording...');
+    setIsRecording(true);
     
     try {
-      // Set recording state BEFORE async call to prevent double-clicks
-      setIsRecording(true);
-      
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
@@ -291,87 +442,35 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       toast.info("Listening... Tap mic again when done");
     } catch (error: any) {
       console.error("[Jac STT] Recording error:", error);
-      // Reset recording state on error
       setIsRecording(false);
+      
       if (error.name === 'NotAllowedError') {
         toast.error("Microphone access denied. Please allow microphone access.");
       } else {
-        toast.error("Could not access microphone");
+        // If MediaRecorder fails, try direct Web Speech
+        toast.error("Recording failed. Trying voice recognition...");
+        startWebSpeechRecognition();
       }
     }
-  }, [isRecording]);
+  }, [isRecording, startWebSpeechRecognition]);
 
   // Stop recording and transcribe
   const stopRecording = useCallback(() => {
     console.log('[Jac STT] Stopping recording...');
+    
+    // Stop MediaRecorder if active
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
       mediaRecorderRef.current.stop();
     }
+    
+    // Stop Web Speech recognition if active
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
+    
     setIsRecording(false);
   }, []);
-
-  // Transcribe audio using ElevenLabs STT
-  const transcribeAudio = async (audioBlob: Blob) => {
-    console.log('[Jac STT] Transcribing audio...');
-    
-    try {
-      setLoading(true);
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) {
-        throw new Error("Not authenticated");
-      }
-
-      const formData = new FormData();
-      formData.append('audio', audioBlob, 'recording.webm');
-
-      console.log('[Jac STT] Calling STT endpoint...');
-      
-      const response = await retryWithBackoff(
-        async () => {
-          const res = await fetchWithTimeout(STT_URL, {
-            method: "POST",
-            headers: {
-              "Authorization": `Bearer ${session.access_token}`,
-            },
-            body: formData,
-          });
-
-          console.log('[Jac STT] Response status:', res.status);
-
-          if (!res.ok) {
-            const errorData = await res.json().catch(() => ({}));
-            console.error('[Jac STT] Error response:', errorData);
-            throw new Error(errorData.error || "Transcription failed");
-          }
-          return res;
-        },
-        {
-          maxRetries: 3,
-          baseDelayMs: 1000,
-          toastId: "jac-stt-retry",
-          showToast: true,
-        }
-      );
-
-      const { text } = await response.json();
-      console.log('[Jac STT] Transcribed text:', text);
-
-      if (text && text.trim()) {
-        setInput(text.trim());
-        // Don't auto-send, let user review first
-        toast.success("Got it! Press send or edit your message");
-        inputRef.current?.focus();
-      } else {
-        toast.error("Couldn't understand that. Try again.");
-      }
-    } catch (error: any) {
-      console.error("[Jac STT] Error:", error);
-      toast.error(error.message || "Transcription failed");
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleSend = async (messageText?: string) => {
     const text = messageText || input.trim();
@@ -584,12 +683,193 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
     stopSpeaking();
   };
 
+  // Chat content (shared between mobile drawer and desktop card)
+  const renderChatContent = () => (
+    <>
+      {/* Messages */}
+      <div className={cn(
+        "flex-1 overflow-y-auto p-3 space-y-3",
+        isMobile ? "max-h-[60vh]" : "h-[350px]"
+      )}>
+        {messages.length === 0 && (
+          <div className="text-center py-6">
+            <Sparkles className="w-8 h-8 mx-auto text-muted-foreground/50 mb-3" />
+            <p className="text-sm text-muted-foreground mb-4">
+              I'm Jac. I know everything in your brain dump. Ask me anything!
+            </p>
+            <div className="flex flex-wrap gap-2 justify-center">
+              {suggestedQueries.map((query) => (
+                <Button
+                  key={query}
+                  variant="outline"
+                  size="sm"
+                  className="text-xs"
+                  onClick={() => handleSend(query)}
+                >
+                  {query}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {messages.map((msg, index) => (
+          <div
+            key={index}
+            className={cn(
+              "flex",
+              msg.role === "user" ? "justify-end" : "justify-start"
+            )}
+          >
+            <div
+              className={cn(
+                "max-w-[85%] rounded-lg px-3 py-2",
+                msg.role === "user"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted"
+              )}
+            >
+              {/* Show thinking indicator for empty assistant messages while streaming */}
+              {msg.role === "assistant" && !msg.content && loading ? (
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="text-sm">Jac is thinking...</span>
+                </div>
+              ) : (
+                <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
+                  <ReactMarkdown>{msg.content}</ReactMarkdown>
+                </div>
+              )}
+
+              {/* Speak button for assistant messages */}
+              {msg.role === "assistant" && msg.content && !loading && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2 mt-1 text-xs"
+                  onClick={() => {
+                    if (isSpeaking) {
+                      stopSpeaking();
+                    } else {
+                      speakText(msg.content);
+                    }
+                  }}
+                  disabled={ttsLoading}
+                  title={isSpeaking ? "Stop speaking" : "Have Jac speak this"}
+                >
+                  {ttsLoading ? (
+                    <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                  ) : isSpeaking ? (
+                    <VolumeX className="w-3 h-3 mr-1" />
+                  ) : (
+                    <Volume2 className="w-3 h-3 mr-1" />
+                  )}
+                  {isSpeaking ? "Stop" : "Speak"}
+                </Button>
+              )}
+
+              {/* Sources */}
+              {msg.sources && msg.sources.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-border/50">
+                  <p className="text-xs text-muted-foreground mb-1">
+                    Sources:
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {msg.sources.slice(0, 3).map((source) => (
+                      <Badge
+                        key={source.id}
+                        variant="secondary"
+                        className="text-xs"
+                      >
+                        <FileText className="w-3 h-3 mr-1" />
+                        {source.title || source.content_type}
+                      </Badge>
+                    ))}
+                    {msg.sources.length > 3 && (
+                      <Badge variant="secondary" className="text-xs">
+                        +{msg.sources.length - 3}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input */}
+      <div className={cn(
+        "p-3 border-t",
+        isMobile && "pb-safe"
+      )}>
+        <div className="flex gap-2">
+          {/* Voice input button */}
+          <Button
+            variant={isRecording ? "destructive" : "outline"}
+            size="icon"
+            className={cn(
+              "shrink-0",
+              isRecording && "animate-pulse",
+              isMobile && "h-12 w-12" // Larger touch target on mobile
+            )}
+            onClick={() => {
+              if (isRecording) {
+                stopRecording();
+              } else {
+                startRecording();
+              }
+            }}
+            disabled={loading || isTranscribing}
+            title={isRecording ? "Stop recording" : "Voice input"}
+          >
+            {isTranscribing ? (
+              <Loader2 className={cn("animate-spin", isMobile ? "w-5 h-5" : "w-4 h-4")} />
+            ) : isRecording ? (
+              <MicOff className={cn(isMobile ? "w-5 h-5" : "w-4 h-4")} />
+            ) : (
+              <Mic className={cn(isMobile ? "w-5 h-5" : "w-4 h-4")} />
+            )}
+          </Button>
+          <Input
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={isRecording ? "Listening..." : isTranscribing ? "Processing..." : "Ask Jac..."}
+            disabled={loading || isRecording || isTranscribing}
+            className={cn("text-sm", isMobile && "h-12 text-base")}
+          />
+          <Button
+            onClick={() => handleSend()}
+            disabled={loading || !input.trim() || isRecording || isTranscribing}
+            size="icon"
+            className={cn("shrink-0", isMobile && "h-12 w-12")}
+          >
+            {loading ? (
+              <Loader2 className={cn("animate-spin", isMobile ? "w-5 h-5" : "w-4 h-4")} />
+            ) : (
+              <Send className={cn(isMobile ? "w-5 h-5" : "w-4 h-4")} />
+            )}
+          </Button>
+        </div>
+      </div>
+    </>
+  );
+
   // Floating button when closed
   if (!isOpen) {
     return (
       <Button
         onClick={toggleOpen}
-        className="fixed bottom-4 right-4 h-14 w-14 rounded-full shadow-lg z-50"
+        className={cn(
+          "fixed z-50 rounded-full shadow-lg",
+          isMobile 
+            ? "bottom-20 right-4 h-14 w-14" // Above mobile nav
+            : "bottom-4 right-4 h-14 w-14"
+        )}
         size="icon"
       >
         <MessageSquare className="w-6 h-6" />
@@ -597,6 +877,71 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
     );
   }
 
+  // Mobile: Full-screen drawer (bottom sheet)
+  if (isMobile) {
+    return (
+      <Drawer open={isOpen} onOpenChange={setIsOpen}>
+        <DrawerContent className="max-h-[85vh]">
+          <DrawerHeader className="border-b pb-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <div className="p-1.5 rounded-md bg-primary/10">
+                  <Sparkles className="w-4 h-4 text-primary" />
+                </div>
+                <DrawerTitle className="text-base">Jac</DrawerTitle>
+                {isSpeaking && (
+                  <Badge variant="secondary" className="text-xs animate-pulse">
+                    Speaking...
+                  </Badge>
+                )}
+                {isTranscribing && (
+                  <Badge variant="secondary" className="text-xs">
+                    <Loader2 className="w-3 h-3 animate-spin mr-1" />
+                    Processing...
+                  </Badge>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                {/* Auto-speak toggle */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  onClick={() => {
+                    setAutoSpeak(!autoSpeak);
+                    if (autoSpeak) {
+                      toast.info("Jac will stay quiet");
+                    } else {
+                      toast.info("Jac will speak responses");
+                    }
+                    if (isSpeaking) stopSpeaking();
+                  }}
+                  title={autoSpeak ? "Disable auto-speak" : "Enable auto-speak"}
+                >
+                  {autoSpeak ? (
+                    <Volume2 className="w-5 h-5 text-primary" />
+                  ) : (
+                    <VolumeX className="w-5 h-5 text-muted-foreground" />
+                  )}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9"
+                  onClick={handleClose}
+                >
+                  <X className="w-5 h-5" />
+                </Button>
+              </div>
+            </div>
+          </DrawerHeader>
+          {renderChatContent()}
+        </DrawerContent>
+      </Drawer>
+    );
+  }
+
+  // Desktop: Card (original behavior)
   return (
     <Card
       className={cn(
@@ -623,6 +968,12 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
             <Badge variant="secondary" className="text-xs">
               <Loader2 className="w-3 h-3 animate-spin mr-1" />
               Loading...
+            </Badge>
+          )}
+          {isTranscribing && (
+            <Badge variant="secondary" className="text-xs">
+              <Loader2 className="w-3 h-3 animate-spin mr-1" />
+              Processing...
             </Badge>
           )}
         </div>
@@ -689,168 +1040,7 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
       )}
 
       {/* Expanded state */}
-      {!isMinimized && (
-        <>
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-3 h-[350px]">
-            {messages.length === 0 && (
-              <div className="text-center py-6">
-                <Sparkles className="w-8 h-8 mx-auto text-muted-foreground/50 mb-3" />
-                <p className="text-sm text-muted-foreground mb-4">
-                  I'm Jac. I know everything in your brain dump. Ask me anything!
-                </p>
-                <div className="flex flex-wrap gap-2 justify-center">
-                  {suggestedQueries.map((query) => (
-                    <Button
-                      key={query}
-                      variant="outline"
-                      size="sm"
-                      className="text-xs"
-                      onClick={() => handleSend(query)}
-                    >
-                      {query}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {messages.map((msg, index) => (
-              <div
-                key={index}
-                className={cn(
-                  "flex",
-                  msg.role === "user" ? "justify-end" : "justify-start"
-                )}
-              >
-                <div
-                  className={cn(
-                    "max-w-[85%] rounded-lg px-3 py-2",
-                    msg.role === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted"
-                  )}
-                >
-                  {/* Show thinking indicator for empty assistant messages while streaming */}
-                  {msg.role === "assistant" && !msg.content && loading ? (
-                    <div className="flex items-center gap-2 text-muted-foreground">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      <span className="text-sm">Jac is thinking...</span>
-                    </div>
-                  ) : (
-                    <div className="text-sm prose prose-sm dark:prose-invert max-w-none">
-                      <ReactMarkdown>{msg.content}</ReactMarkdown>
-                    </div>
-                  )}
-
-                  {/* Speak button for assistant messages */}
-                  {msg.role === "assistant" && msg.content && !loading && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 px-2 mt-1 text-xs"
-                      onClick={() => {
-                        if (isSpeaking) {
-                          stopSpeaking();
-                        } else {
-                          speakText(msg.content);
-                        }
-                      }}
-                      disabled={ttsLoading}
-                      title={isSpeaking ? "Stop speaking" : "Have Jac speak this"}
-                    >
-                      {ttsLoading ? (
-                        <Loader2 className="w-3 h-3 animate-spin mr-1" />
-                      ) : isSpeaking ? (
-                        <VolumeX className="w-3 h-3 mr-1" />
-                      ) : (
-                        <Volume2 className="w-3 h-3 mr-1" />
-                      )}
-                      {isSpeaking ? "Stop" : "Speak"}
-                    </Button>
-                  )}
-
-                  {/* Sources */}
-                  {msg.sources && msg.sources.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-border/50">
-                      <p className="text-xs text-muted-foreground mb-1">
-                        Sources:
-                      </p>
-                      <div className="flex flex-wrap gap-1">
-                        {msg.sources.slice(0, 3).map((source) => (
-                          <Badge
-                            key={source.id}
-                            variant="secondary"
-                            className="text-xs"
-                          >
-                            <FileText className="w-3 h-3 mr-1" />
-                            {source.title || source.content_type}
-                          </Badge>
-                        ))}
-                        {msg.sources.length > 3 && (
-                          <Badge variant="secondary" className="text-xs">
-                            +{msg.sources.length - 3}
-                          </Badge>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Input */}
-          <div className="p-3 border-t">
-            <div className="flex gap-2">
-              {/* Voice input button */}
-              <Button
-                variant={isRecording ? "destructive" : "outline"}
-                size="icon"
-                className={cn("shrink-0", isRecording && "animate-pulse")}
-                onClick={() => {
-                  if (isRecording) {
-                    stopRecording();
-                  } else {
-                    startRecording();
-                  }
-                }}
-                disabled={loading}
-                title={isRecording ? "Stop recording" : "Voice input"}
-              >
-                {isRecording ? (
-                  <MicOff className="w-4 h-4" />
-                ) : (
-                  <Mic className="w-4 h-4" />
-                )}
-              </Button>
-              <Input
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={isRecording ? "Listening..." : "Ask Jac..."}
-                disabled={loading || isRecording}
-                className="text-sm"
-              />
-              <Button
-                onClick={() => handleSend()}
-                disabled={loading || !input.trim() || isRecording}
-                size="icon"
-                className="shrink-0"
-              >
-                {loading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Send className="w-4 h-4" />
-                )}
-              </Button>
-            </div>
-          </div>
-        </>
-      )}
+      {!isMinimized && renderChatContent()}
     </Card>
   );
 };
