@@ -2,6 +2,7 @@
  * Delete All User Data Edge Function
  * 
  * Permanently deletes all user data from the system.
+ * Optionally deletes the user account as well.
  * This is a destructive operation - requires confirmation.
  */
 
@@ -13,6 +14,7 @@ import { parseJsonBody } from '../_shared/validation.ts';
 
 interface DeleteRequest {
   confirmDelete?: boolean;
+  deleteAccount?: boolean;
 }
 
 Deno.serve(async (req) => {
@@ -43,11 +45,9 @@ Deno.serve(async (req) => {
 
     // Parse confirmation from request body
     const { data: body } = await parseJsonBody<DeleteRequest>(req);
+    const deleteAccount = body?.deleteAccount === true;
     
-    // For safety, we can optionally require explicit confirmation
-    // (Currently not enforced to maintain backward compatibility)
-    
-    console.log(`Starting deletion of all data for user: ${userId}`);
+    console.log(`Starting deletion of all data for user: ${userId}, deleteAccount: ${deleteAccount}`);
 
     // Use service role for data deletion
     const serviceClient = createServiceClient();
@@ -58,7 +58,9 @@ Deno.serve(async (req) => {
     const deletionResults = {
       entries: 0,
       brain_reports: 0,
-      storage: 0
+      storage: 0,
+      profile: false,
+      account: false
     };
 
     // Delete entries (main brain dump content)
@@ -111,11 +113,41 @@ Deno.serve(async (req) => {
     }
     console.log(`Deleted ${deletionResults.storage} storage files`);
 
+    // Delete profile
+    const { error: profileError } = await serviceClient
+      .from('profiles')
+      .delete()
+      .eq('id', userId);
+    
+    if (!profileError) {
+      deletionResults.profile = true;
+      console.log('Deleted user profile');
+    } else {
+      console.error('Error deleting profile:', profileError);
+    }
+
+    // Delete the auth account if requested
+    if (deleteAccount) {
+      try {
+        const { error: authDeleteError } = await serviceClient.auth.admin.deleteUser(userId);
+        if (authDeleteError) {
+          console.error('Error deleting auth user:', authDeleteError);
+          // Don't fail - data is already deleted
+        } else {
+          deletionResults.account = true;
+          console.log('Deleted auth account');
+        }
+      } catch (authErr) {
+        console.error('Auth deletion error:', authErr);
+      }
+    }
+
     console.log(`Successfully deleted all data for user: ${userId}`);
 
     return successResponse(req, { 
       success: true, 
-      deleted: deletionResults
+      deleted: deletionResults,
+      accountDeleted: deletionResults.account
     }, 200, rateLimitResult);
 
   } catch (error) {

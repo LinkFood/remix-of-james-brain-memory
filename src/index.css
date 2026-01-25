@@ -8,7 +8,59 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
-    /* ChatGPT-inspired monochrome palette */
+    /* Light mode - Clean white palette */
+    --background: 0 0% 100%;
+    --foreground: 0 0% 9%;
+
+    --card: 0 0% 98%;
+    --card-foreground: 0 0% 9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 9%;
+
+    /* Primary accent - subtle blue-gray */
+    --primary: 220 15% 15%;
+    --primary-foreground: 0 0% 98%;
+
+    --secondary: 0 0% 94%;
+    --secondary-foreground: 0 0% 20%;
+
+    --muted: 0 0% 96%;
+    --muted-foreground: 0 0% 45%;
+
+    --accent: 0 0% 94%;
+    --accent-foreground: 0 0% 9%;
+
+    --destructive: 0 65% 55%;
+    --destructive-foreground: 0 0% 98%;
+
+    --success: 142 70% 45%;
+    --success-foreground: 0 0% 98%;
+
+    --border: 0 0% 90%;
+    --input: 0 0% 94%;
+    --ring: 0 0% 60%;
+
+    --radius: 0.75rem;
+
+    /* Subtle gradients for depth */
+    --gradient-primary: linear-gradient(135deg, hsl(0 0% 96%), hsl(0 0% 94%));
+    --gradient-bg: radial-gradient(ellipse at top, hsl(0 0% 98%), hsl(0 0% 100%));
+    --shadow-subtle: 0 2px 8px hsl(0 0% 0% / 0.06);
+    --shadow-medium: 0 4px 16px hsl(0 0% 0% / 0.1);
+
+    --sidebar-background: 0 0% 98%;
+    --sidebar-foreground: 0 0% 20%;
+    --sidebar-primary: 220 15% 15%;
+    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-accent: 0 0% 94%;
+    --sidebar-accent-foreground: 0 0% 20%;
+    --sidebar-border: 0 0% 90%;
+    --sidebar-ring: 0 0% 60%;
+  }
+
+  .dark {
+    /* Dark mode - ChatGPT-inspired monochrome palette */
     --background: 0 0% 7%;
     --foreground: 0 0% 95%;
 
@@ -41,46 +93,12 @@ All colors MUST be HSL.
     --input: 0 0% 15%;
     --ring: 0 0% 30%;
 
-    --radius: 0.75rem;
-
     /* Subtle gradients for depth */
     --gradient-primary: linear-gradient(135deg, hsl(0 0% 15%), hsl(0 0% 18%));
     --gradient-bg: radial-gradient(ellipse at top, hsl(0 0% 10%), hsl(0 0% 7%));
     --shadow-subtle: 0 2px 8px hsl(0 0% 0% / 0.2);
     --shadow-medium: 0 4px 16px hsl(0 0% 0% / 0.3);
 
-    --sidebar-background: 0 0% 10%;
-    --sidebar-foreground: 0 0% 85%;
-    --sidebar-primary: 220 15% 95%;
-    --sidebar-primary-foreground: 0 0% 7%;
-    --sidebar-accent: 0 0% 15%;
-    --sidebar-accent-foreground: 0 0% 85%;
-    --sidebar-border: 0 0% 18%;
-    --sidebar-ring: 0 0% 30%;
-  }
-
-  .dark {
-    --background: 0 0% 7%;
-    --foreground: 0 0% 95%;
-    --card: 0 0% 10%;
-    --card-foreground: 0 0% 95%;
-    --popover: 0 0% 10%;
-    --popover-foreground: 0 0% 95%;
-    --primary: 220 15% 95%;
-    --primary-foreground: 0 0% 7%;
-    --secondary: 0 0% 15%;
-    --secondary-foreground: 0 0% 85%;
-    --muted: 0 0% 12%;
-    --muted-foreground: 0 0% 50%;
-    --accent: 0 0% 18%;
-    --accent-foreground: 0 0% 95%;
-    --destructive: 0 65% 55%;
-    --destructive-foreground: 0 0% 98%;
-    --success: 142 70% 45%;
-    --success-foreground: 0 0% 98%;
-    --border: 0 0% 18%;
-    --input: 0 0% 15%;
-    --ring: 0 0% 30%;
     --sidebar-background: 0 0% 10%;
     --sidebar-foreground: 0 0% 85%;
     --sidebar-primary: 220 15% 95%;

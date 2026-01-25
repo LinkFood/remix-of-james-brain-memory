@@ -4,8 +4,9 @@ import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Brain, ArrowLeft, Download, Trash2, Database, User } from "lucide-react";
+import { Brain, ArrowLeft, Download, Trash2, Database, User, Tag, AlertTriangle } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
@@ -18,15 +19,23 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Separator } from "@/components/ui/separator";
+import TagManager from "@/components/TagManager";
+import type { Entry } from "@/components/EntryCard";
 
 const Settings = () => {
   const navigate = useNavigate();
+  const [userId, setUserId] = useState<string>("");
   const [userEmail, setUserEmail] = useState<string>("");
   const [exportFormat, setExportFormat] = useState<string>('json');
   const [exportLoading, setExportLoading] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteAccountDialogOpen, setDeleteAccountDialogOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [dataStats, setDataStats] = useState({ entries: 0, dataSizeMB: 0 });
+  const [tagManagerOpen, setTagManagerOpen] = useState(false);
+  const [entries, setEntries] = useState<Entry[]>([]);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [passwordConfirm, setPasswordConfirm] = useState("");
 
   useEffect(() => {
     checkAuth();
@@ -39,7 +48,29 @@ const Settings = () => {
       navigate("/auth");
       return;
     }
+    setUserId(user.id);
     setUserEmail(user.email || "");
+  };
+
+  const fetchEntries = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    
+    const { data } = await supabase
+      .from('entries')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('archived', false);
+    
+    // Map to Entry type - entries only need tags for TagManager
+    const mappedEntries = (data || []).map((item) => ({
+      ...item,
+      tags: item.tags || [],
+      extracted_data: (item.extracted_data as Record<string, unknown>) || {},
+      list_items: [] as { text: string; checked: boolean }[],
+    }));
+    
+    setEntries(mappedEntries as unknown as Entry[]);
   };
 
   const fetchDataStats = async () => {
@@ -139,6 +170,46 @@ const Settings = () => {
     }
   };
 
+  const handleDeleteAccount = async () => {
+    if (deleteConfirmText !== "DELETE") {
+      toast.error("Please type DELETE to confirm");
+      return;
+    }
+    
+    setDeleteLoading(true);
+    try {
+      // Verify password first
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: userEmail,
+        password: passwordConfirm,
+      });
+      
+      if (signInError) {
+        toast.error("Incorrect password");
+        setDeleteLoading(false);
+        return;
+      }
+      
+      // Delete all user data via edge function
+      const { error: deleteError } = await supabase.functions.invoke('delete-all-user-data', {
+        body: { confirmDelete: true, deleteAccount: true }
+      });
+      
+      if (deleteError) throw deleteError;
+      
+      // Sign out
+      await supabase.auth.signOut();
+      
+      toast.success("Account deleted successfully");
+      navigate("/");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to delete account");
+    } finally {
+      setDeleteLoading(false);
+      setDeleteAccountDialogOpen(false);
+    }
+  };
+
   const handleSignOut = async () => {
     await supabase.auth.signOut();
     toast.success("Signed out successfully");
@@ -211,6 +282,27 @@ const Settings = () => {
             </Card>
           </div>
 
+          <Separator className="my-6" />
+
+          {/* Tag Management */}
+          <div className="space-y-3 mb-6">
+            <Label>Manage Tags</Label>
+            <p className="text-xs text-muted-foreground">
+              Rename, merge, or delete tags across all your entries.
+            </p>
+            <Button
+              variant="outline"
+              onClick={() => {
+                fetchEntries();
+                setTagManagerOpen(true);
+              }}
+              className="w-full"
+            >
+              <Tag className="w-4 h-4 mr-2" />
+              Manage Tags
+            </Button>
+          </div>
+
           {/* Export Section */}
           <div className="space-y-3 mb-6">
             <Label>Export All Data</Label>
@@ -241,21 +333,44 @@ const Settings = () => {
 
           <Separator className="my-6" />
 
-          {/* Delete Section */}
-          <div className="space-y-3">
-            <Label className="text-destructive">Danger Zone</Label>
-            <p className="text-xs text-muted-foreground">
-              Delete all your data permanently. This cannot be undone.
-            </p>
-            <Button
-              variant="destructive"
-              onClick={() => setDeleteDialogOpen(true)}
-              disabled={deleteLoading || dataStats.entries === 0}
-              className="w-full"
-            >
-              <Trash2 className="w-4 h-4 mr-2" />
-              Delete All My Data
-            </Button>
+          {/* Danger Zone */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-destructive" />
+              <Label className="text-destructive">Danger Zone</Label>
+            </div>
+            
+            {/* Delete Data */}
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Delete all your data permanently. This cannot be undone.
+              </p>
+              <Button
+                variant="outline"
+                onClick={() => setDeleteDialogOpen(true)}
+                disabled={deleteLoading || dataStats.entries === 0}
+                className="w-full border-destructive/50 text-destructive hover:bg-destructive/10"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete All My Data
+              </Button>
+            </div>
+
+            {/* Delete Account */}
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Permanently delete your account and all associated data.
+              </p>
+              <Button
+                variant="destructive"
+                onClick={() => setDeleteAccountDialogOpen(true)}
+                disabled={deleteLoading}
+                className="w-full"
+              >
+                <Trash2 className="w-4 h-4 mr-2" />
+                Delete My Account
+              </Button>
+            </div>
           </div>
 
         </Card>
@@ -289,6 +404,91 @@ const Settings = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Delete Account Dialog */}
+      <AlertDialog open={deleteAccountDialogOpen} onOpenChange={setDeleteAccountDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              Delete Your Account?
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-4">
+                <p>
+                  This will <strong>permanently delete your account</strong> and all associated data including:
+                </p>
+                <ul className="list-disc list-inside text-sm space-y-1">
+                  <li>All {dataStats.entries} entries</li>
+                  <li>All uploaded files</li>
+                  <li>Your account credentials</li>
+                </ul>
+                <p className="text-destructive font-medium">
+                  This action is irreversible.
+                </p>
+                
+                <div className="space-y-3 pt-2">
+                  <div>
+                    <Label htmlFor="password-confirm" className="text-sm">
+                      Enter your password to confirm:
+                    </Label>
+                    <Input
+                      id="password-confirm"
+                      type="password"
+                      value={passwordConfirm}
+                      onChange={(e) => setPasswordConfirm(e.target.value)}
+                      placeholder="Your password"
+                      className="mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label htmlFor="delete-confirm" className="text-sm">
+                      Type <strong>DELETE</strong> to confirm:
+                    </Label>
+                    <Input
+                      id="delete-confirm"
+                      value={deleteConfirmText}
+                      onChange={(e) => setDeleteConfirmText(e.target.value)}
+                      placeholder="DELETE"
+                      className="mt-1"
+                    />
+                  </div>
+                </div>
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel 
+              disabled={deleteLoading}
+              onClick={() => {
+                setPasswordConfirm("");
+                setDeleteConfirmText("");
+              }}
+            >
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteAccount}
+              disabled={deleteLoading || deleteConfirmText !== "DELETE" || !passwordConfirm}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deleteLoading ? "Deleting..." : "Delete My Account"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Tag Manager */}
+      <TagManager
+        open={tagManagerOpen}
+        onOpenChange={setTagManagerOpen}
+        entries={entries}
+        userId={userId}
+        onTagsUpdated={() => {
+          fetchEntries();
+          fetchDataStats();
+        }}
+      />
     </div>
   );
 };

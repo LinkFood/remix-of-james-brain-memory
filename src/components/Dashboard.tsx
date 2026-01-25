@@ -15,6 +15,7 @@ import { Entry } from "./EntryCard";
 import DumpInput, { DumpInputHandle } from "./DumpInput";
 import { parseListItems } from "@/lib/parseListItems";
 import { StatsGrid, EmptyState, EntrySection } from "./dashboard";
+import TagFilter from "./TagFilter";
 import { useEntries, type DashboardEntry } from "@/hooks/useEntries";
 import { useEntryActions } from "@/hooks/useEntryActions";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
@@ -39,6 +40,9 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
     ideas: false,
     recent: false,
   });
+
+  // Tag filtering
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => ({
@@ -200,29 +204,37 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
 
   const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
 
+  // Filter entries by selected tags
+  const filteredEntries = useMemo(() => {
+    if (selectedTags.length === 0) return entries;
+    return entries.filter((e) =>
+      selectedTags.some((tag) => (e.tags || []).includes(tag))
+    );
+  }, [entries, selectedTags]);
+
   const todayEntries = useMemo(
-    () => entries.filter((e) => new Date(e.created_at) >= todayStart),
-    [entries, todayStart]
+    () => filteredEntries.filter((e) => new Date(e.created_at) >= todayStart),
+    [filteredEntries, todayStart]
   );
 
   const importantEntries = useMemo(
-    () => entries.filter((e) => (e.importance_score ?? 0) >= 7),
-    [entries]
+    () => filteredEntries.filter((e) => (e.importance_score ?? 0) >= 7),
+    [filteredEntries]
   );
 
   const listEntries = useMemo(
-    () => entries.filter((e) => e.content_type === "list"),
-    [entries]
+    () => filteredEntries.filter((e) => e.content_type === "list"),
+    [filteredEntries]
   );
 
   const codeEntries = useMemo(
-    () => entries.filter((e) => e.content_type === "code"),
-    [entries]
+    () => filteredEntries.filter((e) => e.content_type === "code"),
+    [filteredEntries]
   );
 
   const ideaEntries = useMemo(
-    () => entries.filter((e) => e.content_type === "idea"),
-    [entries]
+    () => filteredEntries.filter((e) => e.content_type === "idea"),
+    [filteredEntries]
   );
 
   const starredCount = useMemo(
@@ -232,7 +244,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
   
   // Upcoming entries: events/reminders with future event_date
   const upcomingEntries = useMemo(() => {
-    return entries
+    return filteredEntries
       .filter((e) => {
         const eventDate = e.event_date;
         if (!eventDate) return false;
@@ -243,7 +255,7 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
         const dateB = b.event_date || '';
         return dateA.localeCompare(dateB);
       });
-  }, [entries, todayStr]);
+  }, [filteredEntries, todayStr]);
 
   if (loading) {
     return (
@@ -269,6 +281,13 @@ const Dashboard = ({ userId, onViewEntry, dumpInputRef }: DashboardProps) => {
 
       {/* Quick Stats */}
       <StatsGrid stats={stats} starredCount={starredCount} />
+
+      {/* Tag Filter */}
+      <TagFilter
+        entries={entries}
+        selectedTags={selectedTags}
+        onTagsChange={setSelectedTags}
+      />
 
       {/* Sections */}
       <div className="space-y-4">

@@ -132,18 +132,21 @@ export type Database = {
         Row: {
           created_at: string
           id: string
+          onboarding_completed: boolean | null
           updated_at: string
           username: string | null
         }
         Insert: {
           created_at?: string
           id: string
+          onboarding_completed?: boolean | null
           updated_at?: string
           username?: string | null
         }
         Update: {
           created_at?: string
           id?: string
+          onboarding_completed?: boolean | null
           updated_at?: string
           username?: string | null
         }
