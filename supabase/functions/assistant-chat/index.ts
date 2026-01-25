@@ -50,6 +50,8 @@ interface Entry {
   importance_score: number | null;
   list_items: Array<{ text: string; checked: boolean }>;
   created_at: string;
+  event_date?: string;
+  event_time?: string;
   similarity?: number;
 }
 
@@ -117,6 +119,12 @@ async function fetchWeather(lat = 40.7128, lon = -74.0060, location = "New York"
 function detectWeatherIntent(message: string): boolean {
   const weatherKeywords = /\b(snow|snowing|rain|raining|weather|forecast|temperature|cold|hot|storm|sunny|cloudy|freeze|freezing|sleet|hail|wind|windy|humid|degrees)\b/i;
   return weatherKeywords.test(message);
+}
+
+// Detect if user is asking about calendar/schedule
+function detectCalendarIntent(message: string): boolean {
+  const calendarKeywords = /\b(calendar|schedule|scheduled|upcoming|events?|appointments?|plans?|what('s| is) (on|in) my|this week|next week|tomorrow|today|weekend|when am i|when do i|what do i have)\b/i;
+  return calendarKeywords.test(message);
 }
 
 // Detect save intent and extract what to save
@@ -313,17 +321,42 @@ serve(async (req) => {
       console.warn('Failed to generate embedding, proceeding without semantic search');
     }
 
-    // Step 3: Also fetch recent entries for context
+    // Step 3: Check for calendar intent and fetch calendar entries
+    let calendarEntries: Entry[] = [];
+    if (detectCalendarIntent(message)) {
+      console.log('Calendar intent detected, fetching calendar entries...');
+      
+      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      
+      const { data: upcomingEvents, error: calendarError } = await supabase
+        .from('entries')
+        .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
+        .eq('user_id', userId)
+        .eq('archived', false)
+        .not('event_date', 'is', null)
+        .gte('event_date', today)
+        .order('event_date', { ascending: true })
+        .limit(10);
+
+      if (!calendarError && upcomingEvents) {
+        calendarEntries = upcomingEvents as Entry[];
+        console.log(`Found ${calendarEntries.length} calendar entries`);
+      } else if (calendarError) {
+        console.warn('Calendar query failed:', calendarError);
+      }
+    }
+
+    // Step 4: Also fetch recent entries for context
     const { data: recentEntries } = await supabase
       .from('entries')
-      .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at')
+      .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time')
       .eq('user_id', userId)
       .eq('archived', false)
       .order('created_at', { ascending: false })
       .limit(5);
 
-    // Combine and deduplicate entries
-    const allEntries = [...relevantEntries];
+    // Combine and deduplicate entries (calendar entries first for priority)
+    const allEntries = [...calendarEntries, ...relevantEntries];
     if (recentEntries) {
       for (const entry of recentEntries) {
         if (!allEntries.find((e) => e.id === entry.id)) {
@@ -332,13 +365,20 @@ serve(async (req) => {
       }
     }
 
-    // Step 4: Build context from entries
+    // Step 5: Build context from entries
     const contextEntries = allEntries.slice(0, 15);
     const contextText = contextEntries
       .map((entry) => {
         let entryText = `[${entry.content_type}${entry.content_subtype ? `/${entry.content_subtype}` : ''}] `;
         entryText += entry.title ? `"${entry.title}": ` : '';
         entryText += entry.content.slice(0, 500);
+        
+        // Add date/time for calendar entries
+        if (entry.event_date) {
+          entryText += `\n📅 Date: ${entry.event_date}`;
+          if (entry.event_time) entryText += ` at ${entry.event_time}`;
+        }
+        
         if (entry.list_items && entry.list_items.length > 0) {
           entryText += `\nList items: ${entry.list_items.map((i) => `${i.checked ? '✓' : '○'} ${i.text}`).join(', ')}`;
         }
