@@ -84,8 +84,14 @@ Deno.serve(async (req) => {
       const errorText = await response.text();
       console.error('[elevenlabs-stt] ElevenLabs API error:', response.status, errorText);
 
+      // Pass through rate limit errors so client can use fallback
       if (response.status === 429) {
         return errorResponse(req, 'Voice service rate limit. Try again in a moment.', 429);
+      }
+
+      // Pass through 401 (unusual activity / free tier blocked) so client can fallback
+      if (response.status === 401) {
+        return errorResponse(req, 'Voice service unavailable. Please try browser speech.', 401);
       }
 
       return serverErrorResponse(req, 'Transcription failed');
