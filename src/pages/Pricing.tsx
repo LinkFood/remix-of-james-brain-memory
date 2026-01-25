@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router-dom";
-import { Brain, Check, ArrowLeft } from "lucide-react";
+import { Check, ArrowLeft } from "lucide-react";
+import { LinkJacLogo } from "@/components/LinkJacLogo";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -95,12 +96,9 @@ const Pricing = () => {
         <div className="max-w-5xl mx-auto flex justify-between items-center">
           <button
             onClick={() => navigate("/")}
-            className="flex items-center gap-2 hover:opacity-80 transition-opacity"
+            className="hover:opacity-80 transition-opacity"
           >
-            <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center">
-              <Brain className="w-5 h-5 text-primary" />
-            </div>
-            <span className="text-lg font-bold">LinkJac</span>
+            <LinkJacLogo size="md" />
           </button>
           <div className="flex items-center gap-3">
             <Button variant="ghost" onClick={() => navigate("/")}>

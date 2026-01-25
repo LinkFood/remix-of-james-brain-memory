@@ -7,6 +7,7 @@ import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
 import { useToast } from '@/hooks/use-toast';
 import { Mail, RefreshCw } from 'lucide-react';
+import { LinkJacLogo } from "@/components/LinkJacLogo";
 
 type AuthMode = 'login' | 'signup' | 'forgot' | 'reset';
 
@@ -187,8 +188,8 @@ const Auth = () => {
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-background to-muted/30 p-4">
       <div className="w-full max-w-md space-y-8">
-        <div className="text-center">
-          <h1 className="text-3xl font-bold tracking-tight">LinkJac</h1>
+        <div className="text-center flex flex-col items-center">
+          <LinkJacLogo size="lg" className="mb-2" />
           <p className="text-muted-foreground mt-1">
             Your AI-powered second brain
           </p>

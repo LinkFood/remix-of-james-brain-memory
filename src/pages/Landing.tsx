@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Brain, Zap, Search, List, Code, Lightbulb, ArrowRight, Play, Quote, Users } from 'lucide-react';
+import { Zap, Search, List, Code, Lightbulb, ArrowRight, Play, Quote, Users, Brain } from 'lucide-react';
+import { LinkJacLogo } from "@/components/LinkJacLogo";
 import {
   Accordion,
   AccordionContent,
@@ -75,12 +76,7 @@ const Landing = () => {
       {/* Header */}
       <header className="border-b border-border/50 px-4 sm:px-6 py-4 bg-background/80 backdrop-blur-xl">
         <div className="max-w-5xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center">
-              <Brain className="w-5 h-5 text-primary" />
-            </div>
-            <span className="text-lg font-bold">LinkJac</span>
-          </div>
+          <LinkJacLogo size="md" />
           <div className="flex items-center gap-3">
             <Button variant="ghost" onClick={() => navigate('/pricing')} className="hidden sm:inline-flex">
               Pricing

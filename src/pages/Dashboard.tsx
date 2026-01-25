@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, lazy, Suspense } from "react"
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { Brain, LogOut, Settings, Menu, RefreshCw, Search, Calendar, Network, CloudOff } from "lucide-react";
+import { LogOut, Settings, Menu, RefreshCw, Search, Calendar, Network, CloudOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -11,6 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import DashboardComponent from "@/components/Dashboard";
 import OfflineBanner from "@/components/OfflineBanner";
 import ThemeToggle from "@/components/ThemeToggle";
+import { LinkJacLogo } from "@/components/LinkJacLogo";
 import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { useOfflineQueue } from "@/hooks/useOfflineQueue";
@@ -166,7 +167,7 @@ const Dashboard = () => {
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-bg">
-        <Brain className="w-12 h-12 text-primary animate-pulse" />
+        <LinkJacLogo size="lg" />
       </div>
     );
   }
@@ -273,14 +274,7 @@ const Dashboard = () => {
               </SheetContent>
             </Sheet>
 
-            <div className="flex items-center gap-2">
-              <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center">
-                <Brain className="w-5 h-5 text-primary" />
-              </div>
-              <div>
-                <h1 className="text-lg font-bold text-foreground">LinkJac</h1>
-              </div>
-            </div>
+            <LinkJacLogo size="md" />
           </div>
 
           <div className="hidden md:flex items-center gap-2">

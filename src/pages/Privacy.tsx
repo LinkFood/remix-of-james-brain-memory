@@ -1,6 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, Brain } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
+import { LinkJacLogo } from "@/components/LinkJacLogo";
 
 const Privacy = () => {
   const navigate = useNavigate();
@@ -10,12 +11,7 @@ const Privacy = () => {
       {/* Header */}
       <header className="border-b border-border/50 px-4 sm:px-6 py-4 bg-background/80 backdrop-blur-xl sticky top-0 z-10">
         <div className="max-w-3xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center">
-              <Brain className="w-5 h-5 text-primary" />
-            </div>
-            <span className="text-lg font-bold">LinkJac</span>
-          </div>
+          <LinkJacLogo size="md" />
           <Button onClick={() => navigate(-1)} variant="ghost" size="sm">
             <ArrowLeft className="w-4 h-4 mr-2" />
             Back
