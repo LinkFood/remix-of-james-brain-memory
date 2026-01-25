@@ -33,6 +33,8 @@ import {
   MicOff,
   ExternalLink,
   CheckSquare,
+  Expand,
+  ImageIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -41,6 +43,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { retryWithBackoff } from "@/lib/retryWithBackoff";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { LinkJacBrainIcon } from "@/components/LinkJacLogo";
+import { useSignedUrl } from "@/hooks/use-signed-url";
+import { SourceImageGallery } from "@/components/chat/SourceImageGallery";
 
 // Web Speech API types (browser-specific, not in TypeScript lib)
 interface WebSpeechRecognitionResult {
@@ -86,6 +90,7 @@ interface Source {
   event_date?: string | null;
   event_time?: string | null;
   list_items?: Array<{ text: string; checked: boolean }>;
+  image_url?: string | null;
   similarity?: number;
 }
 
@@ -801,9 +806,16 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
                 </Button>
               )}
 
-              {/* Sources - clickable to open entry */}
+              {/* Sources - with images and clickable badges */}
               {msg.sources && msg.sources.length > 0 && (
                 <div className="mt-2 pt-2 border-t border-border/50">
+                  {/* Image gallery for sources with images */}
+                  <SourceImageGallery 
+                    sources={msg.sources}
+                    userId={userId}
+                    onViewEntry={onViewEntry}
+                  />
+                  
                   <p className="text-xs text-muted-foreground mb-1">
                     Sources (click to view):
                   </p>
@@ -835,6 +847,7 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
                                 archived: false,
                                 event_date: source.event_date || null,
                                 event_time: source.event_time || null,
+                                image_url: source.image_url || null,
                                 created_at: source.created_at,
                                 updated_at: source.created_at,
                               };
