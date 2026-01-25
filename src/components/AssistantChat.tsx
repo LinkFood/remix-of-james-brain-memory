@@ -219,7 +219,10 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
           if (res.status === 401) {
             console.log('[Jac TTS] 401 received - session expired');
             sessionExpiredRef.current = true;
-            await supabase.auth.signOut();
+            // IMPORTANT: server-side session may already be gone; ensure we clear locally.
+            await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+            // Force user back to auth to acquire a fresh session
+            window.location.assign("/auth");
             throw new Error("Session expired");
           }
 
@@ -444,7 +447,8 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
         if (refreshError || !refreshData.session) {
           sessionExpiredRef.current = true;
           toast.error("Session expired. Please sign in again.");
-          await supabase.auth.signOut();
+          await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+          window.location.assign("/auth");
           lastInputWasVoiceRef.current = false; // Don't try TTS
           return;
         }
@@ -487,7 +491,8 @@ const AssistantChat = ({ userId, onEntryCreated, externalOpen, onExternalOpenCha
               sessionExpiredRef.current = true;
               lastInputWasVoiceRef.current = false; // Don't try TTS
               toast.error("Session expired. Please sign in again.");
-              await supabase.auth.signOut();
+              await supabase.auth.signOut({ scope: "local" }).catch(() => {});
+              window.location.assign("/auth");
               throw new Error("Session expired");
             }
             throw new Error(errorData.error || `Request failed: ${res.status}`);
