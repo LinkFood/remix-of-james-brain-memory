@@ -50,7 +50,7 @@ const Dashboard = () => {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const dumpInputRef = useRef<DumpInputHandle>(null);
   const isOnline = useOnlineStatus();
-  const { queueLength, flushQueue } = useOfflineQueue();
+  const { queueLength, flushQueue, clearStuckEntries } = useOfflineQueue();
 
   // Pre-warm edge functions on mount to reduce cold starts
   useEffect(() => {
@@ -184,14 +184,24 @@ const Dashboard = () => {
             <CloudOff className="w-4 h-4" />
             <span>{queueLength} pending {queueLength === 1 ? 'entry' : 'entries'} to sync</span>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={flushQueue}
-            className="text-warning hover:text-warning/80"
-          >
-            Sync now
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={flushQueue}
+              className="text-warning hover:text-warning/80"
+            >
+              Sync now
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={clearStuckEntries}
+              className="text-muted-foreground hover:text-destructive"
+            >
+              Clear
+            </Button>
+          </div>
         </div>
       )}
       {/* Header */}
