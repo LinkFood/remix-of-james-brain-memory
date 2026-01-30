@@ -16,6 +16,7 @@ import { useKeyboardShortcuts } from "@/hooks/use-keyboard-shortcuts";
 import { useOnlineStatus } from "@/hooks/use-online-status";
 import { useOfflineQueue } from "@/hooks/useOfflineQueue";
 import { useBulkSelection } from "@/hooks/useBulkSelection";
+import { useJacDashboard } from "@/hooks/useJacDashboard";
 import type { Entry } from "@/components/EntryCard";
 import type { DumpInputHandle } from "@/components/DumpInput";
 
@@ -67,6 +68,9 @@ const Dashboard = () => {
     toggleItem,
   } = useBulkSelection();
 
+  // Jac dashboard transformation
+  const { state: jacState, sendQuery: jacSendQuery, clearDashboard: jacClearDashboard } = useJacDashboard();
+
   // Pre-warm ALL edge functions on mount to reduce cold starts
   useEffect(() => {
     const warmUp = async () => {
@@ -74,10 +78,13 @@ const Dashboard = () => {
       // Warm up all critical functions for faster responses
       const functions = [
         "smart-save",
-        "assistant-chat", 
+        "assistant-chat",
         "classify-content",
         "calculate-importance",
-        "elevenlabs-tts"
+        "elevenlabs-tts",
+        "find-related-entries",
+        "jac-dashboard-query",
+        "enrich-entry",
       ];
       
       // Fire-and-forget OPTIONS requests to warm up functions with timeout
@@ -462,6 +469,8 @@ const Dashboard = () => {
           isSelecting={isSelecting}
           selectedIds={selectedIds}
           onToggleSelect={toggleItem}
+          jacState={jacState}
+          onClearJac={jacClearDashboard}
         />
       </main>
 
@@ -499,6 +508,7 @@ const Dashboard = () => {
             onFilterByTag={handleFilterByTag}
             onScrollToEntry={handleScrollToEntry}
             onSelectEntries={handleSelectEntries}
+            onJacDashboardQuery={jacSendQuery}
             externalOpen={assistantOpen}
             onExternalOpenChange={setAssistantOpen}
             currentContext={entryViewOpen && selectedEntry ? {
