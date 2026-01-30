@@ -61,6 +61,8 @@ interface UseEntriesOptions {
   userId: string;
   /** Number of entries per page (default: 50) */
   pageSize?: number;
+  /** Include archived entries (default: false) */
+  showArchived?: boolean;
 }
 
 interface UseEntriesReturn {
@@ -78,7 +80,7 @@ interface UseEntriesReturn {
   addEntry: (entry: DashboardEntry) => void;
 }
 
-export function useEntries({ userId, pageSize = 50 }: UseEntriesOptions): UseEntriesReturn {
+export function useEntries({ userId, pageSize = 50, showArchived = false }: UseEntriesOptions): UseEntriesReturn {
   const [entries, setEntries] = useState<DashboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -96,9 +98,13 @@ export function useEntries({ userId, pageSize = 50 }: UseEntriesOptions): UseEnt
         .from("entries")
         .select("*")
         .eq("user_id", userId)
-        .eq("archived", false)
         .order("created_at", { ascending: false })
         .limit(pageSize);
+
+      // Apply archive filter based on showArchived
+      if (!showArchived) {
+        query = query.eq("archived", false);
+      }
 
       if (cursor) {
         query = query.lt("created_at", cursor);
@@ -147,7 +153,7 @@ export function useEntries({ userId, pageSize = 50 }: UseEntriesOptions): UseEnt
       setLoading(false);
       setLoadingMore(false);
     }
-  }, [userId, pageSize]);
+  }, [userId, pageSize, showArchived]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore || entries.length === 0) return;

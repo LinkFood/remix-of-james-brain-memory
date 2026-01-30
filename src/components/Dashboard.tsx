@@ -10,8 +10,9 @@
  */
 
 import { useState, useCallback, useRef, useMemo } from "react";
-import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp, Calendar, Brain } from "lucide-react";
+import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp, Calendar, Brain, Archive } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Entry } from "./EntryCard";
 import DumpInput, { DumpInputHandle } from "./DumpInput";
 import { parseListItems } from "@/lib/parseListItems";
@@ -23,6 +24,8 @@ import { useEntries, type DashboardEntry } from "@/hooks/useEntries";
 import { useEntryActions } from "@/hooks/useEntryActions";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 import JacInsightCard from "@/components/JacInsightCard";
+import JacProactiveInsightBanner from "@/components/JacProactiveInsightBanner";
+import { useProactiveInsights } from "@/hooks/useProactiveInsights";
 import type { JacDashboardState } from "@/hooks/useJacDashboard";
 
 interface DashboardProps {
@@ -69,6 +72,12 @@ const Dashboard = ({
 
   // Tag filtering
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  
+  // Show archived toggle
+  const [showArchived, setShowArchived] = useState(false);
+  
+  // Proactive insights
+  const { insight, dismiss: dismissInsight } = useProactiveInsights(userId);
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => ({
@@ -91,7 +100,7 @@ const Dashboard = ({
     updateEntry,
     removeEntry,
     addEntry,
-  } = useEntries({ userId });
+  } = useEntries({ userId, showArchived });
 
   // Use entry actions hook
   const { toggleStar, toggleArchive, deleteEntry, toggleListItem } = useEntryActions({
@@ -316,6 +325,22 @@ const Dashboard = ({
 
   return (
     <div className="space-y-6">
+      {/* Proactive Jac Insight Banner */}
+      {insight && (
+        <JacProactiveInsightBanner
+          message={insight.message}
+          type={insight.type}
+          onDismiss={dismissInsight}
+          onAction={() => {
+            // Could navigate to first overdue entry
+            const firstId = insight.entryIds[0];
+            const entry = entries.find(e => e.id === firstId);
+            if (entry) onViewEntry(entry);
+            dismissInsight();
+          }}
+        />
+      )}
+
       {/* Dump Input - Sticky on mobile */}
       <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-background/95 backdrop-blur-sm md:static md:mx-0 md:px-0 md:py-0 md:bg-transparent md:backdrop-blur-none">
         <DumpInput
@@ -340,23 +365,33 @@ const Dashboard = ({
       {/* Stats Grid */}
       <StatsGrid stats={stats} starredCount={starredCount} />
 
-      {/* Tag Filter */}
-      <div className="flex items-center gap-2">
-        <TagFilter
-          entries={entries}
-          selectedTags={activeFilterTags}
-          onTagsChange={setSelectedTags}
-        />
-        {externalFilterTags && externalFilterTags.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClearExternalFilter}
-            className="text-xs text-muted-foreground"
-          >
-            Clear Jac filter
-          </Button>
-        )}
+      {/* Tag Filter & Archive Toggle */}
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <TagFilter
+            entries={entries}
+            selectedTags={activeFilterTags}
+            onTagsChange={setSelectedTags}
+          />
+          {externalFilterTags && externalFilterTags.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onClearExternalFilter}
+              className="text-xs text-muted-foreground"
+            >
+              Clear Jac filter
+            </Button>
+          )}
+        </div>
+        <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
+          <Checkbox
+            checked={showArchived}
+            onCheckedChange={(c) => setShowArchived(c as boolean)}
+          />
+          <Archive className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">Show archived</span>
+        </label>
       </div>
 
       {/* Jac Insight Card — appears when Jac transforms the dashboard */}

@@ -28,6 +28,25 @@ const contentTypeIcons: Record<string, string> = {
   note: "📄",
 };
 
+// Color-coded dots for calendar based on entry type
+const getEntryDotColors = (dateEntries: Entry[]): string[] => {
+  const colors = new Set<string>();
+  dateEntries.forEach(e => {
+    if (e.content_type === 'reminder' || e.content_type === 'event') {
+      colors.add('bg-red-400');
+    } else if (e.content_type === 'list') {
+      colors.add('bg-blue-400');
+    } else if (e.content_type === 'code') {
+      colors.add('bg-purple-400');
+    } else if (e.content_type === 'idea') {
+      colors.add('bg-yellow-400');
+    } else {
+      colors.add('bg-primary');
+    }
+  });
+  return Array.from(colors).slice(0, 3); // Max 3 dots
+};
+
 export function CalendarView({ userId, open, onOpenChange, onViewEntry }: CalendarViewProps) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -165,13 +184,20 @@ export function CalendarView({ userId, open, onOpenChange, onViewEntry }: Calend
               className="mx-auto pointer-events-auto"
               components={{
                 DayContent: ({ date }) => {
-                  const hasEntry = datesWithEntries.some(d => isSameDay(d, date));
-                  const isToday = isSameDay(date, new Date());
+                  const dateEntries = entries.filter(e => 
+                    e.event_date && isSameDay(new Date(e.event_date), date)
+                  );
+                  const dotColors = getEntryDotColors(dateEntries);
+                  
                   return (
                     <div className="relative w-full h-full flex items-center justify-center">
                       {date.getDate()}
-                      {hasEntry && (
-                        <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-primary" />
+                      {dotColors.length > 0 && (
+                        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 flex gap-0.5">
+                          {dotColors.map((color, i) => (
+                            <span key={i} className={`w-1 h-1 rounded-full ${color}`} />
+                          ))}
+                        </div>
                       )}
                     </div>
                   );
