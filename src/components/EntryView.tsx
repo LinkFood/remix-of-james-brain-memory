@@ -33,6 +33,7 @@ import {
   FileText,
   Star,
   Archive,
+  ArchiveRestore,
   Pencil,
   Trash2,
   X,
@@ -245,6 +246,26 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete, isAssistantOpen }
     }
   };
 
+  const handleRestore = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("entries")
+        .update({ archived: false })
+        .eq("id", entry.id)
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      toast.success("Restored");
+      if (onUpdate && data) {
+        onUpdate(toEntry(data));
+      }
+    } catch (error) {
+      toast.error("Failed to restore");
+    }
+  };
+
   const handleDelete = async () => {
     if (!confirm("Are you sure you want to delete this entry? This cannot be undone.")) {
       return;
@@ -345,9 +366,15 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete, isAssistantOpen }
                       className={cn("w-4 h-4", entry.starred && "fill-yellow-500")}
                     />
                   </Button>
-                  <Button variant="ghost" size="icon" onClick={handleArchive}>
-                    <Archive className="w-4 h-4" />
-                  </Button>
+                  {entry.archived ? (
+                    <Button variant="ghost" size="icon" onClick={handleRestore} title="Restore from archive">
+                      <ArchiveRestore className="w-4 h-4" />
+                    </Button>
+                  ) : (
+                    <Button variant="ghost" size="icon" onClick={handleArchive} title="Archive">
+                      <Archive className="w-4 h-4" />
+                    </Button>
+                  )}
                   <Button
                     variant="ghost"
                     size="icon"

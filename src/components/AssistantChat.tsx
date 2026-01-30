@@ -45,6 +45,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { LinkJacBrainIcon } from "@/components/LinkJacLogo";
 import { useSignedUrl } from "@/hooks/use-signed-url";
 import { SourceImageGallery } from "@/components/chat/SourceImageGallery";
+import { Skeleton } from "@/components/ui/skeleton";
 
 // Web Speech API types (browser-specific, not in TypeScript lib)
 interface WebSpeechRecognitionResult {
@@ -135,6 +136,9 @@ const dashboardQueries = [
   "Show me connections in my brain",
   "What have I been thinking about?",
   "Find orphan entries with no links",
+  "What have I forgotten about?",
+  "Show me my most important items",
+  "What's overdue?",
 ];
 
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/assistant-chat`;
@@ -953,9 +957,14 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
             >
               {/* Show thinking indicator for empty assistant messages while streaming */}
               {msg.role === "assistant" && !msg.content && loading ? (
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="text-sm">Jac is thinking...</span>
+                <div className="space-y-2 py-1">
+                  <div className="flex items-center gap-2 text-muted-foreground mb-2">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    <span className="text-xs">Jac is thinking...</span>
+                  </div>
+                  <Skeleton className="h-3 w-4/5" />
+                  <Skeleton className="h-3 w-3/5" />
+                  <Skeleton className="h-3 w-2/5" />
                 </div>
               ) : (
                 <div className="text-sm prose prose-sm dark:prose-invert max-w-none">

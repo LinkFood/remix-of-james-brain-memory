@@ -190,10 +190,26 @@ export function useDumpSave({
           ? "Image analyzed and saved!" 
           : (data.summary || "Saved!");
       
+      const entryId = data.entry?.id;
+      const entryTempId = tempId;
+      
       toast.success(successMessage, {
         description: data.classification?.type
           ? `Type: ${data.classification.type}${data.classification.subtype ? ` (${data.classification.subtype})` : ""}`
           : undefined,
+        action: entryId ? {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await supabase.from('entries').delete().eq('id', entryId);
+              if (onOptimisticFail) onOptimisticFail(entryTempId || entryId);
+              toast.info("Entry deleted");
+            } catch (err) {
+              toast.error("Failed to undo");
+            }
+          },
+        } : undefined,
+        duration: 5000,
       });
 
       if (tempId && onOptimisticComplete) {
