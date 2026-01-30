@@ -97,12 +97,12 @@ Deno.serve(async (req) => {
       ? `\n\nExisting lists the user has (consider appending to these if content matches):\n${recentEntries.map(e => `- ID: ${e.id}, Title: "${e.title || 'Untitled'}", Type: ${e.content_type}`).join('\n')}`
       : '';
 
-    const systemPrompt = `You are a content classifier for the "LinkJac" app. Users paste anything - code, lists, ideas, links, notes, images, or PDFs - and you classify it.
+const systemPrompt = `You are a content classifier for the "LinkJac" app. Users paste anything - code, lists, ideas, links, notes, images, or PDFs - and you classify it.
 
 Analyze the content and determine:
 1. TYPE: code | list | idea | link | contact | event | reminder | note | image | document
 2. SUBTYPE (optional): For lists: grocery, todo, shopping, reading, etc. For code: javascript, python, etc. For images: screenshot, diagram, photo, receipt, whiteboard. For documents: invoice, contract, report, article, manual, form, letter
-3. SUGGESTED TITLE: A short, descriptive title (max 60 chars)
+3. SUGGESTED TITLE: Generate a specific, descriptive title (max 60 chars) that explains WHAT this is, not just its type
 4. TAGS: Relevant tags for categorization (max 5)
 5. EXTRACTED DATA: Structured data based on type
 6. APPEND TO: If content should be added to an existing entry, provide the ID
@@ -110,6 +110,36 @@ Analyze the content and determine:
 8. IMAGE DESCRIPTION: For images, perform FORENSIC-LEVEL extraction
 9. DOCUMENT TEXT: For PDFs, extract ALL text content preserving structure
 10. EVENT DATE/TIME: If content mentions dates or times, extract them
+
+=== CRITICAL: TITLE GENERATION RULES ===
+The title is the IDENTITY of each entry. Users will search and ask about entries by title. Generic titles are USELESS.
+
+NEVER generate these generic titles:
+- "Code snippet" → Instead: "React useEffect cleanup hook" or "Python CSV parser function"
+- "List" → Instead: "Weekly grocery shopping list" or "Q3 project tasks"
+- "Note" → Instead: "Ideas for redesigning the dashboard" or "Meeting notes from standup"
+- "Link" → Instead: "Tailwind CSS documentation" or "Stripe API pricing page"
+- "Reminder" → Instead: "Call mom tomorrow afternoon" or "Submit expense report Friday"
+- "Image" → Instead: "Receipt from Home Depot" or "Screenshot of Stripe dashboard"
+- "Document" → Instead: "2024 Tax Return Form" or "Apartment lease agreement"
+- "Untitled" → NEVER use this
+
+FOR CODE:
+- Describe what the code DOES, not that it's code
+- Include language/framework if identifiable
+- Examples: "SQL query for monthly user stats", "Bash script for deploying to AWS", "React hook for auth state"
+
+FOR LISTS:
+- Include the list's PURPOSE or context
+- Examples: "Camping trip packing list", "Books to read 2026", "Birthday party supplies"
+
+FOR IMAGES:
+- Describe the KEY subject matter visible
+- Examples: "Whiteboard brainstorm session", "Screenshot of error in console", "Photo of handwritten notes"
+
+FOR LINKS:
+- Describe what the linked resource IS
+- Examples: "React Query v5 migration guide", "OpenAI pricing calculator", "GitHub issue #1234"
 
 Guidelines:
 - CODE: Contains programming syntax, functions, variables, imports
