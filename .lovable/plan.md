@@ -1,151 +1,190 @@
 
-# Tag Filter & Entry Context Improvements
+# Calendar Upgrade Plan
 
-## Overview
-Two-part fix addressing:
-1. **Tag overflow** - Tags wrap to multiple lines with a "Show more" toggle
-2. **Better entry titles** - AI generates descriptive, context-rich titles instead of generic ones like "Code snippet"
+## Current State Analysis
 
----
-
-## Part 1: Tag Filter - Wrap & Collapse
-
-### Current Problem
-Tags flow off-screen horizontally, making the page wider than it should be.
-
-### Solution
-Replace horizontal scroll with a wrapping grid that collapses after 2 rows:
-
-```text
-┌─────────────────────────────────────────────────────┐
-│ Filter by tags                              [Clear] │
-├─────────────────────────────────────────────────────┤
-│ [code] [grocery] [react] [shopping] [work] [todo]   │
-│ [meeting] [idea] ...                                │
-│                                      [▼ Show 8 more]│
-└─────────────────────────────────────────────────────┘
-```
-
-**When expanded:**
-```text
-│ [code] [grocery] [react] [shopping] [work] [todo]   │
-│ [meeting] [idea] [reminder] [link] [python] [api]   │
-│ [database] [auth] [design]                          │
-│                                       [▲ Show less] │
-```
-
-### Changes to `src/components/TagFilter.tsx`
-
-1. **Replace `ScrollArea` with a flex-wrap container**
-2. **Add `isExpanded` state** to control visibility
-3. **Calculate visible tags** - Show first 10 tags when collapsed
-4. **Add "Show X more" / "Show less" toggle button**
-5. **Constrain with `max-w-full` and `overflow-hidden`** on the container
+The calendar right now is **view-only** - it just displays entries that happen to have an `event_date`. There's no way to:
+- Manually add events directly to the calendar
+- Edit dates on existing entries  
+- Set up reminders/notifications
+- See what's coming up at a glance
+- Create recurring events manually
 
 ---
 
-## Part 2: Better Entry Titles (The Real Fix)
+## Proposed Calendar Features
 
-### Current Problem
-When you ask Jac "what codes are saved?", you get entries with titles like:
-- "Code snippet"
-- "Untitled"
-- "List"
+### 1. Manual Event Creation from Calendar
 
-These don't tell you WHAT the code does or what the list is FOR.
+**What**: Click any date → quick-add form appears → create event/reminder directly
 
-### Solution
-Improve the AI classification prompt to generate **descriptive, specific titles** that answer "What is this thing?"
-
-### Changes to `supabase/functions/classify-content/index.ts`
-
-**Update the system prompt with explicit title guidelines:**
-
-Current behavior:
 ```
-SUGGESTED TITLE: A short, descriptive title (max 60 chars)
-```
-
-New behavior:
-```
-SUGGESTED TITLE: Generate a specific, descriptive title that explains WHAT this is, not just its type.
-
-TITLE RULES:
-- BAD: "Code snippet" → GOOD: "React useEffect cleanup hook"
-- BAD: "List" → GOOD: "Weekly grocery shopping list"  
-- BAD: "Note" → GOOD: "Ideas for redesigning the dashboard"
-- BAD: "Link" → GOOD: "Tailwind CSS documentation"
-- BAD: "Reminder" → GOOD: "Call mom tomorrow afternoon"
-
-For CODE specifically:
-- Describe what the code DOES, not that it's code
-- Include the language/framework if identifiable
-- Examples: "Python CSV parser function", "SQL query for user stats", "Bash deploy script"
-
-For LISTS:
-- Include the list's PURPOSE
-- Examples: "Camping trip packing list", "Q3 project tasks", "Books to read 2026"
-
-For IMAGES:
-- Describe the KEY subject matter
-- Examples: "Receipt from Home Depot", "Screenshot of Stripe dashboard", "Whiteboard brainstorm session"
+┌─────────────────────────────────────────┐
+│ Calendar                                │
+├─────────────────────────────────────────┤
+│     January 2026                        │
+│  S  M  T  W  T  F  S                    │
+│        1  2  3  4  5                    │
+│  6  7  8  9  10[11]12  ← Click date     │
+│ ...                                     │
+├─────────────────────────────────────────┤
+│ + Add to Jan 11                         │
+│ ┌─────────────────────────────────────┐ │
+│ │ What's happening?                   │ │
+│ └─────────────────────────────────────┘ │
+│ Time: [__:__]  Reminder: [▼ None]       │
+│                         [Save]          │
+└─────────────────────────────────────────┘
 ```
 
-### Why This Fixes Jac's Context Problem
+### 2. Date/Time Editing in EntryView
 
-When Jac searches your brain and returns results, it uses `title` in responses like:
-> "Found 3 code entries: **React useEffect cleanup hook**, **Python CSV parser**, **SQL user stats query**"
+**What**: When viewing any entry, add ability to set/change its date and time
 
-vs the current:
-> "Found 3 code entries: **Code snippet**, **Code snippet**, **Code snippet**"
+- Add "Schedule" section to EntryView edit mode
+- Date picker + time picker
+- Recurring toggle (daily/weekly/monthly)
+- This lets any entry become a calendar event
 
-The title becomes the **identity** of each entry.
+### 3. "What's Ahead" Upcoming Preview
+
+**What**: Quick glance at next 7 days directly in calendar header
+
+```
+┌─────────────────────────────────────────┐
+│ 📅 Calendar                             │
+├─────────────────────────────────────────┤
+│ COMING UP                               │
+│ ─────────────────────                   │
+│ Tomorrow                                │
+│  • Team standup @ 10:00                 │
+│  • Call mom                             │
+│                                         │
+│ Fri, Jan 17                             │
+│  • Submit expense report ⏰              │
+│                                         │
+│ This Weekend                            │
+│  • Birthday party @ 3pm                 │
+└─────────────────────────────────────────┘
+```
+
+### 4. Reminder Notifications
+
+**What**: Get notified before events/reminders
+
+**Options** (from simple to complex):
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **Email reminders** | Works everywhere, no browser permissions | Requires email integration, not instant |
+| **In-app alerts** | Simple, shows when you open app | Only works if app is open |
+| **Push notifications** | True reminders, works even when closed | Requires PWA install + permission, complex backend |
+
+**Recommended approach**: Start with **in-app reminders** + **email for important ones**
+
+- When you open the app, show banner: "⏰ 2 things due today"
+- Optional email digest: morning summary of today's events
+
+### 5. Improved Calendar UI
+
+**Current issues**:
+- Sheet slides in from right (feels disconnected)
+- Calendar is tiny
+- No month navigation arrows visible
+- Can't quickly jump to today
+
+**Improvements**:
+- Better month navigation
+- "Today" button to jump back
+- Color-coded dots (🟢 event, 🔴 reminder, 🔵 deadline)
+- Week view option for dense schedules
 
 ---
 
 ## Technical Implementation
 
-### File: `src/components/TagFilter.tsx`
+### Phase 1: Core Calendar Editing
 
-| Change | Description |
-|--------|-------------|
-| Replace `ScrollArea` | Use `flex flex-wrap` layout |
-| Add `useState<boolean>` | Track expanded/collapsed state |
-| Slice visible tags | Show first 10 when collapsed |
-| Toggle button | "Show X more" / "Show less" with chevron icon |
-| Container constraints | `max-w-full overflow-hidden` |
+**Files to modify:**
 
-### File: `supabase/functions/classify-content/index.ts`
+| File | Changes |
+|------|---------|
+| `src/components/CalendarView.tsx` | Add "Quick Add" form when date is selected, improve navigation |
+| `src/components/EntryView.tsx` | Add date/time picker section in edit mode |
+| `src/components/ui/calendar.tsx` | May need custom day rendering for color dots |
 
-| Change | Description |
-|--------|-------------|
-| Update `systemPrompt` | Add detailed title generation rules with examples |
-| Emphasize specificity | "Describe WHAT it is, not THAT it exists" |
-| Type-specific guidance | Different rules for code, lists, images, links |
+**New component:**
+| File | Purpose |
+|------|---------|
+| `src/components/calendar/QuickAddEvent.tsx` | Form for adding event directly from calendar |
 
----
+### Phase 2: Coming Up Section
 
-## Expected Results
+**Files to modify:**
 
-### Before
-- **Tags**: Overflow right edge, page becomes scrollable horizontally
-- **Titles**: "Code snippet", "List", "Note" - useless for identification
+| File | Changes |
+|------|---------|
+| `src/components/CalendarView.tsx` | Add "Coming Up" section above calendar grid |
 
-### After
-- **Tags**: Wrap cleanly, collapse to 2 rows, "Show 8 more" toggle
-- **Titles**: "React hook for auth state", "Weekend grocery list", "API response example" - instantly identifiable
+### Phase 3: In-App Reminders
 
-When you ask Jac "what codes are saved?", instead of showing generic "Code snippet" entries, it will show:
-- "React useEffect cleanup hook"
-- "Python CSV parser function"
-- "SQL query for monthly sales"
-
----
-
-## Files to Modify
+**Files to create:**
 
 | File | Purpose |
 |------|---------|
-| `src/components/TagFilter.tsx` | Wrap & collapse tag layout |
-| `supabase/functions/classify-content/index.ts` | Better title generation prompts |
+| `src/components/ReminderBanner.tsx` | Shows "X things due today" on dashboard |
+| `src/hooks/useUpcomingReminders.ts` | Fetches today's/overdue items |
 
+**Database addition:**
+| Column | Purpose |
+|--------|---------|
+| `entries.reminder_time` | When to remind (e.g., "1h before", "morning of") |
+
+### Phase 4: Email Reminders (Future)
+
+Would require:
+- Email service integration (Resend, SendGrid)
+- Scheduled cron job to check for due reminders
+- User email preferences in settings
+
+---
+
+## User Experience After Upgrade
+
+1. **Open Calendar** → See "Coming Up" section with next 7 days preview
+2. **Click a date** → Quick-add form appears, type "Doctor appointment 3pm"
+3. **View any entry** → Click edit → Set date/time/reminder
+4. **Open app in morning** → Banner: "⏰ 3 things today" with expandable list
+5. **Recurring events** → Weekly standup automatically shows up each week
+
+---
+
+## Implementation Priority
+
+| Priority | Feature | Effort |
+|----------|---------|--------|
+| 🔴 High | Manual event creation from calendar | Medium |
+| 🔴 High | Date/time editing in EntryView | Low |
+| 🟡 Medium | "Coming Up" preview section | Low |
+| 🟡 Medium | In-app reminder banner | Medium |
+| 🟢 Low | Color-coded calendar dots | Low |
+| 🟢 Low | Email reminders | High |
+| 🟢 Low | Push notifications | Very High |
+
+---
+
+## Files Summary
+
+**Modify:**
+- `src/components/CalendarView.tsx` - Major overhaul
+- `src/components/EntryView.tsx` - Add date/time editing
+- `src/components/Dashboard.tsx` - Add reminder banner
+
+**Create:**
+- `src/components/calendar/QuickAddEvent.tsx` - Calendar event form
+- `src/components/calendar/UpcomingPreview.tsx` - Next 7 days view
+- `src/components/ReminderBanner.tsx` - Today's reminders alert
+- `src/hooks/useUpcomingReminders.ts` - Fetch upcoming entries
+
+**Database (optional for reminders):**
+- Add `reminder_minutes` column to entries table (e.g., 60 = remind 1 hour before)
