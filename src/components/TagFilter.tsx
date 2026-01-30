@@ -1,7 +1,6 @@
-import { useMemo } from "react";
-import { Tag, X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Tag, X, ChevronDown, ChevronUp } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import type { Entry } from "@/components/EntryCard";
 
@@ -11,7 +10,11 @@ interface TagFilterProps {
   onTagsChange: (tags: string[]) => void;
 }
 
+const COLLAPSED_TAG_COUNT = 10;
+
 export function TagFilter({ entries, selectedTags, onTagsChange }: TagFilterProps) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
   // Calculate tag counts from entries
   const tagCounts = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -30,6 +33,9 @@ export function TagFilter({ entries, selectedTags, onTagsChange }: TagFilterProp
   }, [entries]);
 
   const allTags = Object.keys(tagCounts);
+  const hiddenCount = allTags.length - COLLAPSED_TAG_COUNT;
+  const hasHiddenTags = hiddenCount > 0;
+  const visibleTags = isExpanded ? allTags : allTags.slice(0, COLLAPSED_TAG_COUNT);
 
   if (allTags.length === 0) {
     return null;
@@ -64,30 +70,51 @@ export function TagFilter({ entries, selectedTags, onTagsChange }: TagFilterProp
           </Button>
         )}
       </div>
-      <ScrollArea className="w-full max-w-full">
-        <div className="flex gap-2 pb-2 pr-4">
-          {allTags.map((tag) => {
-            const isSelected = selectedTags.includes(tag);
-            return (
-              <Badge
-                key={tag}
-                variant={isSelected ? "default" : "secondary"}
-                className={`cursor-pointer transition-colors shrink-0 max-w-[150px] truncate ${
-                  isSelected
-                    ? "bg-primary text-primary-foreground hover:bg-primary/90"
-                    : "hover:bg-accent"
-                }`}
-                onClick={() => toggleTag(tag)}
-                title={tag}
-              >
-                <span className="truncate">{tag}</span>
-                <span className="ml-1 text-xs opacity-70 shrink-0">{tagCounts[tag]}</span>
-              </Badge>
-            );
-          })}
-        </div>
-        <ScrollBar orientation="horizontal" />
-      </ScrollArea>
+      
+      {/* Wrapping tag container */}
+      <div className="flex flex-wrap gap-2">
+        {visibleTags.map((tag) => {
+          const isSelected = selectedTags.includes(tag);
+          return (
+            <Badge
+              key={tag}
+              variant={isSelected ? "default" : "secondary"}
+              className={`cursor-pointer transition-colors max-w-[150px] ${
+                isSelected
+                  ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                  : "hover:bg-accent"
+              }`}
+              onClick={() => toggleTag(tag)}
+              title={tag}
+            >
+              <span className="truncate">{tag}</span>
+              <span className="ml-1 text-xs opacity-70 shrink-0">{tagCounts[tag]}</span>
+            </Badge>
+          );
+        })}
+      </div>
+
+      {/* Show more / Show less toggle */}
+      {hasHiddenTags && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="mt-2 h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
+        >
+          {isExpanded ? (
+            <>
+              <ChevronUp className="w-3 h-3 mr-1" />
+              Show less
+            </>
+          ) : (
+            <>
+              <ChevronDown className="w-3 h-3 mr-1" />
+              Show {hiddenCount} more
+            </>
+          )}
+        </Button>
+      )}
     </div>
   );
 }
