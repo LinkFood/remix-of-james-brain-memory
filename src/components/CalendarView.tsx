@@ -1,11 +1,13 @@
-import { useState, useEffect, useMemo } from "react";
-import { format, isSameDay } from "date-fns";
-import { Calendar as CalendarIcon } from "lucide-react";
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { format, isSameDay, startOfDay, addDays } from "date-fns";
+import { Calendar as CalendarIcon, ChevronLeft, ChevronRight, CalendarPlus } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Calendar } from "@/components/ui/calendar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
+import { QuickAddEvent, UpcomingPreview } from "@/components/calendar";
 import type { Entry } from "@/components/EntryCard";
 
 interface CalendarViewProps {
@@ -31,36 +33,38 @@ export function CalendarView({ userId, open, onOpenChange, onViewEntry }: Calend
   const [loading, setLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [currentMonth, setCurrentMonth] = useState<Date>(new Date());
+  const [showQuickAdd, setShowQuickAdd] = useState(false);
 
   // Fetch entries with event_date
+  const fetchEntries = useCallback(async () => {
+    if (!userId) return;
+    
+    setLoading(true);
+    const { data, error } = await supabase
+      .from("entries")
+      .select("*")
+      .eq("user_id", userId)
+      .not("event_date", "is", null)
+      .eq("archived", false)
+      .order("event_date", { ascending: true });
+
+    if (!error && data) {
+      const transformedData = data.map(entry => ({
+        ...entry,
+        tags: entry.tags || [],
+        extracted_data: (entry.extracted_data || {}) as Record<string, unknown>,
+        list_items: (entry.list_items || []) as Array<{ text: string; checked: boolean }>,
+      }));
+      setEntries(transformedData);
+    }
+    setLoading(false);
+  }, [userId]);
+
   useEffect(() => {
-    if (!open || !userId) return;
-
-    const fetchEntries = async () => {
-      setLoading(true);
-      const { data, error } = await supabase
-        .from("entries")
-        .select("*")
-        .eq("user_id", userId)
-        .not("event_date", "is", null)
-        .eq("archived", false)
-        .order("event_date", { ascending: true });
-
-      if (!error && data) {
-        // Transform data to match Entry type
-        const transformedData = data.map(entry => ({
-          ...entry,
-          tags: entry.tags || [],
-          extracted_data: (entry.extracted_data || {}) as Record<string, unknown>,
-          list_items: (entry.list_items || []) as Array<{ text: string; checked: boolean }>,
-        }));
-        setEntries(transformedData);
-      }
-      setLoading(false);
-    };
-
-    fetchEntries();
-  }, [open, userId]);
+    if (open) {
+      fetchEntries();
+    }
+  }, [open, fetchEntries]);
 
   // Get dates that have entries
   const datesWithEntries = useMemo(() => {
@@ -77,6 +81,25 @@ export function CalendarView({ userId, open, onOpenChange, onViewEntry }: Calend
     );
   }, [entries, selectedDate]);
 
+  // Upcoming entries (next 7 days)
+  const upcomingEntries = useMemo(() => {
+    const today = startOfDay(new Date());
+    const nextWeek = addDays(today, 7);
+    const todayStr = format(today, "yyyy-MM-dd");
+    const nextWeekStr = format(nextWeek, "yyyy-MM-dd");
+    
+    return entries
+      .filter(e => e.event_date && e.event_date >= todayStr && e.event_date <= nextWeekStr)
+      .sort((a, b) => {
+        const dateA = a.event_date || "";
+        const dateB = b.event_date || "";
+        if (dateA !== dateB) return dateA.localeCompare(dateB);
+        const timeA = a.event_time || "99:99";
+        const timeB = b.event_time || "99:99";
+        return timeA.localeCompare(timeB);
+      });
+  }, [entries]);
+
   // Custom day render to show dots for dates with entries
   const modifiers = useMemo(() => ({
     hasEntry: datesWithEntries,
@@ -88,6 +111,17 @@ export function CalendarView({ userId, open, onOpenChange, onViewEntry }: Calend
     },
   };
 
+  const handleDateSelect = (date: Date | undefined) => {
+    setSelectedDate(date);
+    setShowQuickAdd(false);
+  };
+
+  const goToToday = () => {
+    const today = new Date();
+    setSelectedDate(today);
+    setCurrentMonth(today);
+  };
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent side="right" className="w-full sm:max-w-lg p-0 flex flex-col">
@@ -97,24 +131,42 @@ export function CalendarView({ userId, open, onOpenChange, onViewEntry }: Calend
               <CalendarIcon className="h-5 w-5" />
               Calendar
             </SheetTitle>
+            <Button variant="outline" size="sm" onClick={goToToday}>
+              Today
+            </Button>
           </div>
         </SheetHeader>
 
         <div className="flex-1 overflow-hidden flex flex-col">
+          {/* Coming Up Section */}
+          {upcomingEntries.length > 0 && (
+            <div className="px-4 py-3 border-b border-border bg-muted/20">
+              <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide mb-2">
+                Coming Up
+              </h3>
+              <UpcomingPreview 
+                entries={upcomingEntries} 
+                onViewEntry={onViewEntry}
+                maxItems={4}
+              />
+            </div>
+          )}
+
           {/* Calendar */}
           <div className="p-4 border-b border-border">
             <Calendar
               mode="single"
               selected={selectedDate}
-              onSelect={setSelectedDate}
+              onSelect={handleDateSelect}
               month={currentMonth}
               onMonthChange={setCurrentMonth}
               modifiers={modifiers}
               modifiersStyles={modifiersStyles}
-              className="mx-auto"
+              className="mx-auto pointer-events-auto"
               components={{
                 DayContent: ({ date }) => {
                   const hasEntry = datesWithEntries.some(d => isSameDay(d, date));
+                  const isToday = isSameDay(date, new Date());
                   return (
                     <div className="relative w-full h-full flex items-center justify-center">
                       {date.getDate()}
@@ -128,15 +180,38 @@ export function CalendarView({ userId, open, onOpenChange, onViewEntry }: Calend
             />
           </div>
 
+          {/* Quick Add Form */}
+          {showQuickAdd && selectedDate && (
+            <QuickAddEvent
+              userId={userId}
+              selectedDate={selectedDate}
+              onClose={() => setShowQuickAdd(false)}
+              onEventAdded={fetchEntries}
+            />
+          )}
+
           {/* Selected date entries */}
           <div className="flex-1 flex flex-col min-h-0">
-            <div className="px-4 py-3 border-b border-border bg-muted/30">
-              <h3 className="font-medium text-sm">
-                {selectedDate ? format(selectedDate, "EEEE, MMMM d, yyyy") : "Select a date"}
-              </h3>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                {entriesForSelectedDate.length} {entriesForSelectedDate.length === 1 ? "entry" : "entries"}
-              </p>
+            <div className="px-4 py-3 border-b border-border bg-muted/30 flex items-center justify-between">
+              <div>
+                <h3 className="font-medium text-sm">
+                  {selectedDate ? format(selectedDate, "EEEE, MMMM d, yyyy") : "Select a date"}
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {entriesForSelectedDate.length} {entriesForSelectedDate.length === 1 ? "entry" : "entries"}
+                </p>
+              </div>
+              {selectedDate && !showQuickAdd && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowQuickAdd(true)}
+                  className="gap-1"
+                >
+                  <CalendarPlus className="h-4 w-4" />
+                  Add
+                </Button>
+              )}
             </div>
 
             <ScrollArea className="flex-1">
@@ -147,7 +222,18 @@ export function CalendarView({ userId, open, onOpenChange, onViewEntry }: Calend
                   </div>
                 ) : entriesForSelectedDate.length === 0 ? (
                   <div className="text-center py-8 text-muted-foreground text-sm">
-                    No entries for this date
+                    <CalendarIcon className="h-8 w-8 mx-auto mb-2 opacity-50" />
+                    <p>No entries for this date</p>
+                    {selectedDate && (
+                      <Button
+                        variant="link"
+                        size="sm"
+                        onClick={() => setShowQuickAdd(true)}
+                        className="mt-2"
+                      >
+                        Add something
+                      </Button>
+                    )}
                   </div>
                 ) : (
                   entriesForSelectedDate.map((entry) => (
@@ -185,7 +271,7 @@ export function CalendarView({ userId, open, onOpenChange, onViewEntry }: Calend
                           )}
                         </div>
                         {entry.starred && (
-                          <span className="text-yellow-500 shrink-0">★</span>
+                          <span className="text-primary shrink-0">★</span>
                         )}
                       </div>
                     </button>

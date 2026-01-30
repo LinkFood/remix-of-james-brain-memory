@@ -1,11 +1,21 @@
 import { useState } from "react";
-import { format } from "date-fns";
+import { format, parseISO } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +28,7 @@ import {
   Lightbulb,
   Link,
   User,
-  Calendar,
+  Calendar as CalendarIcon,
   Bell,
   FileText,
   Star,
@@ -29,6 +39,7 @@ import {
   Check,
   Clock,
   Image as ImageIcon,
+  Repeat,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -51,11 +62,19 @@ const typeIcons: Record<string, React.ReactNode> = {
   idea: <Lightbulb className="w-5 h-5" />,
   link: <Link className="w-5 h-5" />,
   contact: <User className="w-5 h-5" />,
-  event: <Calendar className="w-5 h-5" />,
+  event: <CalendarIcon className="w-5 h-5" />,
   reminder: <Bell className="w-5 h-5" />,
   note: <FileText className="w-5 h-5" />,
   image: <ImageIcon className="w-5 h-5" />,
 };
+
+const REMINDER_OPTIONS = [
+  { value: "", label: "No reminder" },
+  { value: "15", label: "15 minutes before" },
+  { value: "30", label: "30 minutes before" },
+  { value: "60", label: "1 hour before" },
+  { value: "1440", label: "1 day before" },
+];
 
 const typeColors: Record<string, string> = {
   code: "bg-purple-500/10 text-purple-500 border-purple-500/20",
@@ -84,6 +103,13 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete, isAssistantOpen }
   const [listItems, setListItems] = useState<Array<{ text: string; checked: boolean }>>([]);
   const [saving, setSaving] = useState(false);
   
+  // Schedule editing state
+  const [editEventDate, setEditEventDate] = useState<Date | undefined>(undefined);
+  const [editEventTime, setEditEventTime] = useState("");
+  const [editReminderMinutes, setEditReminderMinutes] = useState("");
+  const [editIsRecurring, setEditIsRecurring] = useState(false);
+  const [editRecurrencePattern, setEditRecurrencePattern] = useState("");
+  
   // Get signed URL for private storage images
   const { signedUrl: imageUrl } = useSignedUrl(entry?.image_url);
 
@@ -96,6 +122,12 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete, isAssistantOpen }
     setEditTitle(entry.title || "");
     setEditContent(entry.content);
     setListItems([...entry.list_items]);
+    // Initialize schedule fields
+    setEditEventDate(entry.event_date ? parseISO(entry.event_date) : undefined);
+    setEditEventTime(entry.event_time || "");
+    setEditReminderMinutes((entry as any).reminder_minutes?.toString() || "");
+    setEditIsRecurring(entry.is_recurring || false);
+    setEditRecurrencePattern(entry.recurrence_pattern || "");
     setIsEditing(true);
   };
 
@@ -104,6 +136,11 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete, isAssistantOpen }
     setEditTitle("");
     setEditContent("");
     setListItems([]);
+    setEditEventDate(undefined);
+    setEditEventTime("");
+    setEditReminderMinutes("");
+    setEditIsRecurring(false);
+    setEditRecurrencePattern("");
   };
 
   const handleSave = async () => {
@@ -120,6 +157,11 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete, isAssistantOpen }
           title: editTitle.trim() || null,
           content: editContent.trim(),
           list_items: JSON.parse(JSON.stringify(listItems)),
+          event_date: editEventDate ? format(editEventDate, "yyyy-MM-dd") : null,
+          event_time: editEventTime || null,
+          reminder_minutes: editReminderMinutes ? parseInt(editReminderMinutes) : null,
+          is_recurring: editIsRecurring,
+          recurrence_pattern: editIsRecurring ? editRecurrencePattern : null,
           updated_at: new Date().toISOString(),
         })
         .eq("id", entry.id)
@@ -428,6 +470,153 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete, isAssistantOpen }
               >
                 Add Item
               </Button>
+            </div>
+          )}
+
+          {/* Schedule Section */}
+          {isEditing ? (
+            <div className="mt-6 pt-4 border-t">
+              <div className="flex items-center gap-2 mb-3">
+                <CalendarIcon className="w-4 h-4 text-muted-foreground" />
+                <p className="text-sm font-medium">Schedule</p>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {/* Date Picker */}
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1 block">Date</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className={cn(
+                          "w-full justify-start text-left font-normal",
+                          !editEventDate && "text-muted-foreground"
+                        )}
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        {editEventDate ? format(editEventDate, "PPP") : "Pick a date"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={editEventDate}
+                        onSelect={setEditEventDate}
+                        initialFocus
+                        className="pointer-events-auto"
+                      />
+                    </PopoverContent>
+                  </Popover>
+                  {editEventDate && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="mt-1 text-xs text-muted-foreground"
+                      onClick={() => setEditEventDate(undefined)}
+                    >
+                      Clear date
+                    </Button>
+                  )}
+                </div>
+
+                {/* Time Input */}
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1 block">Time</Label>
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-muted-foreground" />
+                    <Input
+                      type="time"
+                      value={editEventTime}
+                      onChange={(e) => setEditEventTime(e.target.value)}
+                      className="flex-1"
+                    />
+                  </div>
+                </div>
+
+                {/* Reminder */}
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1 block">Reminder</Label>
+                  <div className="flex items-center gap-2">
+                    <Bell className="h-4 w-4 text-muted-foreground" />
+                    <Select value={editReminderMinutes} onValueChange={setEditReminderMinutes}>
+                      <SelectTrigger className="flex-1">
+                        <SelectValue placeholder="No reminder" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {REMINDER_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {/* Recurring */}
+                <div>
+                  <Label className="text-xs text-muted-foreground mb-1 block">Repeat</Label>
+                  <div className="flex items-center gap-2">
+                    <Repeat className="h-4 w-4 text-muted-foreground" />
+                    <Select 
+                      value={editIsRecurring ? editRecurrencePattern : ""} 
+                      onValueChange={(val) => {
+                        if (val) {
+                          setEditIsRecurring(true);
+                          setEditRecurrencePattern(val);
+                        } else {
+                          setEditIsRecurring(false);
+                          setEditRecurrencePattern("");
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="flex-1">
+                        <SelectValue placeholder="Don't repeat" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="">Don't repeat</SelectItem>
+                        <SelectItem value="daily">Daily</SelectItem>
+                        <SelectItem value="weekly">Weekly</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="yearly">Yearly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (entry.event_date || entry.event_time) && (
+            <div className="mt-6 pt-4 border-t">
+              <div className="flex items-center gap-2 mb-2">
+                <CalendarIcon className="w-4 h-4 text-muted-foreground" />
+                <p className="text-sm font-medium">Schedule</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {entry.event_date && (
+                  <Badge variant="outline" className="gap-1">
+                    <CalendarIcon className="h-3 w-3" />
+                    {format(parseISO(entry.event_date), "PPP")}
+                  </Badge>
+                )}
+                {entry.event_time && (
+                  <Badge variant="outline" className="gap-1">
+                    <Clock className="h-3 w-3" />
+                    {entry.event_time.slice(0, 5)}
+                  </Badge>
+                )}
+                {(entry as any).reminder_minutes && (
+                  <Badge variant="outline" className="gap-1 bg-primary/10 text-primary border-primary/20">
+                    <Bell className="h-3 w-3" />
+                    Reminder set
+                  </Badge>
+                )}
+                {entry.is_recurring && entry.recurrence_pattern && (
+                  <Badge variant="outline" className="gap-1">
+                    <Repeat className="h-3 w-3" />
+                    {entry.recurrence_pattern}
+                  </Badge>
+                )}
+              </div>
             </div>
           )}
 

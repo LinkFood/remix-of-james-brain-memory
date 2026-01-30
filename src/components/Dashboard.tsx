@@ -18,6 +18,7 @@ import { parseListItems } from "@/lib/parseListItems";
 import { StatsGrid, EmptyState, EntrySection } from "./dashboard";
 import { QuickStats } from "./dashboard/QuickStats";
 import TagFilter from "./TagFilter";
+import { ReminderBanner } from "./ReminderBanner";
 import { useEntries, type DashboardEntry } from "@/hooks/useEntries";
 import { useEntryActions } from "@/hooks/useEntryActions";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
@@ -299,6 +300,12 @@ const Dashboard = ({
           onSaveSuccess={handleSaveSuccess}
         />
       </div>
+
+      {/* Reminder Banner */}
+      <ReminderBanner userId={userId} onViewEntry={(e) => {
+        const entry = entries.find(ent => ent.id === e.id);
+        if (entry) onViewEntry(entry);
+      }} />
 
       {/* Quick Stats Banner */}
       <QuickStats entries={entries} />
