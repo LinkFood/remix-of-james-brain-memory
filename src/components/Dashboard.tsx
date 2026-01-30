@@ -22,6 +22,8 @@ import { ReminderBanner } from "./ReminderBanner";
 import { useEntries, type DashboardEntry } from "@/hooks/useEntries";
 import { useEntryActions } from "@/hooks/useEntryActions";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
+import JacInsightCard from "@/components/JacInsightCard";
+import type { JacDashboardState } from "@/hooks/useJacDashboard";
 
 interface DashboardProps {
   userId: string;
@@ -33,11 +35,14 @@ interface DashboardProps {
   isSelecting?: boolean;
   selectedIds?: Set<string>;
   onToggleSelect?: (entryId: string) => void;
+  /** Jac dashboard transformation state */
+  jacState?: JacDashboardState | null;
+  onClearJac?: () => void;
 }
 
-const Dashboard = ({ 
-  userId, 
-  onViewEntry, 
+const Dashboard = ({
+  userId,
+  onViewEntry,
   dumpInputRef,
   externalFilterTags,
   onClearExternalFilter,
@@ -45,6 +50,8 @@ const Dashboard = ({
   isSelecting = false,
   selectedIds,
   onToggleSelect,
+  jacState,
+  onClearJac,
 }: DashboardProps) => {
   const internalDumpRef = useRef<DumpInputHandle>(null);
   const dumpRef = dumpInputRef || internalDumpRef;
@@ -332,6 +339,23 @@ const Dashboard = ({
         )}
       </div>
 
+      {/* Jac Insight Card — appears when Jac transforms the dashboard */}
+      {jacState?.active && jacState.insightCard && (
+        <JacInsightCard
+          insight={jacState.insightCard}
+          message={jacState.message}
+          loading={jacState.loading}
+          onDismiss={() => onClearJac?.()}
+        />
+      )}
+      {jacState?.active && jacState.loading && !jacState.insightCard && (
+        <JacInsightCard
+          insight={{ title: "", body: "", type: "insight" }}
+          loading={true}
+          onDismiss={() => onClearJac?.()}
+        />
+      )}
+
       {/* Sections */}
       <div className="space-y-4">
         {/* Upcoming Section */}
@@ -346,6 +370,7 @@ const Dashboard = ({
             color="bg-green-500/10"
             compact
             highlightedEntryId={highlightedEntryId}
+            jacHighlightIds={jacState?.highlightEntryIds}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -369,6 +394,7 @@ const Dashboard = ({
             color="bg-blue-500/10"
             compact
             highlightedEntryId={highlightedEntryId}
+            jacHighlightIds={jacState?.highlightEntryIds}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -392,6 +418,7 @@ const Dashboard = ({
             color="bg-orange-500/10"
             compact
             highlightedEntryId={highlightedEntryId}
+            jacHighlightIds={jacState?.highlightEntryIds}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -414,6 +441,7 @@ const Dashboard = ({
             onToggle={toggleSection}
             color="bg-blue-500/10"
             highlightedEntryId={highlightedEntryId}
+            jacHighlightIds={jacState?.highlightEntryIds}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -437,6 +465,7 @@ const Dashboard = ({
             color="bg-purple-500/10"
             compact
             highlightedEntryId={highlightedEntryId}
+            jacHighlightIds={jacState?.highlightEntryIds}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -459,6 +488,7 @@ const Dashboard = ({
             color="bg-yellow-500/10"
             compact
             highlightedEntryId={highlightedEntryId}
+            jacHighlightIds={jacState?.highlightEntryIds}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -481,6 +511,7 @@ const Dashboard = ({
             color="bg-muted"
             compact
             highlightedEntryId={highlightedEntryId}
+            jacHighlightIds={jacState?.highlightEntryIds}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}

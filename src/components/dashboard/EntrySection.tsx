@@ -19,6 +19,8 @@ interface EntrySectionProps {
   loadingMore?: boolean;
   hasMore?: boolean;
   highlightedEntryId?: string | null;
+  /** Multiple highlighted entry IDs (from Jac dashboard transformation) */
+  jacHighlightIds?: string[];
   isSelecting?: boolean;
   selectedIds?: Set<string>;
   onLoadMore?: () => void;
@@ -45,6 +47,7 @@ const EntrySection = ({
   loadingMore = false,
   hasMore = false,
   highlightedEntryId,
+  jacHighlightIds = [],
   isSelecting = false,
   selectedIds,
   onLoadMore,
@@ -77,7 +80,7 @@ const EntrySection = ({
               entry={entry}
               compact={compact}
               showContent={showContent}
-              highlighted={entry.id === highlightedEntryId}
+              highlighted={entry.id === highlightedEntryId || jacHighlightIds.includes(entry.id)}
               isSelecting={isSelecting}
               isSelected={selectedIds?.has(entry.id) ?? false}
               onToggleSelect={() => onToggleSelect?.(entry.id)}

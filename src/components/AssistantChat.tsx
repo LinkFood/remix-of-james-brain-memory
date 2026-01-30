@@ -114,6 +114,8 @@ interface AssistantChatProps {
   onFilterByTag?: (tag: string) => void;
   onScrollToEntry?: (entryId: string) => void;
   onSelectEntries?: (entryIds: string[]) => void;
+  /** Send a query to Jac's dashboard transformation engine */
+  onJacDashboardQuery?: (query: string) => void;
   externalOpen?: boolean;
   onExternalOpenChange?: (open: boolean) => void;
   currentContext?: EntryContext | null;
@@ -152,7 +154,7 @@ const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs: nu
 
 const STORAGE_KEY = 'jac-position';
 
-const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onScrollToEntry, onSelectEntries, externalOpen, onExternalOpenChange, currentContext, isEntryViewOpen }: AssistantChatProps) => {
+const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onScrollToEntry, onSelectEntries, onJacDashboardQuery, externalOpen, onExternalOpenChange, currentContext, isEntryViewOpen }: AssistantChatProps) => {
   const [internalOpen, setInternalOpen] = useState(false);
   const [isMinimized, setIsMinimized] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -590,9 +592,42 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
     }
   }, [voiceState, isRecording, isSpeechSupported, startBrowserSpeech, stopVoice]);
 
+  // Detect if a query should transform the dashboard (exploration/pattern queries)
+  const isDashboardQuery = useCallback((text: string): boolean => {
+    const dashboardPatterns = [
+      /what (have i|am i|patterns|themes|connections|am i missing|should i)/i,
+      /how (does this|do these|are .+ connected|do .+ relate)/i,
+      /find (patterns|connections|themes|relationships|related)/i,
+      /show me (connections|patterns|related|themes|what .+ connect)/i,
+      /what('s| is) (the pattern|the connection|related|connected)/i,
+      /connect.*(entries|dumps|notes|ideas)/i,
+      /what.*(thinking about|working on|been dump)/i,
+      /help me (understand|see|find pattern)/i,
+      /surface|cluster|group|organize/i,
+    ];
+    return dashboardPatterns.some((p) => p.test(text));
+  }, []);
+
   const handleSend = async (messageText?: string) => {
     const text = messageText || input.trim();
     if (!text || loading) return;
+
+    // Check if this is a dashboard transformation query
+    if (onJacDashboardQuery && isDashboardQuery(text)) {
+      const userMessage: Message = { role: "user", content: text };
+      setMessages((prev) => [...prev, userMessage]);
+      setInput("");
+
+      // Send to dashboard transformation engine
+      onJacDashboardQuery(text);
+
+      // Add a brief confirmation message in chat
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: "Check the dashboard — I'm showing you what I found." },
+      ]);
+      return;
+    }
 
     const userMessage: Message = { role: "user", content: text };
     setMessages((prev) => [...prev, userMessage]);

@@ -284,9 +284,42 @@ serve(async (req) => {
       console.log('Weather data:', weatherData);
     }
 
-    // Step 1: Keyword-based search (embedding generation not available in Lovable AI)
-    console.log('Performing keyword search for:', message);
+    // Step 1: Search — keyword + semantic (embedding-based) search
+    console.log('Performing search for:', message);
     let relevantEntries: Entry[] = [];
+
+    // Try semantic search first (if message is substantial enough)
+    if (message.length > 10) {
+      try {
+        const embResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ text: message }),
+        });
+
+        if (embResponse.ok) {
+          const embData = await embResponse.json();
+          if (embData.embedding) {
+            const { data: semanticResults } = await supabase.rpc('search_entries_by_embedding', {
+              query_embedding: JSON.stringify(embData.embedding),
+              match_threshold: 0.55,
+              match_count: 10,
+              filter_user_id: userId,
+            });
+
+            if (semanticResults && semanticResults.length > 0) {
+              relevantEntries = semanticResults as Entry[];
+              console.log(`Found ${relevantEntries.length} entries via semantic search`);
+            }
+          }
+        }
+      } catch (embErr) {
+        console.warn('Semantic search failed, falling back to keyword:', embErr);
+      }
+    }
     
     // Extract search words from message (2+ chars, lowercased)
     const searchWords = message

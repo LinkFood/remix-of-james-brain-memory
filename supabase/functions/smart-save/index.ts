@@ -398,6 +398,64 @@ serve(async (req) => {
 
       entry = newEntry;
       console.log('New entry created:', entry.id);
+
+      // Generate embedding asynchronously (fire-and-forget for speed)
+      const embeddingContent = entryContent.slice(0, 8000);
+      if (embeddingContent.length > 10) {
+        fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ text: embeddingContent }),
+        })
+          .then(async (embRes) => {
+            if (embRes.ok) {
+              const embData = await embRes.json();
+              if (embData.embedding) {
+                // Store embedding on the entry
+                const { error: embUpdateError } = await supabase
+                  .from('entries')
+                  .update({ embedding: JSON.stringify(embData.embedding) })
+                  .eq('id', entry!.id);
+                if (embUpdateError) {
+                  console.warn('Failed to store embedding:', embUpdateError);
+                } else {
+                  console.log('Embedding stored for entry:', entry!.id);
+                  // Find and store related entries
+                  try {
+                    const { data: related } = await supabase.rpc('search_entries_by_embedding', {
+                      query_embedding: JSON.stringify(embData.embedding),
+                      match_threshold: 0.65,
+                      match_count: 6,
+                      filter_user_id: userId,
+                    });
+                    if (related && related.length > 0) {
+                      const relationships = related
+                        .filter((r: any) => r.id !== entry!.id)
+                        .slice(0, 5)
+                        .map((r: any) => ({
+                          entry_id: entry!.id,
+                          related_entry_id: r.id,
+                          user_id: userId,
+                          similarity_score: r.similarity,
+                          relationship_type: 'semantic',
+                        }));
+                      if (relationships.length > 0) {
+                        await supabase.from('entry_relationships').insert(relationships);
+                        console.log(`Stored ${relationships.length} relationships for entry:`, entry!.id);
+                      }
+                    }
+                  } catch (relErr) {
+                    console.warn('Failed to compute relationships:', relErr);
+                  }
+                }
+              }
+            }
+          })
+          .catch((err) => console.warn('Embedding generation failed (non-blocking):', err));
+      }
     }
 
     // Increment the dump count for the user's subscription
