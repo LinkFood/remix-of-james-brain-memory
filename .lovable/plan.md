@@ -1,190 +1,80 @@
 
-# Calendar Upgrade Plan
+# Fix: Jac Dashboard Query Suggestions Failing
 
-## Current State Analysis
+## Problem Identified
 
-The calendar right now is **view-only** - it just displays entries that happen to have an `event_date`. There's no way to:
-- Manually add events directly to the calendar
-- Edit dates on existing entries  
-- Set up reminders/notifications
-- See what's coming up at a glance
-- Create recurring events manually
+When you click one of the suggested queries in the Jac assistant (like "What patterns do you see?"), the request fails with a 404 error because the `jac-dashboard-query` edge function **exists in code but is NOT deployed**.
 
----
+### Root Cause
 
-## Proposed Calendar Features
-
-### 1. Manual Event Creation from Calendar
-
-**What**: Click any date → quick-add form appears → create event/reminder directly
+The edge function was created in the codebase at `supabase/functions/jac-dashboard-query/index.ts`, but it was never deployed to the Supabase backend. When the app tries to call it, it gets:
 
 ```
-┌─────────────────────────────────────────┐
-│ Calendar                                │
-├─────────────────────────────────────────┤
-│     January 2026                        │
-│  S  M  T  W  T  F  S                    │
-│        1  2  3  4  5                    │
-│  6  7  8  9  10[11]12  ← Click date     │
-│ ...                                     │
-├─────────────────────────────────────────┤
-│ + Add to Jan 11                         │
-│ ┌─────────────────────────────────────┐ │
-│ │ What's happening?                   │ │
-│ └─────────────────────────────────────┘ │
-│ Time: [__:__]  Reminder: [▼ None]       │
-│                         [Save]          │
-└─────────────────────────────────────────┘
+404 NOT_FOUND: Requested function was not found
 ```
 
-### 2. Date/Time Editing in EntryView
+### How It Fails
 
-**What**: When viewing any entry, add ability to set/change its date and time
-
-- Add "Schedule" section to EntryView edit mode
-- Date picker + time picker
-- Recurring toggle (daily/weekly/monthly)
-- This lets any entry become a calendar event
-
-### 3. "What's Ahead" Upcoming Preview
-
-**What**: Quick glance at next 7 days directly in calendar header
-
-```
-┌─────────────────────────────────────────┐
-│ 📅 Calendar                             │
-├─────────────────────────────────────────┤
-│ COMING UP                               │
-│ ─────────────────────                   │
-│ Tomorrow                                │
-│  • Team standup @ 10:00                 │
-│  • Call mom                             │
-│                                         │
-│ Fri, Jan 17                             │
-│  • Submit expense report ⏰              │
-│                                         │
-│ This Weekend                            │
-│  • Birthday party @ 3pm                 │
-└─────────────────────────────────────────┘
-```
-
-### 4. Reminder Notifications
-
-**What**: Get notified before events/reminders
-
-**Options** (from simple to complex):
-
-| Approach | Pros | Cons |
-|----------|------|------|
-| **Email reminders** | Works everywhere, no browser permissions | Requires email integration, not instant |
-| **In-app alerts** | Simple, shows when you open app | Only works if app is open |
-| **Push notifications** | True reminders, works even when closed | Requires PWA install + permission, complex backend |
-
-**Recommended approach**: Start with **in-app reminders** + **email for important ones**
-
-- When you open the app, show banner: "⏰ 2 things due today"
-- Optional email digest: morning summary of today's events
-
-### 5. Improved Calendar UI
-
-**Current issues**:
-- Sheet slides in from right (feels disconnected)
-- Calendar is tiny
-- No month navigation arrows visible
-- Can't quickly jump to today
-
-**Improvements**:
-- Better month navigation
-- "Today" button to jump back
-- Color-coded dots (🟢 event, 🔴 reminder, 🔵 deadline)
-- Week view option for dense schedules
+1. User clicks a suggestion like "Find patterns" or types a pattern-related query
+2. The `isDashboardQuery()` function detects it as a dashboard transformation query
+3. It routes to `onJacDashboardQuery(text)` which calls `useJacDashboard.sendQuery()`
+4. The hook tries to fetch `/functions/v1/jac-dashboard-query`
+5. Response: 404 - function not found
+6. Toast shows "Jac couldn't process that"
 
 ---
 
-## Technical Implementation
+## Solution
 
-### Phase 1: Core Calendar Editing
-
-**Files to modify:**
-
-| File | Changes |
-|------|---------|
-| `src/components/CalendarView.tsx` | Add "Quick Add" form when date is selected, improve navigation |
-| `src/components/EntryView.tsx` | Add date/time picker section in edit mode |
-| `src/components/ui/calendar.tsx` | May need custom day rendering for color dots |
-
-**New component:**
-| File | Purpose |
-|------|---------|
-| `src/components/calendar/QuickAddEvent.tsx` | Form for adding event directly from calendar |
-
-### Phase 2: Coming Up Section
-
-**Files to modify:**
-
-| File | Changes |
-|------|---------|
-| `src/components/CalendarView.tsx` | Add "Coming Up" section above calendar grid |
-
-### Phase 3: In-App Reminders
-
-**Files to create:**
-
-| File | Purpose |
-|------|---------|
-| `src/components/ReminderBanner.tsx` | Shows "X things due today" on dashboard |
-| `src/hooks/useUpcomingReminders.ts` | Fetches today's/overdue items |
-
-**Database addition:**
-| Column | Purpose |
-|--------|---------|
-| `entries.reminder_time` | When to remind (e.g., "1h before", "morning of") |
-
-### Phase 4: Email Reminders (Future)
-
-Would require:
-- Email service integration (Resend, SendGrid)
-- Scheduled cron job to check for due reminders
-- User email preferences in settings
+**Deploy the existing edge function.** The code is already complete and well-structured - it just needs to be deployed.
 
 ---
 
-## User Experience After Upgrade
+## Technical Details
 
-1. **Open Calendar** → See "Coming Up" section with next 7 days preview
-2. **Click a date** → Quick-add form appears, type "Doctor appointment 3pm"
-3. **View any entry** → Click edit → Set date/time/reminder
-4. **Open app in morning** → Banner: "⏰ 3 things today" with expandable list
-5. **Recurring events** → Weekly standup automatically shows up each week
+### Files Already in Place (no changes needed)
+
+| File | Status |
+|------|--------|
+| `supabase/functions/jac-dashboard-query/index.ts` | Complete, ready to deploy |
+| `src/hooks/useJacDashboard.ts` | Working, calls the function |
+| `src/components/JacInsightCard.tsx` | UI ready |
+| `src/components/Dashboard.tsx` | Integration ready |
+
+### What the Function Does
+
+When deployed, `jac-dashboard-query` will:
+1. Fetch user's recent entries (up to 50)
+2. Fetch entry relationships for pattern detection
+3. Send to AI with structured output request
+4. Return dashboard transformation commands:
+   - `highlightEntryIds` - entries to glow/pulse
+   - `connections` - lines between related entries
+   - `clusters` - groupings by theme
+   - `insightCard` - Jac's insight to display
+   - `surfaceEntryIds` - entries to bring to top
 
 ---
 
-## Implementation Priority
+## Implementation
 
-| Priority | Feature | Effort |
-|----------|---------|--------|
-| 🔴 High | Manual event creation from calendar | Medium |
-| 🔴 High | Date/time editing in EntryView | Low |
-| 🟡 Medium | "Coming Up" preview section | Low |
-| 🟡 Medium | In-app reminder banner | Medium |
-| 🟢 Low | Color-coded calendar dots | Low |
-| 🟢 Low | Email reminders | High |
-| 🟢 Low | Push notifications | Very High |
+### Step 1: Deploy the Edge Function
+
+The function at `supabase/functions/jac-dashboard-query/index.ts` needs to be deployed.
+
+### Step 2: Test the Flow
+
+After deployment:
+1. Open Jac assistant
+2. Click "Find patterns" suggestion or ask "What patterns do you see?"
+3. Should see JacInsightCard appear on dashboard
+4. Relevant entries should highlight
 
 ---
 
-## Files Summary
+## Expected Result After Fix
 
-**Modify:**
-- `src/components/CalendarView.tsx` - Major overhaul
-- `src/components/EntryView.tsx` - Add date/time editing
-- `src/components/Dashboard.tsx` - Add reminder banner
+**Before:** Click suggestion → "Jac couldn't process that" error toast
 
-**Create:**
-- `src/components/calendar/QuickAddEvent.tsx` - Calendar event form
-- `src/components/calendar/UpcomingPreview.tsx` - Next 7 days view
-- `src/components/ReminderBanner.tsx` - Today's reminders alert
-- `src/hooks/useUpcomingReminders.ts` - Fetch upcoming entries
+**After:** Click suggestion → Jac Insight Card appears on dashboard showing patterns, with relevant entries highlighted
 
-**Database (optional for reminders):**
-- Add `reminder_minutes` column to entries table (e.g., 60 = remind 1 hour before)
