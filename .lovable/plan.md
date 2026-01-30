@@ -1,184 +1,283 @@
 
+# Mega Implementation Plan: LinkJac Roadmap to Greatness
 
-# LinkJac: State of the App Review & Roadmap to Greatness
-
-## Current State Assessment
-
-After reviewing your codebase, I'm impressed by how much you've built! The app has a solid foundation with many features already in place. Here's my analysis:
+This plan implements all remaining phases from the roadmap in one comprehensive update.
 
 ---
 
-## What's New & Working Well
+## Phase 1: Stability & Polish (Quick Fixes)
 
-### Core Features (Solid)
-| Feature | Status | Notes |
-|---------|--------|-------|
-| **DumpInput** | Working | Modular, clean architecture with voice input, file upload, drag-drop |
-| **AI Classification** | Working | Titles, tags, types, importance scores auto-generated |
-| **Dashboard Sections** | Working | Today, Important, Lists, Code, Ideas - all auto-organized |
-| **Entry Management** | Working | Star, archive, delete, bulk selection |
-| **Calendar View** | New & Working | Quick add events, coming up preview, date/time editing |
-| **Timeline View** | Working | Chronological grouping (Today, Yesterday, etc.) |
-| **Knowledge Graph** | Working | 3D interactive visualization with Three.js |
-| **Reminder Banner** | New & Working | Shows overdue + today's items |
-| **Jac Assistant** | Working | Voice I/O, streaming, source citations, image gallery |
-| **Jac Dashboard Query** | New | Pattern detection and visual transformations |
-| **Tag Filter** | Improved | Now wraps with "Show more" toggle |
-| **PWA/Offline** | Working | Service worker, offline banner, queue sync |
-| **Data Export** | Working | JSON, CSV, Markdown options |
-| **Subscription System** | Working | Free tier limits, Pro upgrade flow |
+### 1.1 Fix Jac Loading Skeleton
+**File:** `src/components/AssistantChat.tsx`
 
-### Database Schema (Complete)
-All necessary columns exist:
-- Core: `id`, `user_id`, `content`, `title`, `content_type`, `tags`, `importance_score`
-- Lists: `list_items` (JSONB)
-- Media: `image_url`
-- Calendar: `event_date`, `event_time`, `is_recurring`, `recurrence_pattern`, `reminder_minutes`
-- Search: `embedding` (vector)
+Add skeleton loading state while Jac is thinking:
+- Show pulsing skeleton message bubble when `loading === true`
+- Display "Jac is thinking..." placeholder text
+
+### 1.2 Connect "Manage Subscription" to Stripe Portal
+**File:** `src/pages/Settings.tsx`
+
+Currently the "Manage Subscription" button does nothing (line 291-293). We need to:
+- Create edge function `create-customer-portal-session` to generate Stripe billing portal URL
+- Wire button to open portal in new tab
+
+**New Edge Function:** `supabase/functions/create-customer-portal-session/index.ts`
 
 ---
 
-## Issues Found & Fixes Needed
+## Phase 2: Core Experience Enhancement
 
-### 1. Network Error: `assistant-chat` OPTIONS Failing
+### 2.1 Undo Toast for Saves
+**File:** `src/components/dump/hooks/useDumpSave.ts`
+
+After successful save, show an "Undo" toast that:
+- Appears for 5 seconds with "Saved! Undo?" action button
+- If clicked, deletes the just-created entry
+- Requires passing entry ID back from `smart-save` response
+
+**Implementation:**
+```typescript
+toast.success("Saved!", {
+  action: {
+    label: "Undo",
+    onClick: async () => {
+      await supabase.from('entries').delete().eq('id', entryId);
+      // Remove from optimistic list
+    },
+  },
+  duration: 5000,
+});
 ```
-Request: OPTIONS /functions/v1/assistant-chat
-Error: Failed to fetch
+
+### 2.2 Jac Loading Skeleton in AssistantChat
+**File:** `src/components/AssistantChat.tsx`
+
+When `loading === true`, render a skeleton message:
+```tsx
+{loading && (
+  <div className="flex gap-3 p-4">
+    <Skeleton className="h-8 w-8 rounded-full" />
+    <div className="space-y-2 flex-1">
+      <Skeleton className="h-4 w-3/4" />
+      <Skeleton className="h-4 w-1/2" />
+    </div>
+  </div>
+)}
 ```
-**Impact:** Jac assistant may fail intermittently
-**Fix:** Check CORS headers in `assistant-chat/index.ts` - ensure preflight requests return proper headers
-
-### 2. Jac Dashboard Query Edge Function
-The function exists but was just deployed. Need to verify it's working end-to-end when clicking suggestions.
-
-### 3. Missing Integration: Entry Schedule Persistence
-The `EntryView.tsx` schedule section saves to DB, but the realtime subscription doesn't broadcast these updates to other open tabs.
-
-### 4. Calendar Header Icons Duplicated
-The mobile menu shows two Calendar icons (one for Timeline, one for Calendar) which can confuse users.
-
-### 5. Subscription "Manage Subscription" Button
-Currently non-functional placeholder for Pro users.
 
 ---
 
-## Roadmap to Greatness
+## Phase 3: Calendar & Reminders Improvements
 
-### Phase 1: Stability & Polish (Week 1-2)
+### 3.1 Color-Coded Calendar Dots
+**File:** `src/components/CalendarView.tsx`
 
-**Priority: Fix What's Broken**
+Change the single dot to color-coded based on content type:
+- Events (event/reminder): Red dot
+- Lists/todos with unchecked items: Blue dot
+- Code: Purple dot
+- Ideas: Yellow dot
+- Default: Primary color
 
-| Task | Effort | Impact |
-|------|--------|--------|
-| Fix CORS on `assistant-chat` edge function | Low | High |
-| Test Jac dashboard suggestions end-to-end | Low | Medium |
-| Add loading states for all async operations | Low | Medium |
-| Differentiate Timeline vs Calendar icons | Low | Low |
-| Connect "Manage Subscription" to Stripe portal | Medium | Low |
+**Update DayContent component:**
+```tsx
+const getEntryDotColor = (entries: Entry[]) => {
+  const types = entries.map(e => e.content_type);
+  if (types.includes('reminder') || types.includes('event')) return 'bg-red-400';
+  if (types.includes('list')) return 'bg-blue-400';
+  if (types.includes('code')) return 'bg-purple-400';
+  if (types.includes('idea')) return 'bg-yellow-400';
+  return 'bg-primary';
+};
+```
 
-### Phase 2: Core Experience Enhancement (Week 3-4)
-
-**Priority: Make Dumping Magical**
-
-| Feature | Description | Effort |
-|---------|-------------|--------|
-| **Smarter Titles** | Already improved! Verify AI generates specific titles | Low |
-| **Auto-Suggested Tags** | Show 2-3 tag suggestions based on content before saving | Medium |
-| **Quick Actions on Dump** | After dumping, show "Add to calendar?" for time-sensitive content | Medium |
-| **Entry Enrichment** | "Enrich" button fetches context (code docs, link previews) | Medium |
-| **Undo Toast** | "Entry saved. Undo?" with 5-second window | Low |
-
-### Phase 3: Calendar & Reminders (Week 5-6)
-
-**Priority: Make Calendar a Destination**
-
-| Feature | Description | Effort |
-|---------|-------------|--------|
-| **Email Reminders** | Morning digest of today's events via Resend | High |
-| **Recurring Events Display** | Show recurring markers on calendar | Medium |
-| **Week View** | Dense week view for busy users | Medium |
-| **Drag-to-Reschedule** | Drag entries between dates on calendar | High |
-| **Color-Coded Dots** | Different colors for reminders vs events | Low |
-
-### Phase 4: Jac Intelligence (Week 7-8)
-
-**Priority: Make Jac Indispensable**
-
-| Feature | Description | Effort |
-|---------|-------------|--------|
-| **Proactive Insights** | Jac surfaces forgotten items ("You haven't touched X in 2 weeks") | High |
-| **Weekly Brain Report** | Auto-generated summary of activity | Medium |
-| **Quick Commands** | "/remind me tomorrow" "/add to groceries" parsing | Medium |
-| **Cross-Entry Connections** | "This relates to X from last week" auto-linking | High |
-| **Jac Onboarding** | Interactive tour showing Jac's capabilities | Medium |
-
-### Phase 5: Power User Features (Week 9-10)
-
-**Priority: Depth for Heavy Users**
-
-| Feature | Description | Effort |
-|---------|-------------|--------|
-| **Keyboard Shortcuts Panel** | Show all shortcuts with `?` key | Low |
-| **Quick Capture Widget** | Global keyboard shortcut to dump from anywhere (desktop PWA) | Medium |
-| **Saved Searches** | Pin frequent searches like "all code tagged python" | Medium |
-| **Custom Tags & Colors** | User-defined tag colors | Low |
-| **Archived View** | See and restore archived entries | Low |
-
-### Phase 6: Social & Sharing (Week 11-12)
-
-**Priority: Growth & Virality**
-
-| Feature | Description | Effort |
-|---------|-------------|--------|
-| **Share Entry as Public Link** | Generate shareable read-only link | Medium |
-| **Import from Notes Apps** | Import from Apple Notes, Google Keep | High |
-| **Browser Extension** | Quick dump from any webpage | High |
-| **Mobile App (Capacitor)** | Native iOS/Android for quick capture | High |
+### 3.2 Multi-Day Event Indicators
+Show multiple dots when a date has multiple entries of different types.
 
 ---
 
-## Technical Debt to Address
+## Phase 4: Jac Intelligence Upgrades
 
-| Issue | Priority | Notes |
-|-------|----------|-------|
-| Add error boundaries to lazy-loaded components | Medium | Prevent blank screens on chunk errors |
-| Add more unit tests (currently only hooks tested) | Medium | Target >70% coverage |
-| Optimize Knowledge Graph performance | Low | Runs smoothly now but could lag with 500+ entries |
-| Rate limit edge functions properly | Medium | Already have `rateLimit.ts` - ensure all functions use it |
-| Add Sentry integration | Low | Already installed, verify it's capturing errors |
+### 4.1 More Jac Suggestion Queries
+**File:** `src/components/AssistantChat.tsx`
+
+Add more dashboard-focused suggestions:
+```typescript
+const dashboardQueries = [
+  "What patterns am I missing?",
+  "Show me connections in my brain",
+  "What have I been thinking about?",
+  "Find orphan entries with no links",
+  "What have I forgotten about?",     // NEW
+  "Show me my most important items",  // NEW
+  "What's overdue?",                   // NEW
+];
+```
+
+### 4.2 Jac Proactive Insight Banner (Dashboard)
+**New File:** `src/components/JacProactiveInsight.tsx`
+
+A small banner at the top of the dashboard that appears periodically with proactive insights:
+- "You haven't touched X in 2 weeks"
+- "Your grocery list has 12 unchecked items"
+- "You have 3 overdue reminders"
+
+**Implementation:**
+- Create hook `useProactiveInsights.ts` that fetches forgotten entries
+- Show as a dismissible banner above DumpInput
+- Only show if user hasn't dismissed today
 
 ---
 
-## Quick Wins (Can Do Today)
+## Phase 5: Power User Features
 
-1. **Differentiate Timeline/Calendar icons** - Use `Clock` for Timeline, `CalendarDays` for Calendar
-2. **Add "Archive" to entry view** - Already exists but verify it works from all entry points
-3. **Show keyboard shortcuts hint** - Add `?` key to show shortcuts modal
-4. **Add loading skeleton to Jac** - Show skeleton while Jac thinks
-5. **Fix dual Calendar icon** - Use different icons in mobile menu
+### 5.1 Archived View Toggle
+**Files:** `src/pages/Dashboard.tsx`, `src/components/Dashboard.tsx`
+
+Add toggle to view archived entries:
+- Add "Show archived" checkbox in header
+- Filter entries query based on toggle state
+- Show archived entries with visual indicator (opacity, strikethrough)
+
+**Implementation:**
+```tsx
+const [showArchived, setShowArchived] = useState(false);
+
+// In fetch:
+.eq('archived', showArchived ? true : false)
+// OR for "include archived":
+// remove the .eq('archived', false) filter when toggled
+```
+
+### 5.2 Restore from Archive
+**File:** `src/components/EntryCard.tsx` and `EntryView.tsx`
+
+When viewing an archived entry, show "Restore" button instead of "Archive":
+```tsx
+{entry.archived ? (
+  <Button onClick={handleRestore}>
+    <ArchiveRestore className="w-4 h-4" />
+    Restore
+  </Button>
+) : (
+  <Button onClick={handleArchive}>
+    <Archive className="w-4 h-4" />
+    Archive
+  </Button>
+)}
+```
 
 ---
 
-## Metrics to Track
+## Phase 6: Polish & Refinements
 
-| Metric | Target | Why |
-|--------|--------|-----|
-| Dump completion time | <2 seconds | Core value prop |
-| Daily active dumps per user | 5+ | Engagement |
-| Jac usage rate | 30%+ of sessions | AI value |
-| Calendar usage | 20%+ of users | Feature adoption |
-| Export rate | <5% | If high, users are leaving |
+### 6.1 Entry Type Icons in More Places
+Ensure consistent icons across:
+- Dashboard sections
+- Calendar entries
+- Timeline view
+- Search results
+
+### 6.2 Improved Empty States
+**File:** `src/components/dashboard/EmptyState.tsx`
+
+Make empty state more engaging with:
+- Different messages based on what's empty (no ideas vs no lists)
+- Quick action buttons ("Dump your first idea", "Create a list")
 
 ---
 
-## Summary
+## Implementation Files Summary
 
-**You've built a lot!** The core brain dump experience is solid. The AI classification works, Jac is useful, the calendar is functional. The main gaps are:
+### Files to Create:
+| File | Purpose |
+|------|---------|
+| `supabase/functions/create-customer-portal-session/index.ts` | Stripe billing portal |
+| `src/components/JacProactiveInsight.tsx` | Proactive insight banner |
+| `src/hooks/useProactiveInsights.ts` | Fetch forgotten/overdue entries |
 
-1. **Polish** - Some rough edges on edge functions and loading states
-2. **Reminders** - Email/push notifications would complete the calendar
-3. **Jac Proactivity** - Make Jac surface insights without being asked
-4. **Mobile Capture** - Quick capture from phone is the killer feature
+### Files to Modify:
+| File | Changes |
+|------|---------|
+| `src/components/dump/hooks/useDumpSave.ts` | Add Undo toast functionality |
+| `src/components/AssistantChat.tsx` | Add loading skeleton, more suggestions |
+| `src/components/CalendarView.tsx` | Color-coded dots by entry type |
+| `src/pages/Dashboard.tsx` | Add show archived toggle, proactive insight banner |
+| `src/components/Dashboard.tsx` | Pass through archived filter |
+| `src/components/EntryView.tsx` | Add restore from archive option |
+| `src/components/EntryCard.tsx` | Show archived visual indicator |
+| `src/pages/Settings.tsx` | Connect manage subscription button |
+| `supabase/config.toml` | Add new edge function |
 
-The foundation is strong. Now it's about making the existing features feel magical and adding the "can't live without it" moments.
+---
 
+## Technical Details
+
+### Undo Toast Implementation
+The sonner toast library already supports action buttons. We'll:
+1. Store the newly created entry ID after save
+2. Show toast with action callback
+3. On "Undo" click, delete entry and trigger optimistic removal
+
+### Stripe Customer Portal
+Requires:
+1. User's Stripe customer ID (store in subscriptions table or profiles)
+2. Edge function to call `stripe.billingPortal.sessions.create()`
+3. Return URL to redirect user
+
+For now, since Stripe isn't fully wired, we'll:
+- Show a placeholder message or
+- Link to a Stripe customer portal setup flow
+
+### Proactive Insights Logic
+Query for:
+```sql
+-- Forgotten entries (older than 14 days, not starred, no recent activity)
+SELECT * FROM entries
+WHERE user_id = $1
+  AND archived = false
+  AND starred = false
+  AND updated_at < NOW() - INTERVAL '14 days'
+ORDER BY importance_score DESC
+LIMIT 3;
+
+-- Overdue items
+SELECT * FROM entries
+WHERE user_id = $1
+  AND archived = false
+  AND event_date < CURRENT_DATE
+  AND content_type IN ('reminder', 'event')
+LIMIT 5;
+
+-- Unchecked list items (count)
+SELECT COUNT(*) FROM entries
+WHERE user_id = $1
+  AND archived = false
+  AND content_type = 'list'
+  AND list_items::jsonb @> '[{"checked": false}]';
+```
+
+---
+
+## Execution Order
+
+1. **Undo toast** - Quick win, improves UX immediately
+2. **Jac loading skeleton** - Simple visual polish
+3. **More Jac suggestions** - Adds value to existing feature
+4. **Color-coded calendar dots** - Visual enhancement
+5. **Archived view toggle** - Power user feature
+6. **Restore from archive** - Completes archive flow
+7. **Proactive insights** - Advanced Jac feature
+8. **Stripe portal** - Business feature (can be placeholder initially)
+
+---
+
+## Expected Outcomes
+
+After this implementation:
+- Save experience feels more forgiving with Undo option
+- Jac looks smarter with loading states and more suggestions
+- Calendar is more informative with color-coded dots
+- Users can recover archived entries
+- Jac proactively surfaces forgotten/overdue items
+- Pro users can manage their subscription (or see placeholder)
