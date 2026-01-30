@@ -11,12 +11,23 @@ Because "hey remember this" should actually work.
 3. Your brain is yours — own it, export it, delete it
 4. The best interface is no interface
 5. If the user has to decide where something goes, we failed
+6. The value of a thought increases over time if something is watching
 
 ## What We're Building
 
 A second brain that actually works. Not a note app. Not a database. Not Notion.
 
-A place to dump anything and find it later.
+A place to dump anything — and an AI named Jac that finds the patterns you can't see yourself.
+
+## The Three Layers
+
+1. **DUMP** — Zero-friction capture. Jac classifies silently. *Built.*
+2. **CONNECT** — Jac finds semantic relationships across your entries over time. *Built, proving.*
+3. **ENRICH** — Jac brings external context to your internal thoughts. *Built, needs grounding.*
+
+## The Canvas
+
+The dashboard transforms when you ask Jac a question. Entries highlight, connections draw, clusters form. Jac doesn't answer in chat — Jac rearranges your brain visually.
 
 ## Who It's For
 
@@ -32,6 +43,7 @@ A place to dump anything and find it later.
 - **Invisible**: AI works, user doesn't notice
 - **Forgiving**: Works offline, handles errors
 - **Alive**: Things move, update, respond
+- **Surprising**: Jac shows you patterns you didn't know you had
 
 ## The Anti-Goals
 
@@ -43,4 +55,8 @@ A place to dump anything and find it later.
 
 ## The North Star
 
-"Hey remember this" → It actually remembers.
+A user dumps something, forgets about it, and three weeks later Jac says "this connects to that — here's what it means." That moment is the product.
+
+## Tagline
+
+**"Stop organizing. Start dumping."**
