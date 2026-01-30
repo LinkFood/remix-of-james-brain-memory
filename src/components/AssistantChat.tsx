@@ -129,6 +129,14 @@ const suggestedQueries = [
   "Summarize my ideas",
 ];
 
+/** Dashboard transformation queries — these trigger Jac's visual dashboard mode */
+const dashboardQueries = [
+  "What patterns am I missing?",
+  "Show me connections in my brain",
+  "What have I been thinking about?",
+  "Find orphan entries with no links",
+];
+
 const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/assistant-chat`;
 const TTS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/elevenlabs-tts`;
 const STT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/elevenlabs-stt`;
@@ -904,6 +912,26 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
                 </Button>
               ))}
             </div>
+            {onJacDashboardQuery && (
+              <div className="mt-3 pt-3 border-t border-border/50">
+                <p className="text-xs text-muted-foreground/70 mb-2">
+                  Dashboard insights:
+                </p>
+                <div className="flex flex-wrap gap-2 justify-center">
+                  {dashboardQueries.map((query) => (
+                    <Button
+                      key={query}
+                      variant="outline"
+                      size="sm"
+                      className="text-xs border-sky-500/20 text-sky-400 hover:bg-sky-500/10"
+                      onClick={() => handleSend(query)}
+                    >
+                      {query}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

@@ -45,5 +45,11 @@ verify_jwt = false
 [functions.elevenlabs-stt]
 verify_jwt = false
 
+[functions.find-related-entries]
+verify_jwt = false
+
+[functions.enrich-entry]
+verify_jwt = false
+
 [functions.jac-dashboard-query]
 verify_jwt = false

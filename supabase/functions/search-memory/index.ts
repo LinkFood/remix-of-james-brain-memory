@@ -107,14 +107,55 @@ serve(async (req) => {
     const escapedQuery = escapeForLike(query);
 
     if (useSemanticSearch) {
-      // "Smart search" - search across multiple fields and expand to word-level matching
-      console.log('Using smart search (expanded keyword matching)...');
-      
-      // Split query into individual words for broader matching
-      const searchWords = query.toLowerCase().split(/\s+/).filter(w => w.length >= 2);
-      
-      // Build OR conditions for each word across content and title
-      // Also search in tags array
+      // Smart search: try semantic (vector) search first, then fall back to keyword
+      console.log('Using smart search (semantic + keyword)...');
+
+      const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+      const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+      // Try vector-based semantic search first
+      let semanticResults: SearchResult[] = [];
+      if (query.length >= 3) {
+        try {
+          const embResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${supabaseServiceKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ text: query }),
+          });
+
+          if (embResponse.ok) {
+            const embData = await embResponse.json();
+            if (embData.embedding) {
+              const { data: vectorResults, error: vectorError } = await supabaseClient.rpc(
+                'search_entries_by_embedding',
+                {
+                  query_embedding: JSON.stringify(embData.embedding),
+                  match_threshold: 0.5,
+                  match_count: limit,
+                  filter_user_id: userId,
+                }
+              );
+
+              if (!vectorError && vectorResults && vectorResults.length > 0) {
+                semanticResults = vectorResults.map((r: any) => ({
+                  ...r,
+                  similarity: r.similarity,
+                }));
+                console.log(`Semantic search found ${semanticResults.length} results`);
+              }
+            }
+          }
+        } catch (embErr) {
+          console.warn('Semantic search failed, falling back to keyword:', embErr);
+        }
+      }
+
+      // Always also do keyword search to catch exact matches semantic might miss
+      const searchWords = query.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 2);
+
       const { data: keywordResults, error: keywordError } = await supabaseClient
         .from('entries')
         .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
@@ -123,41 +164,30 @@ serve(async (req) => {
         .or(`content.ilike.%${escapedQuery}%,title.ilike.%${escapedQuery}%`)
         .order('importance_score', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
-        .limit(limit * 2);
+        .limit(limit);
 
       if (keywordError) throw keywordError;
-      
-      // If no results from exact match, try word-level matching
-      if (!keywordResults || keywordResults.length === 0) {
-        console.log('No exact match, trying word-level search...');
-        
-        // Try searching for individual words
-        for (const word of searchWords.slice(0, 3)) { // Limit to first 3 words
-          const escapedWord = escapeForLike(word);
-          const { data: wordResults, error: wordError } = await supabaseClient
-            .from('entries')
-            .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
-            .eq('user_id', userId)
-            .eq('archived', false)
-            .or(`content.ilike.%${escapedWord}%,title.ilike.%${escapedWord}%`)
-            .order('importance_score', { ascending: false, nullsFirst: false })
-            .order('created_at', { ascending: false })
-            .limit(limit);
-          
-          if (!wordError && wordResults) {
-            // Add unique results
-            for (const result of wordResults) {
-              if (!entries.find(e => e.id === result.id)) {
-                entries.push(result);
-              }
-            }
-          }
+
+      // Merge: semantic results first (they have similarity scores), then keyword-only results
+      const seenIds = new Set<string>();
+
+      // Add semantic results first (already ranked by similarity)
+      for (const result of semanticResults) {
+        if (!seenIds.has(result.id)) {
+          seenIds.add(result.id);
+          entries.push(result);
         }
-      } else {
-        entries = keywordResults;
       }
-      
-      // Also check for tag matches
+
+      // Add keyword results that weren't in semantic results
+      for (const result of (keywordResults || [])) {
+        if (!seenIds.has(result.id)) {
+          seenIds.add(result.id);
+          entries.push(result);
+        }
+      }
+
+      // Also check tag matches
       if (searchWords.length > 0) {
         const { data: tagResults, error: tagError } = await supabaseClient
           .from('entries')
@@ -167,18 +197,18 @@ serve(async (req) => {
           .contains('tags', searchWords)
           .order('importance_score', { ascending: false, nullsFirst: false })
           .limit(limit);
-        
+
         if (!tagError && tagResults) {
-          // Add unique tag results to the front (they're more relevant)
           for (const result of tagResults) {
-            if (!entries.find(e => e.id === result.id)) {
-              entries.unshift(result);
+            if (!seenIds.has(result.id)) {
+              seenIds.add(result.id);
+              entries.push(result);
             }
           }
         }
       }
-      
-      console.log(`Smart search returned ${entries.length} results`);
+
+      console.log(`Smart search returned ${entries.length} results (${semanticResults.length} semantic, rest keyword)`);
     } else {
       // Standard keyword search - exact phrase matching only
       console.log('Using keyword search...');

@@ -29,6 +29,7 @@ const KnowledgeGraph = lazy(() => import("@/components/KnowledgeGraph"));
 const OnboardingModal = lazy(() => import("@/components/OnboardingModal"));
 const TimelineView = lazy(() => import("@/components/TimelineView"));
 const BulkToolbar = lazy(() => import("@/components/BulkToolbar"));
+const ConnectionLines = lazy(() => import("@/components/ConnectionLines"));
 
 // Fallback component for lazy loading
 const LazyFallback = () => (
@@ -473,6 +474,16 @@ const Dashboard = () => {
           onClearJac={jacClearDashboard}
         />
       </main>
+
+      {/* Connection Lines overlay - Lazy loaded */}
+      {jacState.active && jacState.connections.length > 0 && (
+        <Suspense fallback={null}>
+          <ConnectionLines
+            connections={jacState.connections}
+            active={jacState.active}
+          />
+        </Suspense>
+      )}
 
       {/* Global Search - Lazy loaded */}
       {user?.id && (
