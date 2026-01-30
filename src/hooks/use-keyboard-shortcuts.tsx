@@ -4,12 +4,14 @@ interface KeyboardShortcutsOptions {
   onOpenSearch?: () => void;
   onFocusInput?: () => void;
   onToggleAssistant?: () => void;
+  onOpenShortcuts?: () => void;
 }
 
 export function useKeyboardShortcuts({
   onOpenSearch,
   onFocusInput,
   onToggleAssistant,
+  onOpenShortcuts,
 }: KeyboardShortcutsOptions) {
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
@@ -32,6 +34,13 @@ export function useKeyboardShortcuts({
       // Skip other shortcuts if typing
       if (isInputActive) return;
 
+      // ? key: Show keyboard shortcuts
+      if (event.key === "?" && !event.shiftKey) {
+        event.preventDefault();
+        onOpenShortcuts?.();
+        return;
+      }
+
       // Cmd/Ctrl + N: Focus dump input
       if (isMod && event.key === "n") {
         event.preventDefault();
@@ -46,7 +55,7 @@ export function useKeyboardShortcuts({
         return;
       }
     },
-    [onOpenSearch, onFocusInput, onToggleAssistant]
+    [onOpenSearch, onFocusInput, onToggleAssistant, onOpenShortcuts]
   );
 
   useEffect(() => {

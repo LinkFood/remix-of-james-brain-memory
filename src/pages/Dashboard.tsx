@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, lazy, Suspense, useMemo } fro
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { LogOut, Settings, Menu, RefreshCw, Search, Calendar, Network, CloudOff } from "lucide-react";
+import { LogOut, Settings, Menu, RefreshCw, Search, Calendar, Clock, Network, CloudOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -30,6 +30,7 @@ const OnboardingModal = lazy(() => import("@/components/OnboardingModal"));
 const TimelineView = lazy(() => import("@/components/TimelineView"));
 const BulkToolbar = lazy(() => import("@/components/BulkToolbar"));
 const ConnectionLines = lazy(() => import("@/components/ConnectionLines"));
+const KeyboardShortcutsModal = lazy(() => import("@/components/KeyboardShortcutsModal").then(m => ({ default: m.KeyboardShortcutsModal })));
 
 // Fallback component for lazy loading
 const LazyFallback = () => (
@@ -52,6 +53,7 @@ const Dashboard = () => {
   const [graphOpen, setGraphOpen] = useState(false);
   const [timelineOpen, setTimelineOpen] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [dashboardFilterTags, setDashboardFilterTags] = useState<string[]>([]);
   const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
   const [allEntryIds, setAllEntryIds] = useState<string[]>([]);
@@ -111,6 +113,7 @@ const Dashboard = () => {
       dumpInputRef.current?.focus();
     },
     onToggleAssistant: () => setAssistantOpen((prev) => !prev),
+    onOpenShortcuts: () => setShortcutsOpen(true),
   });
 
   // Check auth and onboarding status
@@ -336,7 +339,7 @@ const Dashboard = () => {
                       setMobileMenuOpen(false);
                     }}
                   >
-                    <Calendar className="w-4 h-4 mr-2" />
+                    <Clock className="w-4 h-4 mr-2" />
                     Timeline
                   </Button>
                   <Button
@@ -407,7 +410,7 @@ const Dashboard = () => {
               className="text-muted-foreground hover:text-foreground"
               title="Timeline"
             >
-              <Calendar className="w-4 h-4" />
+              <Clock className="w-4 h-4" />
             </Button>
             <Button
               onClick={() => setCalendarOpen(true)}
@@ -591,6 +594,14 @@ const Dashboard = () => {
           />
         </Suspense>
       )}
+
+      {/* Keyboard Shortcuts Modal */}
+      <Suspense fallback={null}>
+        <KeyboardShortcutsModal
+          open={shortcutsOpen}
+          onOpenChange={setShortcutsOpen}
+        />
+      </Suspense>
     </div>
   );
 };
