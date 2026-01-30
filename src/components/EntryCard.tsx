@@ -64,6 +64,7 @@ const EntryCard = ({
   compact = false,
   showContent = true,
   highlighted = false,
+  clusterLabel,
   isSelecting = false,
   isSelected = false,
   onToggleSelect,
@@ -72,7 +73,7 @@ const EntryCard = ({
   onArchive,
   onDelete,
   onClick,
-}: EntryCardProps) => {
+}: EntryCardProps & { clusterLabel?: string }) => {
   const icon = typeIcons[entry.content_type] ?? typeIcons.note;
   const colorClass = typeColors[entry.content_type] ?? typeColors.note;
   
@@ -108,7 +109,7 @@ const EntryCard = ({
         onClick && "cursor-pointer hover:border-primary/30",
         entry.starred && "border-yellow-500/30 bg-yellow-500/5",
         isPending && "opacity-60 animate-pulse pointer-events-none",
-        highlighted && "ring-2 ring-primary ring-offset-2 ring-offset-background animate-pulse",
+        highlighted && "ring-2 ring-sky-400/60 ring-offset-2 ring-offset-background shadow-[0_0_15px_rgba(56,189,248,0.15)]",
         isSelected && "ring-2 ring-primary/50 bg-primary/5"
       )}
       onClick={handleCardClick}
@@ -132,9 +133,16 @@ const EntryCard = ({
               {icon}
             </div>
             <div className="flex-1 min-w-0">
-              <h3 className="font-medium text-sm truncate">
-                {entry.title ?? "Untitled"}
-              </h3>
+              <div className="flex items-center gap-2 min-w-0">
+                <h3 className="font-medium text-sm truncate">
+                  {entry.title ?? "Untitled"}
+                </h3>
+                {clusterLabel && (
+                  <Badge variant="outline" className="text-[10px] shrink-0 border-sky-500/30 text-sky-400 bg-sky-500/5">
+                    {clusterLabel}
+                  </Badge>
+                )}
+              </div>
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span>{format(new Date(entry.created_at), "MMM d, h:mm a")}</span>
                 {entry.content_subtype && (

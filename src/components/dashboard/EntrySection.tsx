@@ -21,6 +21,8 @@ interface EntrySectionProps {
   highlightedEntryId?: string | null;
   /** Multiple highlighted entry IDs (from Jac dashboard transformation) */
   jacHighlightIds?: string[];
+  /** Jac cluster labels per entry ID */
+  jacClusterMap?: Map<string, string>;
   isSelecting?: boolean;
   selectedIds?: Set<string>;
   onLoadMore?: () => void;
@@ -48,6 +50,7 @@ const EntrySection = ({
   hasMore = false,
   highlightedEntryId,
   jacHighlightIds = [],
+  jacClusterMap,
   isSelecting = false,
   selectedIds,
   onLoadMore,
@@ -81,6 +84,7 @@ const EntrySection = ({
               compact={compact}
               showContent={showContent}
               highlighted={entry.id === highlightedEntryId || jacHighlightIds.includes(entry.id)}
+              clusterLabel={jacClusterMap?.get(entry.id)}
               isSelecting={isSelecting}
               isSelected={selectedIds?.has(entry.id) ?? false}
               onToggleSelect={() => onToggleSelect?.(entry.id)}

@@ -10,7 +10,7 @@
  */
 
 import { useState, useCallback, useRef, useMemo } from "react";
-import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp, Calendar } from "lucide-react";
+import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp, Calendar, Brain } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Entry } from "./EntryCard";
 import DumpInput, { DumpInputHandle } from "./DumpInput";
@@ -270,6 +270,26 @@ const Dashboard = ({
     () => entries.filter((e) => e.starred).length,
     [entries]
   );
+
+  // Jac surfaced entries — when Jac answers a query and wants entries shown at top
+  const jacSurfacedEntries = useMemo(() => {
+    if (!jacState?.active || !jacState.surfaceEntryIds?.length) return [];
+    return jacState.surfaceEntryIds
+      .map((id) => entries.find((e) => e.id === id))
+      .filter(Boolean) as typeof entries;
+  }, [entries, jacState?.active, jacState?.surfaceEntryIds]);
+
+  // Jac cluster map — which cluster each entry belongs to
+  const jacClusterMap = useMemo(() => {
+    const map = new Map<string, string>();
+    if (!jacState?.active || !jacState.clusters?.length) return map;
+    for (const cluster of jacState.clusters) {
+      for (const id of cluster.entryIds) {
+        map.set(id, cluster.label);
+      }
+    }
+    return map;
+  }, [jacState?.active, jacState?.clusters]);
   
   // Upcoming entries: events/reminders with future event_date
   const upcomingEntries = useMemo(() => {
@@ -358,6 +378,31 @@ const Dashboard = ({
 
       {/* Sections */}
       <div className="space-y-4">
+        {/* Jac Surfaced Section — entries Jac wants you to see */}
+        {jacSurfacedEntries.length > 0 && (
+          <EntrySection
+            title="Jac Found"
+            icon={<Brain className="w-4 h-4 text-sky-400" />}
+            entries={jacSurfacedEntries}
+            section="jac-surfaced"
+            expanded={true}
+            onToggle={() => {}}
+            color="bg-sky-500/10"
+            compact
+            highlightedEntryId={highlightedEntryId}
+            jacHighlightIds={jacState?.highlightEntryIds}
+            jacClusterMap={jacClusterMap}
+            isSelecting={isSelecting}
+            selectedIds={selectedIds}
+            onToggleSelect={onToggleSelect}
+            onToggleListItem={handleToggleListItem}
+            onStar={handleStar}
+            onArchive={handleArchive}
+            onDelete={handleDelete}
+            onViewEntry={onViewEntry}
+          />
+        )}
+
         {/* Upcoming Section */}
         {upcomingEntries.length > 0 && (
           <EntrySection
@@ -371,6 +416,7 @@ const Dashboard = ({
             compact
             highlightedEntryId={highlightedEntryId}
             jacHighlightIds={jacState?.highlightEntryIds}
+            jacClusterMap={jacClusterMap}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -395,6 +441,7 @@ const Dashboard = ({
             compact
             highlightedEntryId={highlightedEntryId}
             jacHighlightIds={jacState?.highlightEntryIds}
+            jacClusterMap={jacClusterMap}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -419,6 +466,7 @@ const Dashboard = ({
             compact
             highlightedEntryId={highlightedEntryId}
             jacHighlightIds={jacState?.highlightEntryIds}
+            jacClusterMap={jacClusterMap}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -442,6 +490,7 @@ const Dashboard = ({
             color="bg-blue-500/10"
             highlightedEntryId={highlightedEntryId}
             jacHighlightIds={jacState?.highlightEntryIds}
+            jacClusterMap={jacClusterMap}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -466,6 +515,7 @@ const Dashboard = ({
             compact
             highlightedEntryId={highlightedEntryId}
             jacHighlightIds={jacState?.highlightEntryIds}
+            jacClusterMap={jacClusterMap}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -489,6 +539,7 @@ const Dashboard = ({
             compact
             highlightedEntryId={highlightedEntryId}
             jacHighlightIds={jacState?.highlightEntryIds}
+            jacClusterMap={jacClusterMap}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
@@ -512,6 +563,7 @@ const Dashboard = ({
             compact
             highlightedEntryId={highlightedEntryId}
             jacHighlightIds={jacState?.highlightEntryIds}
+            jacClusterMap={jacClusterMap}
             isSelecting={isSelecting}
             selectedIds={selectedIds}
             onToggleSelect={onToggleSelect}
