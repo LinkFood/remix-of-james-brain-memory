@@ -68,6 +68,7 @@ export interface Entry {
   event_time?: string | null;
   is_recurring?: boolean | null;
   recurrence_pattern?: string | null;
+  reminder_minutes?: number | null;
   created_at: string;
   updated_at: string;
 }
