@@ -74,6 +74,13 @@ const Dashboard = () => {
   // Jac dashboard transformation
   const { state: jacState, sendQuery: jacSendQuery, clearDashboard: jacClearDashboard } = useJacDashboard();
 
+  // Auto-scroll to top when Jac surfaces content
+  useEffect(() => {
+    if (jacState?.active && (jacState?.surfaceEntryIds?.length > 0 || jacState?.insightCard)) {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }, [jacState?.active, jacState?.surfaceEntryIds?.length, jacState?.insightCard]);
+
   // Pre-warm ALL edge functions on mount to reduce cold starts
   useEffect(() => {
     const warmUp = async () => {

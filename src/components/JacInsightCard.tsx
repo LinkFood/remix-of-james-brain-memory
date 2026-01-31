@@ -17,6 +17,8 @@ interface JacInsightCardProps {
   loading?: boolean;
   onDismiss: () => void;
   className?: string;
+  /** When true, uses larger hero styling for top-of-dashboard display */
+  prominent?: boolean;
 }
 
 const typeConfig = {
@@ -52,6 +54,7 @@ const JacInsightCard = ({
   loading = false,
   onDismiss,
   className,
+  prominent = false,
 }: JacInsightCardProps) => {
   const config = typeConfig[insight.type] || typeConfig.insight;
   const Icon = config.icon;
@@ -61,10 +64,11 @@ const JacInsightCard = ({
       className={cn(
         "border animate-in fade-in slide-in-from-top-2 duration-300",
         config.bgColor,
+        prominent && "ring-2 ring-sky-400/30 shadow-lg shadow-sky-400/10",
         className
       )}
     >
-      <div className="p-4">
+      <div className={cn("p-4", prominent && "p-6")}>
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-start gap-3 flex-1 min-w-0">
             <div className={cn("mt-0.5 shrink-0", config.color)}>
