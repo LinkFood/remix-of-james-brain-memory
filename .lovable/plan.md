@@ -1,175 +1,238 @@
 
-# Fix: Jac Surfaced Content Must Be Front and Center
+# Jac: The Grounded Personal Intelligence
 
-## The Problem
+## The Differentiator: Why This Is NOT Just Another ChatGPT
 
-When you ask Jac a question and it surfaces relevant entries, those entries appear in a "Jac Found" section - but that section is buried BELOW:
-- DumpInput (sticky top)
-- Reminder Banner
-- Quick Stats
-- Stats Grid
-- Tag Filter
+You're absolutely right to ask this question. Here's the answer:
 
-By the time Jac's results show up, the user has to scroll. This defeats the entire "Jac transforms the dashboard" concept.
+### What ChatGPT/Claude Can Do
+- Answer questions about the world (generic knowledge)
+- Forget you between sessions (no memory)
+- Give the same advice to everyone
 
-## The Solution
+### What Jac Can Do (That They Can't)
 
-### 1. Move Jac Content to the Very Top
+| Capability | ChatGPT | Jac |
+|------------|---------|-----|
+| Knows what you dumped 3 weeks ago | No | Yes |
+| Remembers your grocery list style | No | Yes |
+| Notices you mentioned "burnout" twice | No | Yes |
+| Sees your calendar alongside your notes | No | Yes |
+| Tracks importance of YOUR thoughts | No | Yes |
+| Finds patterns across YOUR months of data | No | Yes |
+| Grows smarter as YOU dump more | No | Yes |
 
-When `jacState.active` is true, show Jac's content ABOVE everything else - even above DumpInput.
+### The Formula
 
-**File:** `src/components/Dashboard.tsx`
-
-Current order:
 ```
-1. Proactive Insight Banner
-2. DumpInput (sticky)
-3. Reminder Banner
-4. Quick Stats
-5. Stats Grid
-6. Tag Filter & Archive Toggle
-7. Jac Insight Card <-- TOO LOW
-8. Sections (including "Jac Found") <-- TOO LOW
+Generic LLM = World Knowledge
+Jac = World Knowledge + YOUR Brain + Time
 ```
 
-New order when Jac is active:
+When you ask ChatGPT: "What should I focus on?"
+- ChatGPT: Generic productivity advice
+
+When you ask Jac: "What should I focus on?"
+- Jac: "You dumped 'learn Rust' 3 weeks ago but haven't touched it. You also have a dentist appointment tomorrow. Based on current Rust resources online, here's a quick start path that fits your schedule..."
+
+**The moat is YOUR accumulated data over time. ChatGPT has no memory. Jac has YOUR memory.**
+
+---
+
+## The Evolution: Jac as Core Intelligence
+
+### Architecture
+
 ```
-1. Jac Insight Card <-- MOVED UP
-2. Jac Found Section <-- MOVED UP
-3. DumpInput (collapsible when Jac active)
-4. Everything else...
+┌─────────────────────────────────────────────────────────┐
+│                        USER                              │
+│                    "What should I do?"                   │
+└───────────────────────────┬─────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│                         JAC                              │
+│              (The Intelligence Layer)                    │
+│                                                          │
+│  ┌───────────────┐    ┌───────────────┐                 │
+│  │  YOUR BRAIN   │    │  THE WORLD    │                 │
+│  │  ───────────  │    │  ───────────  │                 │
+│  │  • Entries    │    │  • Perplexity │                 │
+│  │  • Tags       │    │    (web search│                 │
+│  │  • Patterns   │    │     + answers)│                 │
+│  │  • Importance │    │  • Firecrawl  │                 │
+│  │  • Calendar   │    │    (deep docs)│                 │
+│  │  • Connections│    │               │                 │
+│  └───────────────┘    └───────────────┘                 │
+│                                                          │
+│         SYNTHESIS: Personal + World = Grounded          │
+└───────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+            Dashboard transforms to show answer
 ```
 
-### 2. Auto-Scroll to Top When Jac Surfaces Entries
+### Data Jac Already Has Access To
 
-**File:** `src/pages/Dashboard.tsx`
+From the codebase, Jac can query:
 
-Add effect in the page component to scroll to top when `jacState` becomes active with results:
+1. **entries** - All user dumps with:
+   - `content`, `title`, `content_type`, `content_subtype`
+   - `tags[]`, `importance_score` (0-10)
+   - `embedding` (768-dim vector for semantic search)
+   - `event_date`, `event_time` (calendar integration)
+   - `list_items[]` (groceries, todos)
+   - `starred`, `archived`
+   - `created_at`, `updated_at`
 
+2. **entry_relationships** - Pre-computed connections:
+   - `similarity_score` (how related two entries are)
+   - `relationship_type` (semantic, tag-based)
+
+3. **brain_reports** - Weekly summaries:
+   - `key_themes`, `insights`, `decisions`
+
+4. **subscriptions** - Usage context
+
+5. **profiles** - User preferences
+
+**This is context no generic LLM has.**
+
+---
+
+## Implementation Plan
+
+### Phase 1: Jac Voice Throughout (UI/Copy)
+Make Jac feel like a presence, not a feature.
+
+**Files to modify:**
+- `src/components/DumpInput.tsx` - "Saved ✓" becomes "Jac got it"
+- `src/components/dashboard/EmptyState.tsx` - "Jac is ready. Dump something."
+- `src/components/OnboardingModal.tsx` - Jac introduces itself
+- `src/components/dashboard/SectionHeader.tsx` - "What Jac sees in Ideas"
+- Toast messages throughout - First person Jac voice
+
+### Phase 2: Web Grounding (Backend)
+Give Jac access to the world via Perplexity + Firecrawl.
+
+**New edge function: `jac-web-search/index.ts`**
 ```typescript
-useEffect(() => {
-  if (jacState?.active && jacState?.surfaceEntryIds?.length > 0) {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-}, [jacState?.active, jacState?.surfaceEntryIds?.length]);
+// Combines:
+// 1. User brain context (from entries via semantic search)
+// 2. Web context (from Perplexity for answers, Firecrawl for deep docs)
+
+// Decision logic:
+// - General questions → Perplexity (search + answer)
+// - Code/docs questions → Firecrawl (scrape specific docs)
+// - Personal questions → Brain only (no web needed)
 ```
 
-### 3. Collapse Other Sections When Jac is Active
+**Connector requirements:**
+- Perplexity: General web search with citations
+- Firecrawl: Deep documentation scraping for technical queries
 
-When Jac is actively showing results, minimize visual noise by:
-- Collapsing all other sections by default
-- Adding a subtle "Jac is showing you something" visual treatment
-- Providing a clear "Clear Jac view" action to restore normal dashboard
+**Integration points:**
+- `assistant-chat/index.ts` - Add web search when helpful
+- `enrich-entry/index.ts` - Ground enrichment in real sources
+- `jac-dashboard-query/index.ts` - Add web sources to responses
 
-### 4. Make Jac Insight Card More Prominent
+### Phase 3: Jac-First Interface
+The dashboard IS Jac's canvas.
 
-**File:** `src/components/JacInsightCard.tsx`
+**Changes:**
+1. **Jac input bar at top of dashboard** - Not hidden in corner
+   - Simple input: "Ask Jac anything..."
+   - Responses transform dashboard, not chat bubbles
+   
+2. **Jac visible by default** - `isMinimized: false`
 
-Add subtle animation when appearing:
-- Fade in + slide down
-- Slight glow/pulse to draw attention
-- Larger padding when it's the hero element
+3. **Inline Jac hints on entries** - "This connects to 3 others"
 
-## Implementation Details
+4. **Proactive patterns** - More aggressive detection:
+   - "You've mentioned X 3 times this month"
+   - "This idea from January connects to today's dump"
 
-### Dashboard.tsx Changes
+### Phase 4: Jac Personality
+Consistent voice across all touchpoints.
 
-```tsx
-return (
-  <div className="space-y-6">
-    {/* JAC TAKES OVER when active */}
-    {jacState?.active && (
-      <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
-        {/* Jac Insight Card - THE HERO */}
-        {jacState.insightCard && (
-          <JacInsightCard
-            insight={jacState.insightCard}
-            message={jacState.message}
-            loading={jacState.loading}
-            onDismiss={() => onClearJac?.()}
-            prominent // New prop for hero styling
-          />
-        )}
-        
-        {/* Jac Found Section - RIGHT HERE, NOT BURIED */}
-        {jacSurfacedEntries.length > 0 && (
-          <EntrySection
-            title="Jac Found"
-            icon={<Brain className="w-4 h-4 text-sky-400" />}
-            entries={jacSurfacedEntries}
-            // ... rest of props
-          />
-        )}
-        
-        {/* Clear button to return to normal view */}
-        <Button 
-          variant="ghost" 
-          onClick={onClearJac}
-          className="w-full text-muted-foreground"
-        >
-          Back to normal view
-        </Button>
-      </div>
-    )}
+**Jac's character:**
+- First person: "I found...", "I noticed..."
+- Brief and punchy, not verbose
+- Personal: "your brain", "you dumped"
+- Occasionally surprising: "Oh, this connects to something from January..."
 
-    {/* Normal dashboard content - collapse DumpInput when Jac active */}
-    <Collapsible open={!jacState?.active}>
-      <DumpInput ... />
-    </Collapsible>
-    
-    {/* Proactive insight only when Jac NOT active */}
-    {!jacState?.active && insight && (
-      <JacProactiveInsightBanner ... />
-    )}
+**Example responses:**
 
-    {/* Rest of dashboard */}
-    {/* ... */}
-  </div>
-);
-```
+| Before (Generic) | After (Jac) |
+|------------------|-------------|
+| "Based on semantic analysis..." | "I found a pattern you missed." |
+| "The system has identified..." | "This connects to something from January." |
+| "Entry saved successfully." | "Jac got it." |
+| "No results found." | "Nothing in your brain matches that yet." |
 
-### Pages/Dashboard.tsx Changes
+---
 
-Add scroll-to-top effect:
+## Technical Changes Summary
 
-```typescript
-// Auto-scroll to top when Jac surfaces content
-useEffect(() => {
-  if (jacState?.active && (jacState?.surfaceEntryIds?.length > 0 || jacState?.insightCard)) {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }
-}, [jacState?.active, jacState?.surfaceEntryIds?.length, jacState?.insightCard]);
-```
+### New Files
+| File | Purpose |
+|------|---------|
+| `supabase/functions/jac-web-search/index.ts` | Web grounding via Perplexity/Firecrawl |
 
-### Optional: Dim Other Sections
-
-When Jac is active, slightly dim the rest of the dashboard to focus attention:
-
-```tsx
-<div className={cn(
-  "space-y-4",
-  jacState?.active && "opacity-50 pointer-events-none"
-)}>
-  {/* Regular sections */}
-</div>
-```
-
-This creates a modal-like focus on Jac's output without hiding the rest of the dashboard.
-
-## Files to Modify
-
+### Modified Files (Backend)
 | File | Changes |
 |------|---------|
-| `src/components/Dashboard.tsx` | Reorder JSX to put Jac content first when active |
-| `src/pages/Dashboard.tsx` | Add scroll-to-top effect |
-| `src/components/JacInsightCard.tsx` | Add `prominent` prop for hero styling |
+| `supabase/functions/assistant-chat/index.ts` | Add web search integration |
+| `supabase/functions/enrich-entry/index.ts` | Ground enrichment in real sources |
+| `supabase/functions/jac-dashboard-query/index.ts` | Add web context to responses |
+| `supabase/config.toml` | Add `jac-web-search` function |
 
-## Expected Behavior After Fix
+### Modified Files (Frontend)
+| File | Changes |
+|------|---------|
+| `src/components/DumpInput.tsx` | Toast: "Jac got it" |
+| `src/components/dashboard/EmptyState.tsx` | Jac-first copy |
+| `src/components/OnboardingModal.tsx` | Jac introduction |
+| `src/components/AssistantChat.tsx` | `isMinimized: false` default |
+| `src/pages/Dashboard.tsx` | Add Jac input bar at top |
+| `src/components/Dashboard.tsx` | Jac-first section ordering |
 
-1. User asks Jac "What patterns am I missing?"
-2. Dashboard scrolls to top automatically
-3. JacInsightCard appears at the very top with the answer
-4. "Jac Found" section appears immediately below with relevant entries
-5. Rest of dashboard is dimmed/collapsed to focus attention
-6. "Back to normal view" button clears Jac and restores dashboard
-7. User sees context FRONT AND CENTER - exactly as intended
+---
+
+## Connectors Required
+
+Before implementation, you'll need to connect:
+
+1. **Perplexity** - For grounded web search with citations
+2. **Firecrawl** - For deep documentation scraping
+
+These are available in Settings → Connectors.
+
+---
+
+## The Moat (Why This Wins)
+
+1. **Persistent Memory**: ChatGPT forgets. Jac remembers everything.
+
+2. **Pattern Detection Over Time**: Only Jac sees you mentioned burnout twice this month.
+
+3. **Your Data + World Data**: Grounded answers specific to YOU.
+
+4. **Zero-Effort Intelligence**: You dump. Jac thinks. No organizing.
+
+5. **Dashboard as Canvas**: Not chat bubbles - visual transformation.
+
+6. **Full Data Ownership**: Export everything. Delete everything. Your brain, your data.
+
+---
+
+## Order of Execution
+
+1. **Connect Perplexity + Firecrawl** (requires user action)
+2. **Create `jac-web-search` edge function** (backend)
+3. **Integrate web search into `assistant-chat`** (backend)
+4. **Update all UI copy to Jac voice** (frontend)
+5. **Make Jac visible by default** (frontend)
+6. **Add Jac input bar to dashboard** (frontend)
+
+This transforms LinkJac from "note app with AI" to "AI that knows your brain AND the world."
