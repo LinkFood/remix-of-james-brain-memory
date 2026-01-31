@@ -288,9 +288,7 @@ const Settings = () => {
                   <p className="text-xs text-muted-foreground">
                     You have full access to all Pro features.
                   </p>
-                  <Button variant="outline" size="sm" className="mt-2">
-                    Manage Subscription
-                  </Button>
+                  {/* Stripe billing portal coming soon */}
                 </div>
               ) : (
                 <div className="space-y-3">
