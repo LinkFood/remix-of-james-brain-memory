@@ -1,93 +1,175 @@
-# LinkJac: Audit Execution Progress
 
-## Status: Phase 0 Complete ✅
+# Fix: Jac Surfaced Content Must Be Front and Center
 
-**Updated Grade: B-** (up from C+)
+## The Problem
 
----
+When you ask Jac a question and it surfaces relevant entries, those entries appear in a "Jac Found" section - but that section is buried BELOW:
+- DumpInput (sticky top)
+- Reminder Banner
+- Quick Stats
+- Stats Grid
+- Tag Filter
 
-## Phase 0: Launch Blockers - COMPLETE ✅
+By the time Jac's results show up, the user has to scroll. This defeats the entire "Jac transforms the dashboard" concept.
 
-| Task | Status | Notes |
-|------|--------|-------|
-| Fix CORS on assistant-chat | ✅ Done | CORS headers already correct |
-| Remove "Manage Subscription" button | ✅ Done | Hidden until Stripe wired |
-| Add Google OAuth | ✅ Done | Lovable Cloud managed OAuth |
-| Wire onboarding modal | ✅ Done | Already working in Dashboard.tsx |
+## The Solution
 
----
+### 1. Move Jac Content to the Very Top
 
-## Phase 1: Core Polish (Next Priority)
+When `jacState.active` is true, show Jac's content ABOVE everything else - even above DumpInput.
 
-| Task | Status | Priority |
-|------|--------|----------|
-| Make Jac visible by default | TODO | High |
-| Add visible search bar on dashboard | TODO | High |
-| Simplify dashboard to 3-4 sections | TODO | Medium |
-| Record 60-second demo video | TODO (User) | High |
-| Track AI costs per user | TODO | Low |
+**File:** `src/components/Dashboard.tsx`
 
----
+Current order:
+```
+1. Proactive Insight Banner
+2. DumpInput (sticky)
+3. Reminder Banner
+4. Quick Stats
+5. Stats Grid
+6. Tag Filter & Archive Toggle
+7. Jac Insight Card <-- TOO LOW
+8. Sections (including "Jac Found") <-- TOO LOW
+```
 
-## Phase 2: Competitive Features
+New order when Jac is active:
+```
+1. Jac Insight Card <-- MOVED UP
+2. Jac Found Section <-- MOVED UP
+3. DumpInput (collapsible when Jac active)
+4. Everything else...
+```
 
-| Task | Status |
-|------|--------|
-| Browser extension | TODO |
-| Weekly brain digest email | TODO |
-| Shareable entry links | TODO |
-| Email notifications for reminders | TODO |
+### 2. Auto-Scroll to Top When Jac Surfaces Entries
 
----
+**File:** `src/pages/Dashboard.tsx`
 
-## Technical Debt Remaining
+Add effect in the page component to scroll to top when `jacState` becomes active with results:
 
-- [ ] Dead code: `search_messages_by_embedding` (types.ts)
-- [ ] Hardcoded weather location (NYC)
-- [ ] ElevenLabs cost tracking
-- [ ] Knowledge Graph virtualization for 500+ entries
+```typescript
+useEffect(() => {
+  if (jacState?.active && jacState?.surfaceEntryIds?.length > 0) {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}, [jacState?.active, jacState?.surfaceEntryIds?.length]);
+```
 
----
+### 3. Collapse Other Sections When Jac is Active
 
-## Files Modified (Phase 0)
+When Jac is actively showing results, minimize visual noise by:
+- Collapsing all other sections by default
+- Adding a subtle "Jac is showing you something" visual treatment
+- Providing a clear "Clear Jac view" action to restore normal dashboard
 
-- `src/pages/Auth.tsx` - Added Google OAuth button with separator
-- `src/pages/Settings.tsx` - Hidden broken subscription button
-- `src/integrations/lovable/index.ts` - Fixed config argument
+### 4. Make Jac Insight Card More Prominent
 
----
+**File:** `src/components/JacInsightCard.tsx`
 
-## Competitive Analysis Summary
+Add subtle animation when appearing:
+- Fade in + slide down
+- Slight glow/pulse to draw attention
+- Larger padding when it's the hero element
 
-### Your Strengths
-1. Zero-friction dump (no decisions)
-2. AI auto-organization invisible to user
-3. Live dashboard transformation via Jac
-4. Voice I/O via ElevenLabs
-5. Full data ownership messaging
-6. $9/mo pricing (vs $15-25 competitors)
+## Implementation Details
 
-### Key Gaps to Close
-1. No browser extension (Mem has one)
-2. No native mobile (PWA only)
-3. No email notifications
-4. Landing page placeholder video
+### Dashboard.tsx Changes
 
----
+```tsx
+return (
+  <div className="space-y-6">
+    {/* JAC TAKES OVER when active */}
+    {jacState?.active && (
+      <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+        {/* Jac Insight Card - THE HERO */}
+        {jacState.insightCard && (
+          <JacInsightCard
+            insight={jacState.insightCard}
+            message={jacState.message}
+            loading={jacState.loading}
+            onDismiss={() => onClearJac?.()}
+            prominent // New prop for hero styling
+          />
+        )}
+        
+        {/* Jac Found Section - RIGHT HERE, NOT BURIED */}
+        {jacSurfacedEntries.length > 0 && (
+          <EntrySection
+            title="Jac Found"
+            icon={<Brain className="w-4 h-4 text-sky-400" />}
+            entries={jacSurfacedEntries}
+            // ... rest of props
+          />
+        )}
+        
+        {/* Clear button to return to normal view */}
+        <Button 
+          variant="ghost" 
+          onClick={onClearJac}
+          className="w-full text-muted-foreground"
+        >
+          Back to normal view
+        </Button>
+      </div>
+    )}
 
-## Next Immediate Actions
+    {/* Normal dashboard content - collapse DumpInput when Jac active */}
+    <Collapsible open={!jacState?.active}>
+      <DumpInput ... />
+    </Collapsible>
+    
+    {/* Proactive insight only when Jac NOT active */}
+    {!jacState?.active && insight && (
+      <JacProactiveInsightBanner ... />
+    )}
 
-1. **User Task**: Record 60-second demo video
-2. Make Jac chat expanded by default
-3. Add visible search bar to dashboard
-4. Simplify dashboard sections
+    {/* Rest of dashboard */}
+    {/* ... */}
+  </div>
+);
+```
 
----
+### Pages/Dashboard.tsx Changes
 
-## Business Model
+Add scroll-to-top effect:
 
-- Free: 50 dumps/month
-- Pro: $9/month unlimited
-- Margin: ~$7.55-8.28 per Pro user
-- Break-even: ~200 Pro users
-- Real business: ~1,000 Pro users
+```typescript
+// Auto-scroll to top when Jac surfaces content
+useEffect(() => {
+  if (jacState?.active && (jacState?.surfaceEntryIds?.length > 0 || jacState?.insightCard)) {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+}, [jacState?.active, jacState?.surfaceEntryIds?.length, jacState?.insightCard]);
+```
+
+### Optional: Dim Other Sections
+
+When Jac is active, slightly dim the rest of the dashboard to focus attention:
+
+```tsx
+<div className={cn(
+  "space-y-4",
+  jacState?.active && "opacity-50 pointer-events-none"
+)}>
+  {/* Regular sections */}
+</div>
+```
+
+This creates a modal-like focus on Jac's output without hiding the rest of the dashboard.
+
+## Files to Modify
+
+| File | Changes |
+|------|---------|
+| `src/components/Dashboard.tsx` | Reorder JSX to put Jac content first when active |
+| `src/pages/Dashboard.tsx` | Add scroll-to-top effect |
+| `src/components/JacInsightCard.tsx` | Add `prominent` prop for hero styling |
+
+## Expected Behavior After Fix
+
+1. User asks Jac "What patterns am I missing?"
+2. Dashboard scrolls to top automatically
+3. JacInsightCard appears at the very top with the answer
+4. "Jac Found" section appears immediately below with relevant entries
+5. Rest of dashboard is dimmed/collapsed to focus attention
+6. "Back to normal view" button clears Jac and restores dashboard
+7. User sees context FRONT AND CENTER - exactly as intended
