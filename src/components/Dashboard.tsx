@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Entry } from "./EntryCard";
 import DumpInput, { DumpInputHandle } from "./DumpInput";
+import { cn } from "@/lib/utils";
 import { parseListItems } from "@/lib/parseListItems";
 import { StatsGrid, EmptyState, EntrySection } from "./dashboard";
 import { QuickStats } from "./dashboard/QuickStats";
@@ -325,14 +326,71 @@ const Dashboard = ({
 
   return (
     <div className="space-y-6">
-      {/* Proactive Jac Insight Banner */}
-      {insight && (
+      {/* JAC TAKES OVER - Front and center when active */}
+      {jacState?.active && (
+        <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+          {/* Jac Insight Card - THE HERO */}
+          {jacState.insightCard && (
+            <JacInsightCard
+              insight={jacState.insightCard}
+              message={jacState.message}
+              loading={jacState.loading}
+              onDismiss={() => onClearJac?.()}
+              prominent
+            />
+          )}
+          {jacState.loading && !jacState.insightCard && (
+            <JacInsightCard
+              insight={{ title: "", body: "", type: "insight" }}
+              loading={true}
+              onDismiss={() => onClearJac?.()}
+              prominent
+            />
+          )}
+
+          {/* Jac Found Section - RIGHT HERE, NOT BURIED */}
+          {jacSurfacedEntries.length > 0 && (
+            <EntrySection
+              title="Jac Found"
+              icon={<Brain className="w-4 h-4 text-sky-400" />}
+              entries={jacSurfacedEntries}
+              section="jac-surfaced"
+              expanded={true}
+              onToggle={() => {}}
+              color="bg-sky-500/10"
+              compact
+              highlightedEntryId={highlightedEntryId}
+              jacHighlightIds={jacState?.highlightEntryIds}
+              jacClusterMap={jacClusterMap}
+              isSelecting={isSelecting}
+              selectedIds={selectedIds}
+              onToggleSelect={onToggleSelect}
+              onToggleListItem={handleToggleListItem}
+              onStar={handleStar}
+              onArchive={handleArchive}
+              onDelete={handleDelete}
+              onViewEntry={onViewEntry}
+            />
+          )}
+
+          {/* Clear button to return to normal view */}
+          <Button 
+            variant="ghost" 
+            onClick={onClearJac}
+            className="w-full text-muted-foreground hover:text-foreground"
+          >
+            ← Back to normal view
+          </Button>
+        </div>
+      )}
+
+      {/* Proactive Jac Insight Banner - only when Jac NOT active */}
+      {!jacState?.active && insight && (
         <JacProactiveInsightBanner
           message={insight.message}
           type={insight.type}
           onDismiss={dismissInsight}
           onAction={() => {
-            // Could navigate to first overdue entry
             const firstId = insight.entryIds[0];
             const entry = entries.find(e => e.id === firstId);
             if (entry) onViewEntry(entry);
@@ -342,7 +400,10 @@ const Dashboard = ({
       )}
 
       {/* Dump Input - Sticky on mobile */}
-      <div className="sticky top-0 z-10 -mx-4 px-4 py-2 bg-background/95 backdrop-blur-sm md:static md:mx-0 md:px-0 md:py-0 md:bg-transparent md:backdrop-blur-none">
+      <div className={cn(
+        "sticky top-0 z-10 -mx-4 px-4 py-2 bg-background/95 backdrop-blur-sm md:static md:mx-0 md:px-0 md:py-0 md:bg-transparent md:backdrop-blur-none",
+        jacState?.active && "opacity-60"
+      )}>
         <DumpInput
           ref={dumpRef}
           userId={userId}
@@ -353,117 +414,79 @@ const Dashboard = ({
         />
       </div>
 
-      {/* Reminder Banner */}
-      <ReminderBanner userId={userId} onViewEntry={(e) => {
-        const entry = entries.find(ent => ent.id === e.id);
-        if (entry) onViewEntry(entry);
-      }} />
+      {/* Rest of dashboard - dimmed when Jac is active */}
+      <div className={cn(
+        "space-y-6 transition-opacity duration-300",
+        jacState?.active && "opacity-50"
+      )}>
+        {/* Reminder Banner */}
+        <ReminderBanner userId={userId} onViewEntry={(e) => {
+          const entry = entries.find(ent => ent.id === e.id);
+          if (entry) onViewEntry(entry);
+        }} />
 
-      {/* Quick Stats Banner */}
-      <QuickStats entries={entries} />
+        {/* Quick Stats Banner */}
+        <QuickStats entries={entries} />
 
-      {/* Stats Grid */}
-      <StatsGrid stats={stats} starredCount={starredCount} />
+        {/* Stats Grid */}
+        <StatsGrid stats={stats} starredCount={starredCount} />
 
-      {/* Tag Filter & Archive Toggle */}
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2">
-          <TagFilter
-            entries={entries}
-            selectedTags={activeFilterTags}
-            onTagsChange={setSelectedTags}
-          />
-          {externalFilterTags && externalFilterTags.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onClearExternalFilter}
-              className="text-xs text-muted-foreground"
-            >
-              Clear Jac filter
-            </Button>
-          )}
+        {/* Tag Filter & Archive Toggle */}
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <TagFilter
+              entries={entries}
+              selectedTags={activeFilterTags}
+              onTagsChange={setSelectedTags}
+            />
+            {externalFilterTags && externalFilterTags.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onClearExternalFilter}
+                className="text-xs text-muted-foreground"
+              >
+                Clear Jac filter
+              </Button>
+            )}
+          </div>
+          <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
+            <Checkbox
+              checked={showArchived}
+              onCheckedChange={(c) => setShowArchived(c as boolean)}
+            />
+            <Archive className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Show archived</span>
+          </label>
         </div>
-        <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
-          <Checkbox
-            checked={showArchived}
-            onCheckedChange={(c) => setShowArchived(c as boolean)}
-          />
-          <Archive className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Show archived</span>
-        </label>
-      </div>
+        {/* Sections */}
+        <div className="space-y-4">
+          {/* Upcoming Section */}
+          {upcomingEntries.length > 0 && (
+            <EntrySection
+              title="Upcoming"
+              icon={<Calendar className="w-4 h-4 text-green-500" />}
+              entries={upcomingEntries}
+              section="upcoming"
+              expanded={expandedSections.upcoming}
+              onToggle={toggleSection}
+              color="bg-green-500/10"
+              compact
+              highlightedEntryId={highlightedEntryId}
+              jacHighlightIds={jacState?.highlightEntryIds}
+              jacClusterMap={jacClusterMap}
+              isSelecting={isSelecting}
+              selectedIds={selectedIds}
+              onToggleSelect={onToggleSelect}
+              onToggleListItem={handleToggleListItem}
+              onStar={handleStar}
+              onArchive={handleArchive}
+              onDelete={handleDelete}
+              onViewEntry={onViewEntry}
+            />
+          )}
 
-      {/* Jac Insight Card — appears when Jac transforms the dashboard */}
-      {jacState?.active && jacState.insightCard && (
-        <JacInsightCard
-          insight={jacState.insightCard}
-          message={jacState.message}
-          loading={jacState.loading}
-          onDismiss={() => onClearJac?.()}
-        />
-      )}
-      {jacState?.active && jacState.loading && !jacState.insightCard && (
-        <JacInsightCard
-          insight={{ title: "", body: "", type: "insight" }}
-          loading={true}
-          onDismiss={() => onClearJac?.()}
-        />
-      )}
-
-      {/* Sections */}
-      <div className="space-y-4">
-        {/* Jac Surfaced Section — entries Jac wants you to see */}
-        {jacSurfacedEntries.length > 0 && (
-          <EntrySection
-            title="Jac Found"
-            icon={<Brain className="w-4 h-4 text-sky-400" />}
-            entries={jacSurfacedEntries}
-            section="jac-surfaced"
-            expanded={true}
-            onToggle={() => {}}
-            color="bg-sky-500/10"
-            compact
-            highlightedEntryId={highlightedEntryId}
-            jacHighlightIds={jacState?.highlightEntryIds}
-            jacClusterMap={jacClusterMap}
-            isSelecting={isSelecting}
-            selectedIds={selectedIds}
-            onToggleSelect={onToggleSelect}
-            onToggleListItem={handleToggleListItem}
-            onStar={handleStar}
-            onArchive={handleArchive}
-            onDelete={handleDelete}
-            onViewEntry={onViewEntry}
-          />
-        )}
-
-        {/* Upcoming Section */}
-        {upcomingEntries.length > 0 && (
-          <EntrySection
-            title="Upcoming"
-            icon={<Calendar className="w-4 h-4 text-green-500" />}
-            entries={upcomingEntries}
-            section="upcoming"
-            expanded={expandedSections.upcoming}
-            onToggle={toggleSection}
-            color="bg-green-500/10"
-            compact
-            highlightedEntryId={highlightedEntryId}
-            jacHighlightIds={jacState?.highlightEntryIds}
-            jacClusterMap={jacClusterMap}
-            isSelecting={isSelecting}
-            selectedIds={selectedIds}
-            onToggleSelect={onToggleSelect}
-            onToggleListItem={handleToggleListItem}
-            onStar={handleStar}
-            onArchive={handleArchive}
-            onDelete={handleDelete}
-            onViewEntry={onViewEntry}
-          />
-        )}
-
-        {/* Today Section */}
+          {/* Today Section */}
         {todayEntries.length > 0 && (
           <EntrySection
             title="Today"
@@ -613,13 +636,14 @@ const Dashboard = ({
           />
         )}
 
-        {/* Empty State */}
-        {entries.length === 0 && (
-          <EmptyState
-            onTryExample={handleTryExample}
-            onLoadSampleData={handleLoadSampleData}
-          />
-        )}
+          {/* Empty State */}
+          {entries.length === 0 && (
+            <EmptyState
+              onTryExample={handleTryExample}
+              onLoadSampleData={handleLoadSampleData}
+            />
+          )}
+        </div>
       </div>
     </div>
   );
