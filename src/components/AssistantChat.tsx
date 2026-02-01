@@ -45,7 +45,9 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { LinkJacBrainIcon } from "@/components/LinkJacLogo";
 import { useSignedUrl } from "@/hooks/use-signed-url";
 import { SourceImageGallery } from "@/components/chat/SourceImageGallery";
+import { WebSourceCard, WebSource } from "@/components/chat/WebSourceCard";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Globe } from "lucide-react";
 
 // Web Speech API types (browser-specific, not in TypeScript lib)
 interface WebSpeechRecognitionResult {
@@ -99,6 +101,7 @@ interface Message {
   role: "user" | "assistant";
   content: string;
   sources?: Source[];
+  webSources?: WebSource[];
 }
 
 interface EntryContext {
@@ -647,7 +650,7 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
     setLoading(true);
 
     // Add placeholder assistant message for streaming
-    setMessages((prev) => [...prev, { role: "assistant", content: "", sources: [] }]);
+    setMessages((prev) => [...prev, { role: "assistant", content: "", sources: [], webSources: [] }]);
 
     let finalContent = "";
 
@@ -738,6 +741,7 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
       let textBuffer = "";
       let assistantContent = "";
       let sources: Source[] = [];
+      let webSources: WebSource[] = [];
 
       while (true) {
         const { done, value } = await reader.read();
@@ -761,15 +765,16 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
           try {
             const parsed = JSON.parse(jsonStr);
 
-            // Check if this is our sources event
-            if (parsed.sources) {
-              sources = parsed.sources;
+            // Check if this is our sources event (brain sources and/or web sources)
+            if (parsed.sources || parsed.webSources) {
+              if (parsed.sources) sources = parsed.sources;
+              if (parsed.webSources) webSources = parsed.webSources;
               // Update the message with sources
               setMessages((prev) => {
                 const newMessages = [...prev];
                 const lastIdx = newMessages.length - 1;
                 if (newMessages[lastIdx]?.role === "assistant") {
-                  newMessages[lastIdx] = { ...newMessages[lastIdx], sources };
+                  newMessages[lastIdx] = { ...newMessages[lastIdx], sources, webSources };
                 }
                 return newMessages;
               });
@@ -790,6 +795,7 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
                     ...newMessages[lastIdx],
                     content: assistantContent,
                     sources,
+                    webSources,
                   };
                 }
                 return newMessages;
@@ -826,6 +832,7 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
                     ...newMessages[lastIdx],
                     content: assistantContent,
                     sources,
+                    webSources,
                   };
                 }
                 return newMessages;
@@ -1112,6 +1119,27 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
                       Select {msg.sources.length} entries
                     </Button>
                   )}
+                </div>
+              )}
+
+              {/* Web sources - external citations */}
+              {msg.webSources && msg.webSources.length > 0 && (
+                <div className="mt-2 pt-2 border-t border-border/50">
+                  <div className="flex items-center gap-1.5 mb-1.5">
+                    <Globe className="w-3.5 h-3.5 text-muted-foreground" />
+                    <p className="text-xs text-muted-foreground">Web sources:</p>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    {msg.webSources.slice(0, 3).map((source, idx) => (
+                      <WebSourceCard key={`${source.url}-${idx}`} source={source} />
+                    ))}
+                    {msg.webSources.length > 3 && (
+                      <p className="text-xs text-muted-foreground pl-1">
+                        +{msg.webSources.length - 3} more sources
+                      </p>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
