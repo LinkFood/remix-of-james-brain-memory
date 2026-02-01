@@ -35,6 +35,7 @@ import {
   CheckSquare,
   Expand,
   ImageIcon,
+  Globe,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -47,7 +48,6 @@ import { useSignedUrl } from "@/hooks/use-signed-url";
 import { SourceImageGallery } from "@/components/chat/SourceImageGallery";
 import { WebSourceCard, WebSource } from "@/components/chat/WebSourceCard";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Globe } from "lucide-react";
 
 // Web Speech API types (browser-specific, not in TypeScript lib)
 interface WebSpeechRecognitionResult {
