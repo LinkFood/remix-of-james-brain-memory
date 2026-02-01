@@ -1,238 +1,140 @@
 
-# Jac: The Grounded Personal Intelligence
+# Web Sources UI Component for AssistantChat
 
-## The Differentiator: Why This Is NOT Just Another ChatGPT
+## Summary
 
-You're absolutely right to ask this question. Here's the answer:
+Add a visual component to display web sources/citations when Jac uses web grounding (Tavily). This gives users transparency into where external information comes from and allows them to click through to original sources.
 
-### What ChatGPT/Claude Can Do
-- Answer questions about the world (generic knowledge)
-- Forget you between sessions (no memory)
-- Give the same advice to everyone
+## Current State
 
-### What Jac Can Do (That They Can't)
+- **Backend**: Already returns `webSources` array with `{ title, url, snippet, relevanceScore }` in streaming metadata
+- **Frontend**: Currently ignores `webSources` - only displays brain sources (entries)
+- **Message interface**: Only has `sources?: Source[]` for brain entries, missing web sources
 
-| Capability | ChatGPT | Jac |
-|------------|---------|-----|
-| Knows what you dumped 3 weeks ago | No | Yes |
-| Remembers your grocery list style | No | Yes |
-| Notices you mentioned "burnout" twice | No | Yes |
-| Sees your calendar alongside your notes | No | Yes |
-| Tracks importance of YOUR thoughts | No | Yes |
-| Finds patterns across YOUR months of data | No | Yes |
-| Grows smarter as YOU dump more | No | Yes |
+## Implementation
 
-### The Formula
+### Step 1: Extend Message Interface
 
-```
-Generic LLM = World Knowledge
-Jac = World Knowledge + YOUR Brain + Time
-```
+Update the Message interface to include web sources:
 
-When you ask ChatGPT: "What should I focus on?"
-- ChatGPT: Generic productivity advice
-
-When you ask Jac: "What should I focus on?"
-- Jac: "You dumped 'learn Rust' 3 weeks ago but haven't touched it. You also have a dentist appointment tomorrow. Based on current Rust resources online, here's a quick start path that fits your schedule..."
-
-**The moat is YOUR accumulated data over time. ChatGPT has no memory. Jac has YOUR memory.**
-
----
-
-## The Evolution: Jac as Core Intelligence
-
-### Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                        USER                              │
-│                    "What should I do?"                   │
-└───────────────────────────┬─────────────────────────────┘
-                            │
-                            ▼
-┌─────────────────────────────────────────────────────────┐
-│                         JAC                              │
-│              (The Intelligence Layer)                    │
-│                                                          │
-│  ┌───────────────┐    ┌───────────────┐                 │
-│  │  YOUR BRAIN   │    │  THE WORLD    │                 │
-│  │  ───────────  │    │  ───────────  │                 │
-│  │  • Entries    │    │  • Perplexity │                 │
-│  │  • Tags       │    │    (web search│                 │
-│  │  • Patterns   │    │     + answers)│                 │
-│  │  • Importance │    │  • Firecrawl  │                 │
-│  │  • Calendar   │    │    (deep docs)│                 │
-│  │  • Connections│    │               │                 │
-│  └───────────────┘    └───────────────┘                 │
-│                                                          │
-│         SYNTHESIS: Personal + World = Grounded          │
-└───────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-            Dashboard transforms to show answer
-```
-
-### Data Jac Already Has Access To
-
-From the codebase, Jac can query:
-
-1. **entries** - All user dumps with:
-   - `content`, `title`, `content_type`, `content_subtype`
-   - `tags[]`, `importance_score` (0-10)
-   - `embedding` (768-dim vector for semantic search)
-   - `event_date`, `event_time` (calendar integration)
-   - `list_items[]` (groceries, todos)
-   - `starred`, `archived`
-   - `created_at`, `updated_at`
-
-2. **entry_relationships** - Pre-computed connections:
-   - `similarity_score` (how related two entries are)
-   - `relationship_type` (semantic, tag-based)
-
-3. **brain_reports** - Weekly summaries:
-   - `key_themes`, `insights`, `decisions`
-
-4. **subscriptions** - Usage context
-
-5. **profiles** - User preferences
-
-**This is context no generic LLM has.**
-
----
-
-## Implementation Plan
-
-### Phase 1: Jac Voice Throughout (UI/Copy)
-Make Jac feel like a presence, not a feature.
-
-**Files to modify:**
-- `src/components/DumpInput.tsx` - "Saved ✓" becomes "Jac got it"
-- `src/components/dashboard/EmptyState.tsx` - "Jac is ready. Dump something."
-- `src/components/OnboardingModal.tsx` - Jac introduces itself
-- `src/components/dashboard/SectionHeader.tsx` - "What Jac sees in Ideas"
-- Toast messages throughout - First person Jac voice
-
-### Phase 2: Web Grounding (Backend)
-Give Jac access to the world via Perplexity + Firecrawl.
-
-**New edge function: `jac-web-search/index.ts`**
 ```typescript
-// Combines:
-// 1. User brain context (from entries via semantic search)
-// 2. Web context (from Perplexity for answers, Firecrawl for deep docs)
+interface WebSource {
+  title: string;
+  url: string;
+  snippet: string;
+  relevanceScore: number;
+  publishedDate?: string;
+}
 
-// Decision logic:
-// - General questions → Perplexity (search + answer)
-// - Code/docs questions → Firecrawl (scrape specific docs)
-// - Personal questions → Brain only (no web needed)
+interface Message {
+  role: "user" | "assistant";
+  content: string;
+  sources?: Source[];
+  webSources?: WebSource[];
+}
 ```
 
-**Connector requirements:**
-- Perplexity: General web search with citations
-- Firecrawl: Deep documentation scraping for technical queries
+### Step 2: Parse webSources from Stream
 
-**Integration points:**
-- `assistant-chat/index.ts` - Add web search when helpful
-- `enrich-entry/index.ts` - Ground enrichment in real sources
-- `jac-dashboard-query/index.ts` - Add web sources to responses
+Update the stream parsing logic to capture `webSources` alongside `sources`:
 
-### Phase 3: Jac-First Interface
-The dashboard IS Jac's canvas.
+```typescript
+// In the parsing block around line 765
+if (parsed.sources || parsed.webSources) {
+  sources = parsed.sources || sources;
+  webSources = parsed.webSources || webSources;
+  // Update message with both
+  setMessages((prev) => {
+    const newMessages = [...prev];
+    const lastIdx = newMessages.length - 1;
+    if (newMessages[lastIdx]?.role === "assistant") {
+      newMessages[lastIdx] = { ...newMessages[lastIdx], sources, webSources };
+    }
+    return newMessages;
+  });
+  continue;
+}
+```
 
-**Changes:**
-1. **Jac input bar at top of dashboard** - Not hidden in corner
-   - Simple input: "Ask Jac anything..."
-   - Responses transform dashboard, not chat bubbles
-   
-2. **Jac visible by default** - `isMinimized: false`
+### Step 3: Create WebSourceCard Component
 
-3. **Inline Jac hints on entries** - "This connects to 3 others"
+Create a new component `src/components/chat/WebSourceCard.tsx`:
 
-4. **Proactive patterns** - More aggressive detection:
-   - "You've mentioned X 3 times this month"
-   - "This idea from January connects to today's dump"
+```typescript
+// Clean, clickable card showing:
+// - Favicon (extracted from URL domain)
+// - Title (clickable link)
+// - Snippet preview (truncated)
+// - External link icon
+```
 
-### Phase 4: Jac Personality
-Consistent voice across all touchpoints.
+Design:
+- Compact horizontal card with subtle border
+- Globe/external link icon to differentiate from brain sources
+- Opens URL in new tab on click
+- Hover state shows full snippet in tooltip
 
-**Jac's character:**
-- First person: "I found...", "I noticed..."
-- Brief and punchy, not verbose
-- Personal: "your brain", "you dumped"
-- Occasionally surprising: "Oh, this connects to something from January..."
+### Step 4: Add Web Sources Section to Message Render
 
-**Example responses:**
+Below the existing brain sources section (around line 1003), add:
 
-| Before (Generic) | After (Jac) |
-|------------------|-------------|
-| "Based on semantic analysis..." | "I found a pattern you missed." |
-| "The system has identified..." | "This connects to something from January." |
-| "Entry saved successfully." | "Jac got it." |
-| "No results found." | "Nothing in your brain matches that yet." |
+```typescript
+{/* Web Sources - external citations */}
+{msg.webSources && msg.webSources.length > 0 && (
+  <div className="mt-2 pt-2 border-t border-border/50">
+    <div className="flex items-center gap-1.5 mb-1">
+      <Globe className="w-3.5 h-3.5 text-muted-foreground" />
+      <p className="text-xs text-muted-foreground">
+        Web sources:
+      </p>
+    </div>
+    <div className="space-y-1.5">
+      {msg.webSources.slice(0, 3).map((source, idx) => (
+        <WebSourceCard key={idx} source={source} />
+      ))}
+      {msg.webSources.length > 3 && (
+        <span className="text-xs text-muted-foreground">
+          +{msg.webSources.length - 3} more sources
+        </span>
+      )}
+    </div>
+  </div>
+)}
+```
 
----
+## Files to Create/Modify
 
-## Technical Changes Summary
+| File | Action | Description |
+|------|--------|-------------|
+| `src/components/chat/WebSourceCard.tsx` | CREATE | Compact card component for web source display |
+| `src/components/AssistantChat.tsx` | MODIFY | Add WebSource interface, parse webSources from stream, render web sources section |
 
-### New Files
-| File | Purpose |
-|------|---------|
-| `supabase/functions/jac-web-search/index.ts` | Web grounding via Perplexity/Firecrawl |
+## Visual Design
 
-### Modified Files (Backend)
-| File | Changes |
-|------|---------|
-| `supabase/functions/assistant-chat/index.ts` | Add web search integration |
-| `supabase/functions/enrich-entry/index.ts` | Ground enrichment in real sources |
-| `supabase/functions/jac-dashboard-query/index.ts` | Add web context to responses |
-| `supabase/config.toml` | Add `jac-web-search` function |
+```
+┌─────────────────────────────────────────────────────┐
+│  Jac's response text...                             │
+│                                                      │
+│  ─────────────────────────────────────────────────  │
+│  📚 Sources (click to view):                         │
+│  [Entry Badge] [Entry Badge] [Entry Badge]          │
+│                                                      │
+│  ─────────────────────────────────────────────────  │
+│  🌐 Web sources:                                     │
+│  ┌─────────────────────────────────────────────┐    │
+│  │ 🔗 Rust Programming Guide - rust-lang.org   ↗│    │
+│  │    Official Rust documentation and...       │    │
+│  └─────────────────────────────────────────────┘    │
+│  ┌─────────────────────────────────────────────┐    │
+│  │ 🔗 Learn Rust - rustup.rs                   ↗│    │
+│  │    Getting started with Rust in 2026...     │    │
+│  └─────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────┘
+```
 
-### Modified Files (Frontend)
-| File | Changes |
-|------|---------|
-| `src/components/DumpInput.tsx` | Toast: "Jac got it" |
-| `src/components/dashboard/EmptyState.tsx` | Jac-first copy |
-| `src/components/OnboardingModal.tsx` | Jac introduction |
-| `src/components/AssistantChat.tsx` | `isMinimized: false` default |
-| `src/pages/Dashboard.tsx` | Add Jac input bar at top |
-| `src/components/Dashboard.tsx` | Jac-first section ordering |
+## Testing
 
----
-
-## Connectors Required
-
-Before implementation, you'll need to connect:
-
-1. **Perplexity** - For grounded web search with citations
-2. **Firecrawl** - For deep documentation scraping
-
-These are available in Settings → Connectors.
-
----
-
-## The Moat (Why This Wins)
-
-1. **Persistent Memory**: ChatGPT forgets. Jac remembers everything.
-
-2. **Pattern Detection Over Time**: Only Jac sees you mentioned burnout twice this month.
-
-3. **Your Data + World Data**: Grounded answers specific to YOU.
-
-4. **Zero-Effort Intelligence**: You dump. Jac thinks. No organizing.
-
-5. **Dashboard as Canvas**: Not chat bubbles - visual transformation.
-
-6. **Full Data Ownership**: Export everything. Delete everything. Your brain, your data.
-
----
-
-## Order of Execution
-
-1. **Connect Perplexity + Firecrawl** (requires user action)
-2. **Create `jac-web-search` edge function** (backend)
-3. **Integrate web search into `assistant-chat`** (backend)
-4. **Update all UI copy to Jac voice** (frontend)
-5. **Make Jac visible by default** (frontend)
-6. **Add Jac input bar to dashboard** (frontend)
-
-This transforms LinkJac from "note app with AI" to "AI that knows your brain AND the world."
+After implementation, test by asking Jac:
+- "How do I learn Rust?" (should trigger web grounding)
+- "What's new with React in 2026?" (should show web sources)
+- "What's on my grocery list?" (should NOT trigger web grounding)
