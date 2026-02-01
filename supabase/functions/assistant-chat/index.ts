@@ -159,6 +159,108 @@ function detectSaveIntent(message: string): { hasSaveIntent: boolean; contentToS
   return { hasSaveIntent: false, contentToSave: '' };
 }
 
+// Detect if query would benefit from web grounding
+function detectWebSearchIntent(message: string, brainContext: string): { shouldSearch: boolean; searchQuery: string; reason: string } {
+  const messageLower = message.toLowerCase();
+  
+  // Personal/internal queries - NO web search needed
+  const personalPatterns = [
+    /\b(my|mine)\s+(grocery|groceries|shopping|list|notes?|todo|tasks?|appointments?)/i,
+    /\b(what|show|find|search)\s+(my|in my|from my)/i,
+    /\bwhat (did|have) i\b/i,
+    /\b(remember|recall|saved|dumped)\b/i,
+    /\bmy brain\b/i,
+  ];
+  
+  for (const pattern of personalPatterns) {
+    if (pattern.test(messageLower)) {
+      return { shouldSearch: false, searchQuery: '', reason: 'personal_query' };
+    }
+  }
+  
+  // Learning/resource queries - YES web search
+  const learningPatterns = [
+    { pattern: /\bhow (do|to|can)\s+(?:i\s+)?(?:learn|start|begin)/i, reason: 'learning_intent' },
+    { pattern: /\b(tutorial|course|guide|documentation|docs)\b/i, reason: 'resource_request' },
+    { pattern: /\b(latest|current|recent|new|2024|2025|2026)\b/i, reason: 'current_info' },
+    { pattern: /\bwhat('s| is) (new|happening|trending)\b/i, reason: 'news_intent' },
+    { pattern: /\b(best practices?|how does .* work|explain)\b/i, reason: 'knowledge_request' },
+  ];
+  
+  for (const { pattern, reason } of learningPatterns) {
+    const match = messageLower.match(pattern);
+    if (match) {
+      // Build search query from the message
+      const searchQuery = message
+        .replace(/^(hey |hi |jac |please |can you |could you )/i, '')
+        .replace(/\?+$/, '')
+        .trim();
+      return { shouldSearch: true, searchQuery, reason };
+    }
+  }
+  
+  // Context-based triggers - if brain has learning/tech entries
+  if (brainContext) {
+    const techKeywords = /\b(learn|programming|code|framework|library|api|development)\b/i;
+    const hasLearningContext = techKeywords.test(brainContext);
+    
+    // If brain context mentions learning something and user asks about it
+    if (hasLearningContext && /\b(should|focus|priority|next|start)\b/i.test(messageLower)) {
+      const searchQuery = `${message} resources tutorials 2026`;
+      return { shouldSearch: true, searchQuery, reason: 'brain_context_learning' };
+    }
+  }
+  
+  return { shouldSearch: false, searchQuery: '', reason: 'no_match' };
+}
+
+// Interface for web search results
+interface WebSearchResult {
+  answer?: string;
+  results: Array<{ title: string; url: string; snippet: string; relevanceScore: number }>;
+  contextForLLM: string;
+  meta: { query: string; resultCount: number };
+}
+
+// Call jac-web-search edge function
+async function fetchWebContext(
+  query: string, 
+  brainContext: string, 
+  supabaseUrl: string, 
+  authHeader: string
+): Promise<WebSearchResult | null> {
+  try {
+    console.log('Fetching web context for:', query);
+    
+    const response = await fetch(`${supabaseUrl}/functions/v1/jac-web-search`, {
+      method: 'POST',
+      headers: {
+        'Authorization': authHeader,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        query,
+        brainContext: brainContext.slice(0, 500), // Limit context size
+        searchDepth: 'basic',
+        maxResults: 5,
+        includeAnswer: true,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn('Web search failed:', response.status, await response.text());
+      return null;
+    }
+
+    const data = await response.json();
+    console.log(`Web search returned ${data.meta?.resultCount || 0} results`);
+    return data;
+  } catch (err) {
+    console.error('Web search error:', err);
+    return null;
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -283,6 +385,9 @@ serve(async (req) => {
       weatherData = await fetchWeather();
       console.log('Weather data:', weatherData);
     }
+
+    // 3. Check for web search intent (will be evaluated after brain search for context)
+    let webSearchResult: WebSearchResult | null = null;
 
     // Step 1: Search — keyword + semantic (embedding-based) search
     console.log('Performing search for:', message);
@@ -479,6 +584,29 @@ Wind: ${weatherData.windSpeed} mph${snowWarning}
 Use this info proactively in your response.\n`;
     }
 
+    // 4. Now evaluate web search intent with brain context
+    const webSearchIntent = detectWebSearchIntent(message, contextText);
+    if (webSearchIntent.shouldSearch) {
+      console.log(`Web search triggered (reason: ${webSearchIntent.reason}): "${webSearchIntent.searchQuery}"`);
+      webSearchResult = await fetchWebContext(
+        webSearchIntent.searchQuery,
+        contextText,
+        supabaseUrl,
+        authHeader
+      );
+      
+      if (webSearchResult && webSearchResult.contextForLLM) {
+        actionContext += `\n\n=== REAL-TIME WEB CONTEXT ===
+${webSearchResult.contextForLLM}
+
+Use this web context to enhance your answer with current, accurate information.
+Synthesize the web context with the user's brain data - don't just repeat the web results.
+If web results are about something the user has in their brain, connect the dots.
+Cite sources when helpful (e.g., "According to [Source Name]...").
+`;
+      }
+    }
+
     // Build context for currently viewed entry
     let viewingContext = '';
     if (entryContext) {
@@ -520,11 +648,12 @@ When you have weather data, share it proactively. Be helpful about weather-relat
 If snow is expected and they're adding salt - connect the dots but stay brief.
 
 === YOUR CAPABILITIES ===
-- Search and retrieve from the user's LinkJac
+- Search and retrieve from the user's LinkJac brain
 - Help find things they've saved
 - Compile and summarize related entries
 - Surface connections between entries
 - Saving/adding is handled BEFORE you respond - just confirm
+- ACCESS REAL-TIME WEB INFORMATION when needed (see web context section if present)
 
 === LISTS ===
 Show items with: ✓ (done) or ○ (pending)
@@ -604,9 +733,10 @@ ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has n
       
       const transformStream = new TransformStream({
         start(controller) {
-          // Send sources and saved entry as first event
+          // Send sources, web sources, and saved entry as first event
           const metaEvent = `data: ${JSON.stringify({ 
             sources: sourcesUsed,
+            webSources: webSearchResult?.results || [],
             savedEntry: savedEntry ? { id: savedEntry.id, title: savedEntry.title } : null,
             weather: weatherData,
           })}\n\n`;
@@ -637,6 +767,7 @@ ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has n
       JSON.stringify({
         response,
         sourcesUsed,
+        webSources: webSearchResult?.results || [],
         savedEntry: savedEntry ? { id: savedEntry.id, title: savedEntry.title } : null,
         weather: weatherData,
       }),
