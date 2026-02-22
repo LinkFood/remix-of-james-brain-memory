@@ -45,6 +45,18 @@ export async function notifySlack(
     const webhookUrl = (settings?.settings as Record<string, unknown>)?.slack_webhook_url as string | undefined;
     if (!webhookUrl) return;
 
+    // Validate webhook URL to prevent SSRF
+    try {
+      const parsed = new URL(webhookUrl);
+      if (parsed.protocol !== 'https:' || parsed.hostname !== 'hooks.slack.com') {
+        console.warn('[slack] Invalid webhook URL — must be https://hooks.slack.com/...');
+        return;
+      }
+    } catch {
+      console.warn('[slack] Malformed webhook URL');
+      return;
+    }
+
     const emoji = EMOJI_MAP[payload.taskType] || ':robot_face:';
     const durationText = payload.duration
       ? `${Math.round(payload.duration / 1000)}s`

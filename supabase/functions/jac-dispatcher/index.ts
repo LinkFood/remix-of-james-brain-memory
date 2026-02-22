@@ -109,7 +109,15 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, serviceKey);
 
     // Parse body
-    const { message } = await req.json();
+    let body: { message?: string };
+    try {
+      body = await req.json();
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+        status: 400, headers: jsonHeaders,
+      });
+    }
+    const { message } = body;
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       return new Response(JSON.stringify({ error: 'Message is required' }), {
         status: 400, headers: jsonHeaders,
@@ -293,8 +301,28 @@ Be concise. Be confident. Don't ask questions — just act.`;
           query: message,
           brainContext: brainContext.slice(0, 2000),
         }),
-      }).catch((err) => {
+      }).then(async (res) => {
+        if (!res.ok) {
+          const errText = await res.text().catch(() => 'unknown');
+          console.error(`[jac-dispatcher] Worker ${agentType} returned ${res.status}: ${errText}`);
+          // Mark child task as failed so it doesn't stay stuck
+          await supabase.from('agent_tasks')
+            .update({ status: 'failed', error: `Dispatch failed: ${res.status}`, completed_at: new Date().toISOString() })
+            .eq('id', childTaskId);
+          // Mark parent as failed too
+          await supabase.from('agent_tasks')
+            .update({ status: 'failed', error: `Worker ${agentType} failed to start`, completed_at: new Date().toISOString() })
+            .eq('id', parentTask.id);
+        }
+      }).catch(async (err) => {
         console.error(`[jac-dispatcher] Worker dispatch failed for ${agentType}:`, err);
+        // Mark tasks as failed so they don't stay stuck in queued/running
+        await supabase.from('agent_tasks')
+          .update({ status: 'failed', error: `Dispatch error: ${err.message || 'network error'}`, completed_at: new Date().toISOString() })
+          .eq('id', childTaskId);
+        await supabase.from('agent_tasks')
+          .update({ status: 'failed', error: `Worker ${agentType} unreachable`, completed_at: new Date().toISOString() })
+          .eq('id', parentTask.id);
       });
     } else if (intent === 'general') {
       // For general intent, mark parent as completed immediately

@@ -1,28 +1,40 @@
--- JAC Agent OS: Conversation history + task extensions
--- Phase 1: Schema for boss agent conversation tracking
+-- JAC Agent OS: Patch agent_conversations + agent_tasks
+-- Fixes gaps from auto-generated Lovable migration (20260222062635)
+-- Safe: all IF NOT EXISTS / DO $$ blocks
 
--- Conversation history for JAC boss agent
-CREATE TABLE public.agent_conversations (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('user','assistant')),
-  content TEXT NOT NULL,
-  task_ids UUID[] DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+-- Add role CHECK constraint if not present
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'agent_conversations_role_check'
+  ) THEN
+    ALTER TABLE public.agent_conversations
+      ADD CONSTRAINT agent_conversations_role_check
+      CHECK (role IN ('user', 'assistant'));
+  END IF;
+END $$;
 
-ALTER TABLE public.agent_conversations ENABLE ROW LEVEL SECURITY;
+-- Add UPDATE policy (Lovable migration only has SELECT + INSERT)
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'agent_conversations' AND policyname = 'Users can update own conversations'
+  ) THEN
+    CREATE POLICY "Users can update own conversations"
+      ON public.agent_conversations FOR UPDATE
+      USING (auth.uid() = user_id);
+  END IF;
+END $$;
 
-CREATE POLICY "Users own their conversations"
-  ON public.agent_conversations
-  FOR ALL
-  USING (auth.uid() = user_id);
+-- Add DELETE policy
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'agent_conversations' AND policyname = 'Users can delete own conversations'
+  ) THEN
+    CREATE POLICY "Users can delete own conversations"
+      ON public.agent_conversations FOR DELETE
+      USING (auth.uid() = user_id);
+  END IF;
+END $$;
 
-ALTER PUBLICATION supabase_realtime ADD TABLE public.agent_conversations;
-
-CREATE INDEX idx_agent_convos_user
-  ON public.agent_conversations(user_id, created_at DESC);
-
--- Extend agent_tasks with notification tracking + completion timestamp
+-- Extend agent_tasks (IF NOT EXISTS handles idempotency)
 ALTER TABLE public.agent_tasks ADD COLUMN IF NOT EXISTS slack_notified BOOLEAN DEFAULT false;
 ALTER TABLE public.agent_tasks ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
