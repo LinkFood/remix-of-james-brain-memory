@@ -13,7 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Send, Loader2, Bot, User, Zap, Globe, Brain,
   FileText, BarChart3, Eye, CheckCircle2, XCircle,
-  ArrowRight, Sparkles,
+  ArrowRight, Sparkles, Code2,
 } from 'lucide-react';
 import type { JacMessage, AgentTask } from '@/types/agent';
 
@@ -22,6 +22,7 @@ const AGENT_META: Record<string, { name: string; icon: React.ReactNode; color: s
   'jac-research-agent': { name: 'Scout', icon: <Globe className="w-3 h-3" />, color: 'text-blue-400' },
   'jac-save-agent': { name: 'Scribe', icon: <FileText className="w-3 h-3" />, color: 'text-emerald-400' },
   'jac-search-agent': { name: 'Oracle', icon: <Brain className="w-3 h-3" />, color: 'text-amber-400' },
+  'jac-code-agent': { name: 'Coder', icon: <Code2 className="w-3 h-3" />, color: 'text-indigo-400' },
   'jac-report-agent': { name: 'Analyst', icon: <BarChart3 className="w-3 h-3" />, color: 'text-rose-400' },
   'jac-monitor-agent': { name: 'Sentinel', icon: <Eye className="w-3 h-3" />, color: 'text-cyan-400' },
 };

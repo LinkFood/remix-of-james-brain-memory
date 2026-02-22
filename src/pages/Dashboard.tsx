@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, lazy, Suspense, useMemo } fro
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { LogOut, Settings, Menu, RefreshCw, Search, Calendar, Clock, Network, CloudOff, Bot } from "lucide-react";
+import { LogOut, Settings, Menu, RefreshCw, Search, Calendar, Clock, Network, CloudOff, Bot, Code2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -386,6 +386,17 @@ const Dashboard = () => {
                     variant="ghost"
                     className="justify-start"
                     onClick={() => {
+                      navigate("/code");
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    <Code2 className="w-4 h-4 mr-2" />
+                    Code Workspace
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="justify-start"
+                    onClick={() => {
                       navigate("/settings");
                       setMobileMenuOpen(false);
                     }}
@@ -457,6 +468,16 @@ const Dashboard = () => {
             >
               <Bot className="w-4 h-4" />
               <span className="hidden lg:inline">JAC</span>
+            </Button>
+            <Button
+              onClick={() => navigate("/code")}
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground gap-1.5"
+              title="Code Workspace"
+            >
+              <Code2 className="w-4 h-4" />
+              <span className="hidden lg:inline">Code</span>
             </Button>
             <Button
               onClick={() => setRefreshKey((prev) => prev + 1)}

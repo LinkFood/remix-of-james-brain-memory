@@ -41,7 +41,7 @@ function checkRateLimit(userId: string): boolean {
 }
 
 // Intent types the dispatcher can route
-type IntentType = 'research' | 'save' | 'search' | 'report' | 'general';
+type IntentType = 'research' | 'save' | 'search' | 'report' | 'general' | 'code';
 
 const INTENT_TOOL = {
   name: 'route_intent',
@@ -51,7 +51,7 @@ const INTENT_TOOL = {
     properties: {
       intent: {
         type: 'string',
-        enum: ['research', 'save', 'search', 'report', 'general'],
+        enum: ['research', 'save', 'search', 'report', 'general', 'code'],
         description: 'Use "research" for any question about the real world or current information. Use "search" ONLY when user explicitly asks to find their own saved brain entries (e.g. "search my brain", "what did I save").',
       },
       summary: {
@@ -60,7 +60,7 @@ const INTENT_TOOL = {
       },
       agentType: {
         type: 'string',
-        enum: ['jac-research-agent', 'jac-save-agent', 'jac-search-agent', 'assistant-chat'],
+        enum: ['jac-research-agent', 'jac-save-agent', 'jac-search-agent', 'jac-code-agent', 'assistant-chat'],
         description: 'Which worker edge function to dispatch',
       },
       extractedQuery: {
@@ -83,6 +83,7 @@ const AGENT_MAP: Record<string, string> = {
   search: 'jac-search-agent',
   report: 'jac-research-agent',
   general: 'assistant-chat',
+  code: 'jac-code-agent',
 };
 
 serve(async (req) => {
@@ -315,6 +316,9 @@ Intent routing rules (follow these STRICTLY):
 
 5. "general" → assistant-chat: Casual chat, greetings, meta questions about JAC.
 
+6. "code" → jac-code-agent: User wants to write, fix, modify, refactor, or deploy code in a registered project.
+   TRIGGERS: "fix", "add feature", "update code", "refactor", "implement", "PR", "pull request", project names like "pixel-perfect" or "exact-match", code-related requests.
+
 IMPORTANT: Brain context below is for YOUR reference only — do NOT route to search just because matching entries exist.
 ${brainContext ? `\nUser's brain context (for reference only):\n${brainContext}` : ''}
 
@@ -338,6 +342,26 @@ Be concise. Be confident. Don't ask questions — just act.`;
     const agentType = (toolResult?.input?.agentType as string) || AGENT_MAP[intent] || 'assistant-chat';
     const extractedQuery = (toolResult?.input?.extractedQuery as string) || message;
     let response = (toolResult?.input?.response as string) || "I'm on it.";
+
+    // 4b. Code project lookup — find matching project if intent is code
+    let codeProject: { id: string; name: string; repo_full_name: string } | null = null;
+    if (intent === 'code') {
+      try {
+        const { data: projects } = await supabase
+          .from('code_projects')
+          .select('id, name, repo_full_name')
+          .eq('user_id', userId);
+
+        if (projects && projects.length > 0) {
+          const queryLower = extractedQuery.toLowerCase();
+          codeProject = projects.find(
+            (p: { id: string; name: string; repo_full_name: string }) => queryLower.includes(p.name.toLowerCase())
+          ) ?? projects[0]; // fallback to first project if no name match
+        }
+      } catch (err) {
+        console.warn('[jac-dispatcher] Code project lookup failed (non-blocking):', err);
+      }
+    }
 
     // 5. Create parent task
     const { data: parentTask, error: parentError } = await supabase
@@ -382,7 +406,18 @@ Be concise. Be confident. Don't ask questions — just act.`;
           intent: summary,
           agent: agentType,
           parent_task_id: parentTask.id,
-          input: { query: extractedQuery, originalMessage: message, brainContext: brainContext.slice(0, 2000), slack_channel, slack_thinking_ts },
+          input: {
+            query: extractedQuery,
+            originalMessage: message,
+            brainContext: brainContext.slice(0, 2000),
+            slack_channel,
+            slack_thinking_ts,
+            ...(intent === 'code' && codeProject ? {
+              projectId: codeProject.id,
+              projectName: codeProject.name,
+              repoFullName: codeProject.repo_full_name,
+            } : {}),
+          },
         })
         .select('id')
         .single();

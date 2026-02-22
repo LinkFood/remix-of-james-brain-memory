@@ -14,6 +14,7 @@ import Terms from "./pages/Terms";
 import Privacy from "./pages/Privacy";
 import NotFound from "./pages/NotFound";
 import Jac from "./pages/Jac";
+import CodeWorkspace from "./pages/CodeWorkspace";
 import Landing from "./pages/Landing";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -58,6 +59,7 @@ const TrackedRoutes = () => {
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
       <Route path="/jac" element={<Jac />} />
+      <Route path="/code" element={<CodeWorkspace />} />
       <Route path="*" element={<NotFound />} />
     </Routes>
   );

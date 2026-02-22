@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react';
 import {
   Search, FileText, Brain, BarChart3, MessageSquare, Eye,
-  Loader2, CheckCircle2, XCircle, Zap, Globe, BookOpen,
+  Loader2, CheckCircle2, XCircle, Zap, Globe, BookOpen, Code2,
 } from 'lucide-react';
 import type { AgentTask, ActivityLogEntry } from '@/types/agent';
 import { AgentDeskDrawer } from './AgentDeskDrawer';
@@ -47,6 +47,12 @@ const AGENTS: AgentDef[] = [
     icon: <Brain className="w-5 h-5" />,
     activeClasses: 'bg-amber-500/20 text-amber-400',
     doneClasses: 'bg-amber-500/10 text-amber-500/70',
+  },
+  {
+    id: 'jac-code-agent', name: 'Coder', role: 'Code · Commit · PR',
+    icon: <Code2 className="w-5 h-5" />,
+    activeClasses: 'bg-indigo-500/20 text-indigo-400',
+    doneClasses: 'bg-indigo-500/10 text-indigo-500/70',
   },
   {
     id: 'jac-report-agent', name: 'Analyst', role: 'Reports · Summaries',
