@@ -1,190 +1,65 @@
 
-## What’s actually broken (root cause)
 
-The runtime error you’re seeing (“module script isn’t loading… MIME type text/html”) is almost always Vite returning `index.html` for a module request. The two common reasons are:
-1) the imported file doesn’t exist (404 → dev server falls back to HTML), or  
-2) the import path/filename casing is wrong (`WebSourceCard.tsx` vs `webSourceCard.tsx`, etc.).
+# Pass 1 — Foundation Execution
 
-In this project, `src/components/chat/` currently contains only:
-- `SourceImage.tsx`
-- `SourceImageGallery.tsx`
+Execute steps 1-7. Stop after task-dispatcher. No worker agents yet.
 
-So if the UI work attempted to import `@/components/chat/WebSourceCard`, that import will fail because the file truly does not exist yet.
+## Step 1-3: Request Secrets
 
-Also, `AssistantChat.tsx` currently:
-- defines `Message` with only `sources?: Source[]`
-- parses only `parsed.sources` from the stream
-- renders only brain “Sources” (entries), not `webSources`
+Prompt the user to add three secrets:
+- `ANTHROPIC_API_KEY` (required)
+- `FINNHUB_API_KEY` (required for stocks later, but add now)
+- `SLACK_SIGNING_SECRET` (optional, for Slack later)
 
-## Goal
+## Step 4: Database Migration
 
-1) Fix the runtime/module-loading error by ensuring the imported module exists and is referenced with the correct path + casing.  
-2) Implement the Web Sources UI so when the backend streams `webSources`, the chat shows clickable citations.
+Single migration creating:
 
----
+**`agent_tasks`** -- 18 columns including `next_run_at`, indexes on `(user_id, status)`, `(user_id, cron_active)`, and `(next_run_at)`, RLS for SELECT/INSERT/UPDATE, realtime enabled, `updated_at` trigger.
 
-## Implementation steps (code changes)
+**`user_settings`** -- 7 columns, UNIQUE on `user_id`, RLS for ALL, `updated_at` trigger.
 
-### 1) Add the missing component file
+## Step 5: Create `_shared/anthropic.ts`
 
-Create: `src/components/chat/WebSourceCard.tsx`
+Shared helper with:
+- `getAnthropicHeaders()` -- x-api-key + anthropic-version
+- `callClaude(options)` -- fetch wrapper with error handling
+- `parseToolUse(response)` -- extracts tool_use content block
+- `CLAUDE_RATES` and `calculateCost(usage)` for cost tracking
 
-**Responsibilities**
-- Render a compact, clickable card for a single web citation:
-  - title (link)
-  - domain (derived from URL)
-  - snippet (truncated)
-  - “open external” icon
-- Safe URL handling:
-  - Use `try { new URL(source.url) } catch {}` to avoid crashing on malformed URLs.
-- Tooltip for the full snippet (optional but recommended since TooltipProvider already exists in `App.tsx`).
+## Step 6: Swap AI in 5 Edge Functions
 
-**Export**
-- Use a named export: `export function WebSourceCard(...) { ... }`
-- (This avoids default-export/import mismatches and makes errors more obvious.)
+All swap from `ai.gateway.lovable.dev` + `LOVABLE_API_KEY` to `api.anthropic.com` + `ANTHROPIC_API_KEY`.
 
----
+| Function | Key Changes |
+|----------|-------------|
+| assistant-chat | Stream transform: Claude SSE to OpenAI-compatible SSE (Option A, zero frontend changes). System prompt to top-level field. |
+| classify-content | Tool response: `content.find(c => c.type === 'tool_use').input` instead of `tool_calls[0].function.arguments`. `tool_choice` format change. |
+| calculate-importance | Same tool parsing changes as classify-content. |
+| enrich-entry | Drop `response_format: { type: 'json_object' }`, keep JSON instruction in prompt, parse `content[0].text`. |
+| generate-brain-report | Tool parsing changes same as classify-content. |
 
-### 2) Extend AssistantChat message types to include web sources
+## Step 7: Create `task-dispatcher/index.ts`
 
-Modify: `src/components/AssistantChat.tsx`
+- Auth via `extractUserId`
+- Rate limits: max 10 concurrent running tasks, max 200/day
+- Claude analyzes intent, determines required agents
+- Creates parent task in `agent_tasks`
+- Spawns workers via parallel fetch (placeholder for Pass 2 agents)
+- Collects results, saves to entries, updates task status
 
-Add a `WebSource` interface near the existing `Source` interface:
+## Step 8: Update `config.toml`
 
-```ts
-interface WebSource {
-  title: string;
-  url: string;
-  snippet: string;
-  relevanceScore: number;
-  publishedDate?: string;
-}
-```
+Add `verify_jwt = false` entries for `task-dispatcher` (other new functions added in Pass 2).
 
-Update `Message`:
+## After Completion
 
-```ts
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-  sources?: Source[];
-  webSources?: WebSource[];
-}
-```
+User tests:
+- Jac chat works with Claude streaming
+- smart-save pipeline (dump -> classify -> embed -> importance)
+- Brain report generation
+- Enrich function
+- New tables exist in database
 
----
-
-### 3) Parse `webSources` from the streaming response
-
-In the stream-reading section (currently around lines ~740–805):
-- Add `let webSources: WebSource[] = [];`
-- Update the “sources event” block to support both `sources` and `webSources`.
-
-Target behavior:
-- If `parsed.sources` arrives, store/update it on the last assistant message.
-- If `parsed.webSources` arrives, store/update it on the last assistant message.
-- If both arrive, update both.
-
-Pseudo-structure:
-
-```ts
-let sources: Source[] = [];
-let webSources: WebSource[] = [];
-
-if (parsed.sources || parsed.webSources) {
-  if (parsed.sources) sources = parsed.sources;
-  if (parsed.webSources) webSources = parsed.webSources;
-
-  setMessages(prev => {
-    const next = [...prev];
-    const lastIdx = next.length - 1;
-    if (next[lastIdx]?.role === "assistant") {
-      next[lastIdx] = { ...next[lastIdx], sources, webSources };
-    }
-    return next;
-  });
-
-  continue;
-}
-```
-
-Also ensure the “content chunk” updates preserve both arrays:
-
-```ts
-next[lastIdx] = { ...next[lastIdx], content: assistantContent, sources, webSources };
-```
-
-This prevents `webSources` from disappearing as new text chunks stream in.
-
----
-
-### 4) Render a “Web sources” section in the UI
-
-Modify: `src/components/AssistantChat.tsx`
-
-- Import the new component:
-  - `import { WebSourceCard } from "@/components/chat/WebSourceCard";`
-- Add `Globe` to lucide icon imports (or another globe-like icon if needed):
-  - `import { Globe, ... } from "lucide-react";`
-
-Then, in the message render block, directly below the existing brain Sources block, add:
-
-- A divider and label (“Web sources”)
-- Render up to 3 `WebSourceCard`s
-- If more than 3, show `+N more sources`
-
-Example placement:
-- Right after the existing `{msg.sources && msg.sources.length > 0 && (...)}` block, add:
-
-```tsx
-{msg.webSources && msg.webSources.length > 0 && (
-  <div className="mt-2 pt-2 border-t border-border/50">
-    <div className="flex items-center gap-1.5 mb-1">
-      <Globe className="w-3.5 h-3.5 text-muted-foreground" />
-      <p className="text-xs text-muted-foreground">Web sources:</p>
-    </div>
-
-    <div className="space-y-1.5">
-      {msg.webSources.slice(0, 3).map((source, idx) => (
-        <WebSourceCard key={`${source.url}-${idx}`} source={source} />
-      ))}
-      {msg.webSources.length > 3 && (
-        <p className="text-xs text-muted-foreground">
-          +{msg.webSources.length - 3} more sources
-        </p>
-      )}
-    </div>
-  </div>
-)}
-```
-
----
-
-## Why this fixes the MIME type / module script error
-
-- The error is caused by Vite serving HTML for a module request (usually because the module path 404s).
-- Creating `src/components/chat/WebSourceCard.tsx` and importing it with the exact matching casing ensures Vite serves a real TS/JS module instead of HTML.
-
----
-
-## Verification checklist (end-to-end)
-
-1) Reload the app after the changes.
-2) Open Jac and ask: **“How do I learn Rust?”**
-   - Expected: Jac answers normally, and underneath the answer you see:
-     - “Web sources:” section
-     - 1–3 clickable source cards (open in new tab)
-3) Ask something purely internal: **“What’s on my grocery list?”**
-   - Expected: No “Web sources” section; only brain sources if any.
-4) Quick sanity:
-   - No console errors about missing modules
-   - Clicking a web source opens the URL in a new tab
-
----
-
-## Guardrails / edge cases handled
-
-- Malformed URLs: WebSourceCard won’t crash rendering.
-- Streaming overwrites: `webSources` stays attached while content streams.
-- Import casing: fixed by matching filename + import path exactly.
+No further work until user confirms Pass 1 is working.
 
