@@ -47,10 +47,20 @@ serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
   try {
-    // Authenticate user
-    const { userId, error: authError } = await extractUserId(req);
-    if (authError || !userId) {
-      return errorResponse(req, authError ?? 'Unauthorized', 401);
+    // Allow service role calls (e.g. from jac-research-agent)
+    const authHeader = req.headers.get('authorization');
+    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const isServiceRole = authHeader === `Bearer ${serviceKey}`;
+
+    let userId: string;
+    if (isServiceRole) {
+      userId = 'service_role_internal';
+    } else {
+      const { userId: uid, error: authError } = await extractUserId(req);
+      if (authError || !uid) {
+        return errorResponse(req, authError ?? 'Unauthorized', 401);
+      }
+      userId = uid;
     }
 
     // Check rate limit (search is limited to 30 req/min)
