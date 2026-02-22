@@ -1,43 +1,54 @@
 
 
-# Fix All Worker Agents: Pass Slack Thread Info for In-Thread Replies
+# Fix: Slack Replies Not Working + Remove Threading
 
-## Problem
+## Three Issues Found
 
-The dispatcher already sends `slack_channel` and `slack_thread_ts` to every worker agent in the request body. But all three workers ignore those fields and call `notifySlack()` without them. Since `notifySlack()` only uses the bot token for thread replies when `slackChannel` and `slackThreadTs` are provided, it falls back to the webhook (or does nothing useful).
+### Issue 1: Worker agents (research, save, search) never reply in Slack
+`_shared/slack.ts` line 48 exits early if no `slack_webhook_url` is configured in user_settings. The bot token reply path (line 91) is **unreachable** without a webhook URL. Since you use the bot token approach (not webhooks), all worker agent replies silently fail.
 
-## Changes (3 files, identical pattern)
+### Issue 2: Replies appear as threads instead of in the main DM
+Both `_shared/slack.ts` and `jac-dispatcher` include `thread_ts` in `chat.postMessage`, causing Slack to nest replies as threads. Removing `thread_ts` makes replies appear directly in the DM conversation.
 
-### 1. `supabase/functions/jac-research-agent/index.ts`
+### Issue 3: General intent response quality
+The "I'll help you check the time right now" answer is just the AI being vague. This is a prompt tuning issue — lower priority but noted.
 
-- Extract `slack_channel` and `slack_thread_ts` from `body` (after line 49)
-- Pass `slackChannel: slack_channel` and `slackThreadTs: slack_thread_ts` to both `notifySlack()` calls (success on line 254 and error on line 315)
+## Fix (2 files)
 
-### 2. `supabase/functions/jac-save-agent/index.ts`
+### 1. `supabase/functions/_shared/slack.ts`
 
-- Extract `slack_channel` and `slack_thread_ts` from `body` (after line 41)
-- Pass `slackChannel: slack_channel` and `slackThreadTs: slack_thread_ts` to both `notifySlack()` calls (success on line 120 and error on line 180)
-
-### 3. `supabase/functions/jac-search-agent/index.ts`
-
-- Extract `slack_channel` and `slack_thread_ts` from `body` (after line 41)
-- Pass `slackChannel: slack_channel` and `slackThreadTs: slack_thread_ts` to both `notifySlack()` calls (success on line 135 and error on line 197)
-
-## How `notifySlack()` Already Works
-
-The `_shared/slack.ts` already has this logic (no changes needed there):
+Restructure the function so the bot token path is checked **first**, independent of webhook URL:
 
 ```text
-if (payload.slackChannel && payload.slackThreadTs && botToken) {
-  // Reply in the Slack thread using chat.postMessage
-} else {
-  // Fall back to webhook
-}
+Current flow:
+  1. Read webhook URL from user_settings
+  2. If no webhook URL -> RETURN (bug! never reaches bot token)
+  3. If slackChannel + slackThreadTs + botToken -> reply in thread
+  4. Else -> use webhook
+
+New flow:
+  1. Check if slackChannel + botToken are present
+  2. If yes -> post to channel (no thread_ts) and return
+  3. Read webhook URL from user_settings
+  4. If webhook URL -> use webhook
+  5. If neither -> return silently
 ```
 
-So simply passing the two fields is all that's needed.
+Also remove `thread_ts` from the `chat.postMessage` call so replies appear in the main DM flow.
 
-## After This Fix
+### 2. `supabase/functions/jac-dispatcher/index.ts`
 
-All agent types (research, save, search, general) will reply directly in the Slack thread where the user sent the message.
+In the general intent Slack reply (line 370), remove `thread_ts` from the `chat.postMessage` body so the response appears in the main DM conversation, not as a thread.
+
+## What This Fixes
+
+| Issue | Before | After |
+|---|---|---|
+| Research/save/search replies | Silent failure (early return) | Replies in main DM |
+| General replies | Thread | Main DM |
+| Response style | No change needed | Same |
+
+## No Database Changes Needed
+
+Two edge function files change, then redeploy all affected functions.
 
