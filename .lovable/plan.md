@@ -1,31 +1,75 @@
 
 
-# Fix: Insert Missing Profile Row
+# Fix: Send Slack Reply for General Intent Messages
 
-## Problem
-The Slack signing secret is now correct and signature verification passes. The actual error is:
+## The Real Problem
 
-**"No user profile found"** — Your auth user exists but has no row in the `profiles` table. The `handle_new_user` trigger was added after your account was created, so a profile was never auto-generated.
+The entire pipeline is actually working correctly now:
+- Slack signature verification: PASSING
+- Profile lookup: FOUND
+- Dispatcher processing: WORKING (returned 200, created task, generated response)
+- AI response generated: "Yes, this is working! I can see your test #4..."
+
+But **LinkJac never replies in Slack** because the `jac-dispatcher` doesn't send Slack messages for `general` intent. It marks the task as completed and returns the response in the HTTP body (which only the web UI uses). The worker agents (research, save, search) handle their own Slack replies, but `general` has no worker.
 
 ## Solution
-Run a single database migration to insert the missing profile row:
 
-```sql
-INSERT INTO public.profiles (id, username)
-VALUES ('ea684316-73d7-4869-bc16-957558a9e9be', 'jayhillendalepress')
-ON CONFLICT (id) DO NOTHING;
+Add a Slack reply in `jac-dispatcher` for `general` intent when the message came from Slack. After marking the task complete, use the `SLACK_BOT_TOKEN` to post the AI response back in the original Slack thread.
+
+## Changes
+
+### 1. `supabase/functions/jac-dispatcher/index.ts`
+
+In the `else if (intent === 'general')` block (around line 352), after marking the task completed, add code to reply in Slack:
+
+```text
+} else if (intent === 'general') {
+  // Mark parent as completed immediately
+  await supabase
+    .from('agent_tasks')
+    .update({ status: 'completed', completed_at: new Date().toISOString() })
+    .eq('id', parentTask.id);
+
+  // NEW: Reply in Slack if message came from Slack
+  if (slack_channel && slack_thread_ts) {
+    const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+    if (botToken) {
+      fetch('https://slack.com/api/chat.postMessage', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${botToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          channel: slack_channel,
+          thread_ts: slack_thread_ts,
+          text: response,
+        }),
+      }).then(async (res) => {
+        if (res.ok) {
+          await supabase.from('agent_tasks')
+            .update({ slack_notified: true })
+            .eq('id', parentTask.id);
+        }
+      }).catch(err => {
+        console.warn('[jac-dispatcher] Slack reply failed:', err);
+      });
+    }
+  }
+}
 ```
 
-This will also trigger the `on_profile_created_create_subscription` trigger, creating a subscription row automatically.
+This uses the same `SLACK_BOT_TOKEN` that already exists in your secrets. It replies in the same Slack thread the user sent the message from.
 
-## What happens after
-1. You send a DM to LinkJac in Slack
-2. `slack-incoming` receives it, verifies signature (already working), finds your profile
-3. Dispatches to `jac-dispatcher` with your userId
-4. JAC processes the message and responds in the Slack thread
+## Why Previous Fixes Didn't Help
 
-## Technical Details
-- File changed: New migration SQL only (no code changes)
-- The `handle_new_user` trigger exists for future signups but missed the existing user
-- One migration insert fixes the entire pipeline
+| What we tried | Status | Why it wasn't enough |
+|---|---|---|
+| Fixed signing secret | Working | Signature now verifies correctly |
+| Inserted profile row | Working | Profile lookup now succeeds |
+| **Slack reply for general** | **Missing** | **This is the actual gap** |
+
+## No Database Changes Needed
+
+Only one file changes: `supabase/functions/jac-dispatcher/index.ts`
 
