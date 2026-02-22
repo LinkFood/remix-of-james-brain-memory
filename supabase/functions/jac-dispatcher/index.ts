@@ -98,7 +98,7 @@ serve(async (req) => {
 
   try {
     // Parse body first (needed for service-role auth which reads userId from body)
-    let body: { message?: string; userId?: string; slack_channel?: string; slack_thinking_ts?: string; source?: string };
+    let body: { message?: string; userId?: string; slack_channel?: string; slack_thinking_ts?: string; source?: string; context?: { projectId?: string; repoFullName?: string; branch?: string; techStack?: string[] }; type?: string };
     try {
       body = await req.json();
     } catch {
@@ -344,19 +344,36 @@ Be concise. Be confident. Don't ask questions — just act.`;
     let response = (toolResult?.input?.response as string) || "I'm on it.";
 
     // 4b. Code project lookup — find matching project if intent is code
+    // Accept explicit context.projectId from the Code Workspace UI first
     let codeProject: { id: string; name: string; repo_full_name: string } | null = null;
     if (intent === 'code') {
       try {
-        const { data: projects } = await supabase
-          .from('code_projects')
-          .select('id, name, repo_full_name')
-          .eq('user_id', userId);
+        if (body.context?.projectId) {
+          // Explicit project context from Code Workspace UI — use directly
+          const { data: explicitProject } = await supabase
+            .from('code_projects')
+            .select('id, name, repo_full_name')
+            .eq('id', body.context.projectId)
+            .eq('user_id', userId)
+            .single();
+          if (explicitProject) {
+            codeProject = explicitProject as { id: string; name: string; repo_full_name: string };
+          }
+        }
 
-        if (projects && projects.length > 0) {
-          const queryLower = extractedQuery.toLowerCase();
-          codeProject = projects.find(
-            (p: { id: string; name: string; repo_full_name: string }) => queryLower.includes(p.name.toLowerCase())
-          ) ?? projects[0]; // fallback to first project if no name match
+        // Fallback: name-match lookup from message text (for Slack/general use)
+        if (!codeProject) {
+          const { data: projects } = await supabase
+            .from('code_projects')
+            .select('id, name, repo_full_name')
+            .eq('user_id', userId);
+
+          if (projects && projects.length > 0) {
+            const queryLower = extractedQuery.toLowerCase();
+            codeProject = projects.find(
+              (p: { id: string; name: string; repo_full_name: string }) => queryLower.includes(p.name.toLowerCase())
+            ) ?? projects[0]; // fallback to first project if no name match
+          }
         }
       } catch (err) {
         console.warn('[jac-dispatcher] Code project lookup failed (non-blocking):', err);
@@ -453,6 +470,11 @@ Be concise. Be confident. Don't ask questions — just act.`;
           brainContext: brainContext.slice(0, 2000),
           slack_channel,
           slack_thinking_ts,
+          ...(intent === 'code' && codeProject ? {
+            projectId: codeProject.id,
+            projectName: codeProject.name,
+            repoFullName: codeProject.repo_full_name,
+          } : {}),
         }),
       }).then(async (res) => {
         if (!res.ok) {
