@@ -1,35 +1,54 @@
 
 
-# Pass 1 Execution — Ready to Go
+# Lock Down LinkJac — Single User Mode
 
-You have all three API keys ready. Here's the execution sequence:
+## Overview
+Strip the app down to single-user mode. Only you can sign in (via Google OAuth). No signup, no marketing pages, no public access. Edge functions and agents continue running regardless of publish status.
 
-## Step 1: Add Secrets
-Request you to input each secret one at a time:
-1. `ANTHROPIC_API_KEY` — from console.anthropic.com
-2. `FINNHUB_API_KEY` — from finnhub.io
-3. `SLACK_SIGNING_SECRET` — from Slack app settings
+## Changes
 
-## Step 2: Database Migration
-Single SQL migration creating `agent_tasks` (18 columns, indexes, RLS, realtime) and `user_settings` (7 columns, RLS).
+### 1. Simplify Auth Page (`src/pages/Auth.tsx`)
+- Remove all signup mode, forgot password, reset password flows
+- Remove email/password form entirely
+- Show only: Logo, tagline, "Sign in with Google" button, back-to-home link
+- Remove terms/privacy links from auth page (keep routes for legal compliance)
 
-## Step 3: Create `_shared/anthropic.ts`
-Shared helper with `callClaude()`, `parseToolUse()`, `getAnthropicHeaders()`, cost tracking constants.
+### 2. Add Auth Guard + Redirect Logic (`src/App.tsx`)
+- Create a small `AuthRedirect` component for the `/` route
+- If logged in: redirect to `/dashboard`
+- If not logged in: redirect to `/auth`
+- Remove `/pricing` route (not needed for single-user)
+- Keep `/terms` and `/privacy` routes
 
-## Step 4: Swap AI in 5 Edge Functions
-Replace Lovable AI gateway with direct Anthropic Claude API in:
-- `assistant-chat` (stream transform: Claude SSE to OpenAI-compatible SSE)
-- `classify-content` (tool parsing update)
-- `calculate-importance` (tool parsing update)
-- `enrich-entry` (JSON response parsing)
-- `generate-brain-report` (tool parsing update)
+### 3. Strip Landing Page Redirect
+- Replace `Landing` page import with the `AuthRedirect` component on `/`
+- No more marketing landing page — straight to business
 
-## Step 5: Create `task-dispatcher/index.ts`
-Intent analysis, rate limiting (10 concurrent / 200 daily), agent spawning placeholder.
+### 4. Block New User Profiles at Database Level
+- Add a database trigger on `profiles` table insert
+- Check if the inserting user's email matches your allowed email
+- If not, raise an exception (prevents new users from completing signup)
+- This is belt-and-suspenders — even if someone hits the Google OAuth somehow, they can't create a profile
 
-## Step 6: Update `config.toml`
-Add `task-dispatcher` with `verify_jwt = false`.
+### 5. Disable Signup in Auth Config
+- Use the configure-auth tool to disable email signups
+- Google OAuth remains enabled but only your profile will work due to the trigger
 
-## Checkpoint
-Stop and wait for you to test: Jac chat streaming, smart-save pipeline, brain reports, enrich, and verify new tables exist.
+## What Stays the Same
+- All edge functions (they run server-side on Lovable Cloud, independent of frontend publishing)
+- Dashboard, settings, all dump/assistant functionality
+- RLS policies (already per-user)
+- Terms and Privacy pages
+
+## Technical Sequence
+1. Database migration: add trigger to block non-allowlisted profiles
+2. Simplify Auth.tsx to Google-only sign-in
+3. Update App.tsx routing (remove pricing, add auth redirect on `/`)
+4. Deploy and test on preview URL
+
+## Result
+- Visit site -> Google sign-in screen
+- Sign in as you -> dashboard
+- Anyone else -> blocked at profile creation
+- Agents and edge functions keep running 24/7 regardless of browser state
 
