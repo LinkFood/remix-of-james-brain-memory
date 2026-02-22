@@ -54,7 +54,7 @@ export function InstallPrompt() {
     sessionStorage.setItem("pwa-prompt-dismissed", "true");
   };
 
-  if (!showPrompt || dismissed) return null;
+  if (!showPrompt || dismissed || window.location.pathname === '/jac') return null;
 
   return (
     <div className="fixed bottom-20 left-4 right-4 md:left-auto md:right-4 md:w-80 z-50 animate-in slide-in-from-bottom-4">

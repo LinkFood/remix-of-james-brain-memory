@@ -163,12 +163,26 @@ serve(async (req) => {
       // Always also do keyword search to catch exact matches semantic might miss
       const searchWords = query.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 2);
 
+      // Build OR conditions: exact phrase match + individual word matches
+      const orConditions: string[] = [
+        `content.ilike.%${escapedQuery}%`,
+        `title.ilike.%${escapedQuery}%`,
+      ];
+      // Add individual word ilike matches for better recall
+      for (const word of searchWords) {
+        const escapedWord = escapeForLike(word);
+        orConditions.push(`content.ilike.%${escapedWord}%`);
+        orConditions.push(`title.ilike.%${escapedWord}%`);
+      }
+      // Deduplicate conditions
+      const uniqueConditions = [...new Set(orConditions)];
+
       const { data: keywordResults, error: keywordError } = await supabaseClient
         .from('entries')
         .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
         .eq('user_id', userId)
         .eq('archived', false)
-        .or(`content.ilike.%${escapedQuery}%,title.ilike.%${escapedQuery}%`)
+        .or(uniqueConditions.join(','))
         .order('importance_score', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(limit);
