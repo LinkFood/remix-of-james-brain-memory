@@ -153,8 +153,19 @@ export function useJacAgent(userId: string) {
             created_at: string;
           };
           setMessages(prev => {
-            // Deduplicate by timestamp (not content — "yes"/"ok" are valid repeated messages)
+            // Exact timestamp match (for assistant messages added optimistically)
             if (prev.some(m => m.timestamp === newMsg.created_at)) return prev;
+            // For user messages: check if we already have an optimistic version
+            // (same role + content within 10s window — covers client/server timestamp drift)
+            if (newMsg.role === 'user') {
+              const dbTime = new Date(newMsg.created_at).getTime();
+              const hasOptimistic = prev.some(m =>
+                m.role === 'user' &&
+                m.content === newMsg.content &&
+                Math.abs(new Date(m.timestamp).getTime() - dbTime) < 10_000
+              );
+              if (hasOptimistic) return prev;
+            }
             return [
               ...prev,
               {

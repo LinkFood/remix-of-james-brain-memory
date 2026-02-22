@@ -61,7 +61,7 @@ function ResultCard({ task, logs }: { task: AgentTask; logs?: ActivityLogEntry[]
   const totalDuration = logs?.reduce((sum, l) => sum + (l.duration_ms || 0), 0) || 0;
 
   return (
-    <Card className={`p-4 transition-all ${
+    <Card className={`p-4 transition-all animate-in fade-in-0 slide-in-from-bottom-2 duration-300 ${
       isCompleted ? 'border-green-500/20 bg-green-500/[0.02]' :
       isFailed ? 'border-red-500/20 bg-red-500/[0.02]' :
       'border-border'
