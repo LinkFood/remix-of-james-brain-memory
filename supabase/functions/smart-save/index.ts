@@ -143,8 +143,9 @@ serve(async (req) => {
 
     // Skip rate limit for internal agent calls
     const isInternal = isServiceRoleRequest(req);
+    let rateLimit: ReturnType<typeof checkRateLimit> | undefined;
     if (!isInternal) {
-      const rateLimit = checkRateLimit(userId, RATE_LIMIT_CONFIGS.standard);
+      rateLimit = checkRateLimit(userId, RATE_LIMIT_CONFIGS.standard);
       if (!rateLimit.allowed) {
         return new Response(
           JSON.stringify({

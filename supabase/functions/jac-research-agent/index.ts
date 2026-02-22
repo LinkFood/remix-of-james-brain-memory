@@ -294,6 +294,19 @@ Instructions:
         })
         .eq('id', taskId);
 
+      // Also mark parent task as failed so it doesn't stay stuck at "running"
+      if (parentTaskId) {
+        await supabase
+          .from('agent_tasks')
+          .update({
+            status: 'failed',
+            error: `Child task failed: ${errorMessage}`,
+            completed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', parentTaskId);
+      }
+
       if (userId) {
         // Log the failure
         const log = createAgentLogger(supabase, taskId, userId, 'jac-research-agent');
