@@ -1,38 +1,46 @@
 
 
-# Kill Switch Deployment (commit dcd31fd)
+# Fix Kill Button Visibility + End-to-End Testing Plan
 
-## Summary
-All code files are already synced. Two things remain: a database migration and edge function deployments.
+## Problem
+Two issues found:
 
-## Steps
+1. **Mobile ActivityFeed is missing stop props** -- The desktop ActivityFeed (line 132) correctly passes `onStopTask={stopTask} onStopAll={stopAllTasks}`, but the mobile version (line 165) does NOT pass these props. Kill buttons will never appear on mobile.
 
-### 1. Database Migration
-Add the `cancelled_at` column and two indexes to `agent_tasks`:
-- `cancelled_at` (timestamptz, nullable) on `agent_tasks`
-- Index on `(user_id, created_at)` for loop detection queries
-- Index on `(user_id, status)` for cancellable task lookups
+2. **Kill buttons only appear on active tasks** -- This is by design. The "Stop all" bar shows only when tasks are running, and individual stop buttons only render on running/queued task cards. If no tasks are currently active, there's nothing to stop and no buttons to show.
 
-This fixes the build error where the TypeScript `AgentTask` type expects `cancelled_at` but the database column doesn't exist yet.
+## Fix
 
-### 2. Deploy Edge Functions
-Deploy all 6 affected functions:
-- `jac-kill-switch` (new)
-- `jac-dispatcher` (loop detection + stale cleanup guard)
-- `jac-research-agent` (soft-kill guard)
-- `jac-save-agent` (soft-kill guard)
-- `jac-search-agent` (soft-kill guard)
-- `slack-incoming` (stop/halt/cancel/kill interception)
+### Step 1: Add missing props to mobile ActivityFeed
+In `src/pages/Jac.tsx`, line 165, add the two missing props:
 
-### 3. No Other Changes
-All frontend files (types, hooks, components, pages) are already in place with the correct code.
-
-## Technical Details
-
-Migration SQL:
-```text
-ALTER TABLE agent_tasks ADD COLUMN IF NOT EXISTS cancelled_at timestamptz;
-CREATE INDEX IF NOT EXISTS idx_agent_tasks_user_created ON agent_tasks(user_id, created_at);
-CREATE INDEX IF NOT EXISTS idx_agent_tasks_user_status ON agent_tasks(user_id, status);
+```
+<ActivityFeed
+  tasks={tasks}
+  activityLogs={activityLogs}
+  loading={loading}
+  onExpandTask={loadTaskLogs}
+  onStopTask={stopTask}
+  onStopAll={stopAllTasks}
+/>
 ```
 
+### Step 2: Deploy the jac-kill-switch edge function
+The function code is ready but needs deployment.
+
+### Step 3: End-to-end testing
+To verify the kill switch works:
+
+1. **Trigger a task** -- Send a research query via the JAC chat (e.g., "research latest AI news") so a task enters `running` status
+2. **Verify button appears** -- While the task is running, a red stop button should appear on the task card, and a "Stop all" button in the blue operations bar
+3. **Click stop** -- Click the stop button and verify:
+   - Task status changes to `cancelled` (orange badge)
+   - Orange toast notification appears
+   - Task stays cancelled (soft-kill guards prevent overwrite)
+4. **Slack kill** -- Send "stop" or "kill" as a DM to JAC in Slack and verify all active tasks get cancelled
+
+## What's NOT changing
+- No changes to the kill switch edge function (already correct)
+- No changes to useJacAgent hook (stopTask/stopAllTasks already work)
+- No changes to TaskCard or ActivityFeed components (already have the UI)
+- No changes to worker agents (soft-kill guards already in place)
