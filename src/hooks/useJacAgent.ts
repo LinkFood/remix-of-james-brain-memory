@@ -1,8 +1,17 @@
+/**
+ * useJacAgent — Hook for JAC Agent command center
+ *
+ * Manages messages, tasks, activity logs, and realtime subscriptions.
+ * Gracefully handles missing tables (pre-migration state).
+ */
+
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import type { AgentTask, JacMessage, ActivityLogEntry } from '@/types/agent';
 import type { RealtimeChannel } from '@supabase/supabase-js';
+
+const JAC_DISPATCHER_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/jac-dispatcher`;
 
 export function useJacAgent(userId: string) {
   const [messages, setMessages] = useState<JacMessage[]>([]);
@@ -10,9 +19,8 @@ export function useJacAgent(userId: string) {
   const [activityLogs, setActivityLogs] = useState<Map<string, ActivityLogEntry[]>>(new Map());
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
-  const taskChannelRef = useRef<RealtimeChannel | null>(null);
-  const convoChannelRef = useRef<RealtimeChannel | null>(null);
-  const logChannelRef = useRef<RealtimeChannel | null>(null);
+  const [backendReady, setBackendReady] = useState(true);
+  const channelsRef = useRef<RealtimeChannel[]>([]);
 
   // Load conversation history + tasks on mount
   useEffect(() => {
@@ -21,58 +29,66 @@ export function useJacAgent(userId: string) {
     const loadInitial = async () => {
       setLoading(true);
 
-      // Load conversations
-      const { data: convos } = await supabase
-        .from('agent_conversations')
-        .select('role, content, task_ids, created_at')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: true })
-        .limit(100);
+      try {
+        // Load conversations (may fail if table doesn't exist yet)
+        const { data: convos, error: convoError } = await supabase
+          .from('agent_conversations' as any)
+          .select('role, content, task_ids, created_at')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: true })
+          .limit(100);
 
-      if (convos) {
-        setMessages(
-          convos.map((c) => ({
-            role: c.role as 'user' | 'assistant',
-            content: c.content,
-            taskIds: c.task_ids ?? [],
-            timestamp: c.created_at,
-          }))
-        );
-      }
+        if (convoError) {
+          console.warn('[useJacAgent] agent_conversations not ready:', convoError.message);
+          setBackendReady(false);
+        } else if (convos) {
+          setBackendReady(true);
+          setMessages(
+            (convos as any[]).map((c) => ({
+              role: c.role as 'user' | 'assistant',
+              content: c.content,
+              taskIds: c.task_ids ?? [],
+              timestamp: c.created_at,
+            }))
+          );
+        }
 
-      // Load recent tasks
-      const { data: taskData } = await supabase
-        .from('agent_tasks')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(50);
+        // Load recent tasks
+        const { data: taskData } = await supabase
+          .from('agent_tasks')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(50);
 
-      if (taskData) {
-        setTasks(taskData as AgentTask[]);
+        if (taskData) {
+          setTasks(taskData as AgentTask[]);
 
-        // Load logs for active tasks
-        const activeTaskIds = (taskData as AgentTask[])
-          .filter((t) => t.status === 'running' || t.status === 'queued')
-          .map((t) => t.id);
+          // Load logs for active tasks
+          const activeTaskIds = (taskData as AgentTask[])
+            .filter(t => t.status === 'running' || t.status === 'queued')
+            .map(t => t.id);
 
-        if (activeTaskIds.length > 0) {
-          const { data: logs } = await (supabase
-            .from('agent_activity_log' as any)
-            .select('*')
-            .in('task_id', activeTaskIds)
-            .order('created_at', { ascending: true }) as any);
+          if (activeTaskIds.length > 0) {
+            const { data: logs } = await (supabase
+              .from('agent_activity_log' as any)
+              .select('*')
+              .in('task_id', activeTaskIds)
+              .order('created_at', { ascending: true }) as any);
 
-          if (logs) {
-            const logMap = new Map<string, ActivityLogEntry[]>();
-            for (const log of logs as unknown as ActivityLogEntry[]) {
-              const existing = logMap.get(log.task_id) || [];
-              existing.push(log);
-              logMap.set(log.task_id, existing);
+            if (logs) {
+              const logMap = new Map<string, ActivityLogEntry[]>();
+              for (const log of logs as unknown as ActivityLogEntry[]) {
+                const existing = logMap.get(log.task_id) || [];
+                existing.push(log);
+                logMap.set(log.task_id, existing);
+              }
+              setActivityLogs(logMap);
             }
-            setActivityLogs(logMap);
           }
         }
+      } catch (err) {
+        console.warn('[useJacAgent] Load error:', err);
       }
 
       setLoading(false);
@@ -81,11 +97,14 @@ export function useJacAgent(userId: string) {
     loadInitial();
   }, [userId]);
 
-  // Realtime subscription for agent_tasks
+  // Realtime subscriptions
   useEffect(() => {
     if (!userId) return;
 
-    const channel = supabase
+    const channels: RealtimeChannel[] = [];
+
+    // agent_tasks realtime
+    const taskChannel = supabase
       .channel(`agent-tasks-${userId}`)
       .on(
         'postgres_changes',
@@ -97,40 +116,25 @@ export function useJacAgent(userId: string) {
         },
         (payload) => {
           if (payload.eventType === 'INSERT') {
-            setTasks((prev) => [payload.new as AgentTask, ...prev]);
+            setTasks(prev => [payload.new as AgentTask, ...prev]);
           } else if (payload.eventType === 'UPDATE') {
-          const updated = payload.new as AgentTask;
-            setTasks((prev) =>
-              prev.map((t) => (t.id === updated.id ? updated : t))
-            );
-            // Toast on task completion/failure
+            const updated = payload.new as AgentTask;
+            setTasks(prev => prev.map(t => t.id === updated.id ? updated : t));
             if (updated.status === 'completed') {
-              toast.success(`Task completed: ${updated.intent.slice(0, 60)}`);
+              toast.success(`Task completed: ${(updated.intent || updated.type).slice(0, 60)}`);
             } else if (updated.status === 'failed') {
-              toast.error(`Task failed: ${updated.error?.slice(0, 80) || updated.intent.slice(0, 60)}`);
+              toast.error(`Task failed: ${(updated.error || updated.intent || '').slice(0, 80)}`);
             }
           } else if (payload.eventType === 'DELETE') {
-            setTasks((prev) => prev.filter((t) => t.id !== (payload.old as { id: string }).id));
+            setTasks(prev => prev.filter(t => t.id !== (payload.old as { id: string }).id));
           }
         }
       )
       .subscribe();
+    channels.push(taskChannel);
 
-    taskChannelRef.current = channel;
-
-    return () => {
-      if (taskChannelRef.current) {
-        supabase.removeChannel(taskChannelRef.current);
-        taskChannelRef.current = null;
-      }
-    };
-  }, [userId]);
-
-  // Realtime subscription for agent_conversations
-  useEffect(() => {
-    if (!userId) return;
-
-    const channel = supabase
+    // agent_conversations realtime
+    const convoChannel = supabase
       .channel(`agent-convos-${userId}`)
       .on(
         'postgres_changes',
@@ -147,11 +151,9 @@ export function useJacAgent(userId: string) {
             task_ids: string[];
             created_at: string;
           };
-          setMessages((prev) => {
-            const isDuplicate = prev.some(
-              (m) => m.content === newMsg.content && m.role === newMsg.role
-            );
-            if (isDuplicate) return prev;
+          setMessages(prev => {
+            // Deduplicate
+            if (prev.some(m => m.content === newMsg.content && m.role === newMsg.role)) return prev;
             return [
               ...prev,
               {
@@ -165,22 +167,10 @@ export function useJacAgent(userId: string) {
         }
       )
       .subscribe();
+    channels.push(convoChannel);
 
-    convoChannelRef.current = channel;
-
-    return () => {
-      if (convoChannelRef.current) {
-        supabase.removeChannel(convoChannelRef.current);
-        convoChannelRef.current = null;
-      }
-    };
-  }, [userId]);
-
-  // Realtime subscription for agent_activity_log
-  useEffect(() => {
-    if (!userId) return;
-
-    const channel = supabase
+    // agent_activity_log realtime
+    const logChannel = supabase
       .channel(`agent-logs-${userId}`)
       .on(
         'postgres_changes',
@@ -192,7 +182,7 @@ export function useJacAgent(userId: string) {
         },
         (payload) => {
           const newLog = payload.new as ActivityLogEntry;
-          setActivityLogs((prev) => {
+          setActivityLogs(prev => {
             const updated = new Map(prev);
             const existing = updated.get(newLog.task_id) || [];
             updated.set(newLog.task_id, [...existing, newLog]);
@@ -201,18 +191,17 @@ export function useJacAgent(userId: string) {
         }
       )
       .subscribe();
+    channels.push(logChannel);
 
-    logChannelRef.current = channel;
+    channelsRef.current = channels;
 
     return () => {
-      if (logChannelRef.current) {
-        supabase.removeChannel(logChannelRef.current);
-        logChannelRef.current = null;
-      }
+      channels.forEach(ch => supabase.removeChannel(ch));
+      channelsRef.current = [];
     };
   }, [userId]);
 
-  // Load logs for a specific task (on-demand when expanding)
+  // Load logs for a specific task (on-demand)
   const loadTaskLogs = useCallback(async (taskId: string) => {
     const { data: logs } = await (supabase
       .from('agent_activity_log' as any)
@@ -221,7 +210,7 @@ export function useJacAgent(userId: string) {
       .order('created_at', { ascending: true }) as any);
 
     if (logs) {
-      setActivityLogs((prev) => {
+      setActivityLogs(prev => {
         const updated = new Map(prev);
         updated.set(taskId, logs as unknown as ActivityLogEntry[]);
         return updated;
@@ -237,29 +226,28 @@ export function useJacAgent(userId: string) {
       const trimmed = text.trim();
       setSending(true);
 
+      // Optimistic user message
       const userMsg: JacMessage = {
         role: 'user',
         content: trimmed,
         taskIds: [],
         timestamp: new Date().toISOString(),
       };
-      setMessages((prev) => [...prev, userMsg]);
+      setMessages(prev => [...prev, userMsg]);
 
       try {
         const { data: session } = await supabase.auth.getSession();
         if (!session?.session?.access_token) throw new Error('Not authenticated');
 
-        const res = await fetch(
-          `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/jac-dispatcher`,
-          {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${session.session.access_token}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ message: trimmed }),
-          }
-        );
+        const res = await fetch(JAC_DISPATCHER_URL, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${session.session.access_token}`,
+            'Content-Type': 'application/json',
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+          },
+          body: JSON.stringify({ message: trimmed }),
+        });
 
         if (!res.ok) {
           const errorData = await res.json().catch(() => ({}));
@@ -274,15 +262,25 @@ export function useJacAgent(userId: string) {
           taskIds: [data.taskId, data.childTaskId].filter(Boolean),
           timestamp: new Date().toISOString(),
         };
-        setMessages((prev) => [...prev, assistantMsg]);
+        setMessages(prev => [...prev, assistantMsg]);
       } catch (err) {
+        const errorText = err instanceof Error ? err.message : 'Unknown error';
+
+        // Provide helpful error messages
+        let helpText = errorText;
+        if (errorText.includes('404') || errorText.includes('not found')) {
+          helpText = 'JAC dispatcher is not deployed yet. The edge function needs to be deployed to Supabase.';
+        } else if (errorText.includes('500')) {
+          helpText = 'JAC dispatcher hit an internal error. Check that ANTHROPIC_API_KEY is set in Supabase edge function secrets.';
+        }
+
         const errMsg: JacMessage = {
           role: 'assistant',
-          content: `Something went wrong: ${err instanceof Error ? err.message : 'Unknown error'}`,
+          content: helpText,
           taskIds: [],
           timestamp: new Date().toISOString(),
         };
-        setMessages((prev) => [...prev, errMsg]);
+        setMessages(prev => [...prev, errMsg]);
       } finally {
         setSending(false);
       }
@@ -296,6 +294,7 @@ export function useJacAgent(userId: string) {
     activityLogs,
     loading,
     sending,
+    backendReady,
     sendMessage,
     loadTaskLogs,
   };
