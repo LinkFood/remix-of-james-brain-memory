@@ -88,11 +88,11 @@ serve(async (req) => {
 
     // 3. Build summary for output
     const resultSummary = results
-      .slice(0, 5)
+      .slice(0, 3)
       .map((r: { title?: string; content: string; similarity?: number }) =>
-        `- ${r.title || 'Untitled'} (${r.similarity ? `${(r.similarity * 100).toFixed(0)}% match` : 'match'})`
+        `*${r.title || 'Untitled'}* (${r.similarity ? `${(r.similarity * 100).toFixed(0)}% match` : 'match'})\n${r.content.slice(0, 300).trim()}${r.content.length > 300 ? '...' : ''}`
       )
-      .join('\n');
+      .join('\n\n');
 
     // 4. Update task → completed
     await supabase
@@ -139,7 +139,7 @@ serve(async (req) => {
     await notifySlack(supabase, userId, {
       taskId,
       taskType: 'search',
-      summary: `Found ${resultCount} results for: "${query.slice(0, 60)}"${resultSummary ? `\n${resultSummary}` : ''}`,
+      summary: `Found ${resultCount} results for: "${query.slice(0, 60)}"\n\n${resultSummary || 'No matching entries.'}`,
       duration,
       slackChannel,
       slackThinkingTs,
@@ -148,7 +148,7 @@ serve(async (req) => {
 
     // 7. Store result as assistant message
     const responseContent = resultCount > 0
-      ? `Found ${resultCount} brain entries matching "${query}":\n${resultSummary}`
+      ? `Found ${resultCount} brain entries matching "${query}":\n\n${resultSummary}`
       : `No brain entries found matching "${query}".`;
 
     await supabase.from('agent_conversations').insert({

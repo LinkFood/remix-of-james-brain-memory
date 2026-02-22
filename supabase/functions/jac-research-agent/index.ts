@@ -258,7 +258,7 @@ Instructions:
     await notifySlack(supabase, userId, {
       taskId,
       taskType: 'research',
-      summary: `Researched: "${query.slice(0, 60)}"\n${brief.slice(0, 200)}...`,
+      summary: `Researched: "${query.slice(0, 60)}"\n${brief.slice(0, 800)}`,
       brainEntryId,
       duration,
       slackChannel,
@@ -270,7 +270,7 @@ Instructions:
     await supabase.from('agent_conversations').insert({
       user_id: userId,
       role: 'assistant',
-      content: `Research complete: ${query}\n\n${brief.slice(0, 500)}...${brainEntryId ? `\n\nSaved to brain.` : ''}`,
+      content: `Research complete: ${query}\n\n${brief}${brainEntryId ? `\n\nSaved to brain.` : ''}`,
       task_ids: [taskId],
     });
 

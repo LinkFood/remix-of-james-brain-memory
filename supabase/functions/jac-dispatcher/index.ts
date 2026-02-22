@@ -18,7 +18,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserId, extractUserIdWithServiceRole } from '../_shared/auth.ts';
-import { callClaude, CLAUDE_MODELS, parseToolUse } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseToolUse, parseTextContent } from '../_shared/anthropic.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
 
 // Rate limiting
@@ -52,7 +52,7 @@ const INTENT_TOOL = {
       intent: {
         type: 'string',
         enum: ['research', 'save', 'search', 'report', 'general'],
-        description: 'The type of task to dispatch',
+        description: 'Use "research" for any question about the real world or current information. Use "search" ONLY when user explicitly asks to find their own saved brain entries (e.g. "search my brain", "what did I save").',
       },
       summary: {
         type: 'string',
@@ -240,14 +240,24 @@ Your job:
 - Pick the right agent to handle it
 - Write a brief, confident response acknowledging what you're doing
 
-Intent routing:
-- "research" → jac-research-agent: User wants to learn about something, needs web research, wants info synthesized
-- "save" → jac-save-agent: User wants to save/remember/note something to their brain
-- "search" → jac-search-agent: User wants to find something in their brain
-- "report" → jac-research-agent: User wants a comprehensive report or analysis
-- "general" → assistant-chat: General conversation, questions about their data, simple requests
+Intent routing rules (follow these STRICTLY):
 
-${brainContext ? `\nUser's brain context (relevant entries):\n${brainContext}` : ''}
+1. "research" → jac-research-agent: User wants NEW or CURRENT information from the internet.
+   TRIGGERS: weather, news, prices, scores, "what is", "how much", "look up", "find out", "tell me about", factual questions, anything needing live data.
+   DEFAULT: If ambiguous between research and search, choose RESEARCH.
+
+2. "search" → jac-search-agent: User wants to find something THEY PREVIOUSLY SAVED.
+   TRIGGERS: "search my brain", "what did I save", "find my notes", "my entries".
+   REQUIRED: User must explicitly reference their own saved data. Do NOT pick search just because brain context below has matches.
+
+3. "save" → jac-save-agent: User wants to save/remember/note something.
+
+4. "report" → jac-research-agent: User wants a comprehensive multi-source analysis.
+
+5. "general" → assistant-chat: Casual chat, greetings, meta questions about JAC.
+
+IMPORTANT: Brain context below is for YOUR reference only — do NOT route to search just because matching entries exist.
+${brainContext ? `\nUser's brain context (for reference only):\n${brainContext}` : ''}
 
 Be concise. Be confident. Don't ask questions — just act.`;
 
@@ -268,7 +278,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
     const summary = (toolResult?.input?.summary as string) || message.slice(0, 100);
     const agentType = (toolResult?.input?.agentType as string) || AGENT_MAP[intent] || 'assistant-chat';
     const extractedQuery = (toolResult?.input?.extractedQuery as string) || message;
-    const response = (toolResult?.input?.response as string) || "I'm on it.";
+    let response = (toolResult?.input?.response as string) || "I'm on it.";
 
     // 5. Create parent task
     const { data: parentTask, error: parentError } = await supabase
@@ -374,6 +384,35 @@ Be concise. Be confident. Don't ask questions — just act.`;
           .eq('id', parentTask.id);
       });
     } else if (intent === 'general') {
+      // Enrich general responses with brain context if available
+      const originalResponse = response;
+      if (brainContext) {
+        try {
+          const generalClaude = await callClaude({
+            model: CLAUDE_MODELS.sonnet,
+            system: `You are Jac, a personal AI agent. Answer the user's question using the brain context provided. Be concise but thorough. If the brain context isn't relevant, just answer naturally.\n\nBrain context:\n${brainContext}`,
+            messages: [{ role: 'user', content: message }],
+            max_tokens: 2048,
+            temperature: 0.4,
+          });
+          const enriched = parseTextContent(generalClaude);
+          if (enriched) response = enriched;
+        } catch (err) {
+          console.warn('[jac-dispatcher] General enrichment failed (non-blocking):', err);
+        }
+      }
+
+      // Update conversation with enriched response
+      if (response !== originalResponse) {
+        await supabase.from('agent_conversations')
+          .update({ content: response })
+          .eq('user_id', userId)
+          .eq('role', 'assistant')
+          .eq('content', originalResponse)
+          .order('created_at', { ascending: false })
+          .limit(1);
+      }
+
       // For general intent, mark parent as completed immediately
       await supabase
         .from('agent_tasks')
