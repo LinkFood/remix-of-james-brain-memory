@@ -505,6 +505,7 @@ When you have weather data, share it proactively. Be helpful about weather-relat
 - Surface connections between entries
 - Saving/adding is handled BEFORE you respond - just confirm
 - ACCESS REAL-TIME WEB INFORMATION when needed
+- For complex research, multi-step analysis, or agent tasks, suggest the user open the JAC Command Center at /jac
 
 === LISTS ===
 Show items with: ✓ (done) or ○ (pending). Be brief.

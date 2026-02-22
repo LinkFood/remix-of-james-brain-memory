@@ -943,6 +943,14 @@ const AssistantChat = ({ userId, onEntryCreated, onViewEntry, onFilterByTag, onS
                 </div>
               </div>
             )}
+            <div className="mt-3 pt-3 border-t border-border/50">
+              <a
+                href="/jac"
+                className="inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+              >
+                Open JAC Command Center →
+              </a>
+            </div>
           </div>
         )}
 
