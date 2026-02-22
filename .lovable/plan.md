@@ -1,16 +1,31 @@
 
 
-# Update SLACK_SIGNING_SECRET with Correct Value
+# Fix: Insert Missing Profile Row
 
-The user provided their Slack signing secret directly: `5fda67310335054b87ec6142e5f8282d`
+## Problem
+The Slack signing secret is now correct and signature verification passes. The actual error is:
 
-This is exactly 32 hex characters, which matches the expected format for a Slack signing secret.
+**"No user profile found"** — Your auth user exists but has no row in the `profiles` table. The `handle_new_user` trigger was added after your account was created, so a profile was never auto-generated.
 
-## Steps
+## Solution
+Run a single database migration to insert the missing profile row:
 
-1. Update the `SLACK_SIGNING_SECRET` backend secret with the value `5fda67310335054b87ec6142e5f8282d`
-2. Send a test DM to LinkJac in Slack to confirm the signature now verifies
-3. Check logs to confirm the full pipeline works (signature passes, dispatcher called, agent responds)
+```sql
+INSERT INTO public.profiles (id, username)
+VALUES ('ea684316-73d7-4869-bc16-957558a9e9be', 'jayhillendalepress')
+ON CONFLICT (id) DO NOTHING;
+```
 
-No code changes needed.
+This will also trigger the `on_profile_created_create_subscription` trigger, creating a subscription row automatically.
+
+## What happens after
+1. You send a DM to LinkJac in Slack
+2. `slack-incoming` receives it, verifies signature (already working), finds your profile
+3. Dispatches to `jac-dispatcher` with your userId
+4. JAC processes the message and responds in the Slack thread
+
+## Technical Details
+- File changed: New migration SQL only (no code changes)
+- The `handle_new_user` trigger exists for future signups but missed the existing user
+- One migration insert fixes the entire pipeline
 
