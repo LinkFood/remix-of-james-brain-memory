@@ -1,62 +1,66 @@
 
 
-# Lock Down LinkJac — Single User Mode
+# Fix Build Errors: Apply JAC Agent OS Migration
 
-## Overview
-Strip the app to single-user mode. Only you (jayhillendalepress@gmail.com) can sign in via Google OAuth. No signup, no marketing pages, no public access. Edge functions and agents keep running 24/7 regardless.
+## Problem
+The code pushed from CLI references two things that don't exist in the database yet:
+1. **`agent_conversations` table** -- completely missing
+2. **`agent_tasks`** is missing `slack_notified` (boolean) and `completed_at` (timestamptz) columns
 
-## Step 1: Database Trigger — Block Non-Owner Signups
-Modify the existing `handle_new_user()` function to reject any signup where the email is not `jayhillendalepress@gmail.com`. This is the safety net — even if someone reaches the Google OAuth flow, they can't create a profile.
+This causes TypeScript type errors because the auto-generated Supabase types don't include these, so the Supabase client rejects queries against `agent_conversations` and the `AgentTask` type doesn't align with the DB schema.
+
+## Fix: Single Database Migration
+
+Apply one migration that:
+
+1. **Creates `agent_conversations` table** with columns: `id`, `user_id`, `role`, `content`, `task_ids` (text array), `created_at`
+   - RLS enabled with policies for users to read/insert their own conversations
+   - Enable realtime on the table
+   - Index on `user_id` + `created_at`
+
+2. **Adds missing columns to `agent_tasks`**:
+   - `slack_notified boolean DEFAULT false`
+   - `completed_at timestamptz`
+
+3. **Enable realtime on `agent_tasks`** (needed for live task updates in the UI)
+
+Once the migration runs, the auto-generated types will update, and all build errors will resolve -- no code changes needed.
+
+## Technical Details
 
 ```sql
-CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path TO 'public'
-AS $$
-BEGIN
-  IF NEW.email != 'jayhillendalepress@gmail.com' THEN
-    RAISE EXCEPTION 'Signup is not allowed for this application';
-  END IF;
+-- 1. Create agent_conversations table
+CREATE TABLE public.agent_conversations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL,
+  role text NOT NULL,
+  content text NOT NULL,
+  task_ids text[] DEFAULT '{}',
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 
-  INSERT INTO public.profiles (id, username)
-  VALUES (
-    NEW.id,
-    COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1))
-  );
-  RETURN NEW;
-END;
-$$;
+ALTER TABLE public.agent_conversations ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Users can view own conversations"
+  ON public.agent_conversations FOR SELECT
+  USING (auth.uid() = user_id);
+
+CREATE POLICY "Users can insert own conversations"
+  ON public.agent_conversations FOR INSERT
+  WITH CHECK (auth.uid() = user_id);
+
+CREATE INDEX idx_agent_conversations_user_created
+  ON public.agent_conversations (user_id, created_at);
+
+ALTER PUBLICATION supabase_realtime ADD TABLE public.agent_conversations;
+
+-- 2. Add missing columns to agent_tasks
+ALTER TABLE public.agent_tasks
+  ADD COLUMN IF NOT EXISTS slack_notified boolean DEFAULT false,
+  ADD COLUMN IF NOT EXISTS completed_at timestamptz;
+
+-- 3. Enable realtime on agent_tasks
+ALTER PUBLICATION supabase_realtime ADD TABLE public.agent_tasks;
 ```
 
-## Step 2: Simplify Auth Page (`src/pages/Auth.tsx`)
-Replace the entire auth page with a minimal version:
-- LinkJac logo + "Your AI-powered second brain" tagline
-- Single "Sign in with Google" button
-- "Back to home" link
-- Remove: signup form, email/password, forgot password, reset password, terms/privacy links
-
-## Step 3: Update Routing (`src/App.tsx`)
-- Replace Landing page on `/` with an `AuthRedirect` component:
-  - Logged in -> redirect to `/dashboard`
-  - Not logged in -> redirect to `/auth`
-- Remove `/pricing` route
-- Keep `/terms` and `/privacy` routes
-
-## Step 4: Disable Email Signups
-- Use auth configuration to disable email signup method
-- Google OAuth stays enabled (but only your profile works due to the trigger)
-
-## What Stays the Same
-- All edge functions and agents (run on Lovable Cloud servers, independent of browser)
-- Dashboard, dump input, assistant chat, settings
-- All RLS policies (already per-user)
-- Terms and Privacy pages
-
-## Result
-- Visit site -> Google sign-in screen
-- Sign in as you -> dashboard
-- Anyone else -> blocked at profile creation
-- Agents keep running 24/7
-
+After this, no code files need editing -- the build errors all stem from the missing DB schema.
