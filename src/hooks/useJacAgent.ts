@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 import type { AgentTask, JacMessage } from '@/types/agent';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
@@ -73,9 +74,16 @@ export function useJacAgent(userId: string) {
           if (payload.eventType === 'INSERT') {
             setTasks((prev) => [payload.new as AgentTask, ...prev]);
           } else if (payload.eventType === 'UPDATE') {
+          const updated = payload.new as AgentTask;
             setTasks((prev) =>
-              prev.map((t) => (t.id === (payload.new as AgentTask).id ? (payload.new as AgentTask) : t))
+              prev.map((t) => (t.id === updated.id ? updated : t))
             );
+            // Toast on task completion/failure
+            if (updated.status === 'completed') {
+              toast.success(`Task completed: ${updated.intent.slice(0, 60)}`);
+            } else if (updated.status === 'failed') {
+              toast.error(`Task failed: ${updated.error?.slice(0, 80) || updated.intent.slice(0, 60)}`);
+            }
           } else if (payload.eventType === 'DELETE') {
             setTasks((prev) => prev.filter((t) => t.id !== (payload.old as { id: string }).id));
           }
@@ -117,7 +125,7 @@ export function useJacAgent(userId: string) {
           setMessages((prev) => {
             // Avoid duplicates (we optimistically add messages)
             const isDuplicate = prev.some(
-              (m) => m.content === newMsg.content && m.role === newMsg.role && m.timestamp === newMsg.created_at
+              (m) => m.content === newMsg.content && m.role === newMsg.role
             );
             if (isDuplicate) return prev;
             return [
