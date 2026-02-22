@@ -62,10 +62,15 @@ export async function notifySlack(
       });
 
       if (res.ok) {
-        await supabase
-          .from('agent_tasks')
-          .update({ slack_notified: true })
-          .eq('id', payload.taskId);
+        const resData = await res.json();
+        if (resData.ok) {
+          await supabase
+            .from('agent_tasks')
+            .update({ slack_notified: true })
+            .eq('id', payload.taskId);
+        } else {
+          console.warn('[slack] Slack API ok:false —', resData.error);
+        }
       } else {
         console.warn('[slack] Bot token reply failed:', res.status);
       }

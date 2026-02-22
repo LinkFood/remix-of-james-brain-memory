@@ -130,7 +130,16 @@ serve(async (req) => {
       });
     }
 
-    // 2. Concurrent task guard
+    // 2a. Clean stale tasks (stuck in running/queued > 10 min) before counting
+    const staleThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    await supabase
+      .from('agent_tasks')
+      .update({ status: 'failed', error: 'Timed out (stale >10min)', completed_at: new Date().toISOString() })
+      .eq('user_id', userId)
+      .in('status', ['running', 'queued'])
+      .lt('created_at', staleThreshold);
+
+    // 2b. Concurrent task guard
     const { count: runningCount } = await supabase
       .from('agent_tasks')
       .select('id', { count: 'exact', head: true })
@@ -168,13 +177,16 @@ serve(async (req) => {
         .slice(0, 5);
 
       if (searchWords.length > 0) {
-        const searchPattern = `%${searchWords[0]}%`;
+        // Search across ALL keywords with OR conditions (not just the first one)
+        const orClauses = searchWords
+          .map(w => `content.ilike.%${w}%,title.ilike.%${w}%`)
+          .join(',');
         const { data: contentResults } = await supabase
           .from('entries')
           .select('id, content, title, tags')
           .eq('user_id', userId)
           .eq('archived', false)
-          .or(`content.ilike.${searchPattern},title.ilike.${searchPattern}`)
+          .or(orClauses)
           .order('created_at', { ascending: false })
           .limit(10);
 
@@ -406,6 +418,21 @@ Be concise. Be confident. Don't ask questions — just act.`;
 
   } catch (error) {
     console.error('[jac-dispatcher] Error:', error);
+
+    // Clean up stuck "Thinking..." message in Slack on error
+    // Note: body variables (slack_thinking_ts, slack_channel) may not be in scope
+    // if the error happened before parsing. Use try/catch to be safe.
+    try {
+      const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+      if (typeof slack_thinking_ts === 'string' && typeof slack_channel === 'string' && botToken) {
+        fetch('https://slack.com/api/chat.update', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ channel: slack_channel, ts: slack_thinking_ts, text: ':x: Something went wrong. Try again.' }),
+        }).catch(() => {});
+      }
+    } catch {}
+
     return new Response(JSON.stringify({
       error: error instanceof Error ? error.message : 'Internal server error',
     }), { status: 500, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } });

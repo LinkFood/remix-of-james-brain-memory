@@ -56,25 +56,33 @@ serve(async (req) => {
     const rawBody = await req.text();
     const payload = JSON.parse(rawBody);
 
-    // Handle URL verification challenge (before signature check)
-    if (payload.type === 'url_verification') {
-      return new Response(JSON.stringify({ challenge: payload.challenge }), {
-        headers: { 'Content-Type': 'application/json' },
-      });
-    }
-
     const timestamp = req.headers.get('x-slack-request-timestamp') || '';
     const slackSignature = req.headers.get('x-slack-signature') || '';
 
-    // Verify signature for all other requests
+    // Verify signature for ALL requests (including url_verification)
     const isValid = await verifySlackSignature(rawBody, timestamp, slackSignature, signingSecret);
     if (!isValid) {
       console.warn('[slack-incoming] Invalid signature');
       return new Response('Invalid signature', { status: 401 });
     }
 
+    // Handle URL verification challenge (after signature check)
+    if (payload.type === 'url_verification') {
+      return new Response(JSON.stringify({ challenge: payload.challenge }), {
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     // Handle event callbacks
     if (payload.type === 'event_callback') {
+      // Slack retries events up to 3x if it doesn't get a 200 within 3s.
+      // Drop retries to prevent duplicate tasks/messages.
+      const retryNum = req.headers.get('x-slack-retry-num');
+      if (retryNum && parseInt(retryNum) > 0) {
+        console.log(`[slack-incoming] Dropping Slack retry #${retryNum}`);
+        return new Response('ok', { status: 200 });
+      }
+
       const event = payload.event;
 
       // Ignore bot messages (prevent loops)
@@ -135,7 +143,11 @@ serve(async (req) => {
           });
           if (thinkRes.ok) {
             const thinkData = await thinkRes.json();
-            thinkingTs = thinkData.ts;
+            if (thinkData.ok && thinkData.ts) {
+              thinkingTs = thinkData.ts;
+            } else {
+              console.warn('[slack-incoming] Slack postMessage ok:false —', thinkData.error);
+            }
           }
         } catch {}
       }

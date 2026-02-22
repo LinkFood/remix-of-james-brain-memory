@@ -127,21 +127,8 @@ serve(async (req) => {
       return errorResponse(req, 'Query must be at least 3 characters', 400);
     }
 
-    // Enhance query with brain context if available
+    // Use query as-is — brain context is for the LLM synthesis, NOT for polluting the search query
     let enhancedQuery = query;
-    if (brainContext) {
-      // Extract key terms from brain context to make search more relevant
-      const contextKeywords = brainContext
-        .split(/\s+/)
-        .filter(word => word.length > 4)
-        .slice(0, 5)
-        .join(' ');
-      
-      if (contextKeywords) {
-        enhancedQuery = `${query} ${contextKeywords}`;
-        console.log(`Enhanced query with brain context: "${enhancedQuery}"`);
-      }
-    }
 
     // Add current year for relevance
     const currentYear = new Date().getFullYear();
