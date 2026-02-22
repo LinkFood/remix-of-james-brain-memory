@@ -1,49 +1,44 @@
 
+# End-to-End Test Results and Fix Plan
 
-# Fix Build Errors in jac-dispatcher (Commit f484066)
+## Status: Deployed and Running
 
-## Problem
+All 6 edge functions are deployed and responding:
+- slack-incoming -- OK
+- jac-dispatcher -- OK (returns proper validation errors)
+- jac-web-search -- OK (deployed but Tavily key is bad)
+- jac-research-agent -- OK
+- jac-save-agent -- OK
+- jac-search-agent -- OK
 
-The outer `catch` block (line 420) references `slack_thinking_ts` and `slack_channel` as standalone variables, but they only exist as properties on `body`, which is declared inside the `try` block. This causes 4 TypeScript errors.
+## Critical Issue: Invalid Tavily API Key
 
-## Fix
+The `TAVILY_API_KEY` secret IS set, but the key itself is invalid -- Tavily returns HTTP 401 "Unauthorized". This is confirmed by directly calling `jac-web-search` with a test query.
 
-**File: `supabase/functions/jac-dispatcher/index.ts`**
+**Impact:** All research queries from JAC return "No current web sources were available" -- the research agent falls back to LLM-only knowledge with no real web data.
 
-Hoist two variables before the outer `try` block (after line 94, before line 95):
+**Fix:** You need to update the Tavily API key:
+1. Go to [tavily.com](https://tavily.com) and sign in
+2. Copy your current API key (or generate a new one)
+3. Come back here and I will update the secret with the new key
 
-```typescript
-let slackChannel: string | undefined;
-let slackThinkingTs: string | undefined;
-```
+## Frontend Test Results
 
-After `body` is parsed (~line 99), assign them:
+| Page | Status | Notes |
+|------|--------|-------|
+| Landing | OK | Loads, "Get Started" works |
+| Dashboard | OK | 22 entries, stats, tags, reminders all render |
+| JAC Command Center | OK | Chat, agent roster, operations (48 tasks) |
+| Settings | OK | Account, plan, Slack webhook config |
+| Console | Clean | Only benign iframe postMessage warnings |
 
-```typescript
-slackChannel = body.slack_channel;
-slackThinkingTs = body.slack_thinking_ts;
-```
+## No Code Changes Needed
 
-Then update the catch block (lines 427-431) to use the hoisted variables:
+The codebase is working correctly. The only action item is replacing the Tavily API key with a valid one. Once done, research queries will return real web sources and the "Thinking..." to final-answer flow can be fully validated in Slack.
 
-```typescript
-if (typeof slackThinkingTs === 'string' && typeof slackChannel === 'string' && botToken) {
-  fetch('https://slack.com/api/chat.update', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ channel: slackChannel, ts: slackThinkingTs, text: ':x: Something went wrong. Try again.' }),
-  }).catch(() => {});
-}
-```
+## Recommended Slack Tests (After Key Fix)
 
-## Deploy
-
-After fixing, deploy:
-- `slack-incoming`
-- `jac-dispatcher`
-- `jac-web-search`
-
-## Test
-
-Run the 4 tests from the commit notes (retry dedup, research quality, stale task cleanup, error handling).
-
+1. DM LinkJac: "Hey what's up" -- verify single-message update
+2. DM LinkJac: "Save this: test note" -- verify save confirmation replaces Thinking
+3. DM LinkJac: "Research what's new with Claude AI" -- verify web sources appear (not "Incomplete")
+4. Check for duplicate messages (retry dedup)
