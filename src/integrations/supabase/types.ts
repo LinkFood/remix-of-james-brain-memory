@@ -14,6 +14,77 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_tasks: {
+        Row: {
+          agent: string | null
+          cost_usd: number | null
+          created_at: string
+          cron_active: boolean | null
+          cron_expression: string | null
+          error: string | null
+          id: string
+          input: Json
+          intent: string
+          next_run_at: string | null
+          output: Json | null
+          parent_task_id: string | null
+          status: string
+          tokens_in: number | null
+          tokens_out: number | null
+          type: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          agent?: string | null
+          cost_usd?: number | null
+          created_at?: string
+          cron_active?: boolean | null
+          cron_expression?: string | null
+          error?: string | null
+          id?: string
+          input?: Json
+          intent: string
+          next_run_at?: string | null
+          output?: Json | null
+          parent_task_id?: string | null
+          status?: string
+          tokens_in?: number | null
+          tokens_out?: number | null
+          type?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          agent?: string | null
+          cost_usd?: number | null
+          created_at?: string
+          cron_active?: boolean | null
+          cron_expression?: string | null
+          error?: string | null
+          id?: string
+          input?: Json
+          intent?: string
+          next_run_at?: string | null
+          output?: Json | null
+          parent_task_id?: string | null
+          status?: string
+          tokens_in?: number | null
+          tokens_out?: number | null
+          type?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "agent_tasks_parent_task_id_fkey"
+            columns: ["parent_task_id"]
+            isOneToOne: false
+            referencedRelation: "agent_tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       brain_reports: {
         Row: {
           conversation_stats: Json | null
@@ -201,6 +272,39 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      user_settings: {
+        Row: {
+          created_at: string
+          daily_task_limit: number | null
+          id: string
+          max_concurrent_tasks: number | null
+          preferred_model: string | null
+          settings: Json | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          daily_task_limit?: number | null
+          id?: string
+          max_concurrent_tasks?: number | null
+          preferred_model?: string | null
+          settings?: Json | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          daily_task_limit?: number | null
+          id?: string
+          max_concurrent_tasks?: number | null
+          preferred_model?: string | null
+          settings?: Json | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
       }
     }
     Views: {

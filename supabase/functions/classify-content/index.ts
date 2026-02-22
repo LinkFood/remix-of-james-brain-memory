@@ -1,21 +1,17 @@
 /**
  * classify-content — The Brain Behind the Brain
  * 
- * GOAL: Figure out what the user dumped without asking them.
- * 
- * Code? We know. Grocery list? We know. Random thought? We know.
- * 
- * This is the magic. Get this right and the product works.
- * Get this wrong and users have to organize. We failed.
+ * Uses Anthropic Claude for classification.
  */
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserId } from '../_shared/auth.ts';
 import { checkRateLimit, getRateLimitHeaders, RATE_LIMIT_CONFIGS } from '../_shared/rateLimit.ts';
 import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
 import { sanitizeString, validateContentLength, parseJsonBody } from '../_shared/validation.ts';
+import { callClaude, parseToolUse, CLAUDE_MODELS, ClaudeError } from '../_shared/anthropic.ts';
 
 interface ClassificationResult {
   type: 'code' | 'list' | 'idea' | 'link' | 'contact' | 'event' | 'reminder' | 'note' | 'image' | 'document';
@@ -39,37 +35,26 @@ interface ClassifyRequest {
 }
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   const corsResponse = handleCors(req);
   if (corsResponse) return corsResponse;
-
-  const corsHeaders = getCorsHeaders(req);
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
-
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Extract user ID from JWT
     const { userId, error: authError } = await extractUserId(req);
 
-    // Rate limiting (AI operations)
     if (userId) {
       const rateLimitResult = checkRateLimit(`classify:${userId}`, RATE_LIMIT_CONFIGS.ai);
       if (!rateLimitResult.allowed) {
         return new Response(
           JSON.stringify({ error: 'Rate limit exceeded', retryAfter: Math.ceil(rateLimitResult.resetIn / 1000) }),
-          { 
-            status: 429,
-            headers: { ...corsHeaders, ...getRateLimitHeaders(rateLimitResult), 'Content-Type': 'application/json' } 
-          }
+          { status: 429, headers: { ...getCorsHeaders(req), ...getRateLimitHeaders(rateLimitResult), 'Content-Type': 'application/json' } }
         );
       }
     }
 
-    // Parse and validate request
     const { data: body, error: parseError } = await parseJsonBody<ClassifyRequest>(req);
     if (parseError || !body) {
       return errorResponse(req, parseError || 'Invalid request body', 400);
@@ -78,7 +63,7 @@ Deno.serve(async (req) => {
     const content = body.content ? sanitizeString(body.content) : '';
     const imageUrl = body.imageUrl ? sanitizeString(body.imageUrl) : undefined;
 
-    // Fetch recent entries for context (to detect append opportunities)
+    // Fetch recent lists for append context
     let recentEntries: Array<{ id: string; title: string; content_type: string; content: string }> = [];
     if (userId) {
       const { data } = await supabase
@@ -89,7 +74,6 @@ Deno.serve(async (req) => {
         .in('content_type', ['list'])
         .order('updated_at', { ascending: false })
         .limit(10);
-
       recentEntries = data || [];
     }
 
@@ -97,7 +81,7 @@ Deno.serve(async (req) => {
       ? `\n\nExisting lists the user has (consider appending to these if content matches):\n${recentEntries.map(e => `- ID: ${e.id}, Title: "${e.title || 'Untitled'}", Type: ${e.content_type}`).join('\n')}`
       : '';
 
-const systemPrompt = `You are a content classifier for the "LinkJac" app. Users paste anything - code, lists, ideas, links, notes, images, or PDFs - and you classify it.
+    const systemPrompt = `You are a content classifier for the "LinkJac" app. Users paste anything - code, lists, ideas, links, notes, images, or PDFs - and you classify it.
 
 Analyze the content and determine:
 1. TYPE: code | list | idea | link | contact | event | reminder | note | image | document
@@ -124,22 +108,10 @@ NEVER generate these generic titles:
 - "Document" → Instead: "2024 Tax Return Form" or "Apartment lease agreement"
 - "Untitled" → NEVER use this
 
-FOR CODE:
-- Describe what the code DOES, not that it's code
-- Include language/framework if identifiable
-- Examples: "SQL query for monthly user stats", "Bash script for deploying to AWS", "React hook for auth state"
-
-FOR LISTS:
-- Include the list's PURPOSE or context
-- Examples: "Camping trip packing list", "Books to read 2026", "Birthday party supplies"
-
-FOR IMAGES:
-- Describe the KEY subject matter visible
-- Examples: "Whiteboard brainstorm session", "Screenshot of error in console", "Photo of handwritten notes"
-
-FOR LINKS:
-- Describe what the linked resource IS
-- Examples: "React Query v5 migration guide", "OpenAI pricing calculator", "GitHub issue #1234"
+FOR CODE: Describe what the code DOES, not that it's code. Include language/framework.
+FOR LISTS: Include the list's PURPOSE or context.
+FOR IMAGES: Describe the KEY subject matter visible.
+FOR LINKS: Describe what the linked resource IS.
 
 Guidelines:
 - CODE: Contains programming syntax, functions, variables, imports
@@ -154,193 +126,103 @@ Guidelines:
 - DOCUMENT: PDFs, scanned documents, multi-page content
 
 === DATE/TIME EXTRACTION (CRITICAL) ===
-Extract dates and times from content to enable calendar features:
+Extract dates and times from content to enable calendar features.
+Today's date is: ${new Date().toISOString().split('T')[0]}
 
-RELATIVE DATES (resolve to actual dates based on today):
-- "tomorrow" → next day's date
-- "next week" → 7 days from now
-- "next Monday" → next Monday's date
-- "in 3 days" → 3 days from now
-- "tonight" → today's date, evening time (20:00)
-- "this afternoon" → today's date, afternoon time (14:00)
-
-ABSOLUTE DATES:
-- "June 5th" → 2026-06-05
-- "3/15/2026" → 2026-03-15
-- "March 15" → 2026-03-15
-
-TIMES:
-- "at 3pm" → 15:00
-- "at 10:30 AM" → 10:30
-- "at noon" → 12:00
-- "in the morning" → 09:00
-- "evening" → 19:00
-
-RECURRING PATTERNS:
+=== RECURRING PATTERNS ===
 - "every day", "daily" → isRecurring: true, recurrencePattern: "daily"
 - "every week", "weekly" → isRecurring: true, recurrencePattern: "weekly"
 - "every month", "monthly" → isRecurring: true, recurrencePattern: "monthly"
 - "every year", "yearly" → isRecurring: true, recurrencePattern: "yearly"
 
-Today's date is: ${new Date().toISOString().split('T')[0]}
-
-=== CRITICAL: FORENSIC IMAGE EXTRACTION ===
-For ALL images, you MUST perform exhaustive data extraction including ALL visible text, numbers, financial data, receipts, screenshots, and diagrams.
-
 For lists, extract each item as a separate list_item with checked: false.
 ${recentListsContext}`;
 
-    // Build messages array
-    const messages: Array<{ role: string; content: unknown }> = [
-      { role: 'system', content: systemPrompt },
-    ];
-
-    // Detect if this is a PDF by checking the file path
+    // Build messages array for Claude
     const isPdf = imageUrl && (imageUrl.endsWith('.pdf') || imageUrl.includes('.pdf'));
-    
-    // If we have an image or PDF, use vision capabilities
+    const claudeMessages: Array<{ role: 'user' | 'assistant'; content: unknown }> = [];
+
     if (imageUrl) {
       console.log(`[classify-content] Processing ${isPdf ? 'PDF' : 'image'} with vision:`, imageUrl);
       
-      // For PDFs stored in Supabase, we need to get a signed URL
       let fileUrl = imageUrl;
       if (imageUrl.startsWith('dumps/')) {
         const { data: signedData, error: signedError } = await supabase.storage
           .from('dumps')
           .createSignedUrl(imageUrl.replace('dumps/', ''), 300);
-        
         if (signedError) {
           console.error('[classify-content] Failed to create signed URL:', signedError);
           return serverErrorResponse(req, 'Failed to access file');
         }
         fileUrl = signedData.signedUrl;
       }
-      
-      const userContent: Array<{ type: string; text?: string; image_url?: { url: string } }> = [];
-      
-      userContent.push({
-        type: 'image_url',
-        image_url: { url: fileUrl },
-      });
-      
-      let textPrompt = isPdf 
+
+      const userContent: Array<unknown> = [
+        { type: 'image', source: { type: 'url', url: fileUrl } },
+      ];
+
+      let textPrompt = isPdf
         ? 'Analyze this PDF document and extract ALL content. '
         : 'Analyze this image and classify it. ';
-        
-      if (content) {
-        textPrompt += `The user also provided this context: "${content}"\n\n`;
-      }
-      
-      if (isPdf) {
-        textPrompt += `IMPORTANT: This is a PDF document. Extract ALL text content, preserve structure (headings, paragraphs, tables, lists), identify the document type, and extract all key data.`;
-      } else {
-        textPrompt += `IMPORTANT: Provide a detailed description of what's in the image in the imageDescription field.`;
-      }
+      if (content) textPrompt += `The user also provided this context: "${content}"\n\n`;
+      if (isPdf) textPrompt += `IMPORTANT: This is a PDF document. Extract ALL text content, preserve structure.`;
+      else textPrompt += `IMPORTANT: Provide a detailed description in the imageDescription field.`;
       
       userContent.push({ type: 'text', text: textPrompt });
-      
-      messages.push({ role: 'user', content: userContent });
+      claudeMessages.push({ role: 'user', content: userContent });
     } else {
-      // Text-only classification
       if (!content) {
         return errorResponse(req, 'Content is required for text classification', 400);
       }
-      
       const validation = validateContentLength(content, 50000);
       if (!validation.valid) {
         return errorResponse(req, validation.error!, 400);
       }
-      
-      messages.push({
-        role: 'user',
-        content: `Classify this content:\n\n${content}`,
-      });
+      claudeMessages.push({ role: 'user', content: `Classify this content:\n\n${content}` });
     }
 
-    // Use fast flash model for everything - still has vision capabilities
-    const model = 'google/gemini-2.5-flash';
-    console.log(`[classify-content] Using fast model: ${model}, hasFile: ${!!imageUrl}, isPdf: ${isPdf}`);
-
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${lovableApiKey}`,
-        'Content-Type': 'application/json',
+    const claudeTools = [{
+      name: 'classify_content',
+      description: 'Classify the content and extract structured data',
+      input_schema: {
+        type: 'object',
+        properties: {
+          type: { type: 'string', enum: ['code', 'list', 'idea', 'link', 'contact', 'event', 'reminder', 'note', 'image', 'document'] },
+          subtype: { type: 'string', description: 'More specific categorization' },
+          suggestedTitle: { type: 'string', description: 'A short, descriptive title' },
+          tags: { type: 'array', items: { type: 'string' }, description: 'Relevant tags' },
+          extractedData: { type: 'object', description: 'Structured data extracted from content' },
+          appendTo: { type: 'string', description: 'ID of existing entry to append to' },
+          listItems: {
+            type: 'array',
+            items: { type: 'object', properties: { text: { type: 'string' }, checked: { type: 'boolean' } }, required: ['text', 'checked'] },
+          },
+          imageDescription: { type: 'string' },
+          documentText: { type: 'string' },
+          eventDate: { type: 'string', description: 'ISO date string (YYYY-MM-DD)' },
+          eventTime: { type: 'string', description: 'Time string (HH:MM)' },
+          isRecurring: { type: 'boolean' },
+          recurrencePattern: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly'] },
+        },
+        required: ['type', 'suggestedTitle', 'tags'],
       },
-      body: JSON.stringify({
-        model,
-        messages,
-        tools: [
-          {
-            type: 'function',
-            function: {
-              name: 'classify_content',
-              description: 'Classify the content and extract structured data',
-              parameters: {
-                type: 'object',
-                properties: {
-                  type: {
-                    type: 'string',
-                    enum: ['code', 'list', 'idea', 'link', 'contact', 'event', 'reminder', 'note', 'image', 'document'],
-                    description: 'The primary content type'
-                  },
-                  subtype: { type: 'string', description: 'More specific categorization' },
-                  suggestedTitle: { type: 'string', description: 'A short, descriptive title' },
-                  tags: { type: 'array', items: { type: 'string' }, description: 'Relevant tags' },
-                  extractedData: { type: 'object', description: 'Structured data extracted from content' },
-                  appendTo: { type: 'string', description: 'ID of existing entry to append to' },
-                  listItems: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: { text: { type: 'string' }, checked: { type: 'boolean' } },
-                      required: ['text', 'checked']
-                    },
-                    description: 'For list types, the individual items'
-                  },
-                  imageDescription: { type: 'string', description: 'For images: detailed description' },
-                  documentText: { type: 'string', description: 'For PDFs: full extracted text' },
-                  eventDate: { type: 'string', description: 'ISO date string (YYYY-MM-DD)' },
-                  eventTime: { type: 'string', description: 'Time string (HH:MM)' },
-                  isRecurring: { type: 'boolean', description: 'Whether this is recurring' },
-                  recurrencePattern: {
-                    type: 'string',
-                    enum: ['daily', 'weekly', 'monthly', 'yearly'],
-                    description: 'Recurrence pattern'
-                  }
-                },
-                required: ['type', 'suggestedTitle', 'tags'],
-                additionalProperties: false
-              }
-            }
-          }
-        ],
-        tool_choice: { type: 'function', function: { name: 'classify_content' } },
-        temperature: 0.3,
-        max_tokens: 4000
-      }),
+    }];
+
+    console.log(`[classify-content] Calling Claude ${CLAUDE_MODELS.haiku}, hasFile: ${!!imageUrl}, isPdf: ${isPdf}`);
+
+    const claudeResponse = await callClaude({
+      model: CLAUDE_MODELS.haiku,
+      system: systemPrompt,
+      messages: claudeMessages,
+      tools: claudeTools,
+      tool_choice: { type: 'tool', name: 'classify_content' },
+      temperature: 0.3,
+      max_tokens: 4000,
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('AI classification error:', response.status, errorText);
+    const toolResult = parseToolUse(claudeResponse);
 
-      if (response.status === 429) {
-        return errorResponse(req, 'Rate limit exceeded. Please try again later.', 429);
-      }
-      if (response.status === 402) {
-        return errorResponse(req, 'AI credits exhausted', 402);
-      }
-
-      return serverErrorResponse(req, `AI request failed: ${response.status}`);
-    }
-
-    const aiResponse = await response.json();
-    console.log('Classification response received');
-
-    const toolCall = aiResponse.choices[0]?.message?.tool_calls?.[0];
-    
-    if (!toolCall) {
+    if (!toolResult) {
       console.warn('[classify-content] No tool call in response, using fallback');
       const fallbackResult: ClassificationResult = {
         type: isPdf ? 'document' : (imageUrl ? 'image' : 'note'),
@@ -353,9 +235,8 @@ ${recentListsContext}`;
       return successResponse(req, fallbackResult);
     }
 
-    const classification: ClassificationResult = JSON.parse(toolCall.function.arguments);
+    const classification = toolResult.input as unknown as ClassificationResult;
 
-    // Ensure required fields have defaults
     const result: ClassificationResult = {
       type: classification.type || (isPdf ? 'document' : (imageUrl ? 'image' : 'note')),
       subtype: classification.subtype,
@@ -373,11 +254,13 @@ ${recentListsContext}`;
     };
 
     console.log(`[classify-content] Result: type=${result.type}, title="${result.suggestedTitle}"`);
-
     return successResponse(req, result);
 
   } catch (error) {
     console.error('Error in classify-content:', error);
+    if (error instanceof ClaudeError) {
+      return errorResponse(req, error.message, error.status);
+    }
     return serverErrorResponse(req, error instanceof Error ? error : 'Classification failed');
   }
 });
