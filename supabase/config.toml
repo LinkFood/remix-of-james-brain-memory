@@ -14,3 +14,6 @@ verify_jwt = false
 
 [functions.jac-search-agent]
 verify_jwt = false
+
+[functions.slack-incoming]
+verify_jwt = false

@@ -14,6 +14,8 @@ interface SlackPayload {
   brainEntryId?: string;
   duration?: number;
   error?: string;
+  slackChannel?: string;
+  slackThreadTs?: string;
 }
 
 const EMOJI_MAP: Record<string, string> = {
@@ -84,20 +86,50 @@ export async function notifySlack(
       },
     ];
 
-    const res = await fetch(webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ blocks }),
-    });
+    // If we have Slack channel + thread info and a bot token, reply in-thread
+    const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+    if (payload.slackChannel && payload.slackThreadTs && botToken) {
+      const threadText = isError
+        ? `:x: *${payload.taskType.toUpperCase()} failed:* ${payload.error}`
+        : `${emoji} *${payload.taskType.toUpperCase()}*\n${payload.summary}`;
 
-    if (res.ok) {
-      // Mark task as slack-notified
-      await supabase
-        .from('agent_tasks')
-        .update({ slack_notified: true })
-        .eq('id', payload.taskId);
+      const threadRes = await fetch('https://slack.com/api/chat.postMessage', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${botToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          channel: payload.slackChannel,
+          thread_ts: payload.slackThreadTs,
+          text: threadText,
+        }),
+      });
+
+      if (threadRes.ok) {
+        await supabase
+          .from('agent_tasks')
+          .update({ slack_notified: true })
+          .eq('id', payload.taskId);
+      } else {
+        console.warn('[slack] Thread reply failed:', threadRes.status);
+      }
     } else {
-      console.warn('[slack] Webhook POST failed:', res.status);
+      // Fall back to webhook
+      const res = await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blocks }),
+      });
+
+      if (res.ok) {
+        await supabase
+          .from('agent_tasks')
+          .update({ slack_notified: true })
+          .eq('id', payload.taskId);
+      } else {
+        console.warn('[slack] Webhook POST failed:', res.status);
+      }
     }
   } catch (err) {
     // Never throw — Slack is best-effort

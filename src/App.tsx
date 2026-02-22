@@ -14,6 +14,7 @@ import Terms from "./pages/Terms";
 import Privacy from "./pages/Privacy";
 import NotFound from "./pages/NotFound";
 import Jac from "./pages/Jac";
+import Landing from "./pages/Landing";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -50,7 +51,7 @@ const TrackedRoutes = () => {
 
   const routes = (
     <Routes>
-      <Route path="/" element={<AuthRedirect />} />
+      <Route path="/" element={<Landing />} />
       <Route path="/auth" element={<Auth />} />
       <Route path="/dashboard" element={<Dashboard />} />
       <Route path="/settings" element={<Settings />} />
@@ -82,8 +83,8 @@ const App = () => (
           <Sonner />
           <BrowserRouter>
             <TrackedRoutes />
+            <InstallPrompt />
           </BrowserRouter>
-          <InstallPrompt />
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>

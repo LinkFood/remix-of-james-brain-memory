@@ -79,7 +79,8 @@ serve(async (req) => {
     const entryTitle = saveData.entry?.title || 'Untitled';
     const entryType = saveData.entry?.type || 'note';
 
-    await saveStep({ entryId, entryTitle, entryType });
+    await saveStep();
+    await log.info('save_result', { entryId, entryTitle, entryType });
 
     const duration = Date.now() - startTime;
 

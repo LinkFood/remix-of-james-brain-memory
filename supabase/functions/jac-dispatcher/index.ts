@@ -109,7 +109,7 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, serviceKey);
 
     // Parse body
-    let body: { message?: string };
+    let body: { message?: string; slack_channel?: string; slack_thread_ts?: string; source?: string };
     try {
       body = await req.json();
     } catch {
@@ -117,6 +117,7 @@ serve(async (req) => {
         status: 400, headers: jsonHeaders,
       });
     }
+    const { message, slack_channel, slack_thread_ts, source } = body;
     const { message } = body;
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       return new Response(JSON.stringify({ error: 'Message is required' }), {
@@ -154,34 +155,55 @@ serve(async (req) => {
       }), { status: 429, headers: jsonHeaders });
     }
 
-    // 3. Brain context search
+    // 3. Brain context search (keyword-based — embedding endpoint is unreliable)
     let brainContext = '';
     try {
-      const embResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${serviceKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ text: message }),
-      });
+      const searchWords = message.toLowerCase().split(/\s+/)
+        .filter((w: string) => w.length >= 3 && !/^(the|and|or|is|it|to|a|an|in|on|at|for|of|my|me|do|what|how|when|where|why|can|you|please|could|would|should|this|that|with|from|have|has|just|about|been|want|need|like|find|get|show|tell|help)$/i.test(w))
+        .slice(0, 5);
 
-      if (embResponse.ok) {
-        const embData = await embResponse.json();
-        if (embData.embedding) {
-          const { data: results } = await supabase.rpc('search_entries_by_embedding', {
-            query_embedding: JSON.stringify(embData.embedding),
-            match_threshold: 0.55,
-            match_count: 5,
-            filter_user_id: userId,
-          });
-          if (results && results.length > 0) {
-            brainContext = results
-              .map((r: { title?: string; content: string; tags?: string[] }) =>
-                `[${r.title || 'Untitled'}]: ${r.content.slice(0, 300)}${r.tags?.length ? ` [tags: ${r.tags.join(', ')}]` : ''}`
-              )
-              .join('\n');
+      if (searchWords.length > 0) {
+        const searchPattern = `%${searchWords[0]}%`;
+        const { data: contentResults } = await supabase
+          .from('entries')
+          .select('id, content, title, tags')
+          .eq('user_id', userId)
+          .eq('archived', false)
+          .or(`content.ilike.${searchPattern},title.ilike.${searchPattern}`)
+          .order('created_at', { ascending: false })
+          .limit(10);
+
+        const results: Array<{ id: string; content: string; title?: string; tags?: string[] }> = [];
+        if (contentResults) {
+          for (const r of contentResults) {
+            if (!results.find(e => e.id === r.id)) results.push(r as any);
           }
+        }
+
+        // Tag search for remaining words
+        if (results.length < 5) {
+          for (const word of searchWords.slice(0, 3)) {
+            const { data: tagResults } = await supabase
+              .from('entries')
+              .select('id, content, title, tags')
+              .eq('user_id', userId)
+              .eq('archived', false)
+              .contains('tags', [word])
+              .limit(5);
+            if (tagResults) {
+              for (const r of tagResults) {
+                if (!results.find(e => e.id === r.id)) results.push(r as any);
+              }
+            }
+          }
+        }
+
+        if (results.length > 0) {
+          brainContext = results.slice(0, 5)
+            .map((r) =>
+              `[${r.title || 'Untitled'}]: ${r.content.slice(0, 300)}${r.tags?.length ? ` [tags: ${r.tags.join(', ')}]` : ''}`
+            )
+            .join('\n');
         }
       }
     } catch (err) {
@@ -234,7 +256,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
         status: 'running',
         intent: summary,
         agent: 'jac-dispatcher',
-        input: { message, brainContext: brainContext.slice(0, 1000) },
+        input: { message, brainContext: brainContext.slice(0, 1000), slack_channel, slack_thread_ts, source: source || 'web' },
       })
       .select('id')
       .single();
@@ -267,7 +289,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
           intent: summary,
           agent: agentType,
           parent_task_id: parentTask.id,
-          input: { query: message, brainContext: brainContext.slice(0, 2000) },
+          input: { query: message, brainContext: brainContext.slice(0, 2000), slack_channel, slack_thread_ts },
         })
         .select('id')
         .single();
@@ -300,6 +322,8 @@ Be concise. Be confident. Don't ask questions — just act.`;
           userId,
           query: message,
           brainContext: brainContext.slice(0, 2000),
+          slack_channel,
+          slack_thread_ts,
         }),
       }).then(async (res) => {
         if (!res.ok) {
