@@ -199,6 +199,140 @@ export type Database = {
         }
         Relationships: []
       }
+      code_projects: {
+        Row: {
+          active: boolean
+          created_at: string
+          default_branch: string
+          description: string | null
+          file_tree_cache: string[] | null
+          id: string
+          last_synced_at: string | null
+          name: string
+          repo_full_name: string
+          tech_stack: string[] | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          active?: boolean
+          created_at?: string
+          default_branch?: string
+          description?: string | null
+          file_tree_cache?: string[] | null
+          id?: string
+          last_synced_at?: string | null
+          name: string
+          repo_full_name: string
+          tech_stack?: string[] | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          active?: boolean
+          created_at?: string
+          default_branch?: string
+          description?: string | null
+          file_tree_cache?: string[] | null
+          id?: string
+          last_synced_at?: string | null
+          name?: string
+          repo_full_name?: string
+          tech_stack?: string[] | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      code_sessions: {
+        Row: {
+          branch_name: string
+          ci_status: string | null
+          commit_sha: string | null
+          commits: string[] | null
+          context: Json
+          created_at: string
+          file_count: number | null
+          files_changed: string[] | null
+          files_read: string[] | null
+          files_written: string[] | null
+          id: string
+          intent: string
+          iteration_count: number
+          max_iterations: number
+          plan: string | null
+          pr_number: number | null
+          pr_url: string | null
+          project_id: string
+          query: string | null
+          status: string
+          task_id: string | null
+          total_cost_usd: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          branch_name: string
+          ci_status?: string | null
+          commit_sha?: string | null
+          commits?: string[] | null
+          context?: Json
+          created_at?: string
+          file_count?: number | null
+          files_changed?: string[] | null
+          files_read?: string[] | null
+          files_written?: string[] | null
+          id?: string
+          intent?: string
+          iteration_count?: number
+          max_iterations?: number
+          plan?: string | null
+          pr_number?: number | null
+          pr_url?: string | null
+          project_id: string
+          query?: string | null
+          status?: string
+          task_id?: string | null
+          total_cost_usd?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          branch_name?: string
+          ci_status?: string | null
+          commit_sha?: string | null
+          commits?: string[] | null
+          context?: Json
+          created_at?: string
+          file_count?: number | null
+          files_changed?: string[] | null
+          files_read?: string[] | null
+          files_written?: string[] | null
+          id?: string
+          intent?: string
+          iteration_count?: number
+          max_iterations?: number
+          plan?: string | null
+          pr_number?: number | null
+          pr_url?: string | null
+          project_id?: string
+          query?: string | null
+          status?: string
+          task_id?: string | null
+          total_cost_usd?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "code_sessions_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "code_projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       entries: {
         Row: {
           archived: boolean
