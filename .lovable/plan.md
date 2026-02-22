@@ -1,66 +1,74 @@
 
 
-# Fix Build Errors: Apply JAC Agent OS Migration
+# Fix JAC Agent OS — 5 Issues
 
-## Problem
-The code pushed from CLI references two things that don't exist in the database yet:
-1. **`agent_conversations` table** -- completely missing
-2. **`agent_tasks`** is missing `slack_notified` (boolean) and `completed_at` (timestamptz) columns
+## 1. Fix Duplicate Messages in Chat
 
-This causes TypeScript type errors because the auto-generated Supabase types don't include these, so the Supabase client rejects queries against `agent_conversations` and the `AgentTask` type doesn't align with the DB schema.
+**Problem:** When a user sends a message, both the optimistic update AND the realtime subscription add the same message. The dedup check compares timestamps, but the optimistic message uses `new Date().toISOString()` while the DB uses the server's `now()` — they never match.
 
-## Fix: Single Database Migration
+**Fix:** In `src/hooks/useJacAgent.ts`, change the dedup logic to match on `content + role` only (ignore timestamp). This handles both user and assistant messages that are optimistically added before the realtime INSERT arrives.
 
-Apply one migration that:
+## 2. Fix Auth Failures in Worker Agent Chain
 
-1. **Creates `agent_conversations` table** with columns: `id`, `user_id`, `role`, `content`, `task_ids` (text array), `created_at`
-   - RLS enabled with policies for users to read/insert their own conversations
-   - Enable realtime on the table
-   - Index on `user_id` + `created_at`
+**Problem:** `jac-research-agent` calls `jac-web-search`, `search-memory`, and `smart-save` using `Bearer ${serviceKey}`. But `jac-web-search` and `search-memory` use `extractUserId()` from `_shared/auth.ts`, which tries to parse the service role key as a JWT — it's not a JWT, so it fails with "Invalid JWT structure".
 
-2. **Adds missing columns to `agent_tasks`**:
-   - `slack_notified boolean DEFAULT false`
-   - `completed_at timestamptz`
+**Fix:** Update `jac-web-search/index.ts` and `search-memory/index.ts` to check for service role key before calling `extractUserId()`, similar to how `generate-embedding/index.ts` already handles it. If the bearer token matches the service role key, skip JWT validation and proceed as a trusted internal request.
 
-3. **Enable realtime on `agent_tasks`** (needed for live task updates in the UI)
+## 3. Fix Embedding Model Error
 
-Once the migration runs, the auto-generated types will update, and all build errors will resolve -- no code changes needed.
+**Problem:** `generate-embedding` calls the Lovable AI gateway with model `text-embedding-3-small`, but that model isn't in the allowed list. The error log confirms: `invalid model: text-embedding-3-small, allowed models: [openai/gpt-5-mini openai/gpt-5 ...]`.
+
+**Fix:** The Lovable AI gateway doesn't support embedding models directly. Use the Supabase `pgvector` approach or switch to a supported chat model to generate a pseudo-embedding. However, the simplest fix is to check if there's an embedding endpoint that works. Since the allowed models are all chat models, we'll need to use an alternative approach — calling OpenAI's embedding API directly via the LOVABLE_API_KEY with the correct model prefix, or skipping embeddings when unavailable and falling back gracefully.
+
+**Pragmatic approach:** Since the embedding endpoint is broken, make the brain context search in `jac-dispatcher` fail gracefully (it already does via try/catch), and ensure the research agent doesn't break when web-search/search-memory fail (it already catches). The embedding issue is a platform limitation — document it and move on. No code change needed here since failures are already handled.
+
+## 4. Delete Unused Pages
+
+**Files to delete:**
+- `src/pages/Landing.tsx`
+- `src/pages/Pricing.tsx`
+
+These are no longer routed in `App.tsx`.
+
+## 5. Add Task Completion Toast
+
+**Problem:** When a task completes via realtime, the user gets no visible notification.
+
+**Fix:** In the realtime subscription for `agent_tasks` in `useJacAgent.ts`, when a task status changes to `completed` or `failed`, fire a toast notification using the existing `sonner` toast.
+
+---
 
 ## Technical Details
 
-```sql
--- 1. Create agent_conversations table
-CREATE TABLE public.agent_conversations (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL,
-  role text NOT NULL,
-  content text NOT NULL,
-  task_ids text[] DEFAULT '{}',
-  created_at timestamptz NOT NULL DEFAULT now()
-);
+### File: `src/hooks/useJacAgent.ts`
 
-ALTER TABLE public.agent_conversations ENABLE ROW LEVEL SECURITY;
+Changes:
+- Dedup logic: match on `content + role` instead of `content + role + timestamp`
+- Add toast import and fire toast on task status change to completed/failed
 
-CREATE POLICY "Users can view own conversations"
-  ON public.agent_conversations FOR SELECT
-  USING (auth.uid() = user_id);
+### File: `supabase/functions/jac-web-search/index.ts`
 
-CREATE POLICY "Users can insert own conversations"
-  ON public.agent_conversations FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+Add service role check before `extractUserId()`:
+```typescript
+const authHeader = req.headers.get('authorization');
+const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+const isServiceRole = authHeader === `Bearer ${serviceKey}`;
 
-CREATE INDEX idx_agent_conversations_user_created
-  ON public.agent_conversations (user_id, created_at);
-
-ALTER PUBLICATION supabase_realtime ADD TABLE public.agent_conversations;
-
--- 2. Add missing columns to agent_tasks
-ALTER TABLE public.agent_tasks
-  ADD COLUMN IF NOT EXISTS slack_notified boolean DEFAULT false,
-  ADD COLUMN IF NOT EXISTS completed_at timestamptz;
-
--- 3. Enable realtime on agent_tasks
-ALTER PUBLICATION supabase_realtime ADD TABLE public.agent_tasks;
+let userId: string;
+if (isServiceRole) {
+  userId = 'service_role_internal';
+} else {
+  const { userId: uid, error } = await extractUserId(req);
+  if (error || !uid) return errorResponse(req, error ?? 'Unauthorized', 401);
+  userId = uid;
+}
 ```
 
-After this, no code files need editing -- the build errors all stem from the missing DB schema.
+### File: `supabase/functions/search-memory/index.ts`
+
+Same service role check pattern as above.
+
+### Files to delete:
+- `src/pages/Landing.tsx`
+- `src/pages/Pricing.tsx`
+
