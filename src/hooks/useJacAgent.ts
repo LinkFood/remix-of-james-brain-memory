@@ -57,15 +57,15 @@ export function useJacAgent(userId: string) {
           .map((t) => t.id);
 
         if (activeTaskIds.length > 0) {
-          const { data: logs } = await supabase
-            .from('agent_activity_log')
+          const { data: logs } = await (supabase
+            .from('agent_activity_log' as any)
             .select('*')
             .in('task_id', activeTaskIds)
-            .order('created_at', { ascending: true });
+            .order('created_at', { ascending: true }) as any);
 
           if (logs) {
             const logMap = new Map<string, ActivityLogEntry[]>();
-            for (const log of logs as ActivityLogEntry[]) {
+            for (const log of logs as unknown as ActivityLogEntry[]) {
               const existing = logMap.get(log.task_id) || [];
               existing.push(log);
               logMap.set(log.task_id, existing);
@@ -214,16 +214,16 @@ export function useJacAgent(userId: string) {
 
   // Load logs for a specific task (on-demand when expanding)
   const loadTaskLogs = useCallback(async (taskId: string) => {
-    const { data: logs } = await supabase
-      .from('agent_activity_log')
+    const { data: logs } = await (supabase
+      .from('agent_activity_log' as any)
       .select('*')
       .eq('task_id', taskId)
-      .order('created_at', { ascending: true });
+      .order('created_at', { ascending: true }) as any);
 
     if (logs) {
       setActivityLogs((prev) => {
         const updated = new Map(prev);
-        updated.set(taskId, logs as ActivityLogEntry[]);
+        updated.set(taskId, logs as unknown as ActivityLogEntry[]);
         return updated;
       });
     }
