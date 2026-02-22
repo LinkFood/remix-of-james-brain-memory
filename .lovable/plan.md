@@ -1,74 +1,118 @@
 
 
-# Fix JAC Agent OS — 5 Issues
+# Apply Commit afe07d1 — JAC Agent OS Critical Fixes
 
-## 1. Fix Duplicate Messages in Chat
+## Overview
 
-**Problem:** When a user sends a message, both the optimistic update AND the realtime subscription add the same message. The dedup check compares timestamps, but the optimistic message uses `new Date().toISOString()` while the DB uses the server's `now()` — they never match.
+This plan applies all changes from the commit: a new migration, a new shared logger utility, auth fixes across 4 edge functions, dispatcher/research-agent logging, and frontend activity log support.
 
-**Fix:** In `src/hooks/useJacAgent.ts`, change the dedup logic to match on `content + role` only (ignore timestamp). This handles both user and assistant messages that are optimistically added before the realtime INSERT arrives.
+## Step 1: Database Migration — `agent_activity_log` table
 
-## 2. Fix Auth Failures in Worker Agent Chain
+Create the `agent_activity_log` table with RLS and realtime:
 
-**Problem:** `jac-research-agent` calls `jac-web-search`, `search-memory`, and `smart-save` using `Bearer ${serviceKey}`. But `jac-web-search` and `search-memory` use `extractUserId()` from `_shared/auth.ts`, which tries to parse the service role key as a JWT — it's not a JWT, so it fails with "Invalid JWT structure".
+```sql
+CREATE TABLE public.agent_activity_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  task_id uuid NOT NULL,
+  user_id uuid NOT NULL,
+  agent text NOT NULL,
+  step text NOT NULL,
+  status text NOT NULL DEFAULT 'started',
+  detail jsonb NOT NULL DEFAULT '{}',
+  duration_ms integer,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 
-**Fix:** Update `jac-web-search/index.ts` and `search-memory/index.ts` to check for service role key before calling `extractUserId()`, similar to how `generate-embedding/index.ts` already handles it. If the bearer token matches the service role key, skip JWT validation and proceed as a trusted internal request.
+ALTER TABLE public.agent_activity_log ENABLE ROW LEVEL SECURITY;
 
-## 3. Fix Embedding Model Error
+CREATE POLICY "Users can view own activity logs"
+  ON public.agent_activity_log FOR SELECT
+  USING (auth.uid() = user_id);
 
-**Problem:** `generate-embedding` calls the Lovable AI gateway with model `text-embedding-3-small`, but that model isn't in the allowed list. The error log confirms: `invalid model: text-embedding-3-small, allowed models: [openai/gpt-5-mini openai/gpt-5 ...]`.
+CREATE POLICY "Service role can insert activity logs"
+  ON public.agent_activity_log FOR INSERT
+  WITH CHECK (true);
 
-**Fix:** The Lovable AI gateway doesn't support embedding models directly. Use the Supabase `pgvector` approach or switch to a supported chat model to generate a pseudo-embedding. However, the simplest fix is to check if there's an embedding endpoint that works. Since the allowed models are all chat models, we'll need to use an alternative approach — calling OpenAI's embedding API directly via the LOVABLE_API_KEY with the correct model prefix, or skipping embeddings when unavailable and falling back gracefully.
+CREATE INDEX idx_activity_log_task ON public.agent_activity_log (task_id, created_at);
+CREATE INDEX idx_activity_log_user ON public.agent_activity_log (user_id, created_at);
 
-**Pragmatic approach:** Since the embedding endpoint is broken, make the brain context search in `jac-dispatcher` fail gracefully (it already does via try/catch), and ensure the research agent doesn't break when web-search/search-memory fail (it already catches). The embedding issue is a platform limitation — document it and move on. No code change needed here since failures are already handled.
-
-## 4. Delete Unused Pages
-
-**Files to delete:**
-- `src/pages/Landing.tsx`
-- `src/pages/Pricing.tsx`
-
-These are no longer routed in `App.tsx`.
-
-## 5. Add Task Completion Toast
-
-**Problem:** When a task completes via realtime, the user gets no visible notification.
-
-**Fix:** In the realtime subscription for `agent_tasks` in `useJacAgent.ts`, when a task status changes to `completed` or `failed`, fire a toast notification using the existing `sonner` toast.
-
----
-
-## Technical Details
-
-### File: `src/hooks/useJacAgent.ts`
-
-Changes:
-- Dedup logic: match on `content + role` instead of `content + role + timestamp`
-- Add toast import and fire toast on task status change to completed/failed
-
-### File: `supabase/functions/jac-web-search/index.ts`
-
-Add service role check before `extractUserId()`:
-```typescript
-const authHeader = req.headers.get('authorization');
-const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-const isServiceRole = authHeader === `Bearer ${serviceKey}`;
-
-let userId: string;
-if (isServiceRole) {
-  userId = 'service_role_internal';
-} else {
-  const { userId: uid, error } = await extractUserId(req);
-  if (error || !uid) return errorResponse(req, error ?? 'Unauthorized', 401);
-  userId = uid;
-}
+ALTER PUBLICATION supabase_realtime ADD TABLE public.agent_activity_log;
 ```
 
-### File: `supabase/functions/search-memory/index.ts`
+## Step 2: Create `supabase/functions/_shared/logger.ts`
 
-Same service role check pattern as above.
+A shared `createAgentLogger()` utility that agents call to log steps with duration tracking. Each call to `log.step('step_name')` inserts a row into `agent_activity_log` with status `started` and returns a `done(detail?)` function that updates the row with `completed` status and `duration_ms`.
 
-### Files to delete:
-- `src/pages/Landing.tsx`
-- `src/pages/Pricing.tsx`
+## Step 3: Update `supabase/functions/_shared/auth.ts`
+
+Add `extractUserIdWithServiceRole()` function. This is already defined in the useful-context but missing from the actual file. It checks if the request uses the service role key first (reads `userId` from the body), then falls back to JWT auth via `extractUserId()`.
+
+## Step 4: Update Edge Functions (4 files)
+
+### `search-memory/index.ts`
+- Replace the `service_role_internal` pattern with `extractUserIdWithServiceRole(req, body)`
+- Parse body first (needed for auth), then reuse it
+- Skip rate limit for internal agent calls using `isServiceRoleRequest()`
+
+### `jac-web-search/index.ts`
+- Same pattern: switch to `extractUserIdWithServiceRole(req, body)`
+- Parse body early, reuse downstream
+- Skip rate limit for service role calls
+
+### `smart-save/index.ts`
+- Switch from `extractUserId(req)` to `extractUserIdWithServiceRole(req, body)`
+- Parse body early, reuse it downstream
+
+### `jac-dispatcher/index.ts`
+- Add logger import and log `intent_parsed` and `worker_dispatched` steps
+
+### `jac-research-agent/index.ts`
+- Add full step logging: `web_search`, `brain_search`, `ai_synthesis`, `save_to_brain`, `slack_notify`
+- Pass `userId` in body for all inter-function calls (search-memory, jac-web-search, smart-save)
+
+## Step 5: Update Frontend Types
+
+### `src/types/agent.ts`
+- Add `ActivityLogEntry` and `LogStatus` types (already present in file)
+
+## Step 6: Update Frontend Components
+
+### `src/hooks/useJacAgent.ts`
+- Add `activityLogs` state (Map keyed by taskId)
+- Add realtime subscription on `agent_activity_log` table
+- Add `loadTaskLogs()` function for on-demand log loading
+- Export `activityLogs` and `loadTaskLogs`
+
+### `src/components/jac/TaskCard.tsx`
+- Accept `activityLogs` and `onExpand` props
+- Show live step timeline when expanded
+- Auto-expand running tasks
+- Show duration per step
+
+### `src/components/jac/ActivityFeed.tsx`
+- Pass `activityLogs` and `onExpandTask` callback to TaskCard
+
+### `src/pages/Jac.tsx`
+- Wire `activityLogs` and `loadTaskLogs` from the hook through to ActivityFeed
+
+## Step 7: Redeploy Edge Functions
+
+Deploy all 5 modified edge functions: `search-memory`, `jac-web-search`, `smart-save`, `jac-dispatcher`, `jac-research-agent`
+
+## Summary of Files Changed
+
+| File | Action |
+|------|--------|
+| Migration (agent_activity_log) | Create |
+| `supabase/functions/_shared/logger.ts` | Create |
+| `supabase/functions/_shared/auth.ts` | Already correct (verify) |
+| `supabase/functions/search-memory/index.ts` | Update |
+| `supabase/functions/jac-web-search/index.ts` | Update |
+| `supabase/functions/smart-save/index.ts` | Update |
+| `supabase/functions/jac-dispatcher/index.ts` | Update |
+| `supabase/functions/jac-research-agent/index.ts` | Update |
+| `src/hooks/useJacAgent.ts` | Update |
+| `src/components/jac/TaskCard.tsx` | Update |
+| `src/components/jac/ActivityFeed.tsx` | Update |
+| `src/pages/Jac.tsx` | Update |
 
