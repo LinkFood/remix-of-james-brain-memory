@@ -15,7 +15,6 @@ interface SlackPayload {
   duration?: number;
   error?: string;
   slackChannel?: string;
-  slackThreadTs?: string;
 }
 
 const EMOJI_MAP: Record<string, string> = {

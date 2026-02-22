@@ -129,7 +129,6 @@ serve(async (req) => {
           message: cleanMessage,
           userId,
           slack_channel: event.channel,
-          slack_thread_ts: event.thread_ts || event.ts,
           source: 'slack',
         }),
       }).catch(err => {

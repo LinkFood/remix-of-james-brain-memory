@@ -48,7 +48,6 @@ serve(async (req) => {
     const query = body.query as string;
     const brainContext = (body.brainContext as string) || '';
     const slack_channel = body.slack_channel as string | undefined;
-    const slack_thread_ts = body.slack_thread_ts as string | undefined;
 
     if (!taskId || !userId || !query) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), {
@@ -260,7 +259,6 @@ Instructions:
       brainEntryId,
       duration,
       slackChannel: slack_channel,
-      slackThreadTs: slack_thread_ts,
     });
     await slackStep();
 
@@ -323,8 +321,7 @@ Instructions:
           error: errorMessage,
           duration: Date.now() - startTime,
           slackChannel: slack_channel,
-          slackThreadTs: slack_thread_ts,
-        });
+            });
       }
     }
 
