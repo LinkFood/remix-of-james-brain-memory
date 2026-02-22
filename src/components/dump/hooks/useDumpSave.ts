@@ -180,7 +180,6 @@ export function useDumpSave({
         throw new Error(data.error);
       }
 
-      // Success
       setSuccess(true);
       setUploadProgress(null);
       
