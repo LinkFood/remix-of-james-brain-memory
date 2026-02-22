@@ -92,6 +92,9 @@ serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
   const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json' };
 
+  let slackChannel: string | undefined;
+  let slackThinkingTs: string | undefined;
+
   try {
     // Parse body first (needed for service-role auth which reads userId from body)
     let body: { message?: string; userId?: string; slack_channel?: string; slack_thinking_ts?: string; source?: string };
@@ -124,6 +127,8 @@ serve(async (req) => {
     const supabase = createClient(supabaseUrl, serviceKey);
 
     const { message, slack_channel, slack_thinking_ts, source } = body;
+    slackChannel = slack_channel;
+    slackThinkingTs = slack_thinking_ts;
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       return new Response(JSON.stringify({ error: 'Message is required' }), {
         status: 400, headers: jsonHeaders,
@@ -424,11 +429,11 @@ Be concise. Be confident. Don't ask questions — just act.`;
     // if the error happened before parsing. Use try/catch to be safe.
     try {
       const botToken = Deno.env.get('SLACK_BOT_TOKEN');
-      if (typeof slack_thinking_ts === 'string' && typeof slack_channel === 'string' && botToken) {
+      if (typeof slackThinkingTs === 'string' && typeof slackChannel === 'string' && botToken) {
         fetch('https://slack.com/api/chat.update', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ channel: slack_channel, ts: slack_thinking_ts, text: ':x: Something went wrong. Try again.' }),
+          body: JSON.stringify({ channel: slackChannel, ts: slackThinkingTs, text: ':x: Something went wrong. Try again.' }),
         }).catch(() => {});
       }
     } catch {}
