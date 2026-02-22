@@ -14,9 +14,37 @@ export type Database = {
   }
   public: {
     Tables: {
+      agent_conversations: {
+        Row: {
+          content: string
+          created_at: string
+          id: string
+          role: string
+          task_ids: string[] | null
+          user_id: string
+        }
+        Insert: {
+          content: string
+          created_at?: string
+          id?: string
+          role: string
+          task_ids?: string[] | null
+          user_id: string
+        }
+        Update: {
+          content?: string
+          created_at?: string
+          id?: string
+          role?: string
+          task_ids?: string[] | null
+          user_id?: string
+        }
+        Relationships: []
+      }
       agent_tasks: {
         Row: {
           agent: string | null
+          completed_at: string | null
           cost_usd: number | null
           created_at: string
           cron_active: boolean | null
@@ -28,6 +56,7 @@ export type Database = {
           next_run_at: string | null
           output: Json | null
           parent_task_id: string | null
+          slack_notified: boolean | null
           status: string
           tokens_in: number | null
           tokens_out: number | null
@@ -37,6 +66,7 @@ export type Database = {
         }
         Insert: {
           agent?: string | null
+          completed_at?: string | null
           cost_usd?: number | null
           created_at?: string
           cron_active?: boolean | null
@@ -48,6 +78,7 @@ export type Database = {
           next_run_at?: string | null
           output?: Json | null
           parent_task_id?: string | null
+          slack_notified?: boolean | null
           status?: string
           tokens_in?: number | null
           tokens_out?: number | null
@@ -57,6 +88,7 @@ export type Database = {
         }
         Update: {
           agent?: string | null
+          completed_at?: string | null
           cost_usd?: number | null
           created_at?: string
           cron_active?: boolean | null
@@ -68,6 +100,7 @@ export type Database = {
           next_run_at?: string | null
           output?: Json | null
           parent_task_id?: string | null
+          slack_notified?: boolean | null
           status?: string
           tokens_in?: number | null
           tokens_out?: number | null
