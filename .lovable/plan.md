@@ -1,75 +1,43 @@
 
 
-# Fix: Send Slack Reply for General Intent Messages
+# Fix All Worker Agents: Pass Slack Thread Info for In-Thread Replies
 
-## The Real Problem
+## Problem
 
-The entire pipeline is actually working correctly now:
-- Slack signature verification: PASSING
-- Profile lookup: FOUND
-- Dispatcher processing: WORKING (returned 200, created task, generated response)
-- AI response generated: "Yes, this is working! I can see your test #4..."
+The dispatcher already sends `slack_channel` and `slack_thread_ts` to every worker agent in the request body. But all three workers ignore those fields and call `notifySlack()` without them. Since `notifySlack()` only uses the bot token for thread replies when `slackChannel` and `slackThreadTs` are provided, it falls back to the webhook (or does nothing useful).
 
-But **LinkJac never replies in Slack** because the `jac-dispatcher` doesn't send Slack messages for `general` intent. It marks the task as completed and returns the response in the HTTP body (which only the web UI uses). The worker agents (research, save, search) handle their own Slack replies, but `general` has no worker.
+## Changes (3 files, identical pattern)
 
-## Solution
+### 1. `supabase/functions/jac-research-agent/index.ts`
 
-Add a Slack reply in `jac-dispatcher` for `general` intent when the message came from Slack. After marking the task complete, use the `SLACK_BOT_TOKEN` to post the AI response back in the original Slack thread.
+- Extract `slack_channel` and `slack_thread_ts` from `body` (after line 49)
+- Pass `slackChannel: slack_channel` and `slackThreadTs: slack_thread_ts` to both `notifySlack()` calls (success on line 254 and error on line 315)
 
-## Changes
+### 2. `supabase/functions/jac-save-agent/index.ts`
 
-### 1. `supabase/functions/jac-dispatcher/index.ts`
+- Extract `slack_channel` and `slack_thread_ts` from `body` (after line 41)
+- Pass `slackChannel: slack_channel` and `slackThreadTs: slack_thread_ts` to both `notifySlack()` calls (success on line 120 and error on line 180)
 
-In the `else if (intent === 'general')` block (around line 352), after marking the task completed, add code to reply in Slack:
+### 3. `supabase/functions/jac-search-agent/index.ts`
+
+- Extract `slack_channel` and `slack_thread_ts` from `body` (after line 41)
+- Pass `slackChannel: slack_channel` and `slackThreadTs: slack_thread_ts` to both `notifySlack()` calls (success on line 135 and error on line 197)
+
+## How `notifySlack()` Already Works
+
+The `_shared/slack.ts` already has this logic (no changes needed there):
 
 ```text
-} else if (intent === 'general') {
-  // Mark parent as completed immediately
-  await supabase
-    .from('agent_tasks')
-    .update({ status: 'completed', completed_at: new Date().toISOString() })
-    .eq('id', parentTask.id);
-
-  // NEW: Reply in Slack if message came from Slack
-  if (slack_channel && slack_thread_ts) {
-    const botToken = Deno.env.get('SLACK_BOT_TOKEN');
-    if (botToken) {
-      fetch('https://slack.com/api/chat.postMessage', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${botToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          channel: slack_channel,
-          thread_ts: slack_thread_ts,
-          text: response,
-        }),
-      }).then(async (res) => {
-        if (res.ok) {
-          await supabase.from('agent_tasks')
-            .update({ slack_notified: true })
-            .eq('id', parentTask.id);
-        }
-      }).catch(err => {
-        console.warn('[jac-dispatcher] Slack reply failed:', err);
-      });
-    }
-  }
+if (payload.slackChannel && payload.slackThreadTs && botToken) {
+  // Reply in the Slack thread using chat.postMessage
+} else {
+  // Fall back to webhook
 }
 ```
 
-This uses the same `SLACK_BOT_TOKEN` that already exists in your secrets. It replies in the same Slack thread the user sent the message from.
+So simply passing the two fields is all that's needed.
 
-## Why Previous Fixes Didn't Help
+## After This Fix
 
-| What we tried | Status | Why it wasn't enough |
-|---|---|---|
-| Fixed signing secret | Working | Signature now verifies correctly |
-| Inserted profile row | Working | Profile lookup now succeeds |
-| **Slack reply for general** | **Missing** | **This is the actual gap** |
-
-## No Database Changes Needed
-
-Only one file changes: `supabase/functions/jac-dispatcher/index.ts`
+All agent types (research, save, search, general) will reply directly in the Slack thread where the user sent the message.
 
