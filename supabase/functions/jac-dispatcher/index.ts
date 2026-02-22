@@ -17,7 +17,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { extractUserId } from '../_shared/auth.ts';
+import { extractUserId, extractUserIdWithServiceRole } from '../_shared/auth.ts';
 import { callClaude, CLAUDE_MODELS, parseToolUse } from '../_shared/anthropic.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
 
@@ -89,9 +89,20 @@ serve(async (req) => {
   const jsonHeaders = { ...corsHeaders, 'Content-Type': 'application/json' };
 
   try {
-    // 1. Auth
-    const { userId, error: authError } = await extractUserId(req);
+    // Parse body first (needed for service-role auth which reads userId from body)
+    let body: { message?: string; userId?: string; slack_channel?: string; slack_thread_ts?: string; source?: string };
+    try {
+      body = await req.json();
+    } catch {
+      return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+        status: 400, headers: jsonHeaders,
+      });
+    }
+
+    // 1. Auth — supports both user JWT and service-role + userId in body
+    const { userId, error: authError } = await extractUserIdWithServiceRole(req, body as Record<string, unknown>);
     if (authError || !userId) {
+      console.error('[jac-dispatcher] Auth failed:', authError);
       return new Response(JSON.stringify({ error: authError ?? 'Unauthorized' }), {
         status: 401, headers: jsonHeaders,
       });
@@ -108,15 +119,6 @@ serve(async (req) => {
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    // Parse body
-    let body: { message?: string; slack_channel?: string; slack_thread_ts?: string; source?: string };
-    try {
-      body = await req.json();
-    } catch {
-      return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
-        status: 400, headers: jsonHeaders,
-      });
-    }
     const { message, slack_channel, slack_thread_ts, source } = body;
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       return new Response(JSON.stringify({ error: 'Message is required' }), {
