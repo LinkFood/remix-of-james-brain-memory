@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
-import { Brain, ArrowLeft, Download, Trash2, Database, User, Tag, AlertTriangle, Crown, Zap } from "lucide-react";
+import { Brain, ArrowLeft, Download, Trash2, Database, User, Tag, AlertTriangle, Crown, Zap, Bot, Send } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
@@ -38,6 +38,9 @@ const Settings = () => {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [passwordConfirm, setPasswordConfirm] = useState("");
+  const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
+  const [slackSaving, setSlackSaving] = useState(false);
+  const [slackTesting, setSlackTesting] = useState(false);
   
   // Subscription hook
   const { subscription, loading: subLoading, dumpsRemaining, dumpLimit } = useSubscription(userId || null);
@@ -45,6 +48,7 @@ const Settings = () => {
   useEffect(() => {
     checkAuth();
     fetchDataStats();
+    loadSlackWebhook();
   }, []);
 
   const checkAuth = async () => {
@@ -55,6 +59,86 @@ const Settings = () => {
     }
     setUserId(user.id);
     setUserEmail(user.email || "");
+  };
+
+  const loadSlackWebhook = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase
+      .from('user_settings')
+      .select('settings')
+      .eq('user_id', user.id)
+      .single();
+    const url = (data?.settings as Record<string, unknown>)?.slack_webhook_url;
+    if (typeof url === 'string') setSlackWebhookUrl(url);
+  };
+
+  const handleSaveSlackWebhook = async () => {
+    setSlackSaving(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      const { data: existing } = await supabase
+        .from('user_settings')
+        .select('settings')
+        .eq('user_id', user.id)
+        .single();
+
+      const currentSettings = (existing?.settings as Record<string, unknown>) || {};
+      const updatedSettings = { ...currentSettings, slack_webhook_url: slackWebhookUrl || null };
+
+      if (existing) {
+        await supabase
+          .from('user_settings')
+          .update({ settings: updatedSettings })
+          .eq('user_id', user.id);
+      } else {
+        await supabase
+          .from('user_settings')
+          .insert({ user_id: user.id, settings: updatedSettings });
+      }
+
+      toast.success("Slack webhook saved");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save webhook");
+    } finally {
+      setSlackSaving(false);
+    }
+  };
+
+  const handleTestSlackWebhook = async () => {
+    if (!slackWebhookUrl) {
+      toast.error("Enter a webhook URL first");
+      return;
+    }
+    setSlackTesting(true);
+    try {
+      const res = await fetch(slackWebhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: ':robot_face: *JAC Agent OS* :white_check_mark:\n\nTest notification — your webhook is working!',
+              },
+            },
+          ],
+        }),
+      });
+      if (res.ok) {
+        toast.success("Test notification sent!");
+      } else {
+        toast.error(`Webhook returned ${res.status}`);
+      }
+    } catch {
+      toast.error("Failed to reach webhook URL");
+    } finally {
+      setSlackTesting(false);
+    }
   };
 
   const fetchEntries = async () => {
@@ -320,6 +404,56 @@ const Settings = () => {
                   </Button>
                 </div>
               )}
+            </Card>
+          </div>
+
+          <Separator className="my-6" />
+
+          {/* JAC Agent */}
+          <div className="space-y-4 mb-6">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                <Bot className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold">JAC Agent</h2>
+                <p className="text-xs text-muted-foreground">Agent notification settings</p>
+              </div>
+            </div>
+
+            <Card className="p-4 bg-muted/30 border-border space-y-3">
+              <div>
+                <Label htmlFor="slack-webhook" className="text-sm">Slack Webhook URL</Label>
+                <p className="text-xs text-muted-foreground mb-2">
+                  Get notified when JAC agents complete tasks.
+                </p>
+                <Input
+                  id="slack-webhook"
+                  type="url"
+                  value={slackWebhookUrl}
+                  onChange={(e) => setSlackWebhookUrl(e.target.value)}
+                  placeholder="https://hooks.slack.com/services/..."
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  onClick={handleSaveSlackWebhook}
+                  disabled={slackSaving}
+                  size="sm"
+                  className="flex-1"
+                >
+                  {slackSaving ? "Saving..." : "Save Webhook"}
+                </Button>
+                <Button
+                  onClick={handleTestSlackWebhook}
+                  disabled={slackTesting || !slackWebhookUrl}
+                  variant="outline"
+                  size="sm"
+                >
+                  <Send className="w-3 h-3 mr-1" />
+                  {slackTesting ? "Sending..." : "Test"}
+                </Button>
+              </div>
             </Card>
           </div>
 

@@ -2,3 +2,9 @@ project_id = "fhfmwdbousoycutlhvjh"
 
 [functions.task-dispatcher]
 verify_jwt = false
+
+[functions.jac-dispatcher]
+verify_jwt = false
+
+[functions.jac-research-agent]
+verify_jwt = false

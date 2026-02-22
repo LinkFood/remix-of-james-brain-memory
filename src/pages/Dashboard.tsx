@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback, useRef, lazy, Suspense, useMemo } fro
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { User } from "@supabase/supabase-js";
-import { LogOut, Settings, Menu, RefreshCw, Search, Calendar, Clock, Network, CloudOff } from "lucide-react";
+import { LogOut, Settings, Menu, RefreshCw, Search, Calendar, Clock, Network, CloudOff, Bot } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -375,6 +375,17 @@ const Dashboard = () => {
                     variant="ghost"
                     className="justify-start"
                     onClick={() => {
+                      navigate("/jac");
+                      setMobileMenuOpen(false);
+                    }}
+                  >
+                    <Bot className="w-4 h-4 mr-2" />
+                    JAC Agents
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    className="justify-start"
+                    onClick={() => {
                       navigate("/settings");
                       setMobileMenuOpen(false);
                     }}
@@ -436,6 +447,16 @@ const Dashboard = () => {
               title="Knowledge Graph"
             >
               <Network className="w-4 h-4" />
+            </Button>
+            <Button
+              onClick={() => navigate("/jac")}
+              variant="ghost"
+              size="sm"
+              className="text-muted-foreground hover:text-foreground gap-1.5"
+              title="JAC Agent OS"
+            >
+              <Bot className="w-4 h-4" />
+              <span className="hidden lg:inline">JAC</span>
             </Button>
             <Button
               onClick={() => setRefreshKey((prev) => prev + 1)}

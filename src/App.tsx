@@ -12,6 +12,7 @@ import Auth from "./pages/Auth";
 import Terms from "./pages/Terms";
 import Privacy from "./pages/Privacy";
 import NotFound from "./pages/NotFound";
+import Jac from "./pages/Jac";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -47,6 +48,7 @@ const App = () => (
               <Route path="/settings" element={<Settings />} />
               <Route path="/terms" element={<Terms />} />
               <Route path="/privacy" element={<Privacy />} />
+              <Route path="/jac" element={<Jac />} />
               <Route path="*" element={<NotFound />} />
             </Routes>
           </BrowserRouter>
