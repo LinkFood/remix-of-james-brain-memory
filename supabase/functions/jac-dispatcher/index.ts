@@ -63,12 +63,16 @@ const INTENT_TOOL = {
         enum: ['jac-research-agent', 'jac-save-agent', 'jac-search-agent', 'assistant-chat'],
         description: 'Which worker edge function to dispatch',
       },
+      extractedQuery: {
+        type: 'string',
+        description: 'The core query/content extracted from the user message, stripped of intent words. For search: just the search terms (e.g. "Lovable" from "search my brain for Lovable"). For save: just the content to save. For research: the research topic.',
+      },
       response: {
         type: 'string',
         description: 'A brief, natural response to the user acknowledging the request (1-2 sentences)',
       },
     },
-    required: ['intent', 'summary', 'agentType', 'response'],
+    required: ['intent', 'summary', 'agentType', 'extractedQuery', 'response'],
   },
 };
 
@@ -246,6 +250,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
     const intent: IntentType = (toolResult?.input?.intent as IntentType) || 'general';
     const summary = (toolResult?.input?.summary as string) || message.slice(0, 100);
     const agentType = (toolResult?.input?.agentType as string) || AGENT_MAP[intent] || 'assistant-chat';
+    const extractedQuery = (toolResult?.input?.extractedQuery as string) || message;
     const response = (toolResult?.input?.response as string) || "I'm on it.";
 
     // 5. Create parent task
@@ -275,6 +280,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
       intent,
       agentType,
       summary,
+      extractedQuery,
       hasBrainContext: brainContext.length > 0,
     });
 
@@ -290,7 +296,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
           intent: summary,
           agent: agentType,
           parent_task_id: parentTask.id,
-          input: { query: message, brainContext: brainContext.slice(0, 2000), slack_channel },
+          input: { query: extractedQuery, originalMessage: message, brainContext: brainContext.slice(0, 2000), slack_channel },
         })
         .select('id')
         .single();
@@ -321,7 +327,8 @@ Be concise. Be confident. Don't ask questions — just act.`;
           taskId: childTaskId,
           parentTaskId: parentTask.id,
           userId,
-          query: message,
+          query: extractedQuery,
+          originalMessage: message,
           brainContext: brainContext.slice(0, 2000),
           slack_channel,
         }),

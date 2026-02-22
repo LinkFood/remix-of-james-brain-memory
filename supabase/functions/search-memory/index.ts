@@ -161,7 +161,14 @@ serve(async (req) => {
       }
 
       // Always also do keyword search to catch exact matches semantic might miss
-      const searchWords = query.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 2);
+      const STOP_WORDS = new Set([
+        'the','and','or','is','it','to','a','an','in','on','at','for','of','my','me','do',
+        'what','how','when','where','why','can','you','please','could','would','should',
+        'this','that','with','from','have','has','just','about','been','want','need','like',
+        'find','get','show','tell','help','search','brain','memory','look','up','all','any',
+        'some','its','not','but','are','was','were','be','am','will','did','does','had',
+      ]);
+      const searchWords = query.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 3 && !STOP_WORDS.has(w));
 
       // Build OR conditions: exact phrase match + individual word matches
       const orConditions: string[] = [

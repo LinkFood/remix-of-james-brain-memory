@@ -115,6 +115,23 @@ serve(async (req) => {
       }
 
       const userId = profile.id;
+      const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+
+      // Add :brain: reaction so user knows JAC received the message
+      if (botToken) {
+        fetch('https://slack.com/api/reactions.add', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${botToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            channel: event.channel,
+            timestamp: event.ts,
+            name: 'brain',
+          }),
+        }).catch(() => {});
+      }
 
       // Fire-and-forget dispatch to jac-dispatcher
       const dispatchUrl = `${supabaseUrl}/functions/v1/jac-dispatcher`;
