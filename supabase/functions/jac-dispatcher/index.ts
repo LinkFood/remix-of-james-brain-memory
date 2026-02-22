@@ -118,7 +118,6 @@ serve(async (req) => {
       });
     }
     const { message, slack_channel, slack_thread_ts, source } = body;
-    const { message } = body;
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       return new Response(JSON.stringify({ error: 'Message is required' }), {
         status: 400, headers: jsonHeaders,
