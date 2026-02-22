@@ -24,3 +24,17 @@ export interface JacMessage {
   taskIds?: string[];
   timestamp: string;
 }
+
+export type LogStatus = 'started' | 'completed' | 'failed' | 'skipped';
+
+export interface ActivityLogEntry {
+  id: string;
+  task_id: string;
+  user_id: string;
+  agent: string;
+  step: string;
+  status: LogStatus;
+  detail: Record<string, unknown>;
+  duration_ms: number | null;
+  created_at: string;
+}

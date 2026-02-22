@@ -22,7 +22,7 @@ const Jac = () => {
     });
   }, [navigate]);
 
-  const { messages, tasks, loading, sending, sendMessage } = useJacAgent(userId);
+  const { messages, tasks, activityLogs, loading, sending, sendMessage, loadTaskLogs } = useJacAgent(userId);
 
   if (!userId) return null;
 
@@ -70,7 +70,7 @@ const Jac = () => {
               <span className="text-sm font-medium">Activity</span>
               <span className="text-xs text-muted-foreground ml-auto">{tasks.length} tasks</span>
             </div>
-            <ActivityFeed tasks={tasks} loading={loading} />
+            <ActivityFeed tasks={tasks} activityLogs={activityLogs} loading={loading} onExpandTask={loadTaskLogs} />
           </div>
         </div>
 
@@ -94,7 +94,7 @@ const Jac = () => {
               <JacChat messages={messages} tasks={tasks} sending={sending} onSend={sendMessage} />
             </TabsContent>
             <TabsContent value="activity" className="flex-1 m-0 overflow-hidden">
-              <ActivityFeed tasks={tasks} loading={loading} />
+              <ActivityFeed tasks={tasks} activityLogs={activityLogs} loading={loading} onExpandTask={loadTaskLogs} />
             </TabsContent>
           </Tabs>
         </div>

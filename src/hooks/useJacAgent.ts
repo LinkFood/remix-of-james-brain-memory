@@ -1,16 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import type { AgentTask, JacMessage } from '@/types/agent';
+import type { AgentTask, JacMessage, ActivityLogEntry } from '@/types/agent';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export function useJacAgent(userId: string) {
   const [messages, setMessages] = useState<JacMessage[]>([]);
   const [tasks, setTasks] = useState<AgentTask[]>([]);
+  const [activityLogs, setActivityLogs] = useState<Map<string, ActivityLogEntry[]>>(new Map());
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const taskChannelRef = useRef<RealtimeChannel | null>(null);
   const convoChannelRef = useRef<RealtimeChannel | null>(null);
+  const logChannelRef = useRef<RealtimeChannel | null>(null);
 
   // Load conversation history + tasks on mount
   useEffect(() => {
@@ -48,6 +50,29 @@ export function useJacAgent(userId: string) {
 
       if (taskData) {
         setTasks(taskData as AgentTask[]);
+
+        // Load logs for active tasks
+        const activeTaskIds = (taskData as AgentTask[])
+          .filter((t) => t.status === 'running' || t.status === 'queued')
+          .map((t) => t.id);
+
+        if (activeTaskIds.length > 0) {
+          const { data: logs } = await supabase
+            .from('agent_activity_log')
+            .select('*')
+            .in('task_id', activeTaskIds)
+            .order('created_at', { ascending: true });
+
+          if (logs) {
+            const logMap = new Map<string, ActivityLogEntry[]>();
+            for (const log of logs as ActivityLogEntry[]) {
+              const existing = logMap.get(log.task_id) || [];
+              existing.push(log);
+              logMap.set(log.task_id, existing);
+            }
+            setActivityLogs(logMap);
+          }
+        }
       }
 
       setLoading(false);
@@ -123,7 +148,6 @@ export function useJacAgent(userId: string) {
             created_at: string;
           };
           setMessages((prev) => {
-            // Avoid duplicates (we optimistically add messages)
             const isDuplicate = prev.some(
               (m) => m.content === newMsg.content && m.role === newMsg.role
             );
@@ -152,6 +176,59 @@ export function useJacAgent(userId: string) {
     };
   }, [userId]);
 
+  // Realtime subscription for agent_activity_log
+  useEffect(() => {
+    if (!userId) return;
+
+    const channel = supabase
+      .channel(`agent-logs-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'agent_activity_log',
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => {
+          const newLog = payload.new as ActivityLogEntry;
+          setActivityLogs((prev) => {
+            const updated = new Map(prev);
+            const existing = updated.get(newLog.task_id) || [];
+            updated.set(newLog.task_id, [...existing, newLog]);
+            return updated;
+          });
+        }
+      )
+      .subscribe();
+
+    logChannelRef.current = channel;
+
+    return () => {
+      if (logChannelRef.current) {
+        supabase.removeChannel(logChannelRef.current);
+        logChannelRef.current = null;
+      }
+    };
+  }, [userId]);
+
+  // Load logs for a specific task (on-demand when expanding)
+  const loadTaskLogs = useCallback(async (taskId: string) => {
+    const { data: logs } = await supabase
+      .from('agent_activity_log')
+      .select('*')
+      .eq('task_id', taskId)
+      .order('created_at', { ascending: true });
+
+    if (logs) {
+      setActivityLogs((prev) => {
+        const updated = new Map(prev);
+        updated.set(taskId, logs as ActivityLogEntry[]);
+        return updated;
+      });
+    }
+  }, []);
+
   // Send message to JAC dispatcher
   const sendMessage = useCallback(
     async (text: string) => {
@@ -160,7 +237,6 @@ export function useJacAgent(userId: string) {
       const trimmed = text.trim();
       setSending(true);
 
-      // Optimistic user message
       const userMsg: JacMessage = {
         role: 'user',
         content: trimmed,
@@ -192,7 +268,6 @@ export function useJacAgent(userId: string) {
 
         const data = await res.json();
 
-        // Optimistic assistant response
         const assistantMsg: JacMessage = {
           role: 'assistant',
           content: data.response,
@@ -201,7 +276,6 @@ export function useJacAgent(userId: string) {
         };
         setMessages((prev) => [...prev, assistantMsg]);
       } catch (err) {
-        // Error message
         const errMsg: JacMessage = {
           role: 'assistant',
           content: `Something went wrong: ${err instanceof Error ? err.message : 'Unknown error'}`,
@@ -219,8 +293,10 @@ export function useJacAgent(userId: string) {
   return {
     messages,
     tasks,
+    activityLogs,
     loading,
     sending,
     sendMessage,
+    loadTaskLogs,
   };
 }

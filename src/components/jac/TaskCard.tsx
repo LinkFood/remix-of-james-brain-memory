@@ -1,11 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import {
   Search, FileText, Brain, BarChart3, MessageSquare, Eye,
   CheckCircle2, XCircle, Loader2, Clock, ChevronDown, ChevronUp,
 } from 'lucide-react';
-import type { AgentTask } from '@/types/agent';
+import type { AgentTask, ActivityLogEntry } from '@/types/agent';
 
 const TYPE_ICONS: Record<string, React.ReactNode> = {
   research: <Search className="w-4 h-4" />,
@@ -24,6 +24,13 @@ const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = 
   failed: { color: 'bg-red-500/10 text-red-600', icon: <XCircle className="w-3 h-3" /> },
 };
 
+const LOG_STATUS_ICON: Record<string, React.ReactNode> = {
+  started: <Loader2 className="w-3 h-3 animate-spin text-blue-500" />,
+  completed: <CheckCircle2 className="w-3 h-3 text-green-500" />,
+  failed: <XCircle className="w-3 h-3 text-red-500" />,
+  skipped: <Clock className="w-3 h-3 text-muted-foreground" />,
+};
+
 function elapsedTime(start: string, end?: string | null): string {
   const startDate = new Date(start);
   const endDate = end ? new Date(end) : new Date();
@@ -33,23 +40,61 @@ function elapsedTime(start: string, end?: string | null): string {
   return `${Math.round(diffMs / 60_000)}m`;
 }
 
-interface TaskCardProps {
-  task: AgentTask;
+function formatStepName(step: string): string {
+  return step
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-export function TaskCard({ task }: TaskCardProps) {
+interface TaskCardProps {
+  task: AgentTask;
+  logs?: ActivityLogEntry[];
+  onExpand?: (taskId: string) => void;
+}
+
+export function TaskCard({ task, logs, onExpand }: TaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const statusConfig = STATUS_CONFIG[task.status] || STATUS_CONFIG.pending;
   const typeIcon = TYPE_ICONS[task.type] || TYPE_ICONS.general;
 
   const output = task.output as Record<string, unknown> | null;
 
+  // Deduplicate logs — show only the final status per step
+  const deduplicatedLogs = logs
+    ? Array.from(
+        logs.reduce((map, log) => {
+          const existing = map.get(log.step);
+          // Keep the latest (completed/failed over started)
+          if (!existing || log.status !== 'started' || !existing) {
+            map.set(log.step, log);
+          }
+          return map;
+        }, new Map<string, ActivityLogEntry>())
+      ).map(([, log]) => log)
+    : [];
+
+  const handleClick = () => {
+    const willExpand = !expanded;
+    setExpanded(willExpand);
+    if (willExpand && onExpand) {
+      onExpand(task.id);
+    }
+  };
+
+  // Auto-expand running tasks
+  useEffect(() => {
+    if (task.status === 'running' && !expanded) {
+      setExpanded(true);
+      onExpand?.(task.id);
+    }
+  }, [task.status]);
+
   return (
     <Card
       className={`p-3 cursor-pointer transition-all hover:bg-muted/50 ${
         task.status === 'running' ? 'ring-1 ring-blue-500/30' : ''
       }`}
-      onClick={() => setExpanded(!expanded)}
+      onClick={handleClick}
     >
       <div className="flex items-start gap-3">
         <div className="mt-0.5 text-muted-foreground">{typeIcon}</div>
@@ -78,9 +123,55 @@ export function TaskCard({ task }: TaskCardProps) {
       </div>
 
       {expanded && (
-        <div className="mt-3 pt-3 border-t border-border">
+        <div className="mt-3 pt-3 border-t border-border space-y-3">
+          {/* Live step log */}
+          {deduplicatedLogs.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground mb-1.5">Activity Log</p>
+              {deduplicatedLogs.map((log) => (
+                <div
+                  key={log.id}
+                  className="flex items-center gap-2 text-xs"
+                >
+                  {LOG_STATUS_ICON[log.status] || LOG_STATUS_ICON.skipped}
+                  <span className={log.status === 'failed' ? 'text-red-500' : 'text-foreground'}>
+                    {formatStepName(log.step)}
+                  </span>
+                  {log.duration_ms != null && log.duration_ms > 0 && (
+                    <span className="text-muted-foreground">
+                      {log.duration_ms < 1000 ? `${log.duration_ms}ms` : `${(log.duration_ms / 1000).toFixed(1)}s`}
+                    </span>
+                  )}
+                  {log.detail?.error && (
+                    <span className="text-red-500 truncate max-w-[200px]">
+                      {String(log.detail.error)}
+                    </span>
+                  )}
+                  {log.detail?.resultCount != null && (
+                    <span className="text-muted-foreground">
+                      ({String(log.detail.resultCount)} results)
+                    </span>
+                  )}
+                  {log.detail?.matchCount != null && (
+                    <span className="text-muted-foreground">
+                      ({String(log.detail.matchCount)} matches)
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Running indicator when no logs yet */}
+          {task.status === 'running' && deduplicatedLogs.length === 0 && (
+            <div className="flex items-center gap-2 text-xs text-blue-500">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              Working on it...
+            </div>
+          )}
+
           {task.error && (
-            <div className="text-sm text-red-500 mb-2">
+            <div className="text-sm text-red-500">
               {task.error}
             </div>
           )}
@@ -92,7 +183,7 @@ export function TaskCard({ task }: TaskCardProps) {
           )}
 
           {output?.sources && Array.isArray(output.sources) && output.sources.length > 0 && (
-            <div className="mt-2 space-y-1">
+            <div className="space-y-1">
               <p className="text-xs font-medium text-muted-foreground">Sources</p>
               {(output.sources as Array<{ title: string; url: string }>).slice(0, 5).map((s, i) => (
                 <a
@@ -115,15 +206,8 @@ export function TaskCard({ task }: TaskCardProps) {
             </p>
           )}
 
-          {!task.error && !output && task.status !== 'running' && (
+          {!task.error && !output && task.status !== 'running' && deduplicatedLogs.length === 0 && (
             <p className="text-xs text-muted-foreground">No output data</p>
-          )}
-
-          {task.status === 'running' && (
-            <div className="flex items-center gap-2 text-xs text-blue-500">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              Working on it...
-            </div>
           )}
         </div>
       )}

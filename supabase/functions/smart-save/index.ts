@@ -19,7 +19,7 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { extractUserId } from '../_shared/auth.ts';
+import { extractUserId, extractUserIdWithServiceRole, isServiceRoleRequest } from '../_shared/auth.ts';
 import { checkRateLimit, RATE_LIMIT_CONFIGS, getRateLimitHeaders } from '../_shared/rateLimit.ts';
 import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
 import { sanitizeString, validateContentLength, parseJsonBody } from '../_shared/validation.ts';
@@ -128,29 +128,39 @@ serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
   try {
-    // Authenticate user
-    const { userId, error: authError } = await extractUserId(req);
+    // Parse body early for service role auth
+    const rawBody = await req.text();
+    const parsedBody = JSON.parse(rawBody) as SmartSaveRequest & { userId?: string };
+
+    // Authenticate — supports both JWT and service role + userId in body
+    const { userId, error: authError } = await extractUserIdWithServiceRole(
+      req,
+      parsedBody as unknown as Record<string, unknown>
+    );
     if (authError || !userId) {
       return errorResponse(req, authError ?? 'Unauthorized', 401);
     }
 
-    // Check rate limit
-    const rateLimit = checkRateLimit(userId, RATE_LIMIT_CONFIGS.standard);
-    if (!rateLimit.allowed) {
-      return new Response(
-        JSON.stringify({ 
-          error: 'Rate limit exceeded. Please try again later.',
-          retryAfter: Math.ceil(rateLimit.resetIn / 1000),
-        }),
-        { 
-          status: 429, 
-          headers: { 
-            ...corsHeaders, 
-            ...getRateLimitHeaders(rateLimit),
-            'Content-Type': 'application/json',
-          },
-        }
-      );
+    // Skip rate limit for internal agent calls
+    const isInternal = isServiceRoleRequest(req);
+    if (!isInternal) {
+      const rateLimit = checkRateLimit(userId, RATE_LIMIT_CONFIGS.standard);
+      if (!rateLimit.allowed) {
+        return new Response(
+          JSON.stringify({
+            error: 'Rate limit exceeded. Please try again later.',
+            retryAfter: Math.ceil(rateLimit.resetIn / 1000),
+          }),
+          {
+            status: 429,
+            headers: {
+              ...corsHeaders,
+              ...getRateLimitHeaders(rateLimit),
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+      }
     }
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -204,11 +214,8 @@ serve(async (req) => {
       }
     }
 
-    // Parse and validate request body
-    const { data: body, error: parseError } = await parseJsonBody<SmartSaveRequest>(req);
-    if (parseError || !body) {
-      return errorResponse(req, parseError ?? 'Invalid request body', 400);
-    }
+    // Body already parsed above for auth — reuse it
+    const body = parsedBody as SmartSaveRequest;
 
     const { source = 'manual', imageUrl } = body;
     const content = body.content ? sanitizeString(body.content) : '';

@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { TaskCard } from './TaskCard';
-import type { AgentTask, TaskStatus } from '@/types/agent';
+import type { AgentTask, TaskStatus, ActivityLogEntry } from '@/types/agent';
 
 const FILTER_OPTIONS: { label: string; value: TaskStatus | 'all' }[] = [
   { label: 'All', value: 'all' },
@@ -12,10 +12,12 @@ const FILTER_OPTIONS: { label: string; value: TaskStatus | 'all' }[] = [
 
 interface ActivityFeedProps {
   tasks: AgentTask[];
+  activityLogs: Map<string, ActivityLogEntry[]>;
   loading: boolean;
+  onExpandTask?: (taskId: string) => void;
 }
 
-export function ActivityFeed({ tasks, loading }: ActivityFeedProps) {
+export function ActivityFeed({ tasks, activityLogs, loading, onExpandTask }: ActivityFeedProps) {
   const [filter, setFilter] = useState<TaskStatus | 'all'>('all');
 
   const filtered = useMemo(() => {
@@ -59,7 +61,14 @@ export function ActivityFeed({ tasks, loading }: ActivityFeedProps) {
             )}
           </div>
         ) : (
-          filtered.map((task) => <TaskCard key={task.id} task={task} />)
+          filtered.map((task) => (
+            <TaskCard
+              key={task.id}
+              task={task}
+              logs={activityLogs.get(task.id)}
+              onExpand={onExpandTask}
+            />
+          ))
         )}
       </div>
     </div>

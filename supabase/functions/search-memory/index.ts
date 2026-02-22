@@ -10,7 +10,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { extractUserId } from '../_shared/auth.ts';
+import { extractUserId, extractUserIdWithServiceRole, isServiceRoleRequest } from '../_shared/auth.ts';
 import { checkRateLimit, RATE_LIMIT_CONFIGS, getRateLimitHeaders } from '../_shared/rateLimit.ts';
 import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
 import { validateSearchQuery, escapeForLike, parseNumber, parseJsonBody } from '../_shared/validation.ts';
@@ -47,43 +47,39 @@ serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
   try {
-    // Allow service role calls (e.g. from jac-research-agent)
-    const authHeader = req.headers.get('authorization');
-    const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-    const isServiceRole = authHeader === `Bearer ${serviceKey}`;
-
-    let userId: string;
-    if (isServiceRole) {
-      userId = 'service_role_internal';
-    } else {
-      const { userId: uid, error: authError } = await extractUserId(req);
-      if (authError || !uid) {
-        return errorResponse(req, authError ?? 'Unauthorized', 401);
-      }
-      userId = uid;
-    }
-
-    // Check rate limit (search is limited to 30 req/min)
-    const rateLimit = checkRateLimit(userId, RATE_LIMIT_CONFIGS.search);
-    if (!rateLimit.allowed) {
-      return new Response(
-        JSON.stringify({
-          error: 'Rate limit exceeded. Please try again later.',
-          retryAfter: Math.ceil(rateLimit.resetIn / 1000),
-        }),
-        {
-          status: 429,
-          headers: {
-            ...corsHeaders,
-            ...getRateLimitHeaders(rateLimit),
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-    }
-
-    // Parse request body
+    // Parse request body first (needed for service role auth)
     const { data: body, error: parseError } = await parseJsonBody<SearchRequest>(req);
+
+    // Authenticate user — supports both JWT and service role + userId in body
+    const { userId, error: authError } = await extractUserIdWithServiceRole(
+      req,
+      body as unknown as Record<string, unknown>
+    );
+    if (authError || !userId) {
+      return errorResponse(req, authError ?? 'Unauthorized', 401);
+    }
+
+    // Skip rate limit for internal agent calls
+    const isInternal = isServiceRoleRequest(req);
+    if (!isInternal) {
+      const rateLimit = checkRateLimit(userId, RATE_LIMIT_CONFIGS.search);
+      if (!rateLimit.allowed) {
+        return new Response(
+          JSON.stringify({
+            error: 'Rate limit exceeded. Please try again later.',
+            retryAfter: Math.ceil(rateLimit.resetIn / 1000),
+          }),
+          {
+            status: 429,
+            headers: {
+              ...corsHeaders,
+              ...getRateLimitHeaders(rateLimit),
+              'Content-Type': 'application/json',
+            },
+          }
+        );
+      }
+    }
     if (parseError || !body) {
       return errorResponse(req, parseError ?? 'Invalid request body', 400);
     }

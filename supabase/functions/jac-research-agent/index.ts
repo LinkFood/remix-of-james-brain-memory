@@ -8,6 +8,8 @@
  * 4. Save brief to brain via smart-save
  * 5. Slack notification
  * 6. Update task status
+ *
+ * Every step is logged to agent_activity_log for full observability.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -15,9 +17,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent } from '../_shared/anthropic.ts';
 import { notifySlack } from '../_shared/slack.ts';
+import { createAgentLogger } from '../_shared/logger.ts';
 
 serve(async (req) => {
-  // Only accept service role requests (internal calls from jac-dispatcher)
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204 });
   }
@@ -53,15 +55,21 @@ serve(async (req) => {
       });
     }
 
+    // Initialize logger
+    const log = createAgentLogger(supabase, taskId, userId, 'jac-research-agent');
+
     // 1. Update task → running
     await supabase
       .from('agent_tasks')
       .update({ status: 'running', updated_at: new Date().toISOString() })
       .eq('id', taskId);
 
-    // 2. Web search via jac-web-search
+    await log.info('task_started', { query, hasContext: !!brainContext });
+
+    // 2. Web search via jac-web-search (pass userId for service role auth)
     let webResults = '';
     let webSources: Array<{ title: string; url: string }> = [];
+    const webStep = await log.step('web_search', { query });
     try {
       const webRes = await fetch(`${supabaseUrl}/functions/v1/jac-web-search`, {
         method: 'POST',
@@ -70,6 +78,7 @@ serve(async (req) => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          userId,
           query,
           brainContext: brainContext.slice(0, 500),
           searchDepth: 'advanced',
@@ -85,16 +94,19 @@ serve(async (req) => {
           title: r.title,
           url: r.url,
         }));
-        console.log(`[research-agent] Web search returned ${webSources.length} results`);
+        await webStep({ resultCount: webSources.length });
       } else {
-        console.warn('[research-agent] Web search failed:', webRes.status);
+        const errText = await webRes.text();
+        await webStep.fail(`HTTP ${webRes.status}: ${errText.slice(0, 200)}`);
       }
     } catch (err) {
-      console.warn('[research-agent] Web search error:', err);
+      await webStep.fail(err instanceof Error ? err.message : 'Unknown error');
     }
 
-    // 3. Brain cross-reference via search-memory
+    // 3. Brain cross-reference via search-memory (pass userId for service role auth)
     let brainResults = '';
+    let brainMatchCount = 0;
+    const brainStep = await log.step('brain_search', { query });
     try {
       const memRes = await fetch(`${supabaseUrl}/functions/v1/search-memory`, {
         method: 'POST',
@@ -102,7 +114,7 @@ serve(async (req) => {
           'Authorization': `Bearer ${serviceKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ query, limit: 5 }),
+        body: JSON.stringify({ userId, query, limit: 5 }),
       });
 
       if (memRes.ok) {
@@ -113,14 +125,25 @@ serve(async (req) => {
               `[${r.title || 'Untitled'}]: ${r.content.slice(0, 300)}`
             )
             .join('\n');
-          console.log(`[research-agent] Brain search returned ${memData.results.length} results`);
+          brainMatchCount = memData.results.length;
+          await brainStep({ matchCount: brainMatchCount });
+        } else {
+          await brainStep({ matchCount: 0 });
         }
+      } else {
+        const errText = await memRes.text();
+        await brainStep.fail(`HTTP ${memRes.status}: ${errText.slice(0, 200)}`);
       }
     } catch (err) {
-      console.warn('[research-agent] Brain search error:', err);
+      await brainStep.fail(err instanceof Error ? err.message : 'Unknown error');
     }
 
     // 4. Synthesize with Claude Sonnet
+    const synthesisStep = await log.step('ai_synthesis', {
+      webSourceCount: webSources.length,
+      brainMatchCount,
+    });
+
     const synthesisPrompt = `You are a research assistant. Synthesize a clear, actionable research brief based on the query and sources below.
 
 QUERY: ${query}
@@ -148,11 +171,19 @@ Instructions:
     const brief = parseTextContent(claudeResponse);
 
     if (!brief) {
+      await synthesisStep.fail('Claude returned empty response');
       throw new Error('Claude returned empty response');
     }
 
-    // 5. Save brief to brain via smart-save
+    await synthesisStep({
+      briefLength: brief.length,
+      inputTokens: claudeResponse.usage?.input_tokens,
+      outputTokens: claudeResponse.usage?.output_tokens,
+    });
+
+    // 5. Save brief to brain via smart-save (pass userId for service role auth)
     let brainEntryId: string | undefined;
+    const saveStep = await log.step('save_to_brain');
     try {
       const saveRes = await fetch(`${supabaseUrl}/functions/v1/smart-save`, {
         method: 'POST',
@@ -161,6 +192,7 @@ Instructions:
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
+          userId,
           content: `# Research: ${query}\n\n${brief}\n\n---\nSources: ${webSources.map(s => `[${s.title}](${s.url})`).join(', ')}`,
           source: 'jac-agent',
         }),
@@ -169,12 +201,13 @@ Instructions:
       if (saveRes.ok) {
         const saveData = await saveRes.json();
         brainEntryId = saveData.entry?.id;
-        console.log('[research-agent] Brief saved to brain:', brainEntryId);
+        await saveStep({ brainEntryId });
       } else {
-        console.warn('[research-agent] Failed to save brief:', saveRes.status);
+        const errText = await saveRes.text();
+        await saveStep.fail(`HTTP ${saveRes.status}: ${errText.slice(0, 200)}`);
       }
     } catch (err) {
-      console.warn('[research-agent] Save error:', err);
+      await saveStep.fail(err instanceof Error ? err.message : 'Unknown error');
     }
 
     const duration = Date.now() - startTime;
@@ -190,7 +223,7 @@ Instructions:
           brief: brief.slice(0, 5000),
           sources: webSources,
           brainEntryId,
-          brainMatchCount: brainResults ? brainResults.split('\n').length : 0,
+          brainMatchCount,
           durationMs: duration,
         },
       })
@@ -217,6 +250,7 @@ Instructions:
     }
 
     // 7. Slack notification
+    const slackStep = await log.step('slack_notify');
     await notifySlack(supabase, userId, {
       taskId,
       taskType: 'research',
@@ -224,6 +258,7 @@ Instructions:
       brainEntryId,
       duration,
     });
+    await slackStep();
 
     // Store result as assistant message in conversation
     await supabase.from('agent_conversations').insert({
@@ -232,6 +267,8 @@ Instructions:
       content: `Research complete: ${query}\n\n${brief.slice(0, 500)}...${brainEntryId ? `\n\nSaved to brain.` : ''}`,
       task_ids: [taskId],
     });
+
+    await log.info('task_completed', { durationMs: duration, brainEntryId, sourceCount: webSources.length });
 
     return new Response(JSON.stringify({
       success: true,
@@ -246,7 +283,6 @@ Instructions:
   } catch (error) {
     console.error('[research-agent] Error:', error);
 
-    // Update task → failed
     if (taskId) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       await supabase
@@ -258,8 +294,11 @@ Instructions:
         })
         .eq('id', taskId);
 
-      // Notify Slack of failure
       if (userId) {
+        // Log the failure
+        const log = createAgentLogger(supabase, taskId, userId, 'jac-research-agent');
+        await log.info('task_failed', { error: errorMessage, durationMs: Date.now() - startTime });
+
         await notifySlack(supabase, userId, {
           taskId,
           taskType: 'research',

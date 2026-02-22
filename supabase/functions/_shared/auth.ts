@@ -106,3 +106,32 @@ export function isServiceRoleRequest(request: Request): boolean {
 
   return authHeader === `Bearer ${serviceRoleKey}`;
 }
+
+/**
+ * Extract user ID from JWT OR from service role request with userId in body.
+ *
+ * Inter-function calls (e.g., jac-research-agent → search-memory) use the
+ * service role key + pass userId in the request body. This function handles
+ * both patterns so existing functions work for both frontend and agent calls.
+ *
+ * @param request - The incoming request (will be cloned so body can still be read)
+ * @param body - Already-parsed request body (optional — avoids double-read)
+ */
+export async function extractUserIdWithServiceRole(
+  request: Request,
+  body?: Record<string, unknown>
+): Promise<AuthResult> {
+  // Check service role first — if it's an internal agent call, trust the userId in body
+  if (isServiceRoleRequest(request)) {
+    const userId = body?.userId as string | undefined;
+    if (userId && typeof userId === 'string') {
+      const serviceClient = createServiceClient();
+      return { userId, error: null, supabase: serviceClient };
+    }
+    // Service role but no userId — still allow (some functions don't need it)
+    return { userId: null, error: 'Service role request missing userId in body', supabase: null };
+  }
+
+  // Fall back to standard JWT extraction
+  return extractUserId(request);
+}

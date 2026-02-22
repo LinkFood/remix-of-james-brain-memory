@@ -19,6 +19,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserId } from '../_shared/auth.ts';
 import { callClaude, CLAUDE_MODELS, parseToolUse } from '../_shared/anthropic.ts';
+import { createAgentLogger } from '../_shared/logger.ts';
 
 // Rate limiting
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -237,6 +238,15 @@ Be concise. Be confident. Don't ask questions — just act.`;
       });
     }
 
+    // Initialize logger now that we have a taskId
+    const log = createAgentLogger(supabase, parentTask.id, userId, 'jac-dispatcher');
+    await log.info('intent_parsed', {
+      intent,
+      agentType,
+      summary,
+      hasBrainContext: brainContext.length > 0,
+    });
+
     // 6. Create child task (if dispatching to a worker)
     let childTaskId: string | null = null;
     if (intent !== 'general') {
@@ -268,6 +278,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
 
     // 8. Fire-and-forget worker dispatch
     if (intent !== 'general' && childTaskId) {
+      await log.info('worker_dispatched', { agentType, childTaskId });
       const workerUrl = `${supabaseUrl}/functions/v1/${agentType}`;
       fetch(workerUrl, {
         method: 'POST',
