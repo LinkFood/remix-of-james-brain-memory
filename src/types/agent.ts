@@ -1,5 +1,5 @@
 export type TaskType = 'search' | 'save' | 'enrich' | 'report' | 'general' | 'research' | 'monitor';
-export type TaskStatus = 'pending' | 'queued' | 'running' | 'completed' | 'failed';
+export type TaskStatus = 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 export interface AgentTask {
   id: string;
@@ -16,6 +16,7 @@ export interface AgentTask {
   created_at: string;
   updated_at: string;
   completed_at: string | null;
+  cancelled_at: string | null;
 }
 
 export interface JacMessage {

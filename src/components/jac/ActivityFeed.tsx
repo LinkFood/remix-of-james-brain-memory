@@ -9,7 +9,7 @@ import { useState, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { TaskCard } from './TaskCard';
-import { Loader2, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { Loader2, CheckCircle2, XCircle, Clock, StopCircle } from 'lucide-react';
 import type { AgentTask, TaskStatus, ActivityLogEntry } from '@/types/agent';
 
 const FILTER_OPTIONS: { label: string; value: TaskStatus | 'all' }[] = [
@@ -17,12 +17,14 @@ const FILTER_OPTIONS: { label: string; value: TaskStatus | 'all' }[] = [
   { label: 'Running', value: 'running' },
   { label: 'Completed', value: 'completed' },
   { label: 'Failed', value: 'failed' },
+  { label: 'Cancelled', value: 'cancelled' },
 ];
 
 const FILTER_ICONS: Record<string, React.ReactNode> = {
   running: <Loader2 className="w-3 h-3 animate-spin" />,
   completed: <CheckCircle2 className="w-3 h-3" />,
   failed: <XCircle className="w-3 h-3" />,
+  cancelled: <StopCircle className="w-3 h-3" />,
 };
 
 interface ActivityFeedProps {
@@ -30,9 +32,11 @@ interface ActivityFeedProps {
   activityLogs: Map<string, ActivityLogEntry[]>;
   loading: boolean;
   onExpandTask?: (taskId: string) => void;
+  onStopTask?: (taskId: string) => void;
+  onStopAll?: () => void;
 }
 
-export function ActivityFeed({ tasks, activityLogs, loading, onExpandTask }: ActivityFeedProps) {
+export function ActivityFeed({ tasks, activityLogs, loading, onExpandTask, onStopTask, onStopAll }: ActivityFeedProps) {
   const [filter, setFilter] = useState<TaskStatus | 'all'>('all');
 
   const filtered = useMemo(() => {
@@ -75,6 +79,17 @@ export function ActivityFeed({ tasks, activityLogs, loading, onExpandTask }: Act
           <span className="text-[10px] text-blue-400 font-medium">
             {runningCount} operation{runningCount > 1 ? 's' : ''} in progress
           </span>
+          {onStopAll && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="ml-auto h-5 text-[10px] text-red-400 hover:text-red-500 hover:bg-red-500/10 px-2"
+              onClick={onStopAll}
+            >
+              <StopCircle className="w-3 h-3 mr-1" />
+              Stop all
+            </Button>
+          )}
         </div>
       )}
 
@@ -101,6 +116,7 @@ export function ActivityFeed({ tasks, activityLogs, loading, onExpandTask }: Act
                 task={task}
                 logs={activityLogs.get(task.id)}
                 onExpand={onExpandTask}
+                onStop={onStopTask}
               />
             ))
           )}

@@ -125,6 +125,38 @@ serve(async (req) => {
       const userId = profile.id;
       const botToken = Deno.env.get('SLACK_BOT_TOKEN');
 
+      // Kill switch: intercept stop commands before dispatching
+      const stopWords = ['stop', 'halt', 'cancel', 'kill', 'stop all', 'kill switch'];
+      if (stopWords.includes(cleanMessage.toLowerCase())) {
+        const now = new Date().toISOString();
+        const { data: cancelled } = await supabase
+          .from('agent_tasks')
+          .update({
+            status: 'cancelled',
+            cancelled_at: now,
+            updated_at: now,
+            error: 'Cancelled via Slack',
+          })
+          .eq('user_id', userId)
+          .in('status', ['running', 'queued', 'pending'])
+          .select('id');
+
+        const cancelCount = cancelled?.length ?? 0;
+        const replyText = cancelCount > 0
+          ? `Stopped ${cancelCount} task${cancelCount > 1 ? 's' : ''}. JAC is standing by.`
+          : 'No active tasks to stop. JAC is standing by.';
+
+        if (botToken) {
+          fetch('https://slack.com/api/chat.postMessage', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ channel: event.channel, text: replyText }),
+          }).catch(() => {});
+        }
+
+        return new Response('ok', { status: 200 });
+      }
+
       // Post "thinking" placeholder, then pass its ts to dispatcher so agents
       // can UPDATE this message with the real response (like Claude/ChatGPT do)
       let thinkingTs: string | undefined;

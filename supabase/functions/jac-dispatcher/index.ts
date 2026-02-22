@@ -124,7 +124,64 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const supabase = createClient(supabaseUrl, serviceKey);
+    const supabaseEarly = createClient(supabaseUrl, serviceKey);
+
+    // Loop detection: 5+ tasks in 60 seconds = runaway
+    const loopWindow = new Date(Date.now() - 60_000).toISOString();
+    const { count: recentTaskCount } = await supabaseEarly
+      .from('agent_tasks')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', userId)
+      .gte('created_at', loopWindow);
+
+    if ((recentTaskCount ?? 0) >= 5) {
+      // Auto-cancel all running/queued tasks
+      const { data: cancelled } = await supabaseEarly
+        .from('agent_tasks')
+        .update({
+          status: 'cancelled',
+          cancelled_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          error: 'Loop detected — auto-cancelled',
+        })
+        .eq('user_id', userId)
+        .in('status', ['running', 'queued', 'pending'])
+        .select('id');
+
+      const cancelCount = cancelled?.length ?? 0;
+
+      // Slack warning
+      const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+      if (botToken) {
+        try {
+          // Find user's Slack channel from a recent task
+          const { data: recentTask } = await supabaseEarly
+            .from('agent_tasks')
+            .select('input')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .single();
+          const channel = (recentTask?.input as Record<string, unknown>)?.slack_channel as string | undefined;
+          if (channel) {
+            fetch('https://slack.com/api/chat.postMessage', {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                channel,
+                text: `:warning: Loop detected — ${cancelCount} tasks auto-cancelled. Too many requests in 60 seconds. Standing by.`,
+              }),
+            }).catch(() => {});
+          }
+        } catch {}
+      }
+
+      return new Response(JSON.stringify({
+        error: 'Loop detected — too many tasks in 60 seconds. All tasks cancelled.',
+        cancelled: cancelCount,
+      }), { status: 429, headers: jsonHeaders });
+    }
+    const supabase = supabaseEarly;
 
     const { message, slack_channel, slack_thinking_ts, source } = body;
     slackChannel = slack_channel;
@@ -136,12 +193,14 @@ serve(async (req) => {
     }
 
     // 2a. Clean stale tasks (stuck in running/queued > 10 min) before counting
+    // Don't overwrite cancelled tasks
     const staleThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString();
     await supabase
       .from('agent_tasks')
       .update({ status: 'failed', error: 'Timed out (stale >10min)', completed_at: new Date().toISOString() })
       .eq('user_id', userId)
       .in('status', ['running', 'queued'])
+      .not('status', 'eq', 'cancelled')
       .lt('created_at', staleThreshold);
 
     // 2b. Concurrent task guard

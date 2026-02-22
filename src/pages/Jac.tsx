@@ -38,7 +38,7 @@ const Jac = () => {
     });
   }, [navigate]);
 
-  const { messages, tasks, activityLogs, loading, sending, backendReady, sendMessage, loadTaskLogs } = useJacAgent(userId);
+  const { messages, tasks, activityLogs, loading, sending, backendReady, sendMessage, loadTaskLogs, stopTask, stopAllTasks } = useJacAgent(userId);
 
   if (!userId) return null;
 
@@ -129,7 +129,7 @@ const Jac = () => {
                 </TabsTrigger>
               </TabsList>
               <TabsContent value="operations" className="flex-1 m-0 overflow-hidden">
-                <ActivityFeed tasks={tasks} activityLogs={activityLogs} loading={loading} onExpandTask={loadTaskLogs} />
+                <ActivityFeed tasks={tasks} activityLogs={activityLogs} loading={loading} onExpandTask={loadTaskLogs} onStopTask={stopTask} onStopAll={stopAllTasks} />
               </TabsContent>
               <TabsContent value="results" className="flex-1 m-0 overflow-hidden">
                 <AgentResultsFeed tasks={tasks} activityLogs={activityLogs} />

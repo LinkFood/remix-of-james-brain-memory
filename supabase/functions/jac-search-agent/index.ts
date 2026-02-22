@@ -94,7 +94,7 @@ serve(async (req) => {
       )
       .join('\n\n');
 
-    // 4. Update task → completed
+    // 4. Update task → completed (guard: only if still running — cancelled tasks stay cancelled)
     await supabase
       .from('agent_tasks')
       .update({
@@ -112,7 +112,8 @@ serve(async (req) => {
           durationMs: duration,
         },
       })
-      .eq('id', taskId);
+      .eq('id', taskId)
+      .in('status', ['running']);
 
     // 5. Check if parent task should be completed
     if (parentTaskId) {
@@ -130,7 +131,8 @@ serve(async (req) => {
             completed_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
-          .eq('id', parentTaskId);
+          .eq('id', parentTaskId)
+          .in('status', ['running']);
       }
     }
 
@@ -182,7 +184,8 @@ serve(async (req) => {
           error: errorMessage,
           updated_at: new Date().toISOString(),
         })
-        .eq('id', taskId);
+        .eq('id', taskId)
+        .in('status', ['running', 'queued']);
 
       if (parentTaskId) {
         await supabase
@@ -193,7 +196,8 @@ serve(async (req) => {
             completed_at: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           })
-          .eq('id', parentTaskId);
+          .eq('id', parentTaskId)
+          .in('status', ['running', 'queued']);
       }
 
       if (userId) {

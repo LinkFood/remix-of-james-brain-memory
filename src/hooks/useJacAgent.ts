@@ -12,6 +12,7 @@ import type { AgentTask, JacMessage, ActivityLogEntry } from '@/types/agent';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 const JAC_DISPATCHER_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/jac-dispatcher`;
+const JAC_KILL_SWITCH_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/jac-kill-switch`;
 
 export function useJacAgent(userId: string) {
   const [messages, setMessages] = useState<JacMessage[]>([]);
@@ -156,6 +157,8 @@ export function useJacAgent(userId: string) {
               toast.success(`Task completed: ${(updated.intent || updated.type).slice(0, 60)}`);
             } else if (updated.status === 'failed') {
               toast.error(`Task failed: ${(updated.error || updated.intent || '').slice(0, 80)}`);
+            } else if (updated.status === 'cancelled') {
+              toast.info(`Task cancelled: ${(updated.intent || updated.type).slice(0, 60)}`, { style: { backgroundColor: '#f97316', color: 'white' } });
             }
           } else if (payload.eventType === 'DELETE') {
             setTasks(prev => prev.filter(t => t.id !== (payload.old as { id: string }).id));
@@ -259,6 +262,56 @@ export function useJacAgent(userId: string) {
     }
   }, []);
 
+  // Stop a single task
+  const stopTask = useCallback(async (taskId: string) => {
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      if (!session?.session?.access_token) throw new Error('Not authenticated');
+
+      const res = await fetch(JAC_KILL_SWITCH_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.session.access_token}`,
+          'Content-Type': 'application/json',
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ action: 'stop_one', taskId }),
+      });
+
+      const data = await res.json();
+      if (data.cancelled > 0) {
+        toast.info('Task stopped');
+      }
+    } catch (err) {
+      toast.error('Failed to stop task');
+      console.error('[useJacAgent] stopTask error:', err);
+    }
+  }, []);
+
+  // Stop all running tasks
+  const stopAllTasks = useCallback(async () => {
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      if (!session?.session?.access_token) throw new Error('Not authenticated');
+
+      const res = await fetch(JAC_KILL_SWITCH_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.session.access_token}`,
+          'Content-Type': 'application/json',
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ action: 'stop_all' }),
+      });
+
+      const data = await res.json();
+      toast.info(`Stopped ${data.cancelled ?? 0} task${(data.cancelled ?? 0) !== 1 ? 's' : ''}`, { style: { backgroundColor: '#f97316', color: 'white' } });
+    } catch (err) {
+      toast.error('Failed to stop tasks');
+      console.error('[useJacAgent] stopAllTasks error:', err);
+    }
+  }, []);
+
   // Send message to JAC dispatcher
   const sendMessage = useCallback(
     async (text: string) => {
@@ -335,5 +388,7 @@ export function useJacAgent(userId: string) {
     backendReady,
     sendMessage,
     loadTaskLogs,
+    stopTask,
+    stopAllTasks,
   };
 }

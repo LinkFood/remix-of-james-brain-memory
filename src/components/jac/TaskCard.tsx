@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import {
   Search, FileText, Brain, BarChart3, MessageSquare, Eye,
-  CheckCircle2, XCircle, Loader2, Clock, ChevronDown, ChevronUp,
+  CheckCircle2, XCircle, Loader2, Clock, ChevronDown, ChevronUp, StopCircle,
 } from 'lucide-react';
 import type { AgentTask, ActivityLogEntry } from '@/types/agent';
 
@@ -22,6 +23,7 @@ const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = 
   running: { color: 'bg-blue-500/10 text-blue-600', icon: <Loader2 className="w-3 h-3 animate-spin" /> },
   completed: { color: 'bg-green-500/10 text-green-600', icon: <CheckCircle2 className="w-3 h-3" /> },
   failed: { color: 'bg-red-500/10 text-red-600', icon: <XCircle className="w-3 h-3" /> },
+  cancelled: { color: 'bg-orange-500/10 text-orange-600', icon: <StopCircle className="w-3 h-3" /> },
 };
 
 const LOG_STATUS_ICON: Record<string, React.ReactNode> = {
@@ -59,9 +61,10 @@ interface TaskCardProps {
   task: AgentTask;
   logs?: ActivityLogEntry[];
   onExpand?: (taskId: string) => void;
+  onStop?: (taskId: string) => void;
 }
 
-export function TaskCard({ task, logs, onExpand }: TaskCardProps) {
+export function TaskCard({ task, logs, onExpand, onStop }: TaskCardProps) {
   const [expanded, setExpanded] = useState(false);
   const statusConfig = STATUS_CONFIG[task.status] || STATUS_CONFIG.pending;
   const typeIcon = TYPE_ICONS[task.type] || TYPE_ICONS.general;
@@ -117,6 +120,16 @@ export function TaskCard({ task, logs, onExpand }: TaskCardProps) {
               <span className="mr-1">{statusConfig.icon}</span>
               {task.status}
             </Badge>
+            {onStop && (task.status === 'running' || task.status === 'queued') && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-5 w-5 text-muted-foreground hover:text-red-500"
+                onClick={(e) => { e.stopPropagation(); onStop(task.id); }}
+              >
+                <StopCircle className="w-3.5 h-3.5" />
+              </Button>
+            )}
           </div>
 
           <div className="flex items-center gap-2 mt-1 text-xs text-muted-foreground">
