@@ -1,52 +1,42 @@
 
+# Fix Build Errors: `rateLimit` Scope Issue
 
-# Apply Commit d9c92f3 — User Activity Tracking Table
+## Problem
 
-## What's needed
+In both `jac-web-search/index.ts` and `search-memory/index.ts`, the variable `rateLimit` is declared inside an `if (!isInternal)` block at the top, but referenced at the bottom when calling `successResponse(req, ..., 200, rateLimit)`. When a request comes from a service role (internal agent call), the code skips the rate limit block, so `rateLimit` is never defined -- causing a TypeScript error.
 
-The frontend code for activity tracking is already in place. The only missing piece is the `user_activity` database table that the tracker writes to.
+## Fix
 
-## Database Migration
+Declare `rateLimit` before the `if` block with a default value, so it's always in scope.
 
-Create the `user_activity` table with the following schema:
+### `supabase/functions/jac-web-search/index.ts` (line ~90)
 
-```sql
-CREATE TABLE public.user_activity (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id uuid NOT NULL,
-  event text NOT NULL,
-  category text NOT NULL,
-  detail jsonb NOT NULL DEFAULT '{}',
-  entry_id uuid,
-  session_id text NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
-);
-
-ALTER TABLE public.user_activity ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Users can view own activity"
-  ON public.user_activity FOR SELECT
-  USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can insert own activity"
-  ON public.user_activity FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
-
-CREATE INDEX idx_user_activity_user_date ON public.user_activity (user_id, created_at);
-CREATE INDEX idx_user_activity_category ON public.user_activity (user_id, category, created_at);
-
-ALTER PUBLICATION supabase_realtime ADD TABLE public.user_activity;
+Change from:
+```typescript
+const isInternal = isServiceRoleRequest(req);
+if (!isInternal) {
+  const rateLimit = checkRateLimit(userId, RATE_LIMIT_CONFIGS.search);
 ```
 
-## No other changes needed
+To:
+```typescript
+const isInternal = isServiceRoleRequest(req);
+let rateLimit: ReturnType<typeof checkRateLimit> | undefined;
+if (!isInternal) {
+  rateLimit = checkRateLimit(userId, RATE_LIMIT_CONFIGS.search);
+```
 
-- `src/hooks/useActivityTracker.ts` -- already present
-- `src/components/ActivityTrackingProvider.tsx` -- already present
-- `src/App.tsx` -- already wires `ActivityTrackingProvider` around authenticated routes
-- No edge function changes required
+### `supabase/functions/search-memory/index.ts` (line ~63)
 
-## Technical Notes
+Same pattern -- hoist the `rateLimit` declaration above the `if` block.
 
-- The `sendBeacon` call in `useActivityTracker.ts` posts directly to the REST API (`/rest/v1/user_activity`). This requires the anon key header, but `sendBeacon` only sends a Blob body without auth headers. This means unload events may silently fail. This is acceptable -- the 2-second batch flush handles the vast majority of events, and losing the final batch on tab close is a known tradeoff.
-- The INSERT RLS policy requires `auth.uid() = user_id`, which is correct for client-side inserts.
+### Redeploy
 
+Both `jac-web-search` and `search-memory` edge functions need redeployment after the fix.
+
+## Files Changed
+
+| File | Change |
+|------|--------|
+| `supabase/functions/jac-web-search/index.ts` | Hoist `rateLimit` declaration |
+| `supabase/functions/search-memory/index.ts` | Hoist `rateLimit` declaration |
