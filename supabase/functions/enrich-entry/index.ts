@@ -1,14 +1,7 @@
 /**
  * enrich-entry — The Enrich Layer (External Intelligence)
- *
- * GOAL: Add external context to user's entries.
- *
- * Code dumps → relevant docs, patterns, potential issues
- * Ideas → related articles, research, validation
- * Any dump → web context when helpful
- *
- * Uses AI to determine what enrichment is needed, then fetches external context.
- * Results are cached to avoid repeated lookups.
+ * 
+ * Uses Anthropic Claude to add external context to user's entries.
  */
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
@@ -19,6 +12,7 @@ import { extractUserId } from '../_shared/auth.ts';
 import { checkRateLimit, RATE_LIMIT_CONFIGS, getRateLimitHeaders } from '../_shared/rateLimit.ts';
 import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
 import { parseJsonBody } from '../_shared/validation.ts';
+import { callClaude, parseTextContent, CLAUDE_MODELS, ClaudeError } from '../_shared/anthropic.ts';
 
 interface EnrichRequest {
   entryId: string;
@@ -37,7 +31,6 @@ interface EnrichmentResult {
     confidence: number;
     source?: string;
   }>;
-  searchQueries?: string[];
 }
 
 serve(async (req) => {
@@ -50,7 +43,6 @@ serve(async (req) => {
       return errorResponse(req, authError ?? 'Unauthorized', 401);
     }
 
-    // Stricter rate limit for enrichment (it's expensive)
     const rateLimit = checkRateLimit(`enrich:${userId}`, RATE_LIMIT_CONFIGS.ai);
     if (!rateLimit.allowed) {
       return new Response(
@@ -59,7 +51,6 @@ serve(async (req) => {
       );
     }
 
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
@@ -70,12 +61,11 @@ serve(async (req) => {
     }
 
     const { entryId, content, contentType, title, tags } = body;
-
     if (!entryId || !content) {
       return errorResponse(req, 'entryId and content are required', 400);
     }
 
-    // Check if we already have cached enrichment for this entry
+    // Check cache
     const { data: existingEntry } = await supabase
       .from('entries')
       .select('extracted_data')
@@ -85,68 +75,30 @@ serve(async (req) => {
 
     if (existingEntry?.extracted_data?.enrichment) {
       console.log('Returning cached enrichment for entry:', entryId);
-      return successResponse(req, {
-        entryId,
-        enrichment: existingEntry.extracted_data.enrichment,
-        cached: true,
-      }, 200, rateLimit);
+      return successResponse(req, { entryId, enrichment: existingEntry.extracted_data.enrichment, cached: true }, 200, rateLimit);
     }
 
-    // Build enrichment prompt based on content type
+    // Build enrichment focus based on content type
     let enrichmentFocus = '';
     switch (contentType) {
       case 'code':
-        enrichmentFocus = `This is a CODE entry. Provide:
-- What this code does (brief explanation)
-- Potential issues or bugs to watch for
-- Best practices relevant to this pattern
-- Related technologies or libraries that could help
-- Common alternatives or improvements`;
+        enrichmentFocus = `This is a CODE entry. Provide: what this code does, potential issues, best practices, related technologies, common alternatives.`;
         break;
       case 'idea':
-        enrichmentFocus = `This is an IDEA entry. Provide:
-- Validation: Is this idea sound? Any obvious gaps?
-- Related concepts or existing implementations
-- Potential challenges to consider
-- Suggested next steps to explore this further
-- Similar approaches others have taken`;
+        enrichmentFocus = `This is an IDEA entry. Provide: validation/gaps, related concepts, potential challenges, next steps, similar approaches.`;
         break;
       case 'link':
-        enrichmentFocus = `This is a LINK entry. Provide:
-- What this resource is about (brief summary if identifiable)
-- Related resources or alternatives
-- Key concepts from this domain
-- Why this might be useful to the user`;
+        enrichmentFocus = `This is a LINK entry. Provide: what this resource is about, related resources, key concepts, why it's useful.`;
         break;
       case 'note':
       case 'document':
-        enrichmentFocus = `This is a NOTE/DOCUMENT entry. Provide:
-- Key takeaways or summary
-- Related topics to explore
-- Actionable items if any
-- Context that adds depth to this note`;
+        enrichmentFocus = `This is a NOTE/DOCUMENT entry. Provide: key takeaways, related topics, actionable items, additional context.`;
         break;
       default:
-        enrichmentFocus = `Provide useful external context for this entry:
-- Key insights or connections
-- Related information
-- Actionable suggestions
-- Relevant context`;
+        enrichmentFocus = `Provide useful external context: key insights, related information, actionable suggestions, relevant context.`;
     }
 
-    // Call AI to generate enrichment
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${lovableApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          {
-            role: 'system',
-            content: `You are an enrichment engine for a brain-dump app called LinkJac. Your job is to add EXTERNAL CONTEXT to user entries — things they wouldn't know from their own brain.
+    const systemPrompt = `You are an enrichment engine for a brain-dump app called LinkJac. Your job is to add EXTERNAL CONTEXT to user entries.
 
 ${enrichmentFocus}
 
@@ -155,7 +107,6 @@ Rules:
 - Be SPECIFIC to the actual content, not generic advice.
 - Provide confidence scores (0-1) for each insight.
 - Focus on what's genuinely useful, not filler.
-- If you can identify specific technologies, patterns, or concepts, name them.
 - Maximum 5 insights per entry.
 
 Respond as JSON with this structure:
@@ -170,55 +121,37 @@ Respond as JSON with this structure:
       "source": "Optional source reference"
     }
   ]
-}`
-          },
-          {
-            role: 'user',
-            content: `Entry to enrich:
-Title: ${title || 'Untitled'}
-Type: ${contentType}
-Tags: ${(tags || []).join(', ')}
-Content:
-${content.slice(0, 4000)}`
-          }
-        ],
-        temperature: 0.4,
-        max_tokens: 2000,
-        response_format: { type: 'json_object' },
-      }),
+}`;
+
+    const claudeResponse = await callClaude({
+      model: CLAUDE_MODELS.haiku,
+      system: systemPrompt,
+      messages: [{
+        role: 'user',
+        content: `Entry to enrich:\nTitle: ${title || 'Untitled'}\nType: ${contentType}\nTags: ${(tags || []).join(', ')}\nContent:\n${content.slice(0, 4000)}`,
+      }],
+      temperature: 0.4,
+      max_tokens: 2000,
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Enrichment AI error:', response.status, errorText);
-      return errorResponse(req, 'Enrichment failed', 500);
-    }
-
-    const aiData = await response.json();
-    const responseContent = aiData.choices?.[0]?.message?.content;
+    const responseText = parseTextContent(claudeResponse);
 
     let enrichment: EnrichmentResult;
     try {
-      enrichment = JSON.parse(responseContent);
+      enrichment = JSON.parse(responseText);
     } catch {
-      console.error('Failed to parse enrichment response:', responseContent);
-      enrichment = {
-        summary: 'Unable to generate enrichment for this entry.',
-        insights: [],
-      };
+      console.error('Failed to parse enrichment response:', responseText);
+      enrichment = { summary: 'Unable to generate enrichment for this entry.', insights: [] };
     }
 
-    // Cache the enrichment in extracted_data
+    // Cache enrichment
     const currentExtractedData = existingEntry?.extracted_data || {};
     await supabase
       .from('entries')
       .update({
         extracted_data: {
           ...currentExtractedData,
-          enrichment: {
-            ...enrichment,
-            generatedAt: new Date().toISOString(),
-          },
+          enrichment: { ...enrichment, generatedAt: new Date().toISOString() },
         },
       })
       .eq('id', entryId)
@@ -226,14 +159,13 @@ ${content.slice(0, 4000)}`
 
     console.log(`Enrichment generated for entry ${entryId}: ${enrichment.insights.length} insights`);
 
-    return successResponse(req, {
-      entryId,
-      enrichment,
-      cached: false,
-    }, 200, rateLimit);
+    return successResponse(req, { entryId, enrichment, cached: false }, 200, rateLimit);
 
   } catch (error) {
     console.error('Error in enrich-entry:', error);
+    if (error instanceof ClaudeError) {
+      return errorResponse(req, error.message, error.status);
+    }
     return serverErrorResponse(req, error instanceof Error ? error : new Error('Unknown error'));
   }
 });

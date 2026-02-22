@@ -1,36 +1,28 @@
 /**
  * assistant-chat — Your Brain's Search Engine (Backend)
  * 
- * GOAL: "What was that thing..." → Found it.
- * 
- * This streams responses word-by-word for instant feel.
- * Rate limited. Searches embeddings. Shows sources.
- * 
- * NOW WITH: Weather awareness + Pre-stream save execution
+ * NOW POWERED BY: Anthropic Claude via direct API
+ * Stream transform: Claude SSE → OpenAI-compatible SSE (zero frontend changes)
  */
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
+import { getAnthropicHeaders, ANTHROPIC_API_URL, CLAUDE_MODELS, ClaudeError, callClaude } from '../_shared/anthropic.ts';
 
 // Simple in-memory rate limiting (100 requests per minute per user)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT = 100;
-const RATE_LIMIT_WINDOW_MS = 60000; // 1 minute
+const RATE_LIMIT_WINDOW_MS = 60000;
 
 function checkRateLimit(userId: string): boolean {
   const now = Date.now();
   const userLimit = rateLimitMap.get(userId);
-
   if (!userLimit || now > userLimit.resetTime) {
     rateLimitMap.set(userId, { count: 1, resetTime: now + RATE_LIMIT_WINDOW_MS });
     return true;
   }
-
-  if (userLimit.count >= RATE_LIMIT) {
-    return false;
-  }
-
+  if (userLimit.count >= RATE_LIMIT) return false;
   userLimit.count++;
   return true;
 }
@@ -64,7 +56,6 @@ interface WeatherData {
   location: string;
 }
 
-// Weather code to description mapping (WMO codes)
 function getWeatherDescription(code: number): string {
   const descriptions: Record<number, string> = {
     0: 'Clear sky',
@@ -83,26 +74,18 @@ function getWeatherDescription(code: number): string {
   return descriptions[code] || 'Unknown';
 }
 
-// Check if snow is expected
 function isSnowExpected(code: number): boolean {
   return [71, 73, 75, 77, 85, 86].includes(code);
 }
 
-// Fetch weather from Open-Meteo (free, no API key needed)
 async function fetchWeather(lat = 40.7128, lon = -74.0060, location = "New York"): Promise<WeatherData | null> {
   try {
     const response = await fetch(
       `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&temperature_unit=fahrenheit&timezone=auto`
     );
-    
-    if (!response.ok) {
-      console.warn('Weather API failed:', response.status);
-      return null;
-    }
-    
+    if (!response.ok) { console.warn('Weather API failed:', response.status); return null; }
     const data = await response.json();
     const current = data.current_weather;
-    
     return {
       temperature: Math.round(current.temperature),
       weatherCode: current.weathercode,
@@ -110,25 +93,17 @@ async function fetchWeather(lat = 40.7128, lon = -74.0060, location = "New York"
       description: getWeatherDescription(current.weathercode),
       location,
     };
-  } catch (error) {
-    console.warn('Failed to fetch weather:', error);
-    return null;
-  }
+  } catch (error) { console.warn('Failed to fetch weather:', error); return null; }
 }
 
-// Detect if user is asking about weather
 function detectWeatherIntent(message: string): boolean {
-  const weatherKeywords = /\b(snow|snowing|rain|raining|weather|forecast|temperature|cold|hot|storm|sunny|cloudy|freeze|freezing|sleet|hail|wind|windy|humid|degrees)\b/i;
-  return weatherKeywords.test(message);
+  return /\b(snow|snowing|rain|raining|weather|forecast|temperature|cold|hot|storm|sunny|cloudy|freeze|freezing|sleet|hail|wind|windy|humid|degrees)\b/i.test(message);
 }
 
-// Detect if user is asking about calendar/schedule (typo-forgiving)
 function detectCalendarIntent(message: string): boolean {
-  const calendarKeywords = /\b(cal[ae]nd[ae]r|schedule|scheduled|upcoming|events?|appointments?|plans?|this week|next week|tomorrow|today|weekend|when am i|when do i|what do i have|what'?s? (on|in) my)\b/i;
-  return calendarKeywords.test(message);
+  return /\b(cal[ae]nd[ae]r|schedule|scheduled|upcoming|events?|appointments?|plans?|this week|next week|tomorrow|today|weekend|when am i|when do i|what do i have|what'?s? (on|in) my)\b/i.test(message);
 }
 
-// Detect save intent and extract what to save
 function detectSaveIntent(message: string): { hasSaveIntent: boolean; contentToSave: string; listName?: string } {
   const savePatterns = [
     /\b(add|put)\s+(.+?)\s+(?:to|on)\s+(?:my\s+)?(.+?)\s*(?:list)?$/i,
@@ -136,7 +111,6 @@ function detectSaveIntent(message: string): { hasSaveIntent: boolean; contentToS
     /\b(save|remember|note|dump|store)\s+(?:that\s+)?(.+)/i,
     /\b(add)\s+(.+?)\s+(?:to\s+)?(?:my\s+)?(?:shopping|grocery|todo|to-do)/i,
   ];
-
   for (const pattern of savePatterns) {
     const match = message.match(pattern);
     if (match) {
@@ -146,8 +120,6 @@ function detectSaveIntent(message: string): { hasSaveIntent: boolean; contentToS
       return { hasSaveIntent: true, contentToSave: match[2].trim() };
     }
   }
-
-  // Fallback: general save intent
   const hasSaveIntent = /\b(save|add|remember|dump|store|note down)\b/i.test(message);
   if (hasSaveIntent) {
     const contentToSave = message
@@ -155,15 +127,11 @@ function detectSaveIntent(message: string): { hasSaveIntent: boolean; contentToS
       .trim();
     return { hasSaveIntent: contentToSave.length > 5, contentToSave };
   }
-
   return { hasSaveIntent: false, contentToSave: '' };
 }
 
-// Detect if query would benefit from web grounding
 function detectWebSearchIntent(message: string, brainContext: string): { shouldSearch: boolean; searchQuery: string; reason: string } {
   const messageLower = message.toLowerCase();
-  
-  // Personal/internal queries - NO web search needed
   const personalPatterns = [
     /\b(my|mine)\s+(grocery|groceries|shopping|list|notes?|todo|tasks?|appointments?)/i,
     /\b(what|show|find|search)\s+(my|in my|from my)/i,
@@ -171,14 +139,9 @@ function detectWebSearchIntent(message: string, brainContext: string): { shouldS
     /\b(remember|recall|saved|dumped)\b/i,
     /\bmy brain\b/i,
   ];
-  
   for (const pattern of personalPatterns) {
-    if (pattern.test(messageLower)) {
-      return { shouldSearch: false, searchQuery: '', reason: 'personal_query' };
-    }
+    if (pattern.test(messageLower)) return { shouldSearch: false, searchQuery: '', reason: 'personal_query' };
   }
-  
-  // Learning/resource queries - YES web search
   const learningPatterns = [
     { pattern: /\bhow (do|to|can)\s+(?:i\s+)?(?:learn|start|begin)/i, reason: 'learning_intent' },
     { pattern: /\b(tutorial|course|guide|documentation|docs)\b/i, reason: 'resource_request' },
@@ -186,35 +149,21 @@ function detectWebSearchIntent(message: string, brainContext: string): { shouldS
     { pattern: /\bwhat('s| is) (new|happening|trending)\b/i, reason: 'news_intent' },
     { pattern: /\b(best practices?|how does .* work|explain)\b/i, reason: 'knowledge_request' },
   ];
-  
   for (const { pattern, reason } of learningPatterns) {
-    const match = messageLower.match(pattern);
-    if (match) {
-      // Build search query from the message
-      const searchQuery = message
-        .replace(/^(hey |hi |jac |please |can you |could you )/i, '')
-        .replace(/\?+$/, '')
-        .trim();
+    if (messageLower.match(pattern)) {
+      const searchQuery = message.replace(/^(hey |hi |jac |please |can you |could you )/i, '').replace(/\?+$/, '').trim();
       return { shouldSearch: true, searchQuery, reason };
     }
   }
-  
-  // Context-based triggers - if brain has learning/tech entries
   if (brainContext) {
     const techKeywords = /\b(learn|programming|code|framework|library|api|development)\b/i;
-    const hasLearningContext = techKeywords.test(brainContext);
-    
-    // If brain context mentions learning something and user asks about it
-    if (hasLearningContext && /\b(should|focus|priority|next|start)\b/i.test(messageLower)) {
-      const searchQuery = `${message} resources tutorials 2026`;
-      return { shouldSearch: true, searchQuery, reason: 'brain_context_learning' };
+    if (techKeywords.test(brainContext) && /\b(should|focus|priority|next|start)\b/i.test(messageLower)) {
+      return { shouldSearch: true, searchQuery: `${message} resources tutorials 2026`, reason: 'brain_context_learning' };
     }
   }
-  
   return { shouldSearch: false, searchQuery: '', reason: 'no_match' };
 }
 
-// Interface for web search results
 interface WebSearchResult {
   answer?: string;
   results: Array<{ title: string; url: string; snippet: string; relevanceScore: number }>;
@@ -222,43 +171,76 @@ interface WebSearchResult {
   meta: { query: string; resultCount: number };
 }
 
-// Call jac-web-search edge function
-async function fetchWebContext(
-  query: string, 
-  brainContext: string, 
-  supabaseUrl: string, 
-  authHeader: string
-): Promise<WebSearchResult | null> {
+async function fetchWebContext(query: string, brainContext: string, supabaseUrl: string, authHeader: string): Promise<WebSearchResult | null> {
   try {
     console.log('Fetching web context for:', query);
-    
     const response = await fetch(`${supabaseUrl}/functions/v1/jac-web-search`, {
       method: 'POST',
-      headers: {
-        'Authorization': authHeader,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        query,
-        brainContext: brainContext.slice(0, 500), // Limit context size
-        searchDepth: 'basic',
-        maxResults: 5,
-        includeAnswer: true,
-      }),
+      headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, brainContext: brainContext.slice(0, 500), searchDepth: 'basic', maxResults: 5, includeAnswer: true }),
     });
-
-    if (!response.ok) {
-      console.warn('Web search failed:', response.status, await response.text());
-      return null;
-    }
-
+    if (!response.ok) { console.warn('Web search failed:', response.status); return null; }
     const data = await response.json();
     console.log(`Web search returned ${data.meta?.resultCount || 0} results`);
     return data;
-  } catch (err) {
-    console.error('Web search error:', err);
-    return null;
-  }
+  } catch (err) { console.error('Web search error:', err); return null; }
+}
+
+/**
+ * Transform Claude SSE stream → OpenAI-compatible SSE stream
+ * This ensures zero frontend changes needed.
+ */
+function claudeToOpenAIStream(claudeBody: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  return new ReadableStream({
+    async start(controller) {
+      const reader = claudeBody.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            // Send [DONE] in OpenAI format
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          
+          let newlineIdx: number;
+          while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newlineIdx).trim();
+            buffer = buffer.slice(newlineIdx + 1);
+            
+            if (!line.startsWith('data: ')) continue;
+            const jsonStr = line.slice(6);
+            if (!jsonStr || jsonStr === '[DONE]') continue;
+            
+            try {
+              const event = JSON.parse(jsonStr);
+              
+              // Claude event types we care about:
+              // content_block_delta with type: text_delta
+              if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+                const openaiChunk = {
+                  choices: [{ delta: { content: event.delta.text }, index: 0 }],
+                };
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(openaiChunk)}\n\n`));
+              }
+              // message_stop → we'll send [DONE] when the reader is done
+            } catch {
+              // Skip unparseable lines
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Stream transform error:', err);
+        controller.error(err);
+      }
+    },
+  });
 }
 
 serve(async (req) => {
@@ -270,23 +252,17 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
 
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // SECURITY FIX: Extract user ID from JWT instead of request body
+    // Auth
     const authHeader = req.headers.get('Authorization');
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return new Response(
-        JSON.stringify({ error: 'Authorization header required' }),
-        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ error: 'Authorization header required' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     const jwt = authHeader.replace('Bearer ', '');
-
-    // Validate JWT using signing-keys compatible getClaims()
-    // (avoids "session not found" failures that can occur with getUser())
     const authClient = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -296,24 +272,18 @@ serve(async (req) => {
     };
 
     let userId: string | null = null;
-
     if (typeof authAny.getClaims === 'function') {
       const { data, error } = await authAny.getClaims(jwt);
       userId = data?.claims?.sub ?? null;
       if (error || !userId) {
-        return new Response(
-          JSON.stringify({ error: 'Invalid or expired token' }),
-          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return new Response(JSON.stringify({ error: 'Invalid or expired token' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
     } else {
-      // Fallback for older clients
       const { data: { user }, error: authError } = await authClient.auth.getUser(jwt);
       if (authError || !user) {
-        return new Response(
-          JSON.stringify({ error: 'Invalid or expired token' }),
-          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+        return new Response(JSON.stringify({ error: 'Invalid or expired token' }),
+          { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
       }
       userId = user.id;
     }
@@ -321,23 +291,16 @@ serve(async (req) => {
     const { message, conversationHistory = [], stream = true, entryContext = null } = await req.json();
 
     if (!message) {
-      return new Response(
-        JSON.stringify({ error: 'Message is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ error: 'Message is required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // Check rate limit
     if (!checkRateLimit(userId)) {
-      return new Response(
-        JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
-        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
+        { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
     // === PRE-STREAM ACTIONS ===
-    
-    // 1. Check for save intent and execute BEFORE streaming
     const saveIntent = detectSaveIntent(message);
     let savedEntry: Entry | null = null;
     let saveError: string | null = null;
@@ -347,64 +310,39 @@ serve(async (req) => {
       try {
         const saveResponse = await fetch(`${supabaseUrl}/functions/v1/smart-save`, {
           method: 'POST',
-          headers: {
-            'Authorization': authHeader,
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            content: saveIntent.listName 
-              ? `${saveIntent.contentToSave} (${saveIntent.listName})` 
-              : saveIntent.contentToSave,
+            content: saveIntent.listName ? `${saveIntent.contentToSave} (${saveIntent.listName})` : saveIntent.contentToSave,
             source: 'assistant',
           }),
         });
-
         if (saveResponse.ok) {
           const saveData = await saveResponse.json();
-          if (saveData?.entry) {
-            savedEntry = saveData.entry;
-            console.log('Pre-stream save successful:', savedEntry?.id);
-          }
-        } else {
-          saveError = 'Failed to save';
-          console.warn('Pre-stream save failed:', await saveResponse.text());
-        }
-      } catch (err) {
-        saveError = 'Failed to save';
-        console.error('Pre-stream save error:', err);
-      }
+          if (saveData?.entry) { savedEntry = saveData.entry; console.log('Pre-stream save successful:', savedEntry?.id); }
+        } else { saveError = 'Failed to save'; console.warn('Pre-stream save failed:', await saveResponse.text()); }
+      } catch (err) { saveError = 'Failed to save'; console.error('Pre-stream save error:', err); }
     }
 
-    // 2. Check for weather intent and fetch data
     const weatherIntent = detectWeatherIntent(message);
     let weatherData: WeatherData | null = null;
-    
     if (weatherIntent) {
       console.log('Weather intent detected, fetching weather...');
-      // TODO: In future, get user's location from profile
       weatherData = await fetchWeather();
-      console.log('Weather data:', weatherData);
     }
 
-    // 3. Check for web search intent (will be evaluated after brain search for context)
     let webSearchResult: WebSearchResult | null = null;
 
-    // Step 1: Search — keyword + semantic (embedding-based) search
+    // Search entries
     console.log('Performing search for:', message);
     let relevantEntries: Entry[] = [];
 
-    // Try semantic search first (if message is substantial enough)
     if (message.length > 10) {
       try {
         const embResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${supabaseKey}`,
-            'Content-Type': 'application/json',
-          },
+          headers: { 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ text: message }),
         });
-
         if (embResponse.ok) {
           const embData = await embResponse.json();
           if (embData.embedding) {
@@ -414,46 +352,33 @@ serve(async (req) => {
               match_count: 10,
               filter_user_id: userId,
             });
-
             if (semanticResults && semanticResults.length > 0) {
               relevantEntries = semanticResults as Entry[];
               console.log(`Found ${relevantEntries.length} entries via semantic search`);
             }
           }
         }
-      } catch (embErr) {
-        console.warn('Semantic search failed, falling back to keyword:', embErr);
-      }
+      } catch (embErr) { console.warn('Semantic search failed:', embErr); }
     }
     
-    // Extract search words from message (2+ chars, lowercased)
-    const searchWords = message
-      .toLowerCase()
-      .split(/\s+/)
+    const searchWords = message.toLowerCase().split(/\s+/)
       .filter((w: string) => w.length >= 2 && !/^(the|and|or|is|it|to|a|an|in|on|at|for|of|my|i|me|do|what|how|when|where|why)$/i.test(w))
       .slice(0, 5);
     
-    // Generate stemmed/partial variations for better matching (e.g., "grocery" matches "groceries")
     const searchVariations = searchWords.flatMap((word: string) => {
       const variations = [word];
-      // Add common suffixes/prefixes removed
-      if (word.endsWith('ies')) variations.push(word.slice(0, -3) + 'y'); // groceries -> grocery
-      if (word.endsWith('es')) variations.push(word.slice(0, -2)); // dishes -> dish
-      if (word.endsWith('s') && !word.endsWith('ss')) variations.push(word.slice(0, -1)); // items -> item
-      if (word.endsWith('ing')) variations.push(word.slice(0, -3)); // shopping -> shop
-      if (word.endsWith('ed')) variations.push(word.slice(0, -2)); // added -> add
-      // Add common suffixes
-      if (!word.endsWith('s')) variations.push(word + 's'); // item -> items
-      if (!word.endsWith('ies') && word.endsWith('y')) variations.push(word.slice(0, -1) + 'ies'); // grocery -> groceries
+      if (word.endsWith('ies')) variations.push(word.slice(0, -3) + 'y');
+      if (word.endsWith('es')) variations.push(word.slice(0, -2));
+      if (word.endsWith('s') && !word.endsWith('ss')) variations.push(word.slice(0, -1));
+      if (word.endsWith('ing')) variations.push(word.slice(0, -3));
+      if (word.endsWith('ed')) variations.push(word.slice(0, -2));
+      if (!word.endsWith('s')) variations.push(word + 's');
+      if (!word.endsWith('ies') && word.endsWith('y')) variations.push(word.slice(0, -1) + 'ies');
       return [...new Set(variations)];
     });
     
-    console.log('Search words:', searchWords, 'Variations:', searchVariations);
-    
     if (searchWords.length > 0) {
-      // Search content and title using ilike with first variation
       const searchPattern = `%${searchWords[0]}%`;
-      
       const { data: contentResults, error: searchError } = await supabase
         .from('entries')
         .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time, image_url')
@@ -462,17 +387,12 @@ serve(async (req) => {
         .or(`content.ilike.${searchPattern},title.ilike.${searchPattern}`)
         .order('importance_score', { ascending: false, nullsFirst: false })
         .limit(15);
-
       if (!searchError && contentResults) {
         relevantEntries = contentResults as Entry[];
-        console.log(`Found ${relevantEntries.length} entries via keyword search for "${searchWords[0]}"`);
-      } else {
-        console.warn('Keyword search failed:', searchError);
+        console.log(`Found ${relevantEntries.length} entries via keyword search`);
       }
-      
-      // Also search by tags using variations for partial matching
+
       if (relevantEntries.length < 10) {
-        // Search with each variation
         for (const variation of searchVariations.slice(0, 3)) {
           const { data: tagResults } = await supabase
             .from('entries')
@@ -482,29 +402,19 @@ serve(async (req) => {
             .contains('tags', [variation])
             .order('importance_score', { ascending: false, nullsFirst: false })
             .limit(10);
-            
           if (tagResults) {
-            // Merge, avoiding duplicates
             for (const entry of tagResults) {
-              if (!relevantEntries.find((e) => e.id === entry.id)) {
-                relevantEntries.push(entry as Entry);
-              }
+              if (!relevantEntries.find((e) => e.id === entry.id)) relevantEntries.push(entry as Entry);
             }
           }
         }
-        console.log(`After tag search with variations: ${relevantEntries.length} total entries`);
       }
-    } else {
-      console.log('No meaningful search words found in message');
     }
 
-    // Step 3: ALWAYS fetch upcoming calendar entries (not just on intent detection)
-    // This ensures Jac is always aware of scheduled items
+    // Calendar entries
     let calendarEntries: Entry[] = [];
-    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
-    console.log('Fetching upcoming calendar entries...');
-    
-    const { data: upcomingEvents, error: calendarError } = await supabase
+    const today = new Date().toISOString().split('T')[0];
+    const { data: upcomingEvents } = await supabase
       .from('entries')
       .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time, image_url')
       .eq('user_id', userId)
@@ -513,15 +423,9 @@ serve(async (req) => {
       .gte('event_date', today)
       .order('event_date', { ascending: true })
       .limit(15);
+    if (upcomingEvents) calendarEntries = upcomingEvents as Entry[];
 
-    if (!calendarError && upcomingEvents) {
-      calendarEntries = upcomingEvents as Entry[];
-      console.log(`Found ${calendarEntries.length} calendar entries`);
-    } else if (calendarError) {
-      console.warn('Calendar query failed:', calendarError);
-    }
-
-    // Step 4: Fetch more recent entries for broader context (reduced for speed)
+    // Recent entries
     const { data: recentEntries } = await supabase
       .from('entries')
       .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time, image_url')
@@ -530,105 +434,59 @@ serve(async (req) => {
       .order('created_at', { ascending: false })
       .limit(8);
 
-    // Combine and deduplicate entries (calendar entries first for priority)
     const allEntries = [...calendarEntries, ...relevantEntries];
     if (recentEntries) {
       for (const entry of recentEntries) {
-        if (!allEntries.find((e) => e.id === entry.id)) {
-          allEntries.push(entry as Entry);
-        }
+        if (!allEntries.find((e) => e.id === entry.id)) allEntries.push(entry as Entry);
       }
     }
 
-    // Step 5: Build context from entries (reduced for speed)
     const contextEntries = allEntries.slice(0, 10);
     const contextText = contextEntries
       .map((entry) => {
         let entryText = `[${entry.content_type}${entry.content_subtype ? `/${entry.content_subtype}` : ''}] `;
         entryText += entry.title ? `"${entry.title}": ` : '';
         entryText += entry.content.slice(0, 500);
-        
-        // Add date/time for calendar entries
-        if (entry.event_date) {
-          entryText += `\n📅 Date: ${entry.event_date}`;
-          if (entry.event_time) entryText += ` at ${entry.event_time}`;
-        }
-        
+        if (entry.event_date) { entryText += `\n📅 Date: ${entry.event_date}`; if (entry.event_time) entryText += ` at ${entry.event_time}`; }
         if (entry.list_items && entry.list_items.length > 0) {
           entryText += `\nList items: ${entry.list_items.map((i) => `${i.checked ? '✓' : '○'} ${i.text}`).join(', ')}`;
         }
-        if (entry.tags && entry.tags.length > 0) {
-          entryText += ` [tags: ${entry.tags.join(', ')}]`;
-        }
+        if (entry.tags && entry.tags.length > 0) entryText += ` [tags: ${entry.tags.join(', ')}]`;
         return entryText;
       })
       .join('\n\n');
 
-    // Build dynamic context for pre-executed actions
     let actionContext = '';
-    
     if (savedEntry) {
       actionContext += `\n\n=== SAVE COMPLETED ===\nYou just saved "${saveIntent.contentToSave}" to "${savedEntry.title || savedEntry.content_type}". Confirm this briefly.\n`;
     } else if (saveIntent.hasSaveIntent && saveError) {
       actionContext += `\n\n=== SAVE FAILED ===\nFailed to save "${saveIntent.contentToSave}". Apologize briefly.\n`;
     }
-    
     if (weatherData) {
-      const snowWarning = isSnowExpected(weatherData.weatherCode) 
-        ? '\n⚠️ SNOW IS EXPECTED. Mention this proactively.' 
-        : '';
-      actionContext += `\n\n=== CURRENT WEATHER (${weatherData.location}) ===
-Temperature: ${weatherData.temperature}°F
-Conditions: ${weatherData.description}
-Wind: ${weatherData.windSpeed} mph${snowWarning}
-Use this info proactively in your response.\n`;
+      const snowWarning = isSnowExpected(weatherData.weatherCode) ? '\n⚠️ SNOW IS EXPECTED. Mention this proactively.' : '';
+      actionContext += `\n\n=== CURRENT WEATHER (${weatherData.location}) ===\nTemperature: ${weatherData.temperature}°F\nConditions: ${weatherData.description}\nWind: ${weatherData.windSpeed} mph${snowWarning}\n`;
     }
 
-    // 4. Now evaluate web search intent with brain context
     const webSearchIntent = detectWebSearchIntent(message, contextText);
     if (webSearchIntent.shouldSearch) {
-      console.log(`Web search triggered (reason: ${webSearchIntent.reason}): "${webSearchIntent.searchQuery}"`);
-      webSearchResult = await fetchWebContext(
-        webSearchIntent.searchQuery,
-        contextText,
-        supabaseUrl,
-        authHeader
-      );
-      
-      if (webSearchResult && webSearchResult.contextForLLM) {
-        actionContext += `\n\n=== REAL-TIME WEB CONTEXT ===
-${webSearchResult.contextForLLM}
-
-Use this web context to enhance your answer with current, accurate information.
-Synthesize the web context with the user's brain data - don't just repeat the web results.
-If web results are about something the user has in their brain, connect the dots.
-Cite sources when helpful (e.g., "According to [Source Name]...").
-`;
+      console.log(`Web search triggered (reason: ${webSearchIntent.reason})`);
+      webSearchResult = await fetchWebContext(webSearchIntent.searchQuery, contextText, supabaseUrl, authHeader);
+      if (webSearchResult?.contextForLLM) {
+        actionContext += `\n\n=== REAL-TIME WEB CONTEXT ===\n${webSearchResult.contextForLLM}\n\nSynthesize with brain data. Cite sources when helpful.\n`;
       }
     }
 
-    // Build context for currently viewed entry
     let viewingContext = '';
     if (entryContext) {
-      viewingContext = `
-=== ENTRY YOU'RE VIEWING ===
-The user is currently viewing this specific entry. Answer questions about IT specifically:
-Type: ${entryContext.content_type}
-Title: ${entryContext.title || 'Untitled'}
-Content: ${entryContext.content}
-
-If they ask "what is this?" or "tell me about this" or reference "this entry" - they mean THIS entry.
-Answer questions about this entry first, then provide additional context from their brain if relevant.
-`;
+      viewingContext = `\n=== ENTRY YOU'RE VIEWING ===\nType: ${entryContext.content_type}\nTitle: ${entryContext.title || 'Untitled'}\nContent: ${entryContext.content}\n\nIf they reference "this entry" - they mean THIS entry.\n`;
     }
 
-    // Step 5: Create system prompt - ACTION-ORIENTED, NO QUESTIONS
     const systemPrompt = `You are Jac, the user's personal brain assistant. You are OBEDIENT and ACTION-ORIENTED.
 
 === CRITICAL RULES ===
-1. NEVER ask follow-up questions. Ever. Not "Is there anything else?" Not "Would you like me to...?" Just act.
-2. NEVER ask for clarification. Infer from context. Make your best guess and execute.
-3. When the user wants something saved, added, or remembered - it's ALREADY DONE (see action context below). Just confirm briefly.
+1. NEVER ask follow-up questions. Ever. Just act.
+2. NEVER ask for clarification. Infer from context.
+3. When the user wants something saved - it's ALREADY DONE. Just confirm briefly.
 4. Be CONCISE. One short confirmation. Done.
 5. You are aware and intelligent - infer what they mean from context.
 6. You are obedient - do exactly what they ask without questioning.
@@ -637,15 +495,8 @@ Answer questions about this entry first, then provide additional context from th
 WRONG: "I've added salt to your list! Is there anything else you'd like to add?"
 RIGHT: "Done. Added salt to Shopping List."
 
-WRONG: "Would you like me to create a new grocery list for that?"
-RIGHT: "Added to your Grocery List. ✓"
-
-WRONG: "I don't see a list for that. Should I create one?"
-RIGHT: "Created new Shopping List with: Salt ✓"
-
 === WEATHER AWARENESS ===
 When you have weather data, share it proactively. Be helpful about weather-related tasks.
-If snow is expected and they're adding salt - connect the dots but stay brief.
 
 === YOUR CAPABILITIES ===
 - Search and retrieve from the user's LinkJac brain
@@ -653,88 +504,73 @@ If snow is expected and they're adding salt - connect the dots but stay brief.
 - Compile and summarize related entries
 - Surface connections between entries
 - Saving/adding is handled BEFORE you respond - just confirm
-- ACCESS REAL-TIME WEB INFORMATION when needed (see web context section if present)
+- ACCESS REAL-TIME WEB INFORMATION when needed
 
 === LISTS ===
-Show items with: ✓ (done) or ○ (pending)
-Be brief. No fluff.
+Show items with: ✓ (done) or ○ (pending). Be brief.
 
 === IF YOU DON'T KNOW ===
-Say briefly: "Nothing in your brain about that." Don't apologize excessively.
+Say briefly: "Nothing in your brain about that."
 ${actionContext}
 ${viewingContext}
 ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has no entries yet.'}`;
 
-    // Step 6: Build conversation messages
-    const messages = [
-      { role: 'system', content: systemPrompt },
-      ...conversationHistory.slice(-6), // Keep last 6 messages for context
-      { role: 'user', content: message },
-    ];
-
-    // Prepare sources for response (send before streaming) - include full data for clickable sources
+    // Sources for response
     const sourcesUsed = contextEntries.map((e) => ({
-      id: e.id,
-      title: e.title,
-      content: e.content,
-      content_type: e.content_type,
-      content_subtype: e.content_subtype,
-      tags: e.tags || [],
-      importance_score: e.importance_score,
-      created_at: e.created_at,
-      event_date: e.event_date,
-      event_time: e.event_time,
-      list_items: e.list_items,
-      image_url: e.image_url,
-      similarity: e.similarity,
+      id: e.id, title: e.title, content: e.content, content_type: e.content_type,
+      content_subtype: e.content_subtype, tags: e.tags || [], importance_score: e.importance_score,
+      created_at: e.created_at, event_date: e.event_date, event_time: e.event_time,
+      list_items: e.list_items, image_url: e.image_url, similarity: e.similarity,
     }));
 
-    // Step 7: Call AI for response (streaming or non-streaming)
-    console.log(`Generating assistant response (stream: ${stream})...`);
-    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${lovableApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-3-flash-preview',
-        messages,
-        max_tokens: 4096,
-        stream,
-      }),
-    });
-
-    if (!aiResponse.ok) {
-      const errorText = await aiResponse.text();
-      console.error('AI response error:', aiResponse.status, errorText);
-
-      if (aiResponse.status === 429) {
-        return new Response(
-          JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
-          { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
+    // Build Claude messages (system prompt is a top-level field, not in messages)
+    const claudeMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    // Add conversation history
+    for (const msg of conversationHistory.slice(-6)) {
+      if (msg.role === 'user' || msg.role === 'assistant') {
+        claudeMessages.push({ role: msg.role, content: msg.content });
       }
-
-      if (aiResponse.status === 402) {
-        return new Response(
-          JSON.stringify({ error: 'AI credits exhausted. Please add more credits.' }),
-          { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      throw new Error(`AI request failed: ${aiResponse.status}`);
     }
+    claudeMessages.push({ role: 'user', content: message });
 
-    // If streaming, return the stream directly with sources prepended
-    if (stream && aiResponse.body) {
-      // Create a transform stream that prepends sources and saved entry as first SSE event
+    console.log(`Generating assistant response (stream: ${stream})...`);
+
+    if (stream) {
+      // Call Claude with streaming
+      const anthropicHeaders = getAnthropicHeaders();
+      const claudeStreamResponse = await fetch(ANTHROPIC_API_URL, {
+        method: 'POST',
+        headers: anthropicHeaders,
+        body: JSON.stringify({
+          model: CLAUDE_MODELS.sonnet,
+          system: systemPrompt,
+          messages: claudeMessages,
+          max_tokens: 4096,
+          stream: true,
+        }),
+      });
+
+      if (!claudeStreamResponse.ok) {
+        const errorText = await claudeStreamResponse.text();
+        console.error('Claude streaming error:', claudeStreamResponse.status, errorText);
+        if (claudeStreamResponse.status === 429) {
+          return new Response(JSON.stringify({ error: 'Rate limit exceeded. Please try again later.' }),
+            { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        if (claudeStreamResponse.status === 402) {
+          return new Response(JSON.stringify({ error: 'AI credits exhausted.' }),
+            { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        throw new Error(`Claude streaming failed: ${claudeStreamResponse.status}`);
+      }
+
+      // Transform Claude SSE → OpenAI SSE, prepend sources
       const encoder = new TextEncoder();
-      
+      const openAIStream = claudeToOpenAIStream(claudeStreamResponse.body!);
+
       const transformStream = new TransformStream({
         start(controller) {
-          // Send sources, web sources, and saved entry as first event
-          const metaEvent = `data: ${JSON.stringify({ 
+          const metaEvent = `data: ${JSON.stringify({
             sources: sourcesUsed,
             webSources: webSearchResult?.results || [],
             savedEntry: savedEntry ? { id: savedEntry.id, title: savedEntry.title } : null,
@@ -747,25 +583,26 @@ ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has n
         },
       });
 
-      const readableStream = aiResponse.body.pipeThrough(transformStream);
+      const finalStream = openAIStream.pipeThrough(transformStream);
 
-      return new Response(readableStream, {
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-        },
+      return new Response(finalStream, {
+        headers: { ...corsHeaders, 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
       });
     }
 
     // Non-streaming fallback
-    const aiData = await aiResponse.json();
-    const response = aiData.choices[0]?.message?.content || 'I encountered an error. Please try again.';
+    const claudeResponse = await callClaude({
+      model: CLAUDE_MODELS.sonnet,
+      system: systemPrompt,
+      messages: claudeMessages,
+      max_tokens: 4096,
+    });
+
+    const responseText = claudeResponse.content.find(c => c.type === 'text')?.text || 'I encountered an error. Please try again.';
 
     return new Response(
       JSON.stringify({
-        response,
+        response: responseText,
         sourcesUsed,
         webSources: webSearchResult?.results || [],
         savedEntry: savedEntry ? { id: savedEntry.id, title: savedEntry.title } : null,
