@@ -1,35 +1,51 @@
 
-# Fix Build Errors: `slack_channel` Out of Scope in Catch Blocks
 
-## Problem
+# Apply "Thinking..." Update-in-Place (Commit 6da8691)
 
-All 3 worker agents declare `slack_channel` with `const` inside a `try` block, but their `catch` blocks also reference `slack_channel` for error notifications. Since `const` is block-scoped, it's not visible in the `catch`.
+Currently, the "Thinking..." message and the real response are two separate messages. This fix makes JAC post "Thinking..." first, capture its Slack timestamp, pipe it through the whole chain, and then use `chat.update` to replace it with the real answer -- one message, not two.
 
-## Fix (identical pattern in 3 files)
+## Changes (6 files)
 
-### 1. `supabase/functions/jac-research-agent/index.ts`
-- Add `let slackChannel: string | undefined;` next to the other hoisted variables (after line 41)
-- Change line 50 from `const slack_channel = body.slack_channel as string | undefined;` to `slackChannel = body.slack_channel as string | undefined;`
-- Update both `notifySlack` calls (lines 261, 323) from `slackChannel: slack_channel` to `slackChannel: slackChannel` (already named correctly, just the variable changes)
+### 1. `supabase/functions/slack-incoming/index.ts`
+Replace the `:brain:` emoji reaction (lines 120-134) with an awaited `chat.postMessage` that posts "_Thinking..._" and captures the returned `ts`. Pass `slack_thinking_ts` in the dispatch payload to `jac-dispatcher`.
 
-### 2. `supabase/functions/jac-save-agent/index.ts`
-- Add `let slackChannel: string | undefined;` after line 34
-- Change line 42 from `const slack_channel = ...` to `slackChannel = body.slack_channel as string | undefined;`
-- Update both `notifySlack` calls (lines 127, 188) to use `slackChannel` instead of `slack_channel`
+### 2. `supabase/functions/jac-dispatcher/index.ts`
+- Add `slack_thinking_ts` to the body type (line 97)
+- Destructure `slack_thinking_ts` from body
+- Include it in child task input (line 299)
+- Include it in worker dispatch body (line 333)
+- For general intent Slack reply (line 369): use `chat.update` with the thinking `ts` when available, fall back to `chat.postMessage` otherwise
 
-### 3. `supabase/functions/jac-search-agent/index.ts`
-- Add `let slackChannel: string | undefined;` after line 34
-- Change line 42 from `const slack_channel = ...` to `slackChannel = body.slack_channel as string | undefined;`
-- Update both `notifySlack` calls (lines 141, 205) to use `slackChannel` instead of `slack_channel`
+### 3. `supabase/functions/_shared/slack.ts`
+- Add `slackThinkingTs?: string` to `SlackPayload` interface (line 17)
+- In bot token path (line 48): when `slackThinkingTs` is present, use `chat.update` with `ts: slackThinkingTs` instead of `chat.postMessage`
+
+### 4. `supabase/functions/jac-research-agent/index.ts`
+- Add `let slackThinkingTs: string | undefined;` after line 41
+- Read `slackThinkingTs = body.slack_thinking_ts` after line 51
+- Add `slackThinkingTs` to both `notifySlack` calls (lines 262 and 324)
+
+### 5. `supabase/functions/jac-save-agent/index.ts`
+- Add `let slackThinkingTs: string | undefined;` after line 34
+- Read `slackThinkingTs = body.slack_thinking_ts` after line 43
+- Add `slackThinkingTs` to both `notifySlack` calls (lines 128 and 189)
+
+### 6. `supabase/functions/jac-search-agent/index.ts`
+- Add `let slackThinkingTs: string | undefined;` after line 34
+- Read `slackThinkingTs = body.slack_thinking_ts` after line 43
+- Add `slackThinkingTs` to both `notifySlack` calls (lines 142 and 206)
 
 ## Deploy
 
-After fixing, deploy all 5 edge functions:
+All 6 edge functions:
+- `slack-incoming`
+- `jac-dispatcher`
 - `jac-research-agent`
 - `jac-save-agent`
 - `jac-search-agent`
-- `jac-dispatcher`
-- `slack-incoming`
 - `search-memory`
 
-Then run the 4 Slack tests from the commit notes to verify everything works end-to-end.
+## Expected Result
+
+Every Slack DM to LinkJac produces exactly ONE message that starts as "_Thinking..._" then transforms in-place into the real answer. No duplicate messages.
+
