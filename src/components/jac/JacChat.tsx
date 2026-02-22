@@ -134,7 +134,7 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
         ) : (
           messages.map((msg, i) => (
             <div
-              key={msg.timestamp || i}
+              key={`${msg.timestamp}-${msg.role}-${i}`}
               className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
               {msg.role === 'assistant' && (

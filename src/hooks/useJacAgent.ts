@@ -188,7 +188,7 @@ export function useJacAgent(userId: string) {
           };
           setMessages(prev => {
             // Exact timestamp match
-            if (prev.some(m => m.timestamp === newMsg.created_at)) return prev;
+            if (prev.some(m => m.timestamp === newMsg.created_at && m.role === newMsg.role)) return prev;
             const dbTime = new Date(newMsg.created_at).getTime();
             // Dedup for BOTH user and assistant messages:
             // If same role + same content within 30s window, skip (covers optimistic adds & worker results)
