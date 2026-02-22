@@ -117,9 +117,9 @@ serve(async (req) => {
       const userId = profile.id;
       const botToken = Deno.env.get('SLACK_BOT_TOKEN');
 
-      // Add :brain: reaction so user knows JAC received the message
+      // Post immediate "thinking" message so user knows JAC is working
       if (botToken) {
-        fetch('https://slack.com/api/reactions.add', {
+        fetch('https://slack.com/api/chat.postMessage', {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${botToken}`,
@@ -127,8 +127,7 @@ serve(async (req) => {
           },
           body: JSON.stringify({
             channel: event.channel,
-            timestamp: event.ts,
-            name: 'brain',
+            text: '_Thinking..._',
           }),
         }).catch(() => {});
       }
