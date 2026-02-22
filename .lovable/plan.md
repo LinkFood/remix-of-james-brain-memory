@@ -3,52 +3,60 @@
 # Lock Down LinkJac — Single User Mode
 
 ## Overview
-Strip the app down to single-user mode. Only you can sign in (via Google OAuth). No signup, no marketing pages, no public access. Edge functions and agents continue running regardless of publish status.
+Strip the app to single-user mode. Only you (jayhillendalepress@gmail.com) can sign in via Google OAuth. No signup, no marketing pages, no public access. Edge functions and agents keep running 24/7 regardless.
 
-## Changes
+## Step 1: Database Trigger — Block Non-Owner Signups
+Modify the existing `handle_new_user()` function to reject any signup where the email is not `jayhillendalepress@gmail.com`. This is the safety net — even if someone reaches the Google OAuth flow, they can't create a profile.
 
-### 1. Simplify Auth Page (`src/pages/Auth.tsx`)
-- Remove all signup mode, forgot password, reset password flows
-- Remove email/password form entirely
-- Show only: Logo, tagline, "Sign in with Google" button, back-to-home link
-- Remove terms/privacy links from auth page (keep routes for legal compliance)
+```sql
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $$
+BEGIN
+  IF NEW.email != 'jayhillendalepress@gmail.com' THEN
+    RAISE EXCEPTION 'Signup is not allowed for this application';
+  END IF;
 
-### 2. Add Auth Guard + Redirect Logic (`src/App.tsx`)
-- Create a small `AuthRedirect` component for the `/` route
-- If logged in: redirect to `/dashboard`
-- If not logged in: redirect to `/auth`
-- Remove `/pricing` route (not needed for single-user)
+  INSERT INTO public.profiles (id, username)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data->>'username', split_part(NEW.email, '@', 1))
+  );
+  RETURN NEW;
+END;
+$$;
+```
+
+## Step 2: Simplify Auth Page (`src/pages/Auth.tsx`)
+Replace the entire auth page with a minimal version:
+- LinkJac logo + "Your AI-powered second brain" tagline
+- Single "Sign in with Google" button
+- "Back to home" link
+- Remove: signup form, email/password, forgot password, reset password, terms/privacy links
+
+## Step 3: Update Routing (`src/App.tsx`)
+- Replace Landing page on `/` with an `AuthRedirect` component:
+  - Logged in -> redirect to `/dashboard`
+  - Not logged in -> redirect to `/auth`
+- Remove `/pricing` route
 - Keep `/terms` and `/privacy` routes
 
-### 3. Strip Landing Page Redirect
-- Replace `Landing` page import with the `AuthRedirect` component on `/`
-- No more marketing landing page — straight to business
-
-### 4. Block New User Profiles at Database Level
-- Add a database trigger on `profiles` table insert
-- Check if the inserting user's email matches your allowed email
-- If not, raise an exception (prevents new users from completing signup)
-- This is belt-and-suspenders — even if someone hits the Google OAuth somehow, they can't create a profile
-
-### 5. Disable Signup in Auth Config
-- Use the configure-auth tool to disable email signups
-- Google OAuth remains enabled but only your profile will work due to the trigger
+## Step 4: Disable Email Signups
+- Use auth configuration to disable email signup method
+- Google OAuth stays enabled (but only your profile works due to the trigger)
 
 ## What Stays the Same
-- All edge functions (they run server-side on Lovable Cloud, independent of frontend publishing)
-- Dashboard, settings, all dump/assistant functionality
-- RLS policies (already per-user)
+- All edge functions and agents (run on Lovable Cloud servers, independent of browser)
+- Dashboard, dump input, assistant chat, settings
+- All RLS policies (already per-user)
 - Terms and Privacy pages
-
-## Technical Sequence
-1. Database migration: add trigger to block non-allowlisted profiles
-2. Simplify Auth.tsx to Google-only sign-in
-3. Update App.tsx routing (remove pricing, add auth redirect on `/`)
-4. Deploy and test on preview URL
 
 ## Result
 - Visit site -> Google sign-in screen
 - Sign in as you -> dashboard
 - Anyone else -> blocked at profile creation
-- Agents and edge functions keep running 24/7 regardless of browser state
+- Agents keep running 24/7
 
