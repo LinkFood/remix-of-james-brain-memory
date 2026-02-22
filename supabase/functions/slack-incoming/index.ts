@@ -117,19 +117,27 @@ serve(async (req) => {
       const userId = profile.id;
       const botToken = Deno.env.get('SLACK_BOT_TOKEN');
 
-      // Post immediate "thinking" message so user knows JAC is working
+      // Post "thinking" placeholder, then pass its ts to dispatcher so agents
+      // can UPDATE this message with the real response (like Claude/ChatGPT do)
+      let thinkingTs: string | undefined;
       if (botToken) {
-        fetch('https://slack.com/api/chat.postMessage', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${botToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            channel: event.channel,
-            text: '_Thinking..._',
-          }),
-        }).catch(() => {});
+        try {
+          const thinkRes = await fetch('https://slack.com/api/chat.postMessage', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${botToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              channel: event.channel,
+              text: '_Thinking..._',
+            }),
+          });
+          if (thinkRes.ok) {
+            const thinkData = await thinkRes.json();
+            thinkingTs = thinkData.ts;
+          }
+        } catch {}
       }
 
       // Fire-and-forget dispatch to jac-dispatcher
@@ -145,6 +153,7 @@ serve(async (req) => {
           message: cleanMessage,
           userId,
           slack_channel: event.channel,
+          slack_thinking_ts: thinkingTs,
           source: 'slack',
         }),
       }).catch(err => {

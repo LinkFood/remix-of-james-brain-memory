@@ -94,7 +94,7 @@ serve(async (req) => {
 
   try {
     // Parse body first (needed for service-role auth which reads userId from body)
-    let body: { message?: string; userId?: string; slack_channel?: string; source?: string };
+    let body: { message?: string; userId?: string; slack_channel?: string; slack_thinking_ts?: string; source?: string };
     try {
       body = await req.json();
     } catch {
@@ -123,7 +123,7 @@ serve(async (req) => {
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, serviceKey);
 
-    const { message, slack_channel, source } = body;
+    const { message, slack_channel, slack_thinking_ts, source } = body;
     if (!message || typeof message !== 'string' || message.trim().length === 0) {
       return new Response(JSON.stringify({ error: 'Message is required' }), {
         status: 400, headers: jsonHeaders,
@@ -262,7 +262,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
         status: 'running',
         intent: summary,
         agent: 'jac-dispatcher',
-        input: { message, brainContext: brainContext.slice(0, 1000), slack_channel, source: source || 'web' },
+        input: { message, brainContext: brainContext.slice(0, 1000), slack_channel, slack_thinking_ts, source: source || 'web' },
       })
       .select('id')
       .single();
@@ -296,7 +296,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
           intent: summary,
           agent: agentType,
           parent_task_id: parentTask.id,
-          input: { query: extractedQuery, originalMessage: message, brainContext: brainContext.slice(0, 2000), slack_channel },
+          input: { query: extractedQuery, originalMessage: message, brainContext: brainContext.slice(0, 2000), slack_channel, slack_thinking_ts },
         })
         .select('id')
         .single();
@@ -331,6 +331,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
           originalMessage: message,
           brainContext: brainContext.slice(0, 2000),
           slack_channel,
+          slack_thinking_ts,
         }),
       }).then(async (res) => {
         if (!res.ok) {
@@ -362,11 +363,12 @@ Be concise. Be confident. Don't ask questions — just act.`;
         .update({ status: 'completed', completed_at: new Date().toISOString() })
         .eq('id', parentTask.id);
 
-      // Reply in Slack if message came from Slack
+      // Reply in Slack — update the thinking message if we have one, otherwise post new
       if (slack_channel) {
         const botToken = Deno.env.get('SLACK_BOT_TOKEN');
         if (botToken) {
-          fetch('https://slack.com/api/chat.postMessage', {
+          const slackMethod = slack_thinking_ts ? 'chat.update' : 'chat.postMessage';
+          fetch(`https://slack.com/api/${slackMethod}`, {
             method: 'POST',
             headers: {
               'Authorization': `Bearer ${botToken}`,
@@ -375,6 +377,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
             body: JSON.stringify({
               channel: slack_channel,
               text: response,
+              ...(slack_thinking_ts ? { ts: slack_thinking_ts } : {}),
             }),
           }).then(async (res) => {
             if (res.ok) {

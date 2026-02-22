@@ -15,6 +15,7 @@ interface SlackPayload {
   duration?: number;
   error?: string;
   slackChannel?: string;
+  slackThinkingTs?: string;
 }
 
 const EMOJI_MAP: Record<string, string> = {
@@ -43,10 +44,11 @@ export async function notifySlack(
       ? `:x: *${payload.taskType.toUpperCase()} failed:* ${payload.error}`
       : `${emoji} *${payload.taskType.toUpperCase()}*\n${payload.summary}`;
 
-    // Path 1: Bot token + channel — post directly to the DM (no thread_ts)
+    // Path 1: Bot token + channel — update thinking message or post new
     const botToken = Deno.env.get('SLACK_BOT_TOKEN');
     if (payload.slackChannel && botToken) {
-      const res = await fetch('https://slack.com/api/chat.postMessage', {
+      const slackMethod = payload.slackThinkingTs ? 'chat.update' : 'chat.postMessage';
+      const res = await fetch(`https://slack.com/api/${slackMethod}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${botToken}`,
@@ -55,6 +57,7 @@ export async function notifySlack(
         body: JSON.stringify({
           channel: payload.slackChannel,
           text: messageText,
+          ...(payload.slackThinkingTs ? { ts: payload.slackThinkingTs } : {}),
         }),
       });
 

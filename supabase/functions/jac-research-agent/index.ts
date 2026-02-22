@@ -39,6 +39,7 @@ serve(async (req) => {
   let parentTaskId: string | undefined;
   let userId: string | undefined;
   let slackChannel: string | undefined;
+  let slackThinkingTs: string | undefined;
   const startTime = Date.now();
 
   try {
@@ -49,6 +50,7 @@ serve(async (req) => {
     const query = body.query as string;
     const brainContext = (body.brainContext as string) || '';
     slackChannel = body.slack_channel as string | undefined;
+    slackThinkingTs = body.slack_thinking_ts as string | undefined;
 
     if (!taskId || !userId || !query) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), {
@@ -260,6 +262,7 @@ Instructions:
       brainEntryId,
       duration,
       slackChannel,
+      slackThinkingTs,
     });
     await slackStep();
 
@@ -322,7 +325,8 @@ Instructions:
           error: errorMessage,
           duration: Date.now() - startTime,
           slackChannel,
-            });
+          slackThinkingTs,
+        });
       }
     }
 
