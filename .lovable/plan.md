@@ -1,46 +1,53 @@
 
 
-# Fix Kill Button Visibility + End-to-End Testing Plan
+# Fix JAC Chat Not Showing Responses
 
-## Problem
-Two issues found:
+## Root Cause
+The realtime dedup logic in `useJacAgent.ts` has a bug on line 191. It checks if ANY existing message has the same timestamp as the incoming message, without checking the role. The backend (jac-dispatcher) inserts both the user message and assistant response with the exact same `created_at` timestamp. So:
 
-1. **Mobile ActivityFeed is missing stop props** -- The desktop ActivityFeed (line 132) correctly passes `onStopTask={stopTask} onStopAll={stopAllTasks}`, but the mobile version (line 165) does NOT pass these props. Kill buttons will never appear on mobile.
+1. User sends message -> optimistic user message added to state with a local timestamp
+2. Realtime fires for the DB user message -> deduped correctly (same role + content within 30s window on line 195)
+3. Realtime fires for the DB assistant message -> same `created_at` as the user message -> line 191 matches the user message's timestamp -> **assistant response silently dropped**
 
-2. **Kill buttons only appear on active tasks** -- This is by design. The "Stop all" bar shows only when tasks are running, and individual stop buttons only render on running/queued task cards. If no tasks are currently active, there's nothing to stop and no buttons to show.
+The user never sees JAC's reply in the web UI.
 
 ## Fix
 
-### Step 1: Add missing props to mobile ActivityFeed
-In `src/pages/Jac.tsx`, line 165, add the two missing props:
+### 1. Fix timestamp dedup to include role check (useJacAgent.ts, line 191)
 
+Change:
 ```
-<ActivityFeed
-  tasks={tasks}
-  activityLogs={activityLogs}
-  loading={loading}
-  onExpandTask={loadTaskLogs}
-  onStopTask={stopTask}
-  onStopAll={stopAllTasks}
-/>
+if (prev.some(m => m.timestamp === newMsg.created_at)) return prev;
+```
+To:
+```
+if (prev.some(m => m.timestamp === newMsg.created_at && m.role === newMsg.role)) return prev;
 ```
 
-### Step 2: Deploy the jac-kill-switch edge function
-The function code is ready but needs deployment.
+This ensures the exact-timestamp dedup only blocks messages of the same role, allowing the assistant response through even when it shares a timestamp with the user message.
 
-### Step 3: End-to-end testing
-To verify the kill switch works:
+### 2. Fix duplicate key warning in JacChat (line ~120)
 
-1. **Trigger a task** -- Send a research query via the JAC chat (e.g., "research latest AI news") so a task enters `running` status
-2. **Verify button appears** -- While the task is running, a red stop button should appear on the task card, and a "Stop all" button in the blue operations bar
-3. **Click stop** -- Click the stop button and verify:
-   - Task status changes to `cancelled` (orange badge)
-   - Orange toast notification appears
-   - Task stays cancelled (soft-kill guards prevent overwrite)
-4. **Slack kill** -- Send "stop" or "kill" as a DM to JAC in Slack and verify all active tasks get cancelled
+The console shows "Encountered two children with the same key" because messages use `msg.timestamp || i` as the React key, and two messages can share timestamps. Change to use `msg.timestamp + msg.role + i` or similar unique combination.
 
-## What's NOT changing
-- No changes to the kill switch edge function (already correct)
-- No changes to useJacAgent hook (stopTask/stopAllTasks already work)
-- No changes to TaskCard or ActivityFeed components (already have the UI)
-- No changes to worker agents (soft-kill guards already in place)
+In `src/components/jac/JacChat.tsx`, change:
+```
+key={msg.timestamp || i}
+```
+To:
+```
+key={`${msg.timestamp}-${msg.role}-${i}`}
+```
+
+### 3. No backend changes needed
+The dispatcher is working correctly -- messages are being saved and tasks are dispatching fine. This is purely a frontend dedup/rendering bug.
+
+## Testing After Fix
+1. Go to /jac Command Center
+2. Send a message like "research latest AI news" in the chat
+3. Verify: JAC's reply appears immediately in the chat bubble
+4. Verify: Task shows up in the Operations tab as running
+5. When task completes, verify the research result message appears
+6. Test the kill switch: while a task is running, click the Stop button on the task card
+7. Verify: task status changes to cancelled with orange badge
+
