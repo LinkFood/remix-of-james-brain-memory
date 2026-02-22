@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useCodeWorkspace } from '@/hooks/useCodeWorkspace';
 import { ProjectList } from '@/components/code/ProjectList';
+import { AddProjectDialog } from '@/components/code/AddProjectDialog';
 
 const CodeWorkspace = () => {
   const navigate = useNavigate();
@@ -342,6 +343,15 @@ const CodeWorkspace = () => {
           </Tabs>
         </div>
       </div>
+
+      <AddProjectDialog
+        open={addDialogOpen}
+        onOpenChange={setAddDialogOpen}
+        onAdd={(repo, name, stack) => {
+          addProject(repo, name, stack);
+          setAddDialogOpen(false);
+        }}
+      />
     </div>
   );
 };
