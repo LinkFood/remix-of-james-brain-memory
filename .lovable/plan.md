@@ -1,100 +1,157 @@
 
 
-# JAC Agent OS — Launch Polish Plan
+# Launch Polish Plan: JAC Agent OS + Slack 2-Way
 
-Three batches of fixes, tested between each batch. Each batch builds on the last.
-
----
-
-## Batch 1: Fix Embeddings + Search (Critical)
-
-The `generate-embedding` function calls `text-embedding-3-small` on the Lovable AI gateway, which only supports chat models -- not embedding models. Every embedding call fails with a 400 error, breaking all semantic search.
-
-**Strategy**: Since Lovable AI doesn't support embedding models and adding another API key (OpenAI) adds complexity, the fix is to make the system work great WITHOUT embeddings by strengthening keyword search, while making embedding failures non-blocking everywhere.
-
-### Changes
-
-**1. `supabase/functions/generate-embedding/index.ts`**
-- Replace the Lovable AI `/v1/embeddings` call with a call to Claude Haiku (via the existing Anthropic API key) that extracts a list of semantic keywords/tags from the text
-- Use those keywords to build a lightweight "pseudo-embedding" -- or simpler: just return an error gracefully so callers fall back to keyword search
-- Simplest approach: return a clear `501 Not Implemented` with a message, so all callers cleanly fall back
-
-**2. `supabase/functions/search-memory/index.ts`**
-- The semantic search path (lines 126-161) already has a try/catch that falls back to keyword search -- this is good
-- Improve keyword search: also search with individual words from the query (not just exact phrase), which the tag search already does partially
-- Add `ilike` matching for individual significant words to catch more results
-
-**3. `supabase/functions/jac-dispatcher/index.ts`**
-- Brain context search (lines 158-189) calls `generate-embedding` which always fails -- the `catch` already handles this gracefully (`brainContext` stays empty)
-- No code changes needed here, it already handles the failure
-
-**4. `supabase/functions/backfill-embeddings/index.ts`**
-- Skip processing since embeddings aren't available -- add a check at the top that returns early with a message like "Embedding generation is not currently available"
-
-### Deploy + Test
-- Deploy: `generate-embedding`, `search-memory`, `backfill-embeddings`
-- Test: Send "save this: Claude Code is the best IDE" then "search for Claude Code" -- should find it via keyword search
-- Test: Research flow should still work (web search + keyword brain search + synthesis)
+All previous batches remain the same. Adding Batch 4 for Slack inbound (talk to JAC from Slack).
 
 ---
 
-## Batch 2: Fix Duplicate Messages (High)
+## Batch 1: Backend Fixes (Critical Path)
 
-The duplicate message bug: when `sendMessage()` runs, it adds an optimistic assistant message to state. Then the dispatcher saves the same message to `agent_conversations`, which triggers a Realtime INSERT, which adds it again. The dedup logic only checks exact timestamp match (line 168), which fails because the optimistic message uses `new Date().toISOString()` (client time) while the DB uses `now()` (server time).
+### 1a. Fix Dispatcher Brain Context
+**File**: `supabase/functions/jac-dispatcher/index.ts` (lines 157-189)
+- Replace the broken `generate-embedding` + `search_entries_by_embedding` RPC call with a direct keyword search against the `entries` table
+- Extract significant words from the user message, query with `ilike` on content/title and `contains` on tags
+- Deduplicate and take top 5 results to build `brainContext`
 
-Worker agents (save, search, research) ALSO insert result messages into `agent_conversations` (e.g., "Saved to brain: ..."), causing a third message to appear via Realtime.
+### 1b. Fix `jac-save-agent` Bug
+**File**: `supabase/functions/jac-save-agent/index.ts` (line 91)
+- Change `await saveStep({ entryId, entryTitle, entryType })` to `await saveStep()` then `await log.info('save_result', { entryId, entryTitle, entryType })`
 
-### Changes
-
-**1. `src/hooks/useJacAgent.ts` -- Realtime dedup (lines 166-188)**
-- Extend the dedup logic to also handle assistant messages: if a Realtime INSERT arrives for an assistant message whose content matches an existing assistant message within a 30s window, skip it
-- This covers both the optimistic response and the worker result messages
-
-**2. `src/hooks/useJacAgent.ts` -- sendMessage (lines 283-289)**
-- Don't add the assistant response optimistically from the fetch response. Instead, let only the Realtime subscription handle assistant messages. This eliminates the root cause of duplicates.
-- Alternative (simpler): keep the optimistic add but mark it with a flag, and in the Realtime handler, replace the optimistic message with the DB version (using content matching)
-
-**Chosen approach**: Remove the optimistic assistant message add from `sendMessage()`. The dispatcher already saves the assistant message to `agent_conversations`, so the Realtime subscription will pick it up within ~100ms. This is fast enough and eliminates all duplicates.
-
-### Deploy + Test
-- No edge function changes -- frontend only
-- Test: Send "Hey JAC" -- should see exactly ONE response, no duplicates
-- Test: Send "save this: test note" -- should see JAC acknowledgment once, then Scribe result once
-- Test: Send "search for test" -- same, no duplicates
+**Deploy + Test**: Send "search for [something saved]" on `/jac` -- JAC should now have brain context.
 
 ---
 
-## Batch 3: Stale Task Cleanup + UI Polish (Medium/Low)
+## Batch 2: Frontend Polish
 
-### Changes
+### 2a. Move InstallPrompt Inside Router
+**File**: `src/App.tsx`
+- Move `<InstallPrompt />` from outside `BrowserRouter` to inside it
 
-**1. `src/hooks/useJacAgent.ts` -- Stale task cleanup on load**
-- In `loadInitial()`, after loading tasks, find any tasks stuck in `queued` or `running` for more than 5 minutes
-- Update them to `failed` with error "Task timed out" via a Supabase update call
-- This prevents the "1 AGENT ACTIVE" ghost state
+### 2b. Create Landing Page
+**New file**: `src/pages/Landing.tsx`
+- Dark, bold hero: "Your Personal AI Agent Swarm"
+- 3 value props: Dispatch agents / 24-7 async / Results in your brain
+- CTA: Sign In button linking to `/auth`
+- Minimal footer with Terms/Privacy links
 
-**2. `src/components/jac/AgentRoster.tsx` -- "Coming Soon" badges**
-- For `jac-report-agent` (Analyst) and `jac-monitor-agent` (Sentinel), add a "Coming Soon" badge overlay
-- Reduce opacity further and disable the click handler for these agents
+**File**: `src/App.tsx`
+- Change `/` route from redirect to `Landing`
 
-**3. `src/components/InstallPrompt.tsx` -- Auto-dismiss or route-aware**
-- Hide the install prompt on the `/jac` page, or auto-dismiss after 5 seconds
+### 2c. Bridge Dashboard Assistant to JAC
+**File**: `src/components/AssistantChat.tsx`
+- Add a small "Open Command Center" link that navigates to `/jac`
 
-### Deploy + Test
-- No edge function changes -- frontend only
-- Test: Visit /jac, verify no stale "active" agents
-- Test: Verify Analyst and Sentinel show "Coming Soon"
-- Test: Full end-to-end: save -> search -> research flows all work cleanly
+**Test**: Visit `/` -- see landing page. Dashboard assistant has Command Center link.
+
+---
+
+## Batch 3: Vision + Assistant Prompt
+
+### 3a. Update VISION.md
+**File**: `VISION.md`
+- Add "Layer 4 -- AGENTS (Cloud Intelligence)" describing JAC Agent OS
+- Add Slack 2-way communication to the architecture
+- Update tech stack to mention Anthropic Claude
+- Update "What Jac Is" to include agent dispatch and Slack interface
+
+### 3b. Update Assistant System Prompt
+**File**: `supabase/functions/assistant-chat/index.ts`
+- Add a line to the system prompt: "For complex research, analysis, or multi-step tasks, suggest the user open the JAC Command Center at /jac"
+
+**Test**: Verify assistant mentions JAC for complex queries.
+
+---
+
+## Batch 4: Slack Inbound -- Talk to JAC from Your Phone (NEW)
+
+This is the key missing piece. Currently agents send notifications TO Slack, but you can't send commands FROM Slack. This batch makes Slack a full 2-way interface.
+
+### How It Works
+
+```text
+You (Slack) --> "Research the latest AI agent frameworks"
+       |
+       v
+[slack-incoming edge function]
+  - Validates x-slack-signature using SLACK_SIGNING_SECRET
+  - Extracts message text and Slack channel/thread info
+  - Looks up your user_id (single-user app, so hardcoded or from settings)
+  - Calls jac-dispatcher with the message
+  - Responds to Slack within 3 seconds (acknowledges receipt)
+       |
+       v
+[jac-dispatcher] --> spawns Scout agent --> research happens async
+       |
+       v
+[Agent completes] --> notifySlack() sends result back to your Slack channel
+```
+
+### 4a. Create `slack-incoming` Edge Function
+**New file**: `supabase/functions/slack-incoming/index.ts`
+
+Key implementation details:
+- Verify request signature using `SLACK_SIGNING_SECRET` (HMAC-SHA256 of timestamp + body)
+- Handle Slack's URL verification challenge (responds with `challenge` value)
+- Handle `event_callback` events for `message` type (direct messages or mentions)
+- Ignore bot messages (prevent loops -- check `event.bot_id`)
+- Look up user ID: since this is a single-user app, query `profiles` table for the single user, or store a `slack_user_id` mapping in `user_settings`
+- Fire-and-forget call to `jac-dispatcher` (don't wait for agent completion -- Slack has a 3-second timeout)
+- Return 200 immediately with an acknowledgment
+- Slack notification from the agent completing will serve as the "response"
+
+### 4b. Update `supabase/config.toml`
+- Add `[functions.slack-incoming]` with `verify_jwt = false` (Slack sends its own auth)
+
+### 4c. Update `_shared/slack.ts` -- Thread-Aware Responses
+**File**: `supabase/functions/_shared/slack.ts`
+- Currently sends notifications via incoming webhook URL (one-way)
+- For Slack inbound to feel conversational, agent results should reply in the SAME Slack thread
+- Add an optional `slack_thread_ts` and `slack_channel` to the task input so agents can pass it through to `notifySlack`
+- When thread info is available, use the Slack `chat.postMessage` API (via bot token) instead of the webhook to reply in-thread
+- This requires the Slack bot token -- check if we should use the Lovable Slack connector or the existing custom app setup
+
+### 4d. Store Slack Context in Tasks
+**File**: `supabase/functions/slack-incoming/index.ts`
+- When creating the task via `jac-dispatcher`, include `slack_channel` and `slack_thread_ts` in the task input
+- Worker agents pass this through to `notifySlack`
+- Result: you send a message in Slack, agents reply in the same thread
+
+### 4e. Slack Bot Token Setup
+The `SLACK_SIGNING_SECRET` is already configured, which means a custom Slack app exists. For sending replies back to a specific channel/thread, we also need a `SLACK_BOT_TOKEN`.
+
+Options:
+- **Option A**: Use the Lovable Slack connector (simplest -- provides `SLACK_API_KEY` automatically via connector gateway)
+- **Option B**: Use the existing custom Slack app's bot token (requires adding `SLACK_BOT_TOKEN` as a secret)
+
+Since you already have `SLACK_SIGNING_SECRET` for a custom app, and the connector can't receive events (it's send-only), the approach is:
+- Keep the custom app for RECEIVING events (uses `SLACK_SIGNING_SECRET`)
+- Use either the connector or a bot token for SENDING thread replies
+- Simplest: add `SLACK_BOT_TOKEN` as a new secret from the same custom Slack app
+
+I'll ask you for the bot token after building the function.
+
+**Deploy + Test**:
+1. Deploy `slack-incoming`
+2. Configure the Slack app's Event Subscriptions URL to: `https://fhfmwdbousoycutlhvjh.supabase.co/functions/v1/slack-incoming`
+3. Send a DM to the bot in Slack: "Research AI agent frameworks"
+4. Should see task appear in Command Center and result come back in Slack
 
 ---
 
 ## Summary
 
-| Batch | Scope | Files Changed | Deploy |
-|-------|-------|---------------|--------|
-| 1 | Fix embeddings/search | `generate-embedding`, `search-memory`, `backfill-embeddings` | Edge functions |
-| 2 | Fix duplicate messages | `useJacAgent.ts` | Frontend only |
-| 3 | Stale cleanup + polish | `useJacAgent.ts`, `AgentRoster.tsx`, `InstallPrompt.tsx` | Frontend only |
+| Batch | Scope | Files | Type |
+|-------|-------|-------|------|
+| 1 | Fix brain context + save bug | `jac-dispatcher`, `jac-save-agent` | Edge functions |
+| 2 | Landing page + InstallPrompt + assistant bridge | `Landing.tsx` (new), `App.tsx`, `AssistantChat.tsx` | Frontend |
+| 3 | Vision doc + assistant prompt | `VISION.md`, `assistant-chat` | Docs + Edge function |
+| 4 | Slack inbound (talk to JAC from phone) | `slack-incoming` (new), `config.toml`, `_shared/slack.ts` | Edge functions |
 
-Each batch is independently testable. We test after each before moving to the next.
+Test after each batch before moving to the next.
+
+### What You'll Need for Batch 4
+- Your Slack app's **Bot User OAuth Token** (starts with `xoxb-`), found at: Your Slack App > OAuth & Permissions > Bot User OAuth Token
+- Enable **Event Subscriptions** in the Slack app and point the Request URL to the edge function
+- Subscribe to bot events: `message.im` (direct messages) and optionally `app_mention` (mentions in channels)
 
