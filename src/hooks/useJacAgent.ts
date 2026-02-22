@@ -20,8 +20,19 @@ export function useJacAgent(userId: string) {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [backendReady, setBackendReady] = useState(true);
+  const healthCheckedRef = useRef(false);
   const channelsRef = useRef<RealtimeChannel[]>([]);
   const sendingRef = useRef(false);
+
+  // Health check: ping dispatcher to verify backend is deployed
+  useEffect(() => {
+    if (!userId || healthCheckedRef.current) return;
+    healthCheckedRef.current = true;
+
+    fetch(JAC_DISPATCHER_URL, { method: 'OPTIONS' })
+      .then(res => setBackendReady(res.status === 204 || res.status === 200))
+      .catch(() => setBackendReady(false));
+  }, [userId]);
 
   // Load conversation history + tasks on mount
   useEffect(() => {

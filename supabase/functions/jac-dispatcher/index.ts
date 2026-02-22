@@ -60,7 +60,7 @@ const INTENT_TOOL = {
       },
       agentType: {
         type: 'string',
-        enum: ['jac-research-agent', 'smart-save', 'search-memory', 'assistant-chat'],
+        enum: ['jac-research-agent', 'jac-save-agent', 'jac-search-agent', 'assistant-chat'],
         description: 'Which worker edge function to dispatch',
       },
       response: {
@@ -75,8 +75,8 @@ const INTENT_TOOL = {
 // Map intents to worker functions
 const AGENT_MAP: Record<string, string> = {
   research: 'jac-research-agent',
-  save: 'smart-save',
-  search: 'search-memory',
+  save: 'jac-save-agent',
+  search: 'jac-search-agent',
   report: 'jac-research-agent',
   general: 'assistant-chat',
 };
@@ -198,8 +198,8 @@ Your job:
 
 Intent routing:
 - "research" → jac-research-agent: User wants to learn about something, needs web research, wants info synthesized
-- "save" → smart-save: User wants to save/remember/note something to their brain
-- "search" → search-memory: User wants to find something in their brain
+- "save" → jac-save-agent: User wants to save/remember/note something to their brain
+- "search" → jac-search-agent: User wants to find something in their brain
 - "report" → jac-research-agent: User wants a comprehensive report or analysis
 - "general" → assistant-chat: General conversation, questions about their data, simple requests
 

@@ -8,3 +8,9 @@ verify_jwt = false
 
 [functions.jac-research-agent]
 verify_jwt = false
+
+[functions.jac-save-agent]
+verify_jwt = false
+
+[functions.jac-search-agent]
+verify_jwt = false

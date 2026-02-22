@@ -1,26 +1,42 @@
--- JAC Agent OS: End-to-end activity logging
--- Every agent step is recorded for full observability
+-- JAC Agent OS: Safe patch for agent_activity_log
+-- Lovable migration 20260222064727 already created the table.
+-- This adds constraints and policies that were missing.
 
-CREATE TABLE public.agent_activity_log (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  task_id UUID NOT NULL REFERENCES public.agent_tasks(id) ON DELETE CASCADE,
-  user_id UUID NOT NULL,
-  agent TEXT NOT NULL,
-  step TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('started','completed','failed','skipped')),
-  detail JSONB DEFAULT '{}',
-  duration_ms INTEGER,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+-- Add CHECK constraint on status column
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'agent_activity_log_status_check') THEN
+    ALTER TABLE public.agent_activity_log
+      ADD CONSTRAINT agent_activity_log_status_check
+      CHECK (status IN ('started','completed','failed','skipped'));
+  END IF;
+END $$;
 
-ALTER TABLE public.agent_activity_log ENABLE ROW LEVEL SECURITY;
+-- Add UPDATE policy if missing
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE policyname = 'Users can update own activity logs'
+      AND tablename = 'agent_activity_log'
+  ) THEN
+    CREATE POLICY "Users can update own activity logs"
+      ON public.agent_activity_log FOR UPDATE
+      USING (auth.uid() = user_id);
+  END IF;
+END $$;
 
-CREATE POLICY "Users see their own logs"
-  ON public.agent_activity_log
-  FOR ALL
-  USING (auth.uid() = user_id);
+-- Add DELETE policy if missing
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE policyname = 'Users can delete own activity logs'
+      AND tablename = 'agent_activity_log'
+  ) THEN
+    CREATE POLICY "Users can delete own activity logs"
+      ON public.agent_activity_log FOR DELETE
+      USING (auth.uid() = user_id);
+  END IF;
+END $$;
 
-ALTER PUBLICATION supabase_realtime ADD TABLE public.agent_activity_log;
-
-CREATE INDEX idx_activity_log_task ON public.agent_activity_log(task_id, created_at);
-CREATE INDEX idx_activity_log_user ON public.agent_activity_log(user_id, created_at DESC);
+-- Add descending index on user_id if missing (Lovable has ASC)
+CREATE INDEX IF NOT EXISTS idx_activity_log_user_desc
+  ON public.agent_activity_log(user_id, created_at DESC);

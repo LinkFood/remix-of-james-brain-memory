@@ -86,6 +86,13 @@ const Jac = () => {
         </div>
       </header>
 
+      {/* Backend not deployed warning */}
+      {!backendReady && (
+        <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 text-center text-xs text-amber-400">
+          Backend not deployed yet. Deploy edge functions to activate agents.
+        </div>
+      )}
+
       {/* Agent Roster — always visible */}
       <div className="border-b border-border bg-card/20">
         <div className="container mx-auto px-4 py-3">

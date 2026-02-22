@@ -142,6 +142,17 @@ function ResultCard({ task, logs }: { task: AgentTask; logs?: ActivityLogEntry[]
         </div>
       )}
 
+      {/* Step breadcrumb trail */}
+      {logs && logs.filter(l => l.status === 'completed').length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-3">
+          {logs.filter(l => l.status === 'completed').map((log, i) => (
+            <span key={i} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+              {log.step} {log.duration_ms ? `${(log.duration_ms / 1000).toFixed(1)}s` : ''}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Brain save indicator */}
       {brainEntryId && (
         <div className="mt-3 flex items-center gap-1.5 text-[10px] text-muted-foreground">
