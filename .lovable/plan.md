@@ -1,30 +1,16 @@
 
 
-# Fix: Re-enter SLACK_SIGNING_SECRET (Wrong Value Stored)
+# Update SLACK_SIGNING_SECRET with Correct Value
 
-## Problem
+The user provided their Slack signing secret directly: `5fda67310335054b87ec6142e5f8282d`
 
-The `slack-incoming` edge function rejects every Slack message with "Invalid signature" because the `SLACK_SIGNING_SECRET` stored in backend secrets is incorrect.
+This is exactly 32 hex characters, which matches the expected format for a Slack signing secret.
 
-**Evidence**: The logs show `secret length: 81`. A real Slack signing secret is approximately 32 characters long. The stored value is 81 characters, which means extra content was accidentally included when it was first entered (perhaps the full line from the Slack config page, surrounding quotes, or whitespace).
+## Steps
 
-Because the HMAC key is wrong, the computed signature never matches Slack's signature, so every message is rejected at the door. The dispatcher and agents never get called.
+1. Update the `SLACK_SIGNING_SECRET` backend secret with the value `5fda67310335054b87ec6142e5f8282d`
+2. Send a test DM to LinkJac in Slack to confirm the signature now verifies
+3. Check logs to confirm the full pipeline works (signature passes, dispatcher called, agent responds)
 
-## Fix
-
-1. **Re-enter the correct `SLACK_SIGNING_SECRET`** — Go to your Slack app settings at https://api.slack.com/apps, select your LinkJac app, navigate to "Basic Information", and copy ONLY the "Signing Secret" value (should be ~32 hex characters, no quotes or spaces).
-2. **Update the secret** in the backend using the secret management tool.
-3. **Send another test DM** to LinkJac to confirm the signature now verifies and the full pipeline works.
-
-No code changes are needed. The signature verification logic, dispatcher auth fix, and userId passing are all correct. The only issue is the wrong secret value.
-
-## What Happens After the Fix
-
-Once the signing secret is correct:
-- Slack sends a message event to `slack-incoming`
-- Signature verification passes
-- `slack-incoming` looks up your user profile, dispatches to `jac-dispatcher` with your userId
-- `jac-dispatcher` authenticates via service role + userId in body (already fixed)
-- Claude parses intent, creates tasks, dispatches worker agent
-- Worker completes, `notifySlack` replies in your Slack thread using the bot token
+No code changes needed.
 
