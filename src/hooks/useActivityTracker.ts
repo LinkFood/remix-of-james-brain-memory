@@ -61,7 +61,7 @@ async function flushBuffer() {
       created_at: e.created_at,
     }));
 
-    const { error } = await supabase.from('user_activity').insert(rows);
+    const { error } = await (supabase.from('user_activity' as any).insert(rows) as any);
     if (error) {
       console.warn('[activity-tracker] Flush failed:', error.message);
       // Put back failed events (but cap to prevent infinite growth)

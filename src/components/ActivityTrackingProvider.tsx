@@ -18,6 +18,7 @@
  */
 
 import { useEffect, useRef, useCallback } from 'react';
+import type { ActivityCategory } from '@/hooks/useActivityTracker';
 import { useLocation } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useActivityTracker } from '@/hooks/useActivityTracker';
@@ -83,7 +84,7 @@ export function ActivityTrackingProvider({ userId, children }: Props) {
         const startTime = Date.now();
 
         // Map function names to activity categories
-        const categoryMap: Record<string, { event: string; category: 'content' | 'search' | 'chat' | 'agent' }> = {
+        const categoryMap: Record<string, { event: string; category: ActivityCategory }> = {
           'smart-save': { event: 'dump_saved', category: 'content' },
           'assistant-chat': { event: 'chat_message', category: 'chat' },
           'search-memory': { event: 'brain_search', category: 'search' },
