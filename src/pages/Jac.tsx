@@ -89,7 +89,7 @@ const Jac = () => {
       {/* Agent Roster — always visible */}
       <div className="border-b border-border bg-card/20">
         <div className="container mx-auto px-4 py-3">
-          <AgentRoster tasks={tasks} />
+          <AgentRoster tasks={tasks} activityLogs={activityLogs} />
         </div>
       </div>
 

@@ -73,7 +73,21 @@ const Settings = () => {
     if (typeof url === 'string') setSlackWebhookUrl(url);
   };
 
+  const isValidSlackWebhook = (url: string): boolean => {
+    if (!url) return true; // empty = clearing the webhook
+    try {
+      const parsed = new URL(url);
+      return parsed.protocol === 'https:' && parsed.hostname === 'hooks.slack.com';
+    } catch {
+      return false;
+    }
+  };
+
   const handleSaveSlackWebhook = async () => {
+    if (slackWebhookUrl && !isValidSlackWebhook(slackWebhookUrl)) {
+      toast.error("Invalid webhook URL. Must be a hooks.slack.com HTTPS URL.");
+      return;
+    }
     setSlackSaving(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -110,6 +124,10 @@ const Settings = () => {
   const handleTestSlackWebhook = async () => {
     if (!slackWebhookUrl) {
       toast.error("Enter a webhook URL first");
+      return;
+    }
+    if (!isValidSlackWebhook(slackWebhookUrl)) {
+      toast.error("Invalid webhook URL. Must be a hooks.slack.com HTTPS URL.");
       return;
     }
     setSlackTesting(true);

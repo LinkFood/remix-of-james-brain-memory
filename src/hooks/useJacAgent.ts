@@ -21,6 +21,7 @@ export function useJacAgent(userId: string) {
   const [sending, setSending] = useState(false);
   const [backendReady, setBackendReady] = useState(true);
   const channelsRef = useRef<RealtimeChannel[]>([]);
+  const sendingRef = useRef(false);
 
   // Load conversation history + tasks on mount
   useEffect(() => {
@@ -152,8 +153,8 @@ export function useJacAgent(userId: string) {
             created_at: string;
           };
           setMessages(prev => {
-            // Deduplicate
-            if (prev.some(m => m.content === newMsg.content && m.role === newMsg.role)) return prev;
+            // Deduplicate by timestamp (not content — "yes"/"ok" are valid repeated messages)
+            if (prev.some(m => m.timestamp === newMsg.created_at)) return prev;
             return [
               ...prev,
               {
@@ -221,9 +222,10 @@ export function useJacAgent(userId: string) {
   // Send message to JAC dispatcher
   const sendMessage = useCallback(
     async (text: string) => {
-      if (!text.trim() || sending) return;
+      if (!text.trim() || sendingRef.current) return;
 
       const trimmed = text.trim();
+      sendingRef.current = true;
       setSending(true);
 
       // Optimistic user message
@@ -282,10 +284,11 @@ export function useJacAgent(userId: string) {
         };
         setMessages(prev => [...prev, errMsg]);
       } finally {
+        sendingRef.current = false;
         setSending(false);
       }
     },
-    [sending]
+    []
   );
 
   return {

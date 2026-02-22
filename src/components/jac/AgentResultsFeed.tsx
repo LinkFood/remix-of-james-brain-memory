@@ -31,6 +31,15 @@ const AGENT_NAMES: Record<string, string> = {
   'jac-monitor-agent': 'Sentinel',
 };
 
+function isSafeUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
   if (diff < 60_000) return 'just now';
@@ -115,7 +124,7 @@ function ResultCard({ task, logs }: { task: AgentTask; logs?: ActivityLogEntry[]
           <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider flex items-center gap-1">
             <Globe className="w-3 h-3" /> Sources
           </p>
-          {sources.slice(0, 4).map((s, i) => (
+          {sources.filter(s => isSafeUrl(s.url)).slice(0, 4).map((s, i) => (
             <a
               key={i}
               href={s.url}

@@ -5,12 +5,13 @@
  * When idle, they're dim. When done, they show their last result.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   Search, FileText, Brain, BarChart3, MessageSquare, Eye,
   Loader2, CheckCircle2, XCircle, Zap, Globe, BookOpen,
 } from 'lucide-react';
-import type { AgentTask } from '@/types/agent';
+import type { AgentTask, ActivityLogEntry } from '@/types/agent';
+import { AgentDeskDrawer } from './AgentDeskDrawer';
 
 interface AgentDef {
   id: string;
@@ -82,8 +83,12 @@ function getAgentStates(tasks: AgentTask[]): Map<string, AgentState> {
   for (const agent of AGENTS) {
     const agentTasks = tasks.filter(t => t.agent === agent.id);
     const running = agentTasks.find(t => t.status === 'running');
-    const lastCompleted = agentTasks.find(t => t.status === 'completed');
-    const lastFailed = agentTasks.find(t => t.status === 'failed');
+    // Sort by updated_at desc to ensure we get the most recent, not just first in array
+    const sortedByRecent = [...agentTasks].sort((a, b) =>
+      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    );
+    const lastCompleted = sortedByRecent.find(t => t.status === 'completed');
+    const lastFailed = sortedByRecent.find(t => t.status === 'failed');
 
     let status: AgentStatus = 'idle';
     let currentTask: string | undefined;
@@ -115,14 +120,30 @@ function getAgentStates(tasks: AgentTask[]): Map<string, AgentState> {
 
 interface AgentRosterProps {
   tasks: AgentTask[];
+  activityLogs?: Map<string, ActivityLogEntry[]>;
 }
 
-export function AgentRoster({ tasks }: AgentRosterProps) {
+export function AgentRoster({ tasks, activityLogs = new Map() }: AgentRosterProps) {
   const states = useMemo(() => getAgentStates(tasks), [tasks]);
   const activeCount = Array.from(states.values()).filter(s => s.status === 'working').length;
+  const [selectedAgent, setSelectedAgent] = useState<AgentDef | null>(null);
 
   return (
     <div className="space-y-3">
+      {/* Agent Desk Drawer */}
+      {selectedAgent && (
+        <AgentDeskDrawer
+          open={!!selectedAgent}
+          onOpenChange={(open) => { if (!open) setSelectedAgent(null); }}
+          agentId={selectedAgent.id}
+          agentName={selectedAgent.name}
+          agentRole={selectedAgent.role}
+          agentIcon={selectedAgent.icon}
+          tasks={tasks}
+          activityLogs={activityLogs}
+        />
+      )}
+
       {/* HQ Status Bar */}
       <div className="flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
@@ -143,7 +164,8 @@ export function AgentRoster({ tasks }: AgentRosterProps) {
           return (
             <div
               key={agent.id}
-              className={`relative rounded-lg border bg-card/50 p-3 transition-all duration-500 ${STATUS_STYLES[state.status]}`}
+              className={`relative rounded-lg border bg-card/50 p-3 transition-all duration-500 cursor-pointer hover:bg-muted/30 ${STATUS_STYLES[state.status]}`}
+              onClick={() => setSelectedAgent(agent)}
             >
               {/* Working pulse ring */}
               {state.status === 'working' && (

@@ -102,8 +102,10 @@ if (typeof window !== 'undefined') {
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
       const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
       if (supabaseUrl && supabaseKey) {
+        // sendBeacon can't set custom headers, but Supabase accepts
+        // apikey as a query parameter for PostgREST endpoints
         navigator.sendBeacon(
-          `${supabaseUrl}/rest/v1/user_activity`,
+          `${supabaseUrl}/rest/v1/user_activity?apikey=${encodeURIComponent(supabaseKey)}`,
           new Blob(
             [JSON.stringify(rows)],
             { type: 'application/json' }

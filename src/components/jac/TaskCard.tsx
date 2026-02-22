@@ -40,6 +40,15 @@ function elapsedTime(start: string, end?: string | null): string {
   return `${Math.round(diffMs / 60_000)}m`;
 }
 
+function isSafeUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
 function formatStepName(step: string): string {
   return step
     .replace(/_/g, ' ')
@@ -64,8 +73,8 @@ export function TaskCard({ task, logs, onExpand }: TaskCardProps) {
     ? Array.from(
         logs.reduce((map, log) => {
           const existing = map.get(log.step);
-          // Keep the latest (completed/failed over started)
-          if (!existing || log.status !== 'started' || !existing) {
+          // Keep the newest entry, but prefer completed/failed over started
+          if (!existing || log.status !== 'started' || existing.status === 'started') {
             map.set(log.step, log);
           }
           return map;
@@ -87,7 +96,7 @@ export function TaskCard({ task, logs, onExpand }: TaskCardProps) {
       setExpanded(true);
       onExpand?.(task.id);
     }
-  }, [task.status]);
+  }, [task.status, task.id, expanded, onExpand]);
 
   return (
     <Card
@@ -185,7 +194,7 @@ export function TaskCard({ task, logs, onExpand }: TaskCardProps) {
           {output?.sources && Array.isArray(output.sources) && output.sources.length > 0 && (
             <div className="space-y-1">
               <p className="text-xs font-medium text-muted-foreground">Sources</p>
-              {(output.sources as Array<{ title: string; url: string }>).slice(0, 5).map((s, i) => (
+              {(output.sources as Array<{ title: string; url: string }>).filter(s => isSafeUrl(s.url)).slice(0, 5).map((s, i) => (
                 <a
                   key={i}
                   href={s.url}

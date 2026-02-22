@@ -83,7 +83,7 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages.length, tasks]);
+  }, [messages.length]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -121,7 +121,7 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
               {EXAMPLE_COMMANDS.map((cmd) => (
                 <button
                   key={cmd.text}
-                  onClick={() => onSend(cmd.text)}
+                  onClick={() => !sending && onSend(cmd.text)}
                   className="w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-border bg-card/50 hover:bg-muted/50 transition-colors text-left group"
                 >
                   <span className="text-muted-foreground group-hover:text-primary transition-colors">{cmd.icon}</span>
@@ -134,7 +134,7 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
         ) : (
           messages.map((msg, i) => (
             <div
-              key={i}
+              key={msg.timestamp || i}
               className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
               {msg.role === 'assistant' && (
