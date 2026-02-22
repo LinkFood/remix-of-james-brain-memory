@@ -368,7 +368,6 @@ Be concise. Be confident. Don't ask questions — just act.`;
             },
             body: JSON.stringify({
               channel: slack_channel,
-              thread_ts: slack_thread_ts,
               text: response,
             }),
           }).then(async (res) => {
