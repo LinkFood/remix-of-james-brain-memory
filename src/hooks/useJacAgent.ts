@@ -75,7 +75,7 @@ export function useJacAgent(userId: string) {
           .limit(50);
 
         if (taskData) {
-          const typedTasks = taskData as AgentTask[];
+          const typedTasks = taskData as unknown as AgentTask[];
 
           // Clean up stale tasks (stuck in queued/running for >5 minutes)
           const fiveMinAgo = Date.now() - 5 * 60 * 1000;
@@ -98,7 +98,7 @@ export function useJacAgent(userId: string) {
 
           setTasks(typedTasks);
           // Load logs for active tasks
-          const activeTaskIds = (taskData as AgentTask[])
+          const activeTaskIds = (taskData as unknown as AgentTask[])
             .filter(t => t.status === 'running' || t.status === 'queued')
             .map(t => t.id);
 

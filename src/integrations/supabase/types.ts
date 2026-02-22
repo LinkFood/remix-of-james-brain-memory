@@ -80,6 +80,7 @@ export type Database = {
       agent_tasks: {
         Row: {
           agent: string | null
+          cancelled_at: string | null
           completed_at: string | null
           cost_usd: number | null
           created_at: string
@@ -102,6 +103,7 @@ export type Database = {
         }
         Insert: {
           agent?: string | null
+          cancelled_at?: string | null
           completed_at?: string | null
           cost_usd?: number | null
           created_at?: string
@@ -124,6 +126,7 @@ export type Database = {
         }
         Update: {
           agent?: string | null
+          cancelled_at?: string | null
           completed_at?: string | null
           cost_usd?: number | null
           created_at?: string
