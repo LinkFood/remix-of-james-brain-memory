@@ -18,10 +18,12 @@ async function verifySlackSignature(
   signature: string,
   signingSecret: string
 ): Promise<boolean> {
+  console.log('[slack-incoming] Signature check — timestamp:', timestamp, 'signature present:', !!signature, 'secret length:', signingSecret.length);
+
   // Reject requests older than 5 minutes (replay protection)
   const now = Math.floor(Date.now() / 1000);
   if (Math.abs(now - parseInt(timestamp)) > 300) {
-    console.warn('[slack-incoming] Request too old');
+    console.warn('[slack-incoming] Request too old, delta:', Math.abs(now - parseInt(timestamp)));
     return false;
   }
 
@@ -35,6 +37,7 @@ async function verifySlackSignature(
   );
   const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(sigBasestring));
   const hexSig = 'v0=' + Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
+  console.log('[slack-incoming] Computed sig prefix:', hexSig.slice(0, 15), 'Received sig prefix:', signature.slice(0, 15));
   return hexSig === signature;
 }
 
@@ -115,6 +118,7 @@ serve(async (req) => {
 
       // Fire-and-forget dispatch to jac-dispatcher
       const dispatchUrl = `${supabaseUrl}/functions/v1/jac-dispatcher`;
+      console.log('[slack-incoming] Dispatching to jac-dispatcher, userId:', userId, 'message:', cleanMessage.slice(0, 50));
       fetch(dispatchUrl, {
         method: 'POST',
         headers: {
@@ -123,6 +127,7 @@ serve(async (req) => {
         },
         body: JSON.stringify({
           message: cleanMessage,
+          userId,
           slack_channel: event.channel,
           slack_thread_ts: event.thread_ts || event.ts,
           source: 'slack',
