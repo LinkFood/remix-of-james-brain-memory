@@ -74,8 +74,28 @@ export function useJacAgent(userId: string) {
           .limit(50);
 
         if (taskData) {
-          setTasks(taskData as AgentTask[]);
+          const typedTasks = taskData as AgentTask[];
 
+          // Clean up stale tasks (stuck in queued/running for >5 minutes)
+          const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+          const staleTasks = typedTasks.filter(
+            t => (t.status === 'queued' || t.status === 'running') &&
+              new Date(t.updated_at).getTime() < fiveMinAgo
+          );
+          if (staleTasks.length > 0) {
+            console.log(`[useJacAgent] Cleaning up ${staleTasks.length} stale tasks`);
+            for (const stale of staleTasks) {
+              supabase
+                .from('agent_tasks')
+                .update({ status: 'failed', error: 'Task timed out', updated_at: new Date().toISOString() } as any)
+                .eq('id', stale.id)
+                .then(() => {});
+              stale.status = 'failed' as any;
+              stale.error = 'Task timed out';
+            }
+          }
+
+          setTasks(typedTasks);
           // Load logs for active tasks
           const activeTaskIds = (taskData as AgentTask[])
             .filter(t => t.status === 'running' || t.status === 'queued')
@@ -164,19 +184,17 @@ export function useJacAgent(userId: string) {
             created_at: string;
           };
           setMessages(prev => {
-            // Exact timestamp match (for assistant messages added optimistically)
+            // Exact timestamp match
             if (prev.some(m => m.timestamp === newMsg.created_at)) return prev;
-            // For user messages: check if we already have an optimistic version
-            // (same role + content within 10s window — covers client/server timestamp drift)
-            if (newMsg.role === 'user') {
-              const dbTime = new Date(newMsg.created_at).getTime();
-              const hasOptimistic = prev.some(m =>
-                m.role === 'user' &&
-                m.content === newMsg.content &&
-                Math.abs(new Date(m.timestamp).getTime() - dbTime) < 10_000
-              );
-              if (hasOptimistic) return prev;
-            }
+            const dbTime = new Date(newMsg.created_at).getTime();
+            // Dedup for BOTH user and assistant messages:
+            // If same role + same content within 30s window, skip (covers optimistic adds & worker results)
+            const hasDuplicate = prev.some(m =>
+              m.role === newMsg.role &&
+              m.content === newMsg.content &&
+              Math.abs(new Date(m.timestamp).getTime() - dbTime) < 30_000
+            );
+            if (hasDuplicate) return prev;
             return [
               ...prev,
               {
@@ -278,15 +296,10 @@ export function useJacAgent(userId: string) {
           throw new Error(errorData.error || `Request failed: ${res.status}`);
         }
 
-        const data = await res.json();
-
-        const assistantMsg: JacMessage = {
-          role: 'assistant',
-          content: data.response,
-          taskIds: [data.taskId, data.childTaskId].filter(Boolean),
-          timestamp: new Date().toISOString(),
-        };
-        setMessages(prev => [...prev, assistantMsg]);
+        // Don't add assistant response optimistically — let Realtime handle it
+        // to avoid duplicate messages. The dispatcher saves to agent_conversations,
+        // which triggers the Realtime INSERT subscription above.
+        const _data = await res.json();
       } catch (err) {
         const errorText = err instanceof Error ? err.message : 'Unknown error';
 
