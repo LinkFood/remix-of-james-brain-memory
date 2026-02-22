@@ -162,7 +162,7 @@ const Jac = () => {
               <JacChat messages={messages} tasks={tasks} sending={sending} onSend={sendMessage} />
             </TabsContent>
             <TabsContent value="ops" className="flex-1 m-0 overflow-hidden">
-              <ActivityFeed tasks={tasks} activityLogs={activityLogs} loading={loading} onExpandTask={loadTaskLogs} />
+              <ActivityFeed tasks={tasks} activityLogs={activityLogs} loading={loading} onExpandTask={loadTaskLogs} onStopTask={stopTask} onStopAll={stopAllTasks} />
             </TabsContent>
             <TabsContent value="results" className="flex-1 m-0 overflow-hidden">
               <AgentResultsFeed tasks={tasks} activityLogs={activityLogs} />
