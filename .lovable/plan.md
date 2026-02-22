@@ -1,51 +1,49 @@
 
 
-# Apply "Thinking..." Update-in-Place (Commit 6da8691)
+# Fix Build Errors in jac-dispatcher (Commit f484066)
 
-Currently, the "Thinking..." message and the real response are two separate messages. This fix makes JAC post "Thinking..." first, capture its Slack timestamp, pipe it through the whole chain, and then use `chat.update` to replace it with the real answer -- one message, not two.
+## Problem
 
-## Changes (6 files)
+The outer `catch` block (line 420) references `slack_thinking_ts` and `slack_channel` as standalone variables, but they only exist as properties on `body`, which is declared inside the `try` block. This causes 4 TypeScript errors.
 
-### 1. `supabase/functions/slack-incoming/index.ts`
-Replace the `:brain:` emoji reaction (lines 120-134) with an awaited `chat.postMessage` that posts "_Thinking..._" and captures the returned `ts`. Pass `slack_thinking_ts` in the dispatch payload to `jac-dispatcher`.
+## Fix
 
-### 2. `supabase/functions/jac-dispatcher/index.ts`
-- Add `slack_thinking_ts` to the body type (line 97)
-- Destructure `slack_thinking_ts` from body
-- Include it in child task input (line 299)
-- Include it in worker dispatch body (line 333)
-- For general intent Slack reply (line 369): use `chat.update` with the thinking `ts` when available, fall back to `chat.postMessage` otherwise
+**File: `supabase/functions/jac-dispatcher/index.ts`**
 
-### 3. `supabase/functions/_shared/slack.ts`
-- Add `slackThinkingTs?: string` to `SlackPayload` interface (line 17)
-- In bot token path (line 48): when `slackThinkingTs` is present, use `chat.update` with `ts: slackThinkingTs` instead of `chat.postMessage`
+Hoist two variables before the outer `try` block (after line 94, before line 95):
 
-### 4. `supabase/functions/jac-research-agent/index.ts`
-- Add `let slackThinkingTs: string | undefined;` after line 41
-- Read `slackThinkingTs = body.slack_thinking_ts` after line 51
-- Add `slackThinkingTs` to both `notifySlack` calls (lines 262 and 324)
+```typescript
+let slackChannel: string | undefined;
+let slackThinkingTs: string | undefined;
+```
 
-### 5. `supabase/functions/jac-save-agent/index.ts`
-- Add `let slackThinkingTs: string | undefined;` after line 34
-- Read `slackThinkingTs = body.slack_thinking_ts` after line 43
-- Add `slackThinkingTs` to both `notifySlack` calls (lines 128 and 189)
+After `body` is parsed (~line 99), assign them:
 
-### 6. `supabase/functions/jac-search-agent/index.ts`
-- Add `let slackThinkingTs: string | undefined;` after line 34
-- Read `slackThinkingTs = body.slack_thinking_ts` after line 43
-- Add `slackThinkingTs` to both `notifySlack` calls (lines 142 and 206)
+```typescript
+slackChannel = body.slack_channel;
+slackThinkingTs = body.slack_thinking_ts;
+```
+
+Then update the catch block (lines 427-431) to use the hoisted variables:
+
+```typescript
+if (typeof slackThinkingTs === 'string' && typeof slackChannel === 'string' && botToken) {
+  fetch('https://slack.com/api/chat.update', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channel: slackChannel, ts: slackThinkingTs, text: ':x: Something went wrong. Try again.' }),
+  }).catch(() => {});
+}
+```
 
 ## Deploy
 
-All 6 edge functions:
+After fixing, deploy:
 - `slack-incoming`
 - `jac-dispatcher`
-- `jac-research-agent`
-- `jac-save-agent`
-- `jac-search-agent`
-- `search-memory`
+- `jac-web-search`
 
-## Expected Result
+## Test
 
-Every Slack DM to LinkJac produces exactly ONE message that starts as "_Thinking..._" then transforms in-place into the real answer. No duplicate messages.
+Run the 4 tests from the commit notes (retry dedup, research quality, stale task cleanup, error handling).
 
