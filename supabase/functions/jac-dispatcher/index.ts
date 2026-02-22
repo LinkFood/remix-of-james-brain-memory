@@ -355,6 +355,35 @@ Be concise. Be confident. Don't ask questions — just act.`;
         .from('agent_tasks')
         .update({ status: 'completed', completed_at: new Date().toISOString() })
         .eq('id', parentTask.id);
+
+      // Reply in Slack if message came from Slack
+      if (slack_channel && slack_thread_ts) {
+        const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+        if (botToken) {
+          fetch('https://slack.com/api/chat.postMessage', {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${botToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              channel: slack_channel,
+              thread_ts: slack_thread_ts,
+              text: response,
+            }),
+          }).then(async (res) => {
+            if (res.ok) {
+              await supabase.from('agent_tasks')
+                .update({ slack_notified: true })
+                .eq('id', parentTask.id);
+            } else {
+              console.warn('[jac-dispatcher] Slack reply failed:', res.status, await res.text().catch(() => ''));
+            }
+          }).catch(err => {
+            console.warn('[jac-dispatcher] Slack reply error:', err);
+          });
+        }
+      }
     }
 
     // 9. Return immediately
