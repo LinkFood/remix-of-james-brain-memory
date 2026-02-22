@@ -342,6 +342,39 @@ export type Database = {
           },
         ]
       }
+      user_activity: {
+        Row: {
+          category: string
+          created_at: string
+          detail: Json
+          entry_id: string | null
+          event: string
+          id: string
+          session_id: string
+          user_id: string
+        }
+        Insert: {
+          category: string
+          created_at?: string
+          detail?: Json
+          entry_id?: string | null
+          event: string
+          id?: string
+          session_id: string
+          user_id: string
+        }
+        Update: {
+          category?: string
+          created_at?: string
+          detail?: Json
+          entry_id?: string | null
+          event?: string
+          id?: string
+          session_id?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       user_settings: {
         Row: {
           created_at: string
