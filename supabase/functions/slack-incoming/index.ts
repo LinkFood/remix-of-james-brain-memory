@@ -51,23 +51,23 @@ serve(async (req) => {
     }
 
     const rawBody = await req.text();
-    const timestamp = req.headers.get('x-slack-request-timestamp') || '';
-    const slackSignature = req.headers.get('x-slack-signature') || '';
-
-    // Verify signature
-    const isValid = await verifySlackSignature(rawBody, timestamp, slackSignature, signingSecret);
-    if (!isValid) {
-      console.warn('[slack-incoming] Invalid signature');
-      return new Response('Invalid signature', { status: 401 });
-    }
-
     const payload = JSON.parse(rawBody);
 
-    // Handle URL verification challenge
+    // Handle URL verification challenge (before signature check)
     if (payload.type === 'url_verification') {
       return new Response(JSON.stringify({ challenge: payload.challenge }), {
         headers: { 'Content-Type': 'application/json' },
       });
+    }
+
+    const timestamp = req.headers.get('x-slack-request-timestamp') || '';
+    const slackSignature = req.headers.get('x-slack-signature') || '';
+
+    // Verify signature for all other requests
+    const isValid = await verifySlackSignature(rawBody, timestamp, slackSignature, signingSecret);
+    if (!isValid) {
+      console.warn('[slack-incoming] Invalid signature');
+      return new Response('Invalid signature', { status: 401 });
     }
 
     // Handle event callbacks
