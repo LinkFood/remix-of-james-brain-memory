@@ -44,7 +44,7 @@ const CodeWorkspace = () => {
   const {
     projects, sessions, activeProject, activeSession,
     fileTree, selectedFile, selectedFileContent, fileLoading,
-    terminalLogs, loading, sending,
+    terminalLogs, chatMessages, loading, sending,
     addProject, removeProject, selectProject, setSelectedFile,
     sendCodeCommand, loadFileContent, cancelTask,
   } = useCodeWorkspace(userId);
@@ -139,6 +139,7 @@ const CodeWorkspace = () => {
                 <TabsTrigger value="chat" className="text-xs gap-1.5 h-7">
                   <MessageSquare className="w-3.5 h-3.5" />
                   Chat
+                  {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
                 </TabsTrigger>
                 <TabsTrigger value="sessions" className="text-xs gap-1.5 h-7">
                   <History className="w-3.5 h-3.5" />
@@ -155,16 +156,12 @@ const CodeWorkspace = () => {
                 />
               </TabsContent>
 
-              <TabsContent value="chat" className="flex-1 m-0 overflow-hidden flex flex-col">
-                <div className="flex-1 overflow-y-auto p-3">
-                  <div className="text-xs text-muted-foreground/40">
-                    Send commands to the JAC Code Agent below.
-                  </div>
-                </div>
+              <TabsContent value="chat" className="flex-1 m-0 overflow-hidden">
                 <CodeChat
                   onSend={sendCodeCommand}
                   sending={sending}
                   projectName={activeProject?.name ?? null}
+                  messages={chatMessages}
                 />
               </TabsContent>
 
@@ -194,6 +191,7 @@ const CodeWorkspace = () => {
               <TabsTrigger value="chat" className="text-xs gap-1 h-7">
                 <MessageSquare className="w-3.5 h-3.5" />
                 Chat
+                {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
               </TabsTrigger>
             </TabsList>
 
@@ -234,16 +232,12 @@ const CodeWorkspace = () => {
               />
             </TabsContent>
 
-            <TabsContent value="chat" className="flex-1 m-0 overflow-hidden flex flex-col">
-              <div className="flex-1 overflow-y-auto p-3">
-                <div className="text-xs text-muted-foreground/40">
-                  Send commands to the JAC Code Agent below.
-                </div>
-              </div>
+            <TabsContent value="chat" className="flex-1 m-0 overflow-hidden">
               <CodeChat
                 onSend={sendCodeCommand}
                 sending={sending}
                 projectName={activeProject?.name ?? null}
+                messages={chatMessages}
               />
             </TabsContent>
           </Tabs>
