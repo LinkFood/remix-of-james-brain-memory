@@ -8,7 +8,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-import type { CodeProject, CodeSession, AgentTask, ActivityLogEntry } from '@/types/agent';
+import type { CodeProject, CodeSession, AgentTask, ActivityLogEntry, ChatMessage } from '@/types/agent';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 const JAC_DISPATCHER_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/jac-dispatcher`;
@@ -25,6 +25,7 @@ export function useCodeWorkspace(userId: string) {
   const [terminalLogs, setTerminalLogs] = useState<ActivityLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const sendingRef = useRef(false);
   const channelsRef = useRef<RealtimeChannel[]>([]);
 
@@ -83,6 +84,40 @@ export function useCodeWorkspace(userId: string) {
 
             if (logData) {
               setTerminalLogs(logData as unknown as ActivityLogEntry[]);
+              // Build chat messages from historical logs
+              const msgs: ChatMessage[] = [];
+              for (const log of logData as unknown as ActivityLogEntry[]) {
+                if (log.step === 'task_started') {
+                  const detail = log.detail as Record<string, unknown>;
+                  msgs.push({
+                    id: `sys-${log.id}`,
+                    role: 'system',
+                    content: `Task started: ${(detail?.intent as string) || 'code task'}`,
+                    timestamp: log.created_at,
+                  });
+                } else if (log.step === 'task_completed') {
+                  const detail = log.detail as Record<string, unknown>;
+                  const parts = ['✅ Task completed'];
+                  if (detail?.prUrl) parts.push(`PR: ${detail.prUrl}`);
+                  if (detail?.fileCount) parts.push(`Files: ${detail.fileCount}`);
+                  msgs.push({
+                    id: log.id,
+                    role: 'agent',
+                    content: parts.join('\n'),
+                    timestamp: log.created_at,
+                    metadata: detail,
+                  });
+                } else if (log.step === 'task_failed' || log.status === 'failed') {
+                  const detail = log.detail as Record<string, unknown>;
+                  msgs.push({
+                    id: `err-${log.id}`,
+                    role: 'system',
+                    content: `❌ Failed: ${(detail?.error as string) || log.step}`,
+                    timestamp: log.created_at,
+                  });
+                }
+              }
+              setChatMessages(msgs);
             }
           } catch (logErr) {
             console.warn('[useCodeWorkspace] Log backfill error:', logErr);
@@ -220,6 +255,43 @@ export function useCodeWorkspace(userId: string) {
           const newLog = payload.new as ActivityLogEntry;
           if (newLog.agent === 'jac-code-agent') {
             setTerminalLogs(prev => [...prev, newLog]);
+            // Generate chat messages from key steps
+            if (newLog.step === 'task_started') {
+              const detail = newLog.detail as Record<string, unknown>;
+              setChatMessages(prev => [...prev, {
+                id: `sys-${newLog.id}`,
+                role: 'system',
+                content: `Task started: ${(detail?.intent as string) || 'code task'}`,
+                timestamp: newLog.created_at,
+              }]);
+            } else if (newLog.step === 'task_completed') {
+              const detail = newLog.detail as Record<string, unknown>;
+              const parts = ['✅ Task completed'];
+              if (detail?.prUrl) parts.push(`PR: ${detail.prUrl}`);
+              if (detail?.fileCount) parts.push(`Files: ${detail.fileCount}`);
+              setChatMessages(prev => [...prev, {
+                id: newLog.id,
+                role: 'agent',
+                content: parts.join('\n'),
+                timestamp: newLog.created_at,
+                metadata: detail,
+              }]);
+            } else if (newLog.step === 'task_failed' || newLog.status === 'failed') {
+              const detail = newLog.detail as Record<string, unknown>;
+              setChatMessages(prev => [...prev, {
+                id: `err-${newLog.id}`,
+                role: 'system',
+                content: `❌ Failed: ${(detail?.error as string) || newLog.step}`,
+                timestamp: newLog.created_at,
+              }]);
+            } else if (['plan', 'write_code', 'read_file', 'open_pr', 'create_branch'].includes(newLog.step)) {
+              setChatMessages(prev => [...prev, {
+                id: `step-${newLog.id}`,
+                role: 'system',
+                content: `${newLog.step.replace(/_/g, ' ')}...`,
+                timestamp: newLog.created_at,
+              }]);
+            }
           }
         }
       )
@@ -312,6 +384,14 @@ export function useCodeWorkspace(userId: string) {
     sendingRef.current = true;
     setSending(true);
 
+    // Add user message to chat
+    setChatMessages(prev => [...prev, {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: trimmed,
+      timestamp: new Date().toISOString(),
+    }]);
+
     try {
       const { data: session } = await supabase.auth.getSession();
       if (!session?.session?.access_token) throw new Error('Not authenticated');
@@ -388,6 +468,7 @@ export function useCodeWorkspace(userId: string) {
     selectedFileContent,
     fileLoading,
     terminalLogs,
+    chatMessages,
     loading,
     sending,
     addProject,

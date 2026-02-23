@@ -28,6 +28,14 @@ export interface JacMessage {
 
 export type LogStatus = 'started' | 'completed' | 'failed' | 'skipped';
 
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'agent' | 'system';
+  content: string;
+  timestamp: string;
+  metadata?: Record<string, unknown>;
+}
+
 export interface ActivityLogEntry {
   id: string;
   task_id: string;
