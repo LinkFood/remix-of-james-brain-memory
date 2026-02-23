@@ -1,22 +1,36 @@
 
 
-# Fix Build Error + Deploy Edge Functions
+# Kill Button Visibility + Dispatcher Redeploy
 
-## Build Error Fix
+## What's happening with the kill button
 
-The log backfill code (added in commit 3931c51) references `sessionData` in a separate `try` block from where it was declared. The variable is scoped to the first `try` block (line 57) and not accessible in the second `try` block (line 79).
+The kill button in AgentTerminal is working correctly — it only appears when `isRunning` is true AND `onCancel` is provided. These conditions require an active code session with a running task (`activeSession?.status === 'active'` and `activeSession?.task_id` is set). Since no task is currently running, the button is intentionally hidden.
 
-**Fix:** Move the log backfill logic inside the first `try` block, right after the session data is loaded (after line 73, before the closing `catch` on line 75). This keeps `sessionData` in scope and is the simplest correct fix.
+However, there is a real bug: the **mobile terminal tab** never passes `isRunning` or `onCancel`, so even when a task IS running, mobile users won't see the kill button.
 
-## Edge Function Deploys
+## Changes
 
-Redeploy both updated edge functions:
-- `jac-code-agent` (Slack notification formatting, brain save formatting)
-- `jac-dispatcher` (general intent system prompt update)
+### 1. Fix mobile terminal kill button (CodeWorkspace.tsx ~line 227)
 
-## Steps
+The mobile `<AgentTerminal>` is missing the `isRunning` and `onCancel` props. Add them to match the desktop version:
 
-1. Move lines 79-101 (the log backfill `try/catch`) into the outer `try` block, placing it after line 73 and before line 75
-2. Deploy `jac-code-agent` and `jac-dispatcher`
-3. Verify build succeeds and `/code` terminal shows historical logs
+```tsx
+<AgentTerminal
+  logs={terminalLogs}
+  sessionStatus={activeSession?.status ?? null}
+  isRunning={isRunning}
+  onCancel={runningTaskId ? () => cancelTask(runningTaskId) : undefined}
+/>
+```
+
+### 2. Redeploy jac-dispatcher
+
+Re-run edge function deployment for `jac-dispatcher` to ensure the latest commit f64fdc0 changes (code project awareness in general intent) are live.
+
+## Technical Details
+
+- `AgentTerminal` component already supports the kill button UI (lines 73-81 of AgentTerminal.tsx)
+- The `cancelTask` function in `useCodeWorkspace.ts` (line 361) updates `agent_tasks` status to `cancelled`
+- The `jac-code-agent` edge function checks for cancellation before each major step (plan, write_code, create_branch)
+- The kill button will appear as a red "kill" label with an OctagonX icon in the terminal header bar when a task is actively running
 
