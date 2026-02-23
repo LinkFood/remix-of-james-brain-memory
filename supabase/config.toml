@@ -20,3 +20,6 @@ verify_jwt = false
 
 [functions.jac-code-agent]
 verify_jwt = false
+
+[functions.calendar-reminder-check]
+verify_jwt = false
