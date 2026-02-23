@@ -1,110 +1,54 @@
 
 
-# Fix Code Workspace Chat — Show Messages + Agent Activity
+# Apply AgentTerminal Collapsing + Session Dividers (commit 6df52c4)
 
 ## Problem
 
-The Code Workspace chat tab has three issues:
+The `AgentTerminal.tsx` file in the codebase does not contain the changes from commit 6df52c4. It still renders every raw log entry individually, showing duplicate started/completed lines and perpetual blue spinners on finished work.
 
-1. **Empty chat area** — After sending a command like "Fix the login bug", the chat shows nothing. There is no message history, no agent status, and no results. The area above the input is just static placeholder text.
+## Fix
 
-2. **Kill button invisible** — The task completed in ~46 seconds but the kill button only shows when `isRunning` is true. The button likely appeared briefly but the user was on the Chat tab, not the Terminal tab. There is no cross-tab indicator of a running task.
+Replace the current `AgentTerminal.tsx` with the intended version that includes:
 
-3. **No chat log persistence** — `sendCodeCommand` fires the dispatcher and forgets. Sent messages and agent responses are never stored or displayed.
+### 1. Add `collapseLogs` function
 
-## Solution
+A new function that merges started/completed pairs into a single line per step. It maps `"taskId:step"` keys to track which steps have been started, then merges completed/failed entries into the same slot. Only genuinely in-progress steps (started with no matching end) show a spinner.
 
-Transform the chat tab from a dead placeholder into a live conversation view that shows:
-- User-sent commands
-- Real-time agent activity steps (from the same `terminalLogs` data)
-- Final results (PR link, files changed, completion status)
+### 2. Add `useMemo` for collapsed logs
 
-### Changes
-
-#### 1. Add chat message state to `useCodeWorkspace.ts`
-
-Add a `chatMessages` state array that tracks:
-- **User messages**: Added when `sendCodeCommand` is called (before the fetch)
-- **Agent responses**: Derived from `terminalLogs` — when a `task_completed` step arrives, create a summary message with the PR link, files changed, etc.
-
-```typescript
-type ChatMessage = {
-  id: string;
-  role: 'user' | 'agent' | 'system';
-  content: string;
-  timestamp: string;
-  metadata?: Record<string, unknown>;
-};
-```
-
-Store in state (not persisted to DB — reconstructed from activity logs on mount).
-
-#### 2. Build chat messages from terminal logs on mount
-
-During the existing log backfill (lines 74-89), also generate chat messages from historical logs by grouping by task and extracting key steps (task started, plan, write_code, open_pr, task_completed).
-
-#### 3. Update `sendCodeCommand` to add user message
-
-Before the fetch call, push a user message to `chatMessages`:
-```typescript
-setChatMessages(prev => [...prev, {
-  id: crypto.randomUUID(),
-  role: 'user',
-  content: trimmed,
-  timestamp: new Date().toISOString(),
-}]);
-```
-
-#### 4. Update realtime log handler to add agent messages
-
-When a `task_completed` log arrives via realtime, push an agent summary message:
-```typescript
-if (newLog.step === 'task_completed') {
-  const detail = newLog.detail;
-  setChatMessages(prev => [...prev, {
-    id: newLog.id,
-    role: 'agent',
-    content: `Task completed. PR: ${detail.prUrl}\nFiles changed: ${detail.fileCount}`,
-    timestamp: newLog.created_at,
-    metadata: detail,
-  }]);
-}
-```
-
-Also push system messages for `started` and `failed` steps.
-
-#### 5. Replace placeholder chat UI in `CodeWorkspace.tsx`
-
-Replace the empty `div` (lines 158-163) with a scrollable message list:
-- User messages: right-aligned, primary color bubble
-- Agent messages: left-aligned, muted background, with clickable PR links
-- System messages: centered, small text (e.g. "Task started...", "Planning...")
-- Auto-scroll to bottom on new messages
-
-#### 6. Add running indicator to Chat tab
-
-Show a small pulsing dot on the Chat tab trigger when a task is running, so the user knows something is happening even if they're on another tab:
 ```tsx
-<TabsTrigger value="chat" className="text-xs gap-1.5 h-7">
-  <MessageSquare className="w-3.5 h-3.5" />
-  Chat
-  {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
-</TabsTrigger>
+const collapsed = useMemo(() => collapseLogs(logs), [logs]);
 ```
 
-## Files to modify
+### 3. Add session dividers
+
+Track `taskId` changes across the collapsed entries. When the task ID changes, insert a subtle horizontal line with a "session N" label.
+
+### 4. Hide 0ms durations
+
+Change the duration display condition from:
+```tsx
+{log.duration_ms !== null && (
+```
+to:
+```tsx
+{entry.duration_ms !== null && entry.duration_ms > 0 && (
+```
+
+### 5. Render collapsed entries instead of raw logs
+
+Replace `logs.map(...)` with `collapsed.map(...)` using the `CollapsedLogEntry` type.
+
+## File changes
 
 | File | Change |
 |------|--------|
-| `src/types/agent.ts` | Add `ChatMessage` type |
-| `src/hooks/useCodeWorkspace.ts` | Add `chatMessages` state, populate from logs, update on send and realtime |
-| `src/pages/CodeWorkspace.tsx` | Replace placeholder chat area with message list, add running dot to tab, pass chatMessages |
-| `src/components/code/CodeChat.tsx` | Add `messages` prop, render message bubbles above input |
+| `src/components/code/AgentTerminal.tsx` | Full update: add `collapseLogs`, `CollapsedLogEntry` type, `useMemo` import, session dividers, 0ms filter, render collapsed entries |
 
-## What this does NOT change
+## Result
 
-- AgentTerminal — stays as-is (raw log feed)
-- Kill button logic — stays as-is (only shows when running, which is correct)
-- Edge functions — no changes needed
-- Database — no new tables (chat messages derived from existing activity logs)
-
+- ~12 clean lines per 12-step session instead of ~24
+- Green checkmark + duration for completed steps
+- Blue spinner only for genuinely running steps
+- Session dividers between different task runs
+- No misleading 0ms durations
