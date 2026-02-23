@@ -27,6 +27,7 @@ interface ClassificationResult {
   eventTime?: string;
   isRecurring?: boolean;
   recurrencePattern?: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  reminderMinutes?: number;
 }
 
 interface ClassifyRequest {
@@ -135,6 +136,15 @@ Today's date is: ${new Date().toISOString().split('T')[0]}
 - "every month", "monthly" → isRecurring: true, recurrencePattern: "monthly"
 - "every year", "yearly" → isRecurring: true, recurrencePattern: "yearly"
 
+=== REMINDER EXTRACTION ===
+If user says "remind me", extract reminderMinutes:
+- "remind me 15 minutes before" → reminderMinutes: 15
+- "remind me an hour before" → reminderMinutes: 60
+- "remind me the day before" / "remind me day of" → reminderMinutes: 1440
+- "remind me a week before" → reminderMinutes: 10080
+- "remind me tomorrow to X" → set eventDate to tomorrow, reminderMinutes: 1440
+- "remind me" with no time specified → default reminderMinutes: 1440
+
 For lists, extract each item as a separate list_item with checked: false.
 ${recentListsContext}`;
 
@@ -203,6 +213,7 @@ ${recentListsContext}`;
           eventTime: { type: 'string', description: 'Time string (HH:MM)' },
           isRecurring: { type: 'boolean' },
           recurrencePattern: { type: 'string', enum: ['daily', 'weekly', 'monthly', 'yearly'] },
+          reminderMinutes: { type: 'number', description: 'Minutes before event to send reminder. 15, 30, 60, 1440 (1 day), 10080 (1 week). Extract from "remind me" phrases.' },
         },
         required: ['type', 'suggestedTitle', 'tags'],
       },
@@ -251,6 +262,7 @@ ${recentListsContext}`;
       eventTime: classification.eventTime,
       isRecurring: classification.isRecurring,
       recurrencePattern: classification.recurrencePattern,
+      reminderMinutes: classification.reminderMinutes,
     };
 
     console.log(`[classify-content] Result: type=${result.type}, title="${result.suggestedTitle}"`);

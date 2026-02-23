@@ -16,6 +16,63 @@ interface SlackPayload {
   error?: string;
   slackChannel?: string;
   slackThinkingTs?: string;
+  sources?: Array<{ title: string; url: string }>;
+}
+
+/**
+ * Convert Markdown to Slack mrkdwn format.
+ * - ## Header → *Header*
+ * - **bold** → *bold*
+ * - [text](url) → <url|text>
+ * - `code` stays as `code`
+ */
+export function markdownToMrkdwn(text: string): string {
+  return text
+    // Headers: ## Foo → *Foo*
+    .replace(/^#{1,6}\s+(.+)$/gm, '*$1*')
+    // Bold: **text** or __text__ → *text*
+    .replace(/\*\*(.+?)\*\*/g, '*$1*')
+    .replace(/__(.+?)__/g, '*$1*')
+    // Links: [text](url) → <url|text>
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<$2|$1>')
+    // Italic: _text_ (only single underscores not already converted)
+    // Slack uses _ for italic already, so this is a no-op
+    // Strikethrough: ~~text~~ → ~text~
+    .replace(/~~(.+?)~~/g, '~$1~');
+}
+
+/**
+ * Format source URLs for Slack display.
+ */
+export function formatSourcesForSlack(
+  sources: Array<{ title: string; url: string }>,
+  max = 5
+): string {
+  if (!sources || sources.length === 0) return '';
+  const items = sources.slice(0, max)
+    .map(s => `• <${s.url}|${s.title}>`)
+    .join('\n');
+  return `\n\n*Sources:*\n${items}`;
+}
+
+/**
+ * Truncate text at a sentence boundary instead of mid-word.
+ * Appends "...truncated" if text was cut.
+ */
+export function truncateAtSentence(text: string, maxLen: number): string {
+  if (text.length <= maxLen) return text;
+  // Leave room for the suffix
+  const cutoff = maxLen - 14; // "...truncated" = 12 + 2 buffer
+  const slice = text.slice(0, cutoff);
+  // Find last sentence boundary
+  const lastSentence = Math.max(
+    slice.lastIndexOf('. '),
+    slice.lastIndexOf('.\n'),
+    slice.lastIndexOf('! '),
+    slice.lastIndexOf('? ')
+  );
+  const breakPoint = lastSentence > cutoff * 0.5 ? lastSentence + 1 : cutoff;
+  return text.slice(0, breakPoint).trimEnd() + ' ...truncated';
 }
 
 const EMOJI_MAP: Record<string, string> = {
@@ -41,9 +98,16 @@ export async function notifySlack(
     const emoji = EMOJI_MAP[payload.taskType] || ':robot_face:';
     const isError = !!payload.error;
 
-    const messageText = isError
-      ? `:x: *${payload.taskType.toUpperCase()} failed:* ${payload.error}`
-      : `${emoji} *${payload.taskType.toUpperCase()}*\n${payload.summary}`;
+    const formattedSummary = isError
+      ? payload.error!
+      : markdownToMrkdwn(payload.summary);
+    const sourcesText = !isError && payload.sources
+      ? formatSourcesForSlack(payload.sources)
+      : '';
+    const rawMessage = isError
+      ? `:x: *${payload.taskType.toUpperCase()} failed:* ${formattedSummary}`
+      : `${emoji} *${payload.taskType.toUpperCase()}*\n${formattedSummary}${sourcesText}`;
+    const messageText = truncateAtSentence(rawMessage, 3900);
 
     // Path 1: Bot token + channel — update thinking message or post new
     const botToken = Deno.env.get('SLACK_BOT_TOKEN');
@@ -110,7 +174,7 @@ export async function notifySlack(
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `${emoji} *JAC Agent — ${payload.taskType.toUpperCase()}* ${statusEmoji}\n\n${isError ? `:warning: *Error:* ${payload.error}` : payload.summary}`,
+          text: truncateAtSentence(`${emoji} *JAC Agent — ${payload.taskType.toUpperCase()}* ${statusEmoji}\n\n${isError ? `:warning: *Error:* ${payload.error}` : `${formattedSummary}${sourcesText}`}`, 3900),
         },
       },
       {

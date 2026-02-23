@@ -38,6 +38,7 @@ interface ClassificationResult {
   eventTime?: string;
   isRecurring?: boolean;
   recurrencePattern?: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  reminderMinutes?: number;
 }
 
 interface Entry {
@@ -391,6 +392,9 @@ serve(async (req) => {
       }
       if (classification.recurrencePattern) {
         entryData.recurrence_pattern = classification.recurrencePattern;
+      }
+      if (classification.reminderMinutes) {
+        entryData.reminder_minutes = classification.reminderMinutes;
       }
 
       const { data: newEntry, error: insertError } = await supabase

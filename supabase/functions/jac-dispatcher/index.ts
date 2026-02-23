@@ -20,6 +20,7 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserId, extractUserIdWithServiceRole } from '../_shared/auth.ts';
 import { callClaude, CLAUDE_MODELS, parseToolUse, parseTextContent } from '../_shared/anthropic.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
+import { markdownToMrkdwn } from '../_shared/slack.ts';
 
 // Rate limiting
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -310,11 +311,12 @@ Intent routing rules (follow these STRICTLY):
    TRIGGERS: "search my brain", "what did I save", "find my notes", "my entries".
    REQUIRED: User must explicitly reference their own saved data. Do NOT pick search just because brain context below has matches.
 
-3. "save" → jac-save-agent: User wants to save/remember/note something.
+3. "save" → jac-save-agent: User wants to save/remember/note something. "remind me" → save (with reminder extraction).
 
 4. "report" → jac-research-agent: User wants a comprehensive multi-source analysis.
 
 5. "general" → assistant-chat: Casual chat, greetings, meta questions about JAC.
+   ALSO USE FOR: Calendar/schedule queries ("what's on my calendar", "do I have anything today/tomorrow/this week", "upcoming events", "my schedule", "my plans"). The assistant-chat has full calendar access.
 
 6. "code" → jac-code-agent: User wants to write, fix, modify, refactor, or deploy code in a registered project.
    TRIGGERS: "fix", "add feature", "update code", "refactor", "implement", "PR", "pull request", project names like "pixel-perfect" or "exact-match", code-related requests.
@@ -571,7 +573,7 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}
             },
             body: JSON.stringify({
               channel: slack_channel,
-              text: response,
+              text: markdownToMrkdwn(response).slice(0, 3900),
               ...(slack_thinking_ts ? { ts: slack_thinking_ts } : {}),
             }),
           }).then(async (res) => {

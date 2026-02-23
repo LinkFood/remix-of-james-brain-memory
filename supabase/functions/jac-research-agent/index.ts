@@ -260,11 +260,12 @@ Instructions:
     await notifySlack(supabase, userId, {
       taskId,
       taskType: 'research',
-      summary: `Researched: "${query.slice(0, 60)}"\n${brief.slice(0, 800)}`,
+      summary: `Researched: "${query.slice(0, 60)}"\n${brief.slice(0, 2500)}`,
       brainEntryId,
       duration,
       slackChannel,
       slackThinkingTs,
+      sources: webSources.slice(0, 5),
     });
     await slackStep();
 
