@@ -351,6 +351,7 @@ export type Database = {
           list_items: Json | null
           recurrence_pattern: string | null
           reminder_minutes: number | null
+          reminder_sent: boolean | null
           source: string
           starred: boolean
           tags: string[] | null
@@ -375,6 +376,7 @@ export type Database = {
           list_items?: Json | null
           recurrence_pattern?: string | null
           reminder_minutes?: number | null
+          reminder_sent?: boolean | null
           source?: string
           starred?: boolean
           tags?: string[] | null
@@ -399,6 +401,7 @@ export type Database = {
           list_items?: Json | null
           recurrence_pattern?: string | null
           reminder_minutes?: number | null
+          reminder_sent?: boolean | null
           source?: string
           starred?: boolean
           tags?: string[] | null
