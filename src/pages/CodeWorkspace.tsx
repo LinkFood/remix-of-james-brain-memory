@@ -229,6 +229,8 @@ const CodeWorkspace = () => {
               <AgentTerminal
                 logs={terminalLogs}
                 sessionStatus={activeSession?.status ?? null}
+                isRunning={isRunning}
+                onCancel={runningTaskId ? () => cancelTask(runningTaskId) : undefined}
               />
             </TabsContent>
 
