@@ -46,8 +46,12 @@ const CodeWorkspace = () => {
     fileTree, selectedFile, selectedFileContent, fileLoading,
     terminalLogs, loading, sending,
     addProject, removeProject, selectProject, setSelectedFile,
-    sendCodeCommand, loadFileContent,
+    sendCodeCommand, loadFileContent, cancelTask,
   } = useCodeWorkspace(userId);
+
+  // Find the running code task (child task from the active session)
+  const runningTaskId = activeSession?.task_id ?? null;
+  const isRunning = activeSession?.status === 'active';
 
   if (!userId) return null;
 
@@ -146,6 +150,8 @@ const CodeWorkspace = () => {
                 <AgentTerminal
                   logs={terminalLogs}
                   sessionStatus={activeSession?.status ?? null}
+                  isRunning={isRunning}
+                  onCancel={runningTaskId ? () => cancelTask(runningTaskId) : undefined}
                 />
               </TabsContent>
 

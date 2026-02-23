@@ -71,13 +71,8 @@ export function useCodeWorkspace(userId: string) {
             setActiveSession(active);
             setActiveProjectId(active.project_id);
           }
-          // Backfill terminal logs for recent code sessions
-          const recentTaskIds = (sessionData as unknown as CodeSession[])
-            ?.filter(s => s.task_id)
-            .slice(0, 10)
-            .map(s => s.task_id) || [];
-
-          if (recentTaskIds.length > 0) {
+          // Backfill terminal logs for code agent
+          try {
             const { data: logData } = await supabase
               .from('agent_activity_log' as any)
               .select('*')
@@ -89,6 +84,8 @@ export function useCodeWorkspace(userId: string) {
             if (logData) {
               setTerminalLogs(logData as unknown as ActivityLogEntry[]);
             }
+          } catch (logErr) {
+            console.warn('[useCodeWorkspace] Log backfill error:', logErr);
           }
         }
       } catch (err) {
@@ -131,6 +128,10 @@ export function useCodeWorkspace(userId: string) {
               }
             } else {
               setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
+              // Auto-refresh file tree if this is the active project and tree changed
+              if (updated.id === activeProjectId && updated.file_tree_cache) {
+                setFileTree(updated.file_tree_cache);
+              }
             }
           } else if (payload.eventType === 'DELETE') {
             setProjects(prev => prev.filter(p => p.id !== (payload.old as { id: string }).id));
@@ -356,6 +357,27 @@ export function useCodeWorkspace(userId: string) {
     }
   }, [activeProject]);
 
+  // Cancel a running code task (kill switch)
+  const cancelTask = useCallback(async (taskId: string) => {
+    try {
+      const { error } = await supabase
+        .from('agent_tasks' as any)
+        .update({
+          status: 'cancelled',
+          cancelled_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          error: 'Cancelled by user from Code Workspace',
+        } as any)
+        .eq('id', taskId);
+
+      if (error) throw error;
+      toast.info('Task cancelled — agent will stop at next checkpoint');
+    } catch (err) {
+      toast.error('Failed to cancel task');
+      console.error('[useCodeWorkspace] cancelTask error:', err);
+    }
+  }, []);
+
   return {
     projects,
     sessions,
@@ -374,5 +396,6 @@ export function useCodeWorkspace(userId: string) {
     setSelectedFile,
     sendCodeCommand,
     loadFileContent,
+    cancelTask,
   };
 }

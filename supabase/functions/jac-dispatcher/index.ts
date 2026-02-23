@@ -500,32 +500,45 @@ Be concise. Be confident. Don't ask questions — just act.`;
           .eq('id', parentTask.id);
       });
     } else if (intent === 'general') {
-      // Enrich general responses with brain context if available
+      // Enrich general responses — always call Claude for general intent (not just when brain context exists)
       const originalResponse = response;
-      if (brainContext) {
-        try {
-          const generalClaude = await callClaude({
-            model: CLAUDE_MODELS.sonnet,
-            system: `You are Jac, a personal AI agent. Answer the user's question using the brain context provided. Be concise but thorough. If the brain context isn't relevant, just answer naturally.
+
+      // Look up code_projects for the user so general intent can answer questions about them
+      let codeProjectsContext = '';
+      try {
+        const { data: userProjects } = await supabase
+          .from('code_projects')
+          .select('name, repo_full_name, tech_stack, active')
+          .eq('user_id', userId)
+          .eq('active', true);
+        if (userProjects && userProjects.length > 0) {
+          codeProjectsContext = `\n\nUser's registered code projects:\n${userProjects.map((p: { name: string; repo_full_name: string; tech_stack?: string[] }) => `- ${p.name} (${p.repo_full_name})${p.tech_stack?.length ? ` [${p.tech_stack.join(', ')}]` : ''}`).join('\n')}`;
+        }
+      } catch (err) {
+        console.warn('[jac-dispatcher] Code projects lookup for general failed:', err);
+      }
+
+      try {
+        const generalClaude = await callClaude({
+          model: CLAUDE_MODELS.sonnet,
+          system: `You are Jac, a personal AI agent. Answer the user's question concisely and thoroughly.
 
 You have several specialized agents:
 - Research agent: looks up real-time information from the internet
 - Save agent: saves notes and information to the brain
 - Search agent: searches previously saved brain entries
-- Code agent: reads GitHub repos, plans changes, writes code, creates branches, commits, and opens PRs autonomously
+- Code agent: reads GitHub repos, plans changes, writes code, creates branches, commits, and opens PRs autonomously. Users can register projects in the Code Workspace, then ask you to fix bugs, add features, refactor code, etc. You'll create a branch, write the code, and open a PR.
 
-If the user asks about your capabilities, mention these agents. For coding questions like "can you code?" — yes, you can write, fix, and modify code in registered GitHub projects via the code agent.
-
-Brain context:\n${brainContext}`,
-            messages: [{ role: 'user', content: message }],
-            max_tokens: 2048,
-            temperature: 0.4,
-          });
-          const enriched = parseTextContent(generalClaude);
-          if (enriched) response = enriched;
-        } catch (err) {
-          console.warn('[jac-dispatcher] General enrichment failed (non-blocking):', err);
-        }
+If the user asks about your capabilities, mention these agents. For coding questions like "can you code?" — yes, you can write, fix, and modify code in registered GitHub projects via the code agent. If they ask about their projects, check the project list below.
+${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}`,
+          messages: [{ role: 'user', content: message }],
+          max_tokens: 2048,
+          temperature: 0.4,
+        });
+        const enriched = parseTextContent(generalClaude);
+        if (enriched) response = enriched;
+      } catch (err) {
+        console.warn('[jac-dispatcher] General enrichment failed (non-blocking):', err);
       }
 
       // Update conversation with enriched response

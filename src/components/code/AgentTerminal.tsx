@@ -6,12 +6,14 @@
  */
 
 import { useRef, useEffect } from 'react';
-import { CheckCircle2, XCircle, Loader2, SkipForward, Terminal } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader2, SkipForward, Terminal, OctagonX } from 'lucide-react';
 import type { ActivityLogEntry } from '@/types/agent';
 
 interface AgentTerminalProps {
   logs: ActivityLogEntry[];
   sessionStatus: string | null;
+  onCancel?: () => void;
+  isRunning?: boolean;
 }
 
 function formatTimestamp(iso: string): string {
@@ -52,7 +54,7 @@ function getDetailSummary(detail: Record<string, unknown>): string {
   return '';
 }
 
-export function AgentTerminal({ logs, sessionStatus }: AgentTerminalProps) {
+export function AgentTerminal({ logs, sessionStatus, onCancel, isRunning }: AgentTerminalProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -67,16 +69,28 @@ export function AgentTerminal({ logs, sessionStatus }: AgentTerminalProps) {
       <div className="flex items-center gap-2 px-3 py-2 border-b border-border/50 bg-[#161b22]">
         <Terminal className="w-3.5 h-3.5 text-green-400" />
         <span className="text-xs font-mono text-green-400/80">agent-terminal</span>
-        {sessionStatus && (
-          <span className={`ml-auto text-[10px] font-mono ${
-            sessionStatus === 'active' ? 'text-blue-400' :
-            sessionStatus === 'completed' ? 'text-green-400' :
-            sessionStatus === 'failed' ? 'text-red-400' :
-            'text-amber-400'
-          }`}>
-            [{sessionStatus}]
-          </span>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          {isRunning && onCancel && (
+            <button
+              onClick={onCancel}
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono text-red-400 hover:text-red-300 hover:bg-red-500/10 transition-colors"
+              title="Kill running task"
+            >
+              <OctagonX className="w-3 h-3" />
+              kill
+            </button>
+          )}
+          {sessionStatus && (
+            <span className={`text-[10px] font-mono ${
+              sessionStatus === 'active' ? 'text-blue-400' :
+              sessionStatus === 'completed' ? 'text-green-400' :
+              sessionStatus === 'failed' ? 'text-red-400' :
+              'text-amber-400'
+            }`}>
+              [{sessionStatus}]
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Log lines */}
