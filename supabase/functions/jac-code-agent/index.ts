@@ -398,7 +398,7 @@ Instructions:
         },
         body: JSON.stringify({
           userId,
-          content: `# Code: ${query}\n\n**Repo:** ${repoFull}\n**Branch:** ${branchName}\n**PR:** ${pr.url}\n\n## Plan\n${plan}\n\n## Files Changed\n${codeFiles.map(f => `- \`${f.path}\``).join('\n')}\n\n**Commit:** ${commitSha.slice(0, 8)}`,
+          content: `Code: ${query}\n\nRepo: ${repoFull}\nBranch: ${branchName}\nPR: ${pr.url}\n\nPlan:\n${plan}\n\nFiles changed: ${codeFiles.map(f => f.path).join(', ')}\nCommit: ${commitSha.slice(0, 8)}`,
           source: 'jac-agent',
         }),
       });
@@ -466,7 +466,7 @@ Instructions:
     await notifySlack(supabase, userId, {
       taskId,
       taskType: 'code',
-      summary: `Coded: "${query.slice(0, 60)}"\nPR: ${pr.url}\nFiles: ${codeFiles.map(f => f.path).join(', ')}`,
+      summary: `Coded: "${query.slice(0, 60)}"\n<${pr.url}|PR #${pr.number}> on \`${branchName}\`\nFiles: ${codeFiles.map(f => f.path).join(', ')}`,
       brainEntryId,
       duration,
       slackChannel,

@@ -506,7 +506,17 @@ Be concise. Be confident. Don't ask questions — just act.`;
         try {
           const generalClaude = await callClaude({
             model: CLAUDE_MODELS.sonnet,
-            system: `You are Jac, a personal AI agent. Answer the user's question using the brain context provided. Be concise but thorough. If the brain context isn't relevant, just answer naturally.\n\nBrain context:\n${brainContext}`,
+            system: `You are Jac, a personal AI agent. Answer the user's question using the brain context provided. Be concise but thorough. If the brain context isn't relevant, just answer naturally.
+
+You have several specialized agents:
+- Research agent: looks up real-time information from the internet
+- Save agent: saves notes and information to the brain
+- Search agent: searches previously saved brain entries
+- Code agent: reads GitHub repos, plans changes, writes code, creates branches, commits, and opens PRs autonomously
+
+If the user asks about your capabilities, mention these agents. For coding questions like "can you code?" — yes, you can write, fix, and modify code in registered GitHub projects via the code agent.
+
+Brain context:\n${brainContext}`,
             messages: [{ role: 'user', content: message }],
             max_tokens: 2048,
             temperature: 0.4,

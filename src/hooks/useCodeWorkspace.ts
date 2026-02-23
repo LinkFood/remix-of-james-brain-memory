@@ -76,6 +76,30 @@ export function useCodeWorkspace(userId: string) {
         console.warn('[useCodeWorkspace] Load error:', err);
       }
 
+      // Load terminal logs for recent code sessions (backfill history)
+      try {
+        const recentTaskIds = (sessionData as unknown as CodeSession[])
+          ?.filter(s => s.task_id)
+          .slice(0, 10)
+          .map(s => s.task_id) || [];
+
+        if (recentTaskIds.length > 0) {
+          const { data: logData } = await supabase
+            .from('agent_activity_log' as any)
+            .select('*')
+            .eq('agent', 'jac-code-agent')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: true })
+            .limit(200);
+
+          if (logData) {
+            setTerminalLogs(logData as unknown as ActivityLogEntry[]);
+          }
+        }
+      } catch (err) {
+        console.warn('[useCodeWorkspace] Log backfill error:', err);
+      }
+
       setLoading(false);
     };
 

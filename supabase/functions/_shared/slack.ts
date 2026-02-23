@@ -25,6 +25,7 @@ const EMOJI_MAP: Record<string, string> = {
   report: ':bar_chart:',
   general: ':robot_face:',
   monitor: ':eyes:',
+  code: ':computer:',
 };
 
 /**
