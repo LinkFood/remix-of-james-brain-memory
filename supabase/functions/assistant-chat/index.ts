@@ -324,6 +324,7 @@ serve(async (req) => {
     }
 
     const weatherIntent = detectWeatherIntent(message);
+    const calendarIntent = detectCalendarIntent(message);
     let weatherData: WeatherData | null = null;
     if (weatherIntent) {
       console.log('Weather intent detected, fetching weather...');
@@ -467,6 +468,20 @@ serve(async (req) => {
       actionContext += `\n\n=== CURRENT WEATHER (${weatherData.location}) ===\nTemperature: ${weatherData.temperature}°F\nConditions: ${weatherData.description}\nWind: ${weatherData.windSpeed} mph${snowWarning}\n`;
     }
 
+    if (calendarIntent || calendarEntries.length > 0) {
+      if (calendarEntries.length > 0) {
+        const calText = calendarEntries.map(e => {
+          let line = `- ${e.title || 'Untitled'}`;
+          if (e.event_date) line += ` — ${e.event_date}`;
+          if (e.event_time) line += ` at ${e.event_time}`;
+          return line;
+        }).join('\n');
+        actionContext += `\n\n=== YOUR CALENDAR (upcoming events) ===\n${calText}\nPresent these as the user's upcoming schedule when asked.\n`;
+      } else if (calendarIntent) {
+        actionContext += `\n\n=== YOUR CALENDAR ===\nNo upcoming events saved. Let the user know their calendar is empty and suggest they save events with dates.\n`;
+      }
+    }
+
     const webSearchIntent = detectWebSearchIntent(message, contextText);
     if (webSearchIntent.shouldSearch) {
       console.log(`Web search triggered (reason: ${webSearchIntent.reason})`);
@@ -504,6 +519,7 @@ When you have weather data, share it proactively. Be helpful about weather-relat
 - Compile and summarize related entries
 - Surface connections between entries
 - Saving/adding is handled BEFORE you respond - just confirm
+- Show upcoming calendar events and schedule from saved entries
 - ACCESS REAL-TIME WEB INFORMATION when needed
 - For complex research, multi-step analysis, or agent tasks, suggest the user open the JAC Command Center at /jac
 

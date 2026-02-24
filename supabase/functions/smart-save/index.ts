@@ -381,7 +381,7 @@ serve(async (req) => {
         image_url: imageUrl || null,
       };
       
-      if (classification.eventDate) {
+      if (classification.eventDate && /^\d{4}-\d{2}-\d{2}$/.test(classification.eventDate)) {
         entryData.event_date = classification.eventDate;
       }
       if (classification.eventTime) {
@@ -394,7 +394,10 @@ serve(async (req) => {
         entryData.recurrence_pattern = classification.recurrencePattern;
       }
       if (classification.reminderMinutes) {
-        entryData.reminder_minutes = classification.reminderMinutes;
+        const mins = Number(classification.reminderMinutes);
+        if (!isNaN(mins) && mins > 0 && mins <= 20160) {
+          entryData.reminder_minutes = Math.round(mins);
+        }
       }
 
       const { data: newEntry, error: insertError } = await supabase
