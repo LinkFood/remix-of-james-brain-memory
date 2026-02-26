@@ -125,6 +125,30 @@ serve(async (req) => {
       const userId = profile.id;
       const botToken = Deno.env.get('SLACK_BOT_TOKEN');
 
+      // Persist Slack channel for reminder delivery (merge with existing settings)
+      try {
+        const { data: existing } = await supabase
+          .from('user_settings')
+          .select('settings')
+          .eq('user_id', userId)
+          .single();
+
+        const mergedSettings = {
+          ...(existing?.settings as Record<string, unknown> ?? {}),
+          slack_channel_id: event.channel,
+        };
+
+        await supabase
+          .from('user_settings')
+          .upsert({
+            user_id: userId,
+            settings: mergedSettings,
+            updated_at: new Date().toISOString(),
+          }, { onConflict: 'user_id', ignoreDuplicates: false });
+      } catch (err) {
+        console.warn('[slack-incoming] Failed to persist Slack channel (non-blocking):', err);
+      }
+
       // Kill switch: intercept stop commands before dispatching
       const stopWords = ['stop', 'halt', 'cancel', 'kill', 'stop all', 'kill switch'];
       if (stopWords.includes(cleanMessage.toLowerCase())) {

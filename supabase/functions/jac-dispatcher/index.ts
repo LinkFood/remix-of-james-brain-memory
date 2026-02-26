@@ -21,6 +21,7 @@ import { extractUserId, extractUserIdWithServiceRole } from '../_shared/auth.ts'
 import { callClaude, CLAUDE_MODELS, parseToolUse, parseTextContent } from '../_shared/anthropic.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
 import { markdownToMrkdwn } from '../_shared/slack.ts';
+import { getUserContext } from '../_shared/context.ts';
 
 // Rate limiting
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -520,6 +521,15 @@ Be concise. Be confident. Don't ask questions — just act.`;
         console.warn('[jac-dispatcher] Code projects lookup for general failed:', err);
       }
 
+      // Fetch user context (schedule, overdue items, upcoming events)
+      let userContextText = '';
+      try {
+        const userContext = await getUserContext(supabase, userId);
+        userContextText = userContext.contextText;
+      } catch (err) {
+        console.warn('[jac-dispatcher] getUserContext failed (non-blocking):', err);
+      }
+
       try {
         const generalClaude = await callClaude({
           model: CLAUDE_MODELS.sonnet,
@@ -532,7 +542,9 @@ You have several specialized agents:
 - Code agent: reads GitHub repos, plans changes, writes code, creates branches, commits, and opens PRs autonomously. Users can register projects in the Code Workspace, then ask you to fix bugs, add features, refactor code, etc. You'll create a branch, write the code, and open a PR.
 
 If the user asks about your capabilities, mention these agents. For coding questions like "can you code?" — yes, you can write, fix, and modify code in registered GitHub projects via the code agent. If they ask about their projects, check the project list below.
-${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}`,
+
+When the user asks about their calendar, schedule, events, overdue items, or what they have coming up — use the schedule context below to give a specific, accurate answer. List actual items with dates and times.
+${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}${userContextText ? `\n\n${userContextText}` : ''}`,
           messages: [{ role: 'user', content: message }],
           max_tokens: 2048,
           temperature: 0.4,

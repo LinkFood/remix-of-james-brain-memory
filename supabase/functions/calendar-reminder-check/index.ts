@@ -98,19 +98,31 @@ serve(async (req) => {
           if (reminderTime < fifteenMinAgo) continue; // Already missed this window
         }
 
-        // Find user's Slack channel from their most recent agent_tasks entry
+        // Find user's Slack channel — primary: user_settings, fallback: agent_tasks
         let slackChannel: string | undefined;
         if (botToken) {
-          const { data: recentTask } = await supabase
-            .from('agent_tasks')
-            .select('input')
-            .eq('user_id', entry.user_id)
-            .not('input->slack_channel', 'is', null)
-            .order('created_at', { ascending: false })
-            .limit(1)
-            .single();
+          // Primary: persisted Slack channel from user_settings
+          try {
+            const { data: settings } = await supabase
+              .from('user_settings')
+              .select('settings')
+              .eq('user_id', entry.user_id)
+              .single();
+            slackChannel = (settings?.settings as Record<string, unknown>)?.slack_channel_id as string | undefined;
+          } catch {}
 
-          slackChannel = (recentTask?.input as Record<string, unknown>)?.slack_channel as string | undefined;
+          // Fallback: agent_tasks (backwards compat)
+          if (!slackChannel) {
+            const { data: recentTask } = await supabase
+              .from('agent_tasks')
+              .select('input')
+              .eq('user_id', entry.user_id)
+              .not('input->slack_channel', 'is', null)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .single();
+            slackChannel = (recentTask?.input as Record<string, unknown>)?.slack_channel as string | undefined;
+          }
         }
 
         // Calculate time until event
