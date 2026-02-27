@@ -75,7 +75,7 @@ function isSnowExpected(code: number): boolean {
   return [71, 73, 75, 77, 85, 86].includes(code);
 }
 
-async function fetchWeather(lat = 40.7128, lon = -74.0060, location = "New York"): Promise<WeatherData | null> {
+async function fetchWeather(lat = 32.7767, lon = -96.7970, location = "Dallas-Fort Worth"): Promise<WeatherData | null> {
   try {
     const response = await fetch(
       `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true&temperature_unit=fahrenheit&timezone=auto`
@@ -326,7 +326,26 @@ serve(async (req) => {
     let weatherData: WeatherData | null = null;
     if (weatherIntent) {
       console.log('Weather intent detected, fetching weather...');
-      weatherData = await fetchWeather();
+      // Read location from user settings if available
+      let userLat: number | undefined;
+      let userLon: number | undefined;
+      let userLocation: string | undefined;
+      try {
+        const { data: settings } = await supabase
+          .from('user_settings')
+          .select('settings')
+          .eq('user_id', userId)
+          .maybeSingle();
+        const s = settings?.settings as Record<string, unknown> | null;
+        if (s?.latitude && s?.longitude) {
+          userLat = Number(s.latitude);
+          userLon = Number(s.longitude);
+          userLocation = (s.location_name as string) || undefined;
+        }
+      } catch (err) {
+        console.warn('Failed to read user location settings:', err);
+      }
+      weatherData = await fetchWeather(userLat, userLon, userLocation);
     }
 
     let webSearchResult: WebSearchResult | null = null;
@@ -377,13 +396,19 @@ serve(async (req) => {
     });
     
     if (searchWords.length > 0) {
-      const searchPattern = `%${escapeForLike(searchWords[0])}%`;
+      // Build OR clause using ALL search words (not just the first one)
+      const orClauses = searchWords
+        .map((w: string) => {
+          const ew = escapeForLike(w);
+          return `content.ilike.%${ew}%,title.ilike.%${ew}%`;
+        })
+        .join(',');
       const { data: contentResults, error: searchError } = await supabase
         .from('entries')
         .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time, image_url')
         .eq('user_id', userId)
         .eq('archived', false)
-        .or(`content.ilike.${searchPattern},title.ilike.${searchPattern}`)
+        .or(orClauses)
         .order('importance_score', { ascending: false, nullsFirst: false })
         .limit(15);
       if (!searchError && contentResults) {

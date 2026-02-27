@@ -47,11 +47,3 @@ export function handleCors(request: Request): Response | null {
   return null;
 }
 
-/**
- * Legacy CORS headers for backward compatibility
- * Use getCorsHeaders(request) instead for dynamic origin handling
- */
-export const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};

@@ -17,7 +17,7 @@ import { Entry } from "./EntryCard";
 import DumpInput, { DumpInputHandle } from "./DumpInput";
 import { cn } from "@/lib/utils";
 import { parseListItems } from "@/lib/parseListItems";
-import { StatsGrid, EmptyState, EntrySection } from "./dashboard";
+import { StatsGrid, EmptyState, EntrySection } from "./dashboard/index";
 import { QuickStats } from "./dashboard/QuickStats";
 import TagFilter from "./TagFilter";
 import { ReminderBanner } from "./ReminderBanner";

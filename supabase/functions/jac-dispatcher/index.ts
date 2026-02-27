@@ -18,7 +18,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserId, extractUserIdWithServiceRole } from '../_shared/auth.ts';
-import { callClaude, CLAUDE_MODELS, parseToolUse, parseTextContent } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseToolUse, parseTextContent, recordTokenUsage } from '../_shared/anthropic.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
 import { markdownToMrkdwn } from '../_shared/slack.ts';
 import { getUserContext } from '../_shared/context.ts';
@@ -197,14 +197,41 @@ serve(async (req) => {
     }
 
     // 2a. Clean stale tasks (stuck in running/queued > 10 min) before counting
-    // Don't overwrite cancelled tasks
+    // Don't overwrite cancelled tasks. Also update any Slack "Thinking..." messages.
     const staleThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    await supabase
+    const { data: staleTasks } = await supabase
       .from('agent_tasks')
-      .update({ status: 'failed', error: 'Timed out (stale >10min)', completed_at: new Date().toISOString() })
+      .select('id, input')
       .eq('user_id', userId)
       .in('status', ['running', 'queued'])
       .lt('created_at', staleThreshold);
+
+    if (staleTasks && staleTasks.length > 0) {
+      // Mark stale tasks as failed
+      await supabase
+        .from('agent_tasks')
+        .update({ status: 'failed', error: 'Timed out (stale >10min)', completed_at: new Date().toISOString() })
+        .eq('user_id', userId)
+        .in('status', ['running', 'queued'])
+        .lt('created_at', staleThreshold);
+
+      // Update any stuck Slack "Thinking..." messages
+      const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+      if (botToken) {
+        for (const task of staleTasks) {
+          const input = task.input as Record<string, unknown> | null;
+          const ch = input?.slack_channel as string | undefined;
+          const ts = input?.slack_thinking_ts as string | undefined;
+          if (ch && ts) {
+            fetch('https://slack.com/api/chat.update', {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ channel: ch, ts, text: ':warning: Task timed out after 10 minutes. Try again.' }),
+            }).catch(() => {});
+          }
+        }
+      }
+    }
 
     // 2b. Concurrent task guard
     const { count: runningCount } = await supabase
@@ -339,6 +366,9 @@ Be concise. Be confident. Don't ask questions — just act.`;
 
     const toolResult = parseToolUse(claudeResponse);
 
+    // Record token usage for intent parsing (will be overwritten with totals for general intent)
+    // parentTask.id set below — record after task creation
+
     // Fallback if tool parsing fails
     const intent: IntentType = (toolResult?.input?.intent as IntentType) || 'general';
     const summary = (toolResult?.input?.summary as string) || message.slice(0, 100);
@@ -403,6 +433,9 @@ Be concise. Be confident. Don't ask questions — just act.`;
         status: 500, headers: jsonHeaders,
       });
     }
+
+    // Record intent parse token usage
+    await recordTokenUsage(supabase, parentTask.id, CLAUDE_MODELS.sonnet, claudeResponse.usage);
 
     // Initialize logger now that we have a taskId
     const log = createAgentLogger(supabase, parentTask.id, userId, 'jac-dispatcher');
@@ -551,6 +584,12 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}
         });
         const enriched = parseTextContent(generalClaude);
         if (enriched) response = enriched;
+        // Update token usage with general enrichment totals (overwrites intent parse)
+        const totalUsage = {
+          input_tokens: (claudeResponse.usage?.input_tokens || 0) + (generalClaude.usage?.input_tokens || 0),
+          output_tokens: (claudeResponse.usage?.output_tokens || 0) + (generalClaude.usage?.output_tokens || 0),
+        };
+        await recordTokenUsage(supabase, parentTask.id, CLAUDE_MODELS.sonnet, totalUsage);
       } catch (err) {
         console.warn('[jac-dispatcher] General enrichment failed (non-blocking):', err);
       }

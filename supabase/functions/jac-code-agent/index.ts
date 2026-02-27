@@ -18,7 +18,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
-import { callClaude, CLAUDE_MODELS, parseTextContent, parseToolUse, calculateCost } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseTextContent, parseToolUse, calculateCost, recordTokenUsage } from '../_shared/anthropic.ts';
 import { notifySlack } from '../_shared/slack.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
 import { getRepoTree, getFileContent, createBranch, commitFiles, createPR, isSecretFile } from '../_shared/github.ts';
@@ -326,6 +326,13 @@ Instructions:
 
     const totalCost = calculateCost(CLAUDE_MODELS.sonnet, planResponse.usage) +
       calculateCost(CLAUDE_MODELS.sonnet, codeResponse.usage);
+
+    // Record combined token usage for both plan + code calls
+    const combinedUsage = {
+      input_tokens: (planResponse.usage?.input_tokens || 0) + (codeResponse.usage?.input_tokens || 0),
+      output_tokens: (planResponse.usage?.output_tokens || 0) + (codeResponse.usage?.output_tokens || 0),
+    };
+    await recordTokenUsage(supabase, taskId, CLAUDE_MODELS.sonnet, combinedUsage);
 
     await writeStep({
       fileCount: codeFiles.length,

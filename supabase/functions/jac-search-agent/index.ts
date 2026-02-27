@@ -61,6 +61,21 @@ serve(async (req) => {
 
     await log.info('task_started', { query });
 
+    // Kill switch check before search
+    {
+      const { data: taskCheck } = await supabase
+        .from('agent_tasks')
+        .select('status')
+        .eq('id', taskId!)
+        .single();
+      if (taskCheck?.status === 'cancelled') {
+        await log.info('task_cancelled', { step: 'before_search' });
+        return new Response(JSON.stringify({ cancelled: true }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
     // 2. Call search-memory internally
     const searchStep = await log.step('search_memory', { query });
     const searchRes = await fetch(`${supabaseUrl}/functions/v1/search-memory`, {

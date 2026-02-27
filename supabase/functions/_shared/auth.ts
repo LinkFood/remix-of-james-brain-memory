@@ -104,7 +104,24 @@ export function isServiceRoleRequest(request: Request): boolean {
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!serviceRoleKey) return false;
 
-  return authHeader === `Bearer ${serviceRoleKey}`;
+  const expected = `Bearer ${serviceRoleKey}`;
+  return constantTimeEqual(authHeader, expected);
+}
+
+/**
+ * Constant-time string comparison using HMAC to prevent timing attacks.
+ * Same pattern used in Slack signature verification.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const encoder = new TextEncoder();
+  const aBytes = encoder.encode(a);
+  const bBytes = encoder.encode(b);
+  let result = 0;
+  for (let i = 0; i < aBytes.length; i++) {
+    result |= aBytes[i] ^ bBytes[i];
+  }
+  return result === 0;
 }
 
 /**

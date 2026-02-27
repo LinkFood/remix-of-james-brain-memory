@@ -168,6 +168,29 @@ export function calculateCost(model: string, usage: ClaudeUsage): number {
   return (usage.input_tokens / 1_000_000) * rates.input + (usage.output_tokens / 1_000_000) * rates.output;
 }
 
+/**
+ * Record token usage and cost on an agent_task row.
+ * No-op if taskId is null (e.g., general intent handled inline).
+ */
+export async function recordTokenUsage(
+  supabase: { from: (table: string) => any },
+  taskId: string | null | undefined,
+  model: string,
+  usage: ClaudeUsage
+): Promise<void> {
+  if (!taskId) return;
+  const cost = calculateCost(model, usage);
+  try {
+    await supabase.from('agent_tasks').update({
+      tokens_in: usage.input_tokens,
+      tokens_out: usage.output_tokens,
+      cost_usd: cost,
+    }).eq('id', taskId);
+  } catch (err) {
+    console.warn('recordTokenUsage failed (non-blocking):', err);
+  }
+}
+
 export class ClaudeError extends Error {
   status: number;
   constructor(message: string, status: number) {

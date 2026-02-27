@@ -21,7 +21,7 @@ import { extractUserId } from '../_shared/auth.ts';
 import { checkRateLimit, RATE_LIMIT_CONFIGS, getRateLimitHeaders } from '../_shared/rateLimit.ts';
 import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
 import { parseJsonBody } from '../_shared/validation.ts';
-import { callClaude, parseTextContent, CLAUDE_MODELS } from '../_shared/anthropic.ts';
+import { callClaude, parseTextContent, CLAUDE_MODELS, recordTokenUsage } from '../_shared/anthropic.ts';
 
 interface DashboardQueryRequest {
   query: string;
@@ -152,6 +152,11 @@ ${relationsContext || 'No relationships computed yet.'}`;
       max_tokens: 3000,
       temperature: 0.4,
     });
+
+    // Record token usage (no taskId for dashboard queries, but log for observability)
+    if (aiResponse.usage) {
+      console.log(`[dashboard-query] tokens: in=${aiResponse.usage.input_tokens} out=${aiResponse.usage.output_tokens}`);
+    }
 
     const responseContent = parseTextContent(aiResponse);
 

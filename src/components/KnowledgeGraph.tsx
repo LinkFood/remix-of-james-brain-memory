@@ -104,16 +104,29 @@ const Node = ({ node, onClick, isSelected }: NodeProps) => {
 };
 
 const Edge = ({ start, end, strength }: { start: [number, number, number]; end: [number, number, number]; strength: number }) => {
-  const points = [new THREE.Vector3(...start), new THREE.Vector3(...end)];
-  const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
+  const lineRef = useRef<THREE.Line | null>(null);
 
-  return (
-    <primitive object={new THREE.Line(lineGeometry, new THREE.LineBasicMaterial({ 
-      color: '#6366f1', 
-      transparent: true, 
-      opacity: strength * 0.5 
-    }))} />
-  );
+  const line = useMemo(() => {
+    const points = [new THREE.Vector3(...start), new THREE.Vector3(...end)];
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const material = new THREE.LineBasicMaterial({
+      color: '#6366f1',
+      transparent: true,
+      opacity: strength * 0.5,
+    });
+    return new THREE.Line(geometry, material);
+  }, [start, end, strength]);
+
+  useEffect(() => {
+    lineRef.current = line;
+    return () => {
+      // Dispose geometry and material on unmount
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
+    };
+  }, [line]);
+
+  return <primitive object={line} />;
 };
 
 const Scene = ({ nodes, edges, selectedNode, onNodeClick }: {
@@ -166,7 +179,6 @@ export default function KnowledgeGraph({ userId }: KnowledgeGraphProps) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
-  const [stats, setStats] = useState({ tags: 0, contentTypes: 0, connections: 0 });
 
   useEffect(() => {
     fetchEntries();
@@ -190,7 +202,7 @@ export default function KnowledgeGraph({ userId }: KnowledgeGraphProps) {
     setLoading(false);
   }
 
-  const { nodes, edges } = useMemo(() => {
+  const { nodes, edges, stats } = useMemo(() => {
     const graphNodes: GraphNode[] = [];
     const graphEdges: GraphEdge[] = [];
 
@@ -288,13 +300,11 @@ export default function KnowledgeGraph({ userId }: KnowledgeGraphProps) {
       });
     });
 
-    setStats({
-      tags: topTags.length,
-      contentTypes: contentTypeEntries.length,
-      connections: graphEdges.length,
-    });
-
-    return { nodes: graphNodes, edges: graphEdges };
+    return {
+      nodes: graphNodes,
+      edges: graphEdges,
+      stats: { tags: topTags.length, contentTypes: contentTypeEntries.length, connections: graphEdges.length },
+    };
   }, [entries]);
 
   const handleNodeClick = (node: GraphNode) => {

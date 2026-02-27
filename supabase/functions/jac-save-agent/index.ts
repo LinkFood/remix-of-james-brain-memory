@@ -61,6 +61,21 @@ serve(async (req) => {
 
     await log.info('task_started', { query });
 
+    // Kill switch check before save
+    {
+      const { data: taskCheck } = await supabase
+        .from('agent_tasks')
+        .select('status')
+        .eq('id', taskId!)
+        .single();
+      if (taskCheck?.status === 'cancelled') {
+        await log.info('task_cancelled', { step: 'before_save' });
+        return new Response(JSON.stringify({ cancelled: true }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    }
+
     // 2. Call smart-save internally
     const saveStep = await log.step('smart_save', { query });
     const saveRes = await fetch(`${supabaseUrl}/functions/v1/smart-save`, {

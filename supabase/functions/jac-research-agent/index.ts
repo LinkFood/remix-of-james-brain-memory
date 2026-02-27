@@ -15,7 +15,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
-import { callClaude, CLAUDE_MODELS, parseTextContent } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseTextContent, recordTokenUsage } from '../_shared/anthropic.ts';
 import { notifySlack } from '../_shared/slack.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
 
@@ -69,6 +69,16 @@ serve(async (req) => {
       .eq('id', taskId);
 
     await log.info('task_started', { query, hasContext: !!brainContext });
+
+    // Kill switch helper
+    async function checkCancelled(): Promise<boolean> {
+      const { data } = await supabase
+        .from('agent_tasks')
+        .select('status')
+        .eq('id', taskId!)
+        .single();
+      return data?.status === 'cancelled';
+    }
 
     // 2. Web search via jac-web-search (pass userId for service role auth)
     let webResults = '';
@@ -142,6 +152,14 @@ serve(async (req) => {
       await brainStep.fail(err instanceof Error ? err.message : 'Unknown error');
     }
 
+    // Kill switch check before synthesis
+    if (await checkCancelled()) {
+      await log.info('task_cancelled', { step: 'before_synthesis' });
+      return new Response(JSON.stringify({ cancelled: true }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+
     // 4. Synthesize with Claude Sonnet
     const synthesisStep = await log.step('ai_synthesis', {
       webSourceCount: webSources.length,
@@ -184,6 +202,17 @@ Instructions:
       inputTokens: claudeResponse.usage?.input_tokens,
       outputTokens: claudeResponse.usage?.output_tokens,
     });
+
+    // Record token usage
+    await recordTokenUsage(supabase, taskId, CLAUDE_MODELS.sonnet, claudeResponse.usage);
+
+    // Kill switch check before save
+    if (await checkCancelled()) {
+      await log.info('task_cancelled', { step: 'before_save' });
+      return new Response(JSON.stringify({ cancelled: true }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }
 
     // 5. Save brief to brain via smart-save (pass userId for service role auth)
     let brainEntryId: string | undefined;

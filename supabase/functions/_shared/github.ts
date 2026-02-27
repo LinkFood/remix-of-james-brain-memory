@@ -3,9 +3,19 @@
  *
  * Pure fetch-based wrapper. No npm deps. Uses GITHUB_PAT from env.
  * Safety: commitFiles rejects if branch is main or master.
+ * Security: all path/branch/ref params are URL-encoded.
  */
 
 const GITHUB_API = 'https://api.github.com';
+
+// Repo format validation
+const REPO_NAME_RE = /^[a-zA-Z0-9._-]+$/;
+
+function validateRepoComponent(value: string, label: string): void {
+  if (!value || !REPO_NAME_RE.test(value)) {
+    throw new Error(`Invalid ${label}: "${value}". Must match [a-zA-Z0-9._-]+`);
+  }
+}
 
 function getHeaders(): Record<string, string> {
   const token = Deno.env.get('GITHUB_PAT');
@@ -40,7 +50,9 @@ export async function getRepoTree(
   repo: string,
   ref = 'main'
 ): Promise<string[]> {
-  const url = `${GITHUB_API}/repos/${owner}/${repo}/git/trees/${ref}?recursive=1`;
+  validateRepoComponent(owner, 'owner');
+  validateRepoComponent(repo, 'repo');
+  const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/trees/${encodeURIComponent(ref)}?recursive=1`;
   const res = await fetch(url, { headers: getHeaders() });
 
   if (!res.ok) {
@@ -67,7 +79,10 @@ export async function getFileContent(
     throw new Error(`Refused to read secret file: ${path}`);
   }
 
-  const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${path}?ref=${ref}`;
+  validateRepoComponent(owner, 'owner');
+  validateRepoComponent(repo, 'repo');
+  const encodedPath = path.split('/').map(encodeURIComponent).join('/');
+  const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodedPath}?ref=${encodeURIComponent(ref)}`;
   const res = await fetch(url, { headers: getHeaders() });
 
   if (!res.ok) {
@@ -94,8 +109,11 @@ export async function createBranch(
   baseBranch: string,
   newBranch: string
 ): Promise<void> {
+  validateRepoComponent(owner, 'owner');
+  validateRepoComponent(repo, 'repo');
+
   // Get the SHA of the base branch
-  const refUrl = `${GITHUB_API}/repos/${owner}/${repo}/git/ref/heads/${baseBranch}`;
+  const refUrl = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/ref/heads/${encodeURIComponent(baseBranch)}`;
   const refRes = await fetch(refUrl, { headers: getHeaders() });
 
   if (!refRes.ok) {
@@ -107,7 +125,7 @@ export async function createBranch(
   const sha = refData.object.sha;
 
   // Create the new branch
-  const createUrl = `${GITHUB_API}/repos/${owner}/${repo}/git/refs`;
+  const createUrl = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`;
   const createRes = await fetch(createUrl, {
     method: 'POST',
     headers: getHeaders(),
@@ -153,17 +171,22 @@ export async function commitFiles(
     throw new Error(`Too many files (${files.length}). Max 10 per session.`);
   }
 
+  validateRepoComponent(owner, 'owner');
+  validateRepoComponent(repo, 'repo');
   const headers = getHeaders();
+  const ownerEnc = encodeURIComponent(owner);
+  const repoEnc = encodeURIComponent(repo);
+  const branchEnc = encodeURIComponent(branch);
 
   // 1. Get the current commit SHA of the branch
-  const refUrl = `${GITHUB_API}/repos/${owner}/${repo}/git/ref/heads/${branch}`;
+  const refUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/ref/heads/${branchEnc}`;
   const refRes = await fetch(refUrl, { headers });
   if (!refRes.ok) throw new Error(`Failed to get branch ref: ${refRes.status}`);
   const refData = await refRes.json();
   const parentSha = refData.object.sha;
 
   // 2. Get the tree SHA of the parent commit
-  const commitUrl = `${GITHUB_API}/repos/${owner}/${repo}/git/commits/${parentSha}`;
+  const commitUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/commits/${parentSha}`;
   const commitRes = await fetch(commitUrl, { headers });
   if (!commitRes.ok) throw new Error(`Failed to get parent commit: ${commitRes.status}`);
   const commitData = await commitRes.json();
@@ -173,7 +196,7 @@ export async function commitFiles(
   const treeItems: Array<{ path: string; mode: string; type: string; sha: string }> = [];
 
   for (const file of files) {
-    const blobUrl = `${GITHUB_API}/repos/${owner}/${repo}/git/blobs`;
+    const blobUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/blobs`;
     const blobRes = await fetch(blobUrl, {
       method: 'POST',
       headers,
@@ -185,7 +208,7 @@ export async function commitFiles(
   }
 
   // 4. Create a new tree
-  const treeUrl = `${GITHUB_API}/repos/${owner}/${repo}/git/trees`;
+  const treeUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/trees`;
   const treeRes = await fetch(treeUrl, {
     method: 'POST',
     headers,
@@ -195,7 +218,7 @@ export async function commitFiles(
   const treeData = await treeRes.json();
 
   // 5. Create a new commit
-  const newCommitUrl = `${GITHUB_API}/repos/${owner}/${repo}/git/commits`;
+  const newCommitUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/commits`;
   const newCommitRes = await fetch(newCommitUrl, {
     method: 'POST',
     headers,
@@ -209,7 +232,7 @@ export async function commitFiles(
   const newCommitData = await newCommitRes.json();
 
   // 6. Update the branch ref to point to the new commit
-  const updateRefUrl = `${GITHUB_API}/repos/${owner}/${repo}/git/refs/heads/${branch}`;
+  const updateRefUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/refs/heads/${branchEnc}`;
   const updateRes = await fetch(updateRefUrl, {
     method: 'PATCH',
     headers,
@@ -231,7 +254,9 @@ export async function createPR(
   title: string,
   body: string
 ): Promise<{ number: number; url: string }> {
-  const url = `${GITHUB_API}/repos/${owner}/${repo}/pulls`;
+  validateRepoComponent(owner, 'owner');
+  validateRepoComponent(repo, 'repo');
+  const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls`;
   const res = await fetch(url, {
     method: 'POST',
     headers: getHeaders(),
@@ -251,7 +276,9 @@ export async function createPR(
  * Check if a repo exists and is accessible
  */
 export async function repoExists(owner: string, repo: string): Promise<boolean> {
-  const url = `${GITHUB_API}/repos/${owner}/${repo}`;
+  validateRepoComponent(owner, 'owner');
+  validateRepoComponent(repo, 'repo');
+  const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
   const res = await fetch(url, { headers: getHeaders() });
   return res.ok;
 }
