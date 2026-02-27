@@ -7,12 +7,11 @@
 
 import { useMemo, useState } from 'react';
 import {
-  Search, FileText, Brain, BarChart3, MessageSquare, Eye,
-  Loader2, CheckCircle2, XCircle, Zap, Globe, BookOpen, Code2,
+  FileText, Brain,
+  Loader2, Zap, Globe, Code2,
 } from 'lucide-react';
 import type { AgentTask, ActivityLogEntry } from '@/types/agent';
 import { AgentDeskDrawer } from './AgentDeskDrawer';
-import { Badge } from '@/components/ui/badge';
 
 interface AgentDef {
   id: string;
@@ -53,18 +52,6 @@ const AGENTS: AgentDef[] = [
     icon: <Code2 className="w-5 h-5" />,
     activeClasses: 'bg-indigo-500/20 text-indigo-400',
     doneClasses: 'bg-indigo-500/10 text-indigo-500/70',
-  },
-  {
-    id: 'jac-report-agent', name: 'Analyst', role: 'Reports · Summaries',
-    icon: <BarChart3 className="w-5 h-5" />,
-    activeClasses: 'bg-rose-500/20 text-rose-400',
-    doneClasses: 'bg-rose-500/10 text-rose-500/70',
-  },
-  {
-    id: 'jac-monitor-agent', name: 'Sentinel', role: 'Watch · Alert · Guard',
-    icon: <Eye className="w-5 h-5" />,
-    activeClasses: 'bg-cyan-500/20 text-cyan-400',
-    doneClasses: 'bg-cyan-500/10 text-cyan-500/70',
   },
 ];
 
@@ -168,49 +155,35 @@ export function AgentRoster({ tasks, activityLogs = new Map() }: AgentRosterProp
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
         {AGENTS.map((agent) => {
           const state = states.get(agent.id) || { status: 'idle' as AgentStatus, taskCount: 0 };
-          const isComingSoon = agent.id === 'jac-report-agent' || agent.id === 'jac-monitor-agent';
           return (
             <div
               key={agent.id}
-              className={`relative rounded-lg border bg-card/50 p-3 transition-all duration-500 ${
-                isComingSoon
-                  ? 'opacity-30 cursor-default'
-                  : `cursor-pointer hover:bg-muted/30 ${STATUS_STYLES[state.status]}`
-              }`}
-              onClick={() => !isComingSoon && setSelectedAgent(agent)}
+              className={`relative rounded-lg border bg-card/50 p-3 transition-all duration-500 cursor-pointer hover:bg-muted/30 ${STATUS_STYLES[state.status]}`}
+              onClick={() => setSelectedAgent(agent)}
             >
-              {/* Coming Soon badge */}
-              {isComingSoon && (
-                <Badge variant="secondary" className="absolute -top-1.5 -right-1.5 text-[8px] px-1.5 py-0 z-10">
-                  Soon
-                </Badge>
-              )}
-
               {/* Working pulse ring */}
-              {state.status === 'working' && !isComingSoon && (
+              {state.status === 'working' && (
                 <div className="absolute inset-0 rounded-lg border-2 border-blue-500/30 animate-ping pointer-events-none" style={{ animationDuration: '2s' }} />
               )}
 
               <div className="relative flex items-start gap-2.5">
                 {/* Agent icon with status indicator */}
                 <div className={`relative shrink-0 w-9 h-9 rounded-lg flex items-center justify-center ${
-                  state.status === 'working' && !isComingSoon ? agent.activeClasses :
-                  state.status === 'done' && !isComingSoon ? agent.doneClasses :
+                  state.status === 'working' ? agent.activeClasses :
+                  state.status === 'done' ? agent.doneClasses :
                   'bg-muted/50 text-muted-foreground'
                 }`}>
-                  {state.status === 'working' && !isComingSoon ? (
+                  {state.status === 'working' ? (
                     <Loader2 className="w-5 h-5 animate-spin" />
                   ) : (
                     agent.icon
                   )}
-                  {!isComingSoon && (
-                    <div className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-card ${
-                      state.status === 'working' ? 'bg-blue-500' :
-                      state.status === 'done' ? 'bg-green-500' :
-                      state.status === 'failed' ? 'bg-red-500' :
-                      'bg-muted-foreground/30'
-                    }`} />
-                  )}
+                  <div className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-card ${
+                    state.status === 'working' ? 'bg-blue-500' :
+                    state.status === 'done' ? 'bg-green-500' :
+                    state.status === 'failed' ? 'bg-red-500' :
+                    'bg-muted-foreground/30'
+                  }`} />
                 </div>
 
                 <div className="min-w-0 flex-1">
@@ -220,17 +193,17 @@ export function AgentRoster({ tasks, activityLogs = new Map() }: AgentRosterProp
               </div>
 
               {/* Current task / last result */}
-              {!isComingSoon && state.status === 'working' && state.currentTask && (
+              {state.status === 'working' && state.currentTask && (
                 <p className="mt-2 text-[10px] text-blue-400 truncate leading-tight">
                   {state.currentTask}
                 </p>
               )}
-              {!isComingSoon && state.status === 'done' && state.lastResult && (
+              {state.status === 'done' && state.lastResult && (
                 <p className="mt-2 text-[10px] text-muted-foreground truncate leading-tight">
                   {state.lastResult}
                 </p>
               )}
-              {!isComingSoon && state.status === 'idle' && state.taskCount > 0 && (
+              {state.status === 'idle' && state.taskCount > 0 && (
                 <p className="mt-2 text-[10px] text-muted-foreground/50 leading-tight">
                   {state.taskCount} ops done
                 </p>

@@ -96,7 +96,8 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
   return (
     <div className="flex flex-col h-full">
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4">
+        <div className="max-w-3xl mx-auto space-y-4">
         {messages.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full">
             <div className="w-16 h-16 rounded-2xl bg-primary/5 flex items-center justify-center mb-4">
@@ -173,33 +174,36 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
 
         {/* Scroll anchor */}
         <div ref={bottomRef} />
+        </div>
       </div>
 
       {/* Input — always visible at bottom */}
       <form onSubmit={handleSubmit} className="p-3 border-t border-border bg-card/50 backdrop-blur-sm">
-        <div className="flex gap-2 items-end">
-          <Textarea
-            ref={textareaRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Tell JAC what to do..."
-            disabled={sending}
-            className="flex-1 min-h-[40px] max-h-[120px] resize-none text-sm"
-            rows={1}
-          />
-          <Button
-            type="submit"
-            size="icon"
-            disabled={sending || !input.trim()}
-            className="shrink-0 h-10 w-10"
-          >
-            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-          </Button>
+        <div className="max-w-3xl mx-auto">
+          <div className="flex gap-2 items-end">
+            <Textarea
+              ref={textareaRef}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Tell JAC what to do..."
+              disabled={sending}
+              className="flex-1 min-h-[40px] max-h-[120px] resize-none text-sm"
+              rows={1}
+            />
+            <Button
+              type="submit"
+              size="icon"
+              disabled={sending || !input.trim()}
+              className="shrink-0 h-10 w-10"
+            >
+              {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            </Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground/50 mt-1.5 text-center hidden sm:block">
+            Enter to send · Shift+Enter for new line
+          </p>
         </div>
-        <p className="text-[10px] text-muted-foreground/50 mt-1.5 text-center">
-          Enter to send · Shift+Enter for new line
-        </p>
       </form>
     </div>
   );
