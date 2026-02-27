@@ -15,7 +15,7 @@ const Landing = () => {
         </div>
 
         <p className="text-xl md:text-2xl text-muted-foreground max-w-2xl mb-4">
-          Your Personal AI Agent Swarm
+          Your Personal AI Operating System
         </p>
         <p className="text-base text-muted-foreground max-w-lg mb-12">
           Dump your thoughts. Dispatch agents. Get results — 24/7, from anywhere.
