@@ -5,6 +5,9 @@
  * today's events, overdue items, upcoming (next 7 days).
  * Returns structured data + a pre-formatted contextText string
  * for injection into agent system prompts.
+ *
+ * All dates are calculated in the user's timezone (from user_settings),
+ * defaulting to America/Chicago if not set.
  */
 
 import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
@@ -16,22 +19,38 @@ export interface UserContext {
   contextText: string;
 }
 
+/** Get a YYYY-MM-DD date string offset by N days from now, in a specific timezone */
+function getDateInTimezone(tz: string, offsetDays = 0): string {
+  const d = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000);
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
 export async function getUserContext(
   supabase: SupabaseClient,
   userId: string,
 ): Promise<UserContext> {
-  const now = new Date();
-  const todayStr = now.toISOString().split('T')[0];
+  // Get user's timezone from settings
+  let userTz = 'America/Chicago';
+  try {
+    const { data: settings } = await supabase
+      .from('user_settings')
+      .select('settings')
+      .eq('user_id', userId)
+      .single();
+    const tz = (settings?.settings as Record<string, unknown>)?.timezone as string | undefined;
+    if (tz) userTz = tz;
+  } catch {
+    // Use default
+  }
 
-  // Tomorrow
-  const tomorrow = new Date(now);
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const tomorrowStr = tomorrow.toISOString().split('T')[0];
-
-  // 7 days from now
-  const weekOut = new Date(now);
-  weekOut.setDate(weekOut.getDate() + 7);
-  const weekOutStr = weekOut.toISOString().split('T')[0];
+  const todayStr = getDateInTimezone(userTz);
+  const tomorrowStr = getDateInTimezone(userTz, 1);
+  const weekOutStr = getDateInTimezone(userTz, 7);
 
   const selectFields = 'id, title, event_date, event_time';
 
@@ -76,7 +95,13 @@ export async function getUserContext(
 
   // Build contextText
   const lines: string[] = [];
-  const dateDisplay = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const now = new Date();
+  const dateDisplay = now.toLocaleDateString('en-US', {
+    timeZone: userTz,
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
   lines.push(`=== YOUR SCHEDULE (today: ${dateDisplay}) ===`);
 
   if (overdueItems.length > 0) {
