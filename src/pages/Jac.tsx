@@ -46,7 +46,7 @@ const Jac = () => {
   const completedCount = tasks.filter(t => t.status === 'completed').length;
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
+    <div className="h-screen bg-background flex flex-col overflow-hidden">
       {/* Header */}
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
         <div className="container mx-auto px-4 py-2.5 flex items-center gap-3">

@@ -1,36 +1,24 @@
 /**
- * JacChat — Command channel to the boss agent
+ * JacChat — Talk to JAC
  *
- * This is where you talk to JAC. Messages show inline task dispatches
- * with live status. Think of it as a military command radio.
+ * Clean conversational interface. JAC handles the routing behind the scenes.
+ * Task status only shows when something is actively working or failed.
  */
 
 import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
 import { Textarea } from '@/components/ui/textarea';
 import {
-  Send, Loader2, Bot, User, Zap, Globe, Brain,
-  FileText, BarChart3, Eye, CheckCircle2, XCircle,
-  ArrowRight, Sparkles, Code2,
+  Send, Loader2, Bot, User, Sparkles,
+  ArrowRight, CheckCircle2, XCircle, Globe, Brain, FileText, Code2,
 } from 'lucide-react';
 import type { JacMessage, AgentTask } from '@/types/agent';
-
-const AGENT_META: Record<string, { name: string; icon: React.ReactNode; color: string }> = {
-  'jac-dispatcher': { name: 'JAC', icon: <Zap className="w-3 h-3" />, color: 'text-violet-400' },
-  'jac-research-agent': { name: 'Scout', icon: <Globe className="w-3 h-3" />, color: 'text-blue-400' },
-  'jac-save-agent': { name: 'Scribe', icon: <FileText className="w-3 h-3" />, color: 'text-emerald-400' },
-  'jac-search-agent': { name: 'Oracle', icon: <Brain className="w-3 h-3" />, color: 'text-amber-400' },
-  'jac-code-agent': { name: 'Coder', icon: <Code2 className="w-3 h-3" />, color: 'text-indigo-400' },
-  'jac-report-agent': { name: 'Analyst', icon: <BarChart3 className="w-3 h-3" />, color: 'text-rose-400' },
-  'jac-monitor-agent': { name: 'Sentinel', icon: <Eye className="w-3 h-3" />, color: 'text-cyan-400' },
-};
 
 const EXAMPLE_COMMANDS = [
   { text: 'Research React 19 features', icon: <Globe className="w-3.5 h-3.5" /> },
   { text: 'What do I know about investing?', icon: <Brain className="w-3.5 h-3.5" /> },
   { text: 'Save this: launch landing page by March', icon: <FileText className="w-3.5 h-3.5" /> },
+  { text: 'What\'s on my schedule today?', icon: <CheckCircle2 className="w-3.5 h-3.5" /> },
 ];
 
 interface JacChatProps {
@@ -40,37 +28,31 @@ interface JacChatProps {
   onSend: (text: string) => void;
 }
 
-function InlineTaskStatus({ task }: { task: AgentTask }) {
-  const meta = AGENT_META[task.agent || ''] || AGENT_META['jac-dispatcher'];
+function ActiveTaskIndicator({ task }: { task: AgentTask }) {
   const isRunning = task.status === 'running' || task.status === 'queued';
-  const isDone = task.status === 'completed';
   const isFailed = task.status === 'failed';
 
+  // Only show running or failed tasks — completed ones are silent
+  if (!isRunning && !isFailed) return null;
+
+  const label = isRunning
+    ? task.type === 'research' ? 'Researching...'
+      : task.type === 'save' ? 'Saving...'
+      : task.type === 'search' ? 'Searching...'
+      : task.type === 'code' ? 'Coding...'
+      : 'Working...'
+    : 'Something went wrong';
+
   return (
-    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs transition-all ${
-      isRunning ? 'bg-blue-500/5 border border-blue-500/20' :
-      isDone ? 'bg-green-500/5 border border-green-500/20' :
-      isFailed ? 'bg-red-500/5 border border-red-500/20' :
-      'bg-muted/30 border border-border'
+    <div className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-xs ${
+      isRunning ? 'text-blue-400' : 'text-red-400'
     }`}>
       {isRunning ? (
-        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-400 shrink-0" />
-      ) : isDone ? (
-        <CheckCircle2 className="w-3.5 h-3.5 text-green-500 shrink-0" />
-      ) : isFailed ? (
-        <XCircle className="w-3.5 h-3.5 text-red-500 shrink-0" />
-      ) : null}
-      <span className={meta.color}>{meta.name}</span>
-      <ArrowRight className="w-3 h-3 text-muted-foreground/40" />
-      <span className="text-foreground/80 truncate">{task.intent || task.type}</span>
-      <Badge variant="outline" className={`ml-auto text-[9px] px-1.5 py-0 shrink-0 ${
-        isRunning ? 'border-blue-500/30 text-blue-400' :
-        isDone ? 'border-green-500/30 text-green-500' :
-        isFailed ? 'border-red-500/30 text-red-500' :
-        ''
-      }`}>
-        {task.status}
-      </Badge>
+        <Loader2 className="w-3 h-3 animate-spin shrink-0" />
+      ) : (
+        <XCircle className="w-3 h-3 shrink-0" />
+      )}
+      <span>{label}</span>
     </div>
   );
 }
@@ -79,18 +61,20 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
   const [input, setInput] = useState('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
+  // Auto-scroll to bottom on new messages
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages.length]);
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages.length, sending]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || sending) return;
     onSend(input.trim());
     setInput('');
+    // Refocus the textarea after sending
+    setTimeout(() => textareaRef.current?.focus(), 50);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -100,9 +84,13 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
     }
   };
 
-  const getLinkedTasks = (taskIds?: string[]): AgentTask[] => {
+  const getActiveTasks = (taskIds?: string[]): AgentTask[] => {
     if (!taskIds?.length) return [];
-    return tasks.filter(t => taskIds.includes(t.id) && t.agent !== 'jac-dispatcher');
+    return tasks.filter(t =>
+      taskIds.includes(t.id) &&
+      t.agent !== 'jac-dispatcher' &&
+      (t.status === 'running' || t.status === 'queued' || t.status === 'failed')
+    );
   };
 
   return (
@@ -114,9 +102,9 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
             <div className="w-16 h-16 rounded-2xl bg-primary/5 flex items-center justify-center mb-4">
               <Sparkles className="w-8 h-8 text-primary/40" />
             </div>
-            <h2 className="text-lg font-semibold text-foreground/80">JAC Agent OS</h2>
+            <h2 className="text-lg font-semibold text-foreground/80">Hey, it's JAC</h2>
             <p className="text-sm text-muted-foreground mt-1 mb-6">
-              Your agents are standing by. What do you need?
+              What do you need?
             </p>
             <div className="space-y-2 w-full max-w-sm">
               {EXAMPLE_COMMANDS.map((cmd) => (
@@ -144,18 +132,18 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
                 </div>
               )}
 
-              <div className={`max-w-[85%] space-y-2 ${msg.role === 'user' ? 'items-end' : ''}`}>
-                <Card className={`p-3 text-sm ${
+              <div className={`max-w-[85%] space-y-1 ${msg.role === 'user' ? 'items-end' : ''}`}>
+                <div className={`px-3.5 py-2.5 rounded-2xl text-sm ${
                   msg.role === 'user'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'bg-muted/30 border-muted/50'
+                    ? 'bg-primary text-primary-foreground rounded-br-md'
+                    : 'bg-muted/40 border border-border/50 rounded-bl-md'
                 }`}>
                   <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
-                </Card>
+                </div>
 
-                {/* Inline task dispatches */}
-                {msg.role === 'assistant' && getLinkedTasks(msg.taskIds).map(task => (
-                  <InlineTaskStatus key={task.id} task={task} />
+                {/* Only show active/failed tasks — hide completed */}
+                {msg.role === 'assistant' && getActiveTasks(msg.taskIds).map(task => (
+                  <ActiveTaskIndicator key={task.id} task={task} />
                 ))}
               </div>
 
@@ -173,16 +161,22 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
             <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center shrink-0">
               <Bot className="w-4 h-4 text-primary" />
             </div>
-            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/30 border border-border">
-              <Loader2 className="w-4 h-4 animate-spin text-primary" />
-              <span className="text-sm text-muted-foreground">Dispatching...</span>
+            <div className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl rounded-bl-md bg-muted/40 border border-border/50">
+              <div className="flex gap-1">
+                <span className="w-1.5 h-1.5 bg-primary/40 rounded-full animate-bounce [animation-delay:0ms]" />
+                <span className="w-1.5 h-1.5 bg-primary/40 rounded-full animate-bounce [animation-delay:150ms]" />
+                <span className="w-1.5 h-1.5 bg-primary/40 rounded-full animate-bounce [animation-delay:300ms]" />
+              </div>
             </div>
           </div>
         )}
+
+        {/* Scroll anchor */}
+        <div ref={bottomRef} />
       </div>
 
-      {/* Input */}
-      <form onSubmit={handleSubmit} className="p-3 border-t border-border bg-card/30">
+      {/* Input — always visible at bottom */}
+      <form onSubmit={handleSubmit} className="p-3 border-t border-border bg-card/50 backdrop-blur-sm">
         <div className="flex gap-2 items-end">
           <Textarea
             ref={textareaRef}

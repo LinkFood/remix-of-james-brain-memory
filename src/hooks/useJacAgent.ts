@@ -335,8 +335,13 @@ export function useJacAgent(userId: string) {
         const { data: session } = await supabase.auth.getSession();
         if (!session?.session?.access_token) throw new Error('Not authenticated');
 
+        // 90s timeout — dispatcher can take time for Claude intent parsing + enrichment
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 90_000);
+
         const res = await fetch(JAC_DISPATCHER_URL, {
           method: 'POST',
+          signal: controller.signal,
           headers: {
             Authorization: `Bearer ${session.session.access_token}`,
             'Content-Type': 'application/json',
@@ -344,6 +349,7 @@ export function useJacAgent(userId: string) {
           },
           body: JSON.stringify({ message: trimmed }),
         });
+        clearTimeout(timeout);
 
         if (!res.ok) {
           const errorData = await res.json().catch(() => ({}));
@@ -359,10 +365,14 @@ export function useJacAgent(userId: string) {
 
         // Provide helpful error messages
         let helpText = errorText;
-        if (errorText.includes('404') || errorText.includes('not found')) {
-          helpText = 'JAC dispatcher is not deployed yet. The edge function needs to be deployed to Supabase.';
+        if (errorText === 'Failed to fetch') {
+          helpText = "Couldn't reach JAC. Check your connection and try again.";
+        } else if (errorText.includes('aborted') || errorText.includes('abort')) {
+          helpText = 'Request timed out. JAC might be under heavy load — try again.';
+        } else if (errorText.includes('404') || errorText.includes('not found')) {
+          helpText = 'JAC dispatcher is not deployed yet.';
         } else if (errorText.includes('500')) {
-          helpText = 'JAC dispatcher hit an internal error. Check that ANTHROPIC_API_KEY is set in Supabase edge function secrets.';
+          helpText = 'JAC hit an internal error. Try again in a moment.';
         }
 
         const errMsg: JacMessage = {
