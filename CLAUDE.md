@@ -7,28 +7,27 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 | Capability | Status | How |
 |---|---|---|
 | Brain dumps (notes, ideas, links) | Working | Chat/Slack -> dispatcher -> save-agent -> entries table |
-| Reminders ("remind me to buy eggs Tuesday") | Working (manual cron) | smart-save extracts event_date + reminder_minutes -> calendar-reminder-check fires Slack |
+| Reminders ("remind me to buy eggs Tuesday") | Working (pg_cron every 5 min) | smart-save extracts event_date + reminder_minutes -> calendar-reminder-check fires Slack |
 | Event scheduling | Working | smart-save extracts dates, recurring patterns; schedule injected into every conversation |
 | Research (weather, news, facts) | Working | dispatcher -> research-agent (Tavily + Claude synthesis) |
-| Semantic search over saved entries | Working | pgvector embeddings + keyword hybrid via search-memory |
+| Semantic search over saved entries | Working | Voyage AI voyage-3-lite (512-dim) + keyword hybrid via search-memory (threshold 0.3) |
 | Code: read repos, plan, write, commit, PR | Working | dispatcher -> code-agent -> GitHub API -> branch + PR |
 | Slack: bidirectional chat + proactive reminders | Working | slack-incoming (HMAC verified) -> dispatcher; reminders via calendar-reminder-check |
 | Kill switch (stop all agents) | Working | Slack keywords or web UI -> cancels all running/queued tasks |
 | Dashboard NL queries | Working | jac-dashboard-query (Claude Haiku over entries + relationships) |
+| Token tracking | Working | dispatcher, research-agent, code-agent, dashboard-query record cost_usd/tokens |
+| JAC chat UX | Working | Clean chat bubbles, hidden task internals, typing dots, 90s timeout |
 
 ## What's Broken or Not Wired Up
 
 | Issue | Detail |
 |---|---|
-| Reminder cron not scheduled | `calendar-reminder-check` works but pg_cron needs manual setup in DB |
-| Self-deploy blocked | `supabase-management.ts` written but needs standalone Supabase (migration pending) |
+| Self-deploy blocked | `supabase-management.ts` written but needs Management PAT in secrets |
 | File content not viewable in code UI | File tree shows but clicking shows placeholder; server-side read only during coding tasks |
-| `task-dispatcher` is a dead stub | Never called; `jac-dispatcher` is the real entry point. Remove it. |
+| `task-dispatcher` is a dead stub | Never called; `jac-dispatcher` is the real entry point. Delete it. |
 | `assistant-chat` has duplicate intent detection | Regex-based classify that duplicates/conflicts with dispatcher's Claude-based routing |
-| Brain context uses keyword not semantic | Dispatcher injects brain context via ilike, not embeddings ("embedding endpoint unreliable") |
-| Embedding failures = unsearchable entries | No retry/backfill job committed |
-| KnowledgeGraph memory leak | THREE.js geometry/materials never disposed |
-| Dead product code remains | useSubscription, UpgradeModal, /pricing in Settings, broken Delete Account |
+| JAC chat intermittent failures | "Failed to fetch" sometimes — 90s timeout + better errors added, root cause not fully diagnosed |
+| JAC doesn't feel like one agent | User feedback: too much task infrastructure visible. Ops panel + Agent Roster still exposed. |
 
 ## Tech Stack
 
@@ -38,9 +37,10 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 | Routing | react-router-dom v6 |
 | Server state | TanStack React Query v5 |
 | Auth | Supabase Auth (Google OAuth, JWT) |
-| Database | Supabase Postgres + pgvector (768-dim, HNSW) |
+| Database | Supabase Postgres + pgvector (512-dim via Voyage AI, HNSW index) |
 | Edge functions | Deno (Supabase Edge Functions) |
 | AI | Claude Sonnet 4 (dispatcher, research, code), Claude Haiku 4.5 (classify, dashboard) |
+| Embeddings | Voyage AI voyage-3-lite (512-dim, via VOYAGE_API_KEY) |
 | Voice | ElevenLabs (STT + TTS) |
 | Web search | Tavily API |
 | GitHub | REST API via PAT |
@@ -57,8 +57,8 @@ src/
 └── lib/            # utils
 supabase/
 ├── functions/      # Edge functions (one dir per function)
-│   └── _shared/    # anthropic, auth, cors, github, logger, slack, context, response, validation, rateLimit
-└── migrations/     # SQL migrations (42 files)
+│   └── _shared/    # anthropic, auth, cors, github, logger, slack, context, response, validation, rateLimit, clock
+└── migrations/     # SQL migrations (44+ files)
 ```
 
 ## Dispatcher Intent Routing
@@ -93,9 +93,11 @@ Rate limits: 50 req/min, 10 concurrent tasks, 200 tasks/day. Loop guard: 5+ task
 
 1. Input -> `smart-save` (fast-path regex for URLs/lists/short code, else Claude Haiku classifies)
 2. Extracts: type, title, tags, event_date, event_time, is_recurring, recurrence_pattern, reminder_minutes
-3. Content types: `code`, `list`, `idea`, `link`, `contact`, `event`, `reminder`, `note`, `image`, `document`
-4. After save: `generate-embedding` (fire-and-forget) -> pgvector storage -> `entry_relationships` via semantic similarity
-5. `enrich-entry` adds AI enrichment (also fire-and-forget)
+3. **All entries get AI importance scoring** (fast-path: deferred fire-and-forget; AI path: parallel with classification)
+4. Content types: `code`, `list`, `idea`, `link`, `contact`, `event`, `reminder`, `note`, `image`, `document`
+5. After save: `generate-embedding` with **rich text** (`"title | type | tags | content"`) -> pgvector storage -> `entry_relationships` via semantic similarity
+6. `generate-embedding` accepts `input_type` param: `'document'` (default, for storage) or `'query'` (for search)
+7. `backfill-embeddings` runs every 30 min via pg_cron — re-embeds with rich text, creates relationships
 
 ## Calendar / Reminders
 
@@ -103,20 +105,22 @@ Rate limits: 50 req/min, 10 concurrent tasks, 200 tasks/day. Loop guard: 5+ task
 - Sends Slack message with bell emoji, title, date, countdown
 - Sets `reminder_sent = true` after send
 - Schedule context (`_shared/context.ts`): today's events, overdue items, next 7 days — injected into every dispatcher and assistant-chat conversation
-- **Needs:** pg_cron setup (2x/day for date-only, every 15 min for timed events via `timed_only: true`)
+- **pg_cron active:** reminders every 5 min, 8 AM + 6 PM Central (date-only), stale task cleanup every 30 min, backfill-embeddings every 30 min, brain-insights 10 AM + 8 PM Central, expired insights cleanup 3 AM UTC
+- All date calcs use user's timezone from user_settings (default America/Chicago)
 
 ## Database (core tables)
 
 | Table | Purpose |
 |---|---|
 | `profiles` | User profile, auto-created on signup |
-| `entries` | Brain: content, tags, embedding, importance, event_date, starred, reminder_minutes, reminder_sent |
+| `entries` | Brain: content, tags, embedding (vector(512)), importance, event_date, starred, reminder_minutes, reminder_sent |
+| `brain_insights` | AI-generated insights: type (pattern/overdue/stale/schedule/suggestion), title, body, priority, entry_ids[], dismissed, expires_at |
 | `agent_tasks` | Task queue: type, status, agent, input/output JSONB, parent_task_id, cost_usd, tokens_in/out |
 | `agent_conversations` | Chat history per user |
 | `agent_activity_log` | Per-step agent logs |
 | `code_projects` | Registered GitHub repos (name, repo_full_name, default_branch, tech_stack, file_tree_cache) |
 | `code_sessions` | Active coding sessions |
-| `user_settings` | Per-user settings JSONB (includes slack_channel_id) |
+| `user_settings` | Per-user settings JSONB (includes slack_channel_id, location, timezone) |
 | `entry_relationships` | Semantic links between entries |
 
 All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent workers.
@@ -132,18 +136,21 @@ All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent wo
 
 - CORS: dynamic origin checking via `_shared/cors.ts` — NEVER use `'*'`
 - Slack: HMAC-SHA256 with constant-time comparison (not `===`)
+- Service role key: constant-time HMAC comparison in `_shared/auth.ts`
 - ilike injection: all user input escaped via `escapeForLike()` from `_shared/validation.ts`
 - Conversation updates: use row ID, NEVER content string matching (PostgREST ignores .order/.limit on UPDATE)
 - GitHub PAT: scoped to specific repos, code agent blocks main/master commits
+- GitHub API paths: all path/branch/ref params use `encodeURIComponent()`
 - Rate limiting: in-memory (per-isolate) + DB-backed (concurrent/daily limits)
 - Kill switch: Slack keywords or web UI -> cancels all running tasks
+- Kill switch checks in ALL worker agents (research, save, search, code)
 - Code agent file blocks: `.env`, `.pem`, `.key`, `credentials`, `secret`
 
 ## Edge Functions
 
 | Function | Purpose |
 |---|---|
-| `jac-dispatcher` | Boss: parses intent via Claude, creates tasks, fires workers |
+| `jac-dispatcher` | Boss: semantic+keyword brain context, intent parse via Claude, creates tasks, fires workers |
 | `jac-research-agent` | Web research (Tavily + Claude synthesis) |
 | `jac-save-agent` | Saves content to entries |
 | `jac-search-agent` | Semantic search (embedding + keyword) |
@@ -154,11 +161,29 @@ All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent wo
 | `calendar-reminder-check` | Cron: due entries -> Slack reminders |
 | `assistant-chat` | Streaming chat with brain context (legacy, predates dispatcher) |
 | `smart-save` | Classify + save dump input |
-| `enrich-entry` | AI enrichment for entries |
-| `generate-embedding` | Vector embedding generation |
-| `search-memory` | pgvector semantic search |
+| `enrich-entry` | AI enrichment for entries (dormant — UI removed) |
+| `generate-embedding` | Voyage AI voyage-3-lite (512-dim), accepts `input_type` (document/query) |
+| `search-memory` | Semantic (vector, threshold 0.3) + keyword hybrid search |
 | `classify-content` | Claude Haiku content classification |
-| `calculate-importance` | Importance scoring (1-10) |
+| `calculate-importance` | Importance scoring (1-10) — runs on ALL entries now |
+| `backfill-embeddings` | Batch embed with rich text + create relationships (cron every 30 min) |
+| `brain-insights` | AI insight generation via Claude Haiku (cron 10 AM + 8 PM Central) |
+
+## Shared Modules (`_shared/`)
+
+| Module | Purpose |
+|---|---|
+| `anthropic.ts` | Claude API calls + `recordTokenUsage()` helper |
+| `auth.ts` | JWT extraction, service-role validation (constant-time) |
+| `cors.ts` | Dynamic origin CORS headers |
+| `github.ts` | GitHub REST API with `encodeURIComponent()` on all paths |
+| `logger.ts` | Activity log writing |
+| `slack.ts` | Slack message posting/updating |
+| `context.ts` | Schedule context injection (timezone-aware) |
+| `response.ts` | Standard response formatting |
+| `validation.ts` | Input validation + `escapeForLike()` |
+| `rateLimit.ts` | Rate limiting (in-memory + DB) |
+| `clock.ts` | Timezone-aware date/time utilities |
 
 ## Routes
 
@@ -174,5 +199,7 @@ All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent wo
 ## Env Vars
 
 **Vercel:** `VITE_SUPABASE_URL`, `VITE_SUPABASE_PUBLISHABLE_KEY`
-**Supabase secrets:** `ANTHROPIC_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `GITHUB_PAT`, `TAVILY_API_KEY`
+**Supabase secrets:** `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `GITHUB_PAT`, `TAVILY_API_KEY`
 **Future (self-deploy):** `SUPABASE_MANAGEMENT_PAT`
+
+**Note:** Edge function env auto-injects `sb_secret_*` format keys (not JWTs). Vault must store matching format for cron auth.
