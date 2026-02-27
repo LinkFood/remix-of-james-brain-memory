@@ -9,6 +9,8 @@ import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { getAnthropicHeaders, ANTHROPIC_API_URL, CLAUDE_MODELS, ClaudeError, callClaude } from '../_shared/anthropic.ts';
+import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { escapeForLike } from '../_shared/validation.ts';
 
 // Simple in-memory rate limiting (100 requests per minute per user)
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -26,11 +28,6 @@ function checkRateLimit(userId: string): boolean {
   userLimit.count++;
   return true;
 }
-
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
 
 interface Entry {
   id: string;
@@ -244,9 +241,10 @@ function claudeToOpenAIStream(claudeBody: ReadableStream<Uint8Array>): ReadableS
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+  const corsPreflightResponse = handleCors(req);
+  if (corsPreflightResponse) return corsPreflightResponse;
+
+  const corsHeaders = getCorsHeaders(req);
 
   try {
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
@@ -379,7 +377,7 @@ serve(async (req) => {
     });
     
     if (searchWords.length > 0) {
-      const searchPattern = `%${searchWords[0]}%`;
+      const searchPattern = `%${escapeForLike(searchWords[0])}%`;
       const { data: contentResults, error: searchError } = await supabase
         .from('entries')
         .select('id, content, title, content_type, content_subtype, tags, importance_score, list_items, created_at, event_date, event_time, image_url')

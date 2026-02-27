@@ -38,7 +38,17 @@ async function verifySlackSignature(
   const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(sigBasestring));
   const hexSig = 'v0=' + Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
   console.log('[slack-incoming] Computed sig prefix:', hexSig.slice(0, 15), 'Received sig prefix:', signature.slice(0, 15));
-  return hexSig === signature;
+
+  // Constant-time comparison to prevent timing attacks
+  const encoder = new TextEncoder();
+  const a = encoder.encode(hexSig);
+  const b = encoder.encode(signature);
+  if (a.byteLength !== b.byteLength) return false;
+  const keyMaterial = await crypto.subtle.importKey('raw', a, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const mac = new Uint8Array(await crypto.subtle.sign('HMAC', keyMaterial, b));
+  // If HMAC(a, b) matches HMAC(a, a), the inputs are equal — constant-time via subtle
+  const macCheck = new Uint8Array(await crypto.subtle.sign('HMAC', keyMaterial, a));
+  return mac.every((byte, i) => byte === macCheck[i]);
 }
 
 serve(async (req) => {

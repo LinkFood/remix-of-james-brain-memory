@@ -77,8 +77,9 @@ export function useJacAgent(userId: string) {
         if (taskData) {
           const typedTasks = taskData as unknown as AgentTask[];
 
-          // Clean up stale tasks (stuck in queued/running for >5 minutes)
-          const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+          // Clean up stale tasks (stuck in queued/running for >15 minutes)
+          // Server-side dispatcher cleans at 10 min; give workers extra headroom
+          const fiveMinAgo = Date.now() - 15 * 60 * 1000;
           const staleTasks = typedTasks.filter(
             t => (t.status === 'queued' || t.status === 'running') &&
               new Date(t.updated_at).getTime() < fiveMinAgo

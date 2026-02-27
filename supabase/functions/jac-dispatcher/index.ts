@@ -22,6 +22,7 @@ import { callClaude, CLAUDE_MODELS, parseToolUse, parseTextContent } from '../_s
 import { createAgentLogger } from '../_shared/logger.ts';
 import { markdownToMrkdwn } from '../_shared/slack.ts';
 import { getUserContext } from '../_shared/context.ts';
+import { escapeForLike } from '../_shared/validation.ts';
 
 // Rate limiting
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
@@ -203,7 +204,6 @@ serve(async (req) => {
       .update({ status: 'failed', error: 'Timed out (stale >10min)', completed_at: new Date().toISOString() })
       .eq('user_id', userId)
       .in('status', ['running', 'queued'])
-      .not('status', 'eq', 'cancelled')
       .lt('created_at', staleThreshold);
 
     // 2b. Concurrent task guard
@@ -246,7 +246,7 @@ serve(async (req) => {
       if (searchWords.length > 0) {
         // Search across ALL keywords with OR conditions (not just the first one)
         const orClauses = searchWords
-          .map(w => `content.ilike.%${w}%,title.ilike.%${w}%`)
+          .map(w => { const ew = escapeForLike(w); return `content.ilike.%${ew}%,title.ilike.%${ew}%`; })
           .join(',');
         const { data: contentResults } = await supabase
           .from('entries')
@@ -449,10 +449,10 @@ Be concise. Be confident. Don't ask questions — just act.`;
     const taskIds = [parentTask.id];
     if (childTaskId) taskIds.push(childTaskId);
 
-    await supabase.from('agent_conversations').insert([
+    const { data: insertedConvos } = await supabase.from('agent_conversations').insert([
       { user_id: userId, role: 'user', content: message, task_ids: taskIds },
       { user_id: userId, role: 'assistant', content: response, task_ids: taskIds },
-    ]);
+    ]).select('id, role');
 
     // 8. Fire-and-forget worker dispatch
     if (intent !== 'general' && childTaskId) {
@@ -555,15 +555,14 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}
         console.warn('[jac-dispatcher] General enrichment failed (non-blocking):', err);
       }
 
-      // Update conversation with enriched response
+      // Update conversation with enriched response using row ID (not content match)
       if (response !== originalResponse) {
-        await supabase.from('agent_conversations')
-          .update({ content: response })
-          .eq('user_id', userId)
-          .eq('role', 'assistant')
-          .eq('content', originalResponse)
-          .order('created_at', { ascending: false })
-          .limit(1);
+        const assistantConvoId = insertedConvos?.find(c => c.role === 'assistant')?.id;
+        if (assistantConvoId) {
+          await supabase.from('agent_conversations')
+            .update({ content: response })
+            .eq('id', assistantConvoId);
+        }
       }
 
       // For general intent, mark parent as completed immediately
