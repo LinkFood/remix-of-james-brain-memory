@@ -14,7 +14,6 @@
  * - enrichmentTargets: entries to enrich with external context
  */
 
-import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.84.0";
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
@@ -22,6 +21,7 @@ import { extractUserId } from '../_shared/auth.ts';
 import { checkRateLimit, RATE_LIMIT_CONFIGS, getRateLimitHeaders } from '../_shared/rateLimit.ts';
 import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
 import { parseJsonBody } from '../_shared/validation.ts';
+import { callClaude, parseTextContent, CLAUDE_MODELS } from '../_shared/anthropic.ts';
 
 interface DashboardQueryRequest {
   query: string;
@@ -69,7 +69,6 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
-    const lovableApiKey = Deno.env.get('LOVABLE_API_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     const { data: body, error: parseError } = await parseJsonBody<DashboardQueryRequest>(req);
@@ -108,19 +107,8 @@ serve(async (req) => {
       .map((r: any) => `${r.entry_id} <-> ${r.related_entry_id} (similarity: ${r.similarity_score.toFixed(2)})`)
       .join('\n');
 
-    // Call AI to generate dashboard commands
-    const aiResponse = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${lovableApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash',
-        messages: [
-          {
-            role: 'system',
-            content: `You are Jac, an AI assistant for LinkJac (a brain dump app). Instead of just answering with text, you transform the user's dashboard to VISUALLY SHOW the answer.
+    // Call Claude to generate dashboard commands
+    const systemPrompt = `You are Jac, an AI assistant for LinkJac (a brain dump app). Instead of just answering with text, you transform the user's dashboard to VISUALLY SHOW the answer.
 
 You receive the user's entries and their relationships. You must return a JSON object that controls the dashboard.
 
@@ -143,30 +131,29 @@ Rules:
 - For enrichmentTargets, only suggest code, idea, or high-importance entries
 - Maximum 10 entries in any array
 - Always include a message and insightCard
+- ALWAYS respond with valid JSON only, no markdown fences
 
 USER'S ENTRIES:
 ${entriesContext || 'No entries yet.'}
 
 KNOWN RELATIONSHIPS:
-${relationsContext || 'No relationships computed yet.'}`
-          },
-          ...conversationHistory.slice(-4),
-          { role: 'user', content: query },
-        ],
-        temperature: 0.4,
-        max_tokens: 3000,
-        response_format: { type: 'json_object' },
-      }),
+${relationsContext || 'No relationships computed yet.'}`;
+
+    const claudeMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+    for (const msg of conversationHistory.slice(-4)) {
+      claudeMessages.push({ role: msg.role as 'user' | 'assistant', content: msg.content });
+    }
+    claudeMessages.push({ role: 'user', content: query });
+
+    const aiResponse = await callClaude({
+      model: CLAUDE_MODELS.haiku,
+      system: systemPrompt,
+      messages: claudeMessages,
+      max_tokens: 3000,
+      temperature: 0.4,
     });
 
-    if (!aiResponse.ok) {
-      const errText = await aiResponse.text();
-      console.error('Dashboard query AI error:', aiResponse.status, errText);
-      return errorResponse(req, 'Failed to process query', 500);
-    }
-
-    const aiData = await aiResponse.json();
-    const responseContent = aiData.choices?.[0]?.message?.content;
+    const responseContent = parseTextContent(aiResponse);
 
     let dashboardCommand: DashboardCommand;
     try {

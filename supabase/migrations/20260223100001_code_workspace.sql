@@ -1,10 +1,11 @@
 -- Code Workspace: Projects + Sessions tables for jac-code-agent
 -- Enables autonomous coding: read repos, plan, write code, commit, open PRs
+-- Made idempotent: Lovable migration 20260222220426 may have already created base tables
 
 -- ============================================================
 -- code_projects — Project registry
 -- ============================================================
-CREATE TABLE public.code_projects (
+CREATE TABLE IF NOT EXISTS public.code_projects (
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID NOT NULL,
   name TEXT NOT NULL,
@@ -19,32 +20,34 @@ CREATE TABLE public.code_projects (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_code_projects_user_id ON public.code_projects(user_id);
-CREATE INDEX idx_code_projects_active ON public.code_projects(user_id, active);
+CREATE INDEX IF NOT EXISTS idx_code_projects_user_id ON public.code_projects(user_id);
+CREATE INDEX IF NOT EXISTS idx_code_projects_active ON public.code_projects(user_id, active);
 
 ALTER TABLE public.code_projects ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can view own projects"
-  ON public.code_projects FOR SELECT
-  USING (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can view own projects" ON public.code_projects FOR SELECT USING (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Users can insert own projects"
-  ON public.code_projects FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can insert own projects" ON public.code_projects FOR INSERT WITH CHECK (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Users can update own projects"
-  ON public.code_projects FOR UPDATE
-  USING (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can update own projects" ON public.code_projects FOR UPDATE USING (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Users can delete own projects"
-  ON public.code_projects FOR DELETE
-  USING (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can delete own projects" ON public.code_projects FOR DELETE USING (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Service role full access to code_projects"
-  ON public.code_projects FOR ALL
-  USING (auth.role() = 'service_role');
+DO $$ BEGIN
+  CREATE POLICY "Service role full access to code_projects" ON public.code_projects FOR ALL USING (auth.role() = 'service_role');
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-ALTER PUBLICATION supabase_realtime ADD TABLE public.code_projects;
+DO $$ BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.code_projects;
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 -- updated_at trigger
 CREATE OR REPLACE FUNCTION public.update_code_projects_updated_at()
@@ -55,6 +58,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS update_code_projects_updated_at ON public.code_projects;
 CREATE TRIGGER update_code_projects_updated_at
   BEFORE UPDATE ON public.code_projects
   FOR EACH ROW
@@ -63,7 +67,7 @@ CREATE TRIGGER update_code_projects_updated_at
 -- ============================================================
 -- code_sessions — Coding session state
 -- ============================================================
-CREATE TABLE public.code_sessions (
+CREATE TABLE IF NOT EXISTS public.code_sessions (
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID NOT NULL,
   project_id UUID NOT NULL REFERENCES public.code_projects(id) ON DELETE CASCADE,
@@ -85,34 +89,36 @@ CREATE TABLE public.code_sessions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_code_sessions_user_id ON public.code_sessions(user_id);
-CREATE INDEX idx_code_sessions_project_id ON public.code_sessions(project_id);
-CREATE INDEX idx_code_sessions_task_id ON public.code_sessions(task_id);
-CREATE INDEX idx_code_sessions_status ON public.code_sessions(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_code_sessions_user_id ON public.code_sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_code_sessions_project_id ON public.code_sessions(project_id);
+CREATE INDEX IF NOT EXISTS idx_code_sessions_task_id ON public.code_sessions(task_id);
+CREATE INDEX IF NOT EXISTS idx_code_sessions_status ON public.code_sessions(user_id, status);
 
 ALTER TABLE public.code_sessions ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY "Users can view own sessions"
-  ON public.code_sessions FOR SELECT
-  USING (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can view own sessions" ON public.code_sessions FOR SELECT USING (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Users can insert own sessions"
-  ON public.code_sessions FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can insert own sessions" ON public.code_sessions FOR INSERT WITH CHECK (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Users can update own sessions"
-  ON public.code_sessions FOR UPDATE
-  USING (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can update own sessions" ON public.code_sessions FOR UPDATE USING (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Users can delete own sessions"
-  ON public.code_sessions FOR DELETE
-  USING (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can delete own sessions" ON public.code_sessions FOR DELETE USING (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Service role full access to code_sessions"
-  ON public.code_sessions FOR ALL
-  USING (auth.role() = 'service_role');
+DO $$ BEGIN
+  CREATE POLICY "Service role full access to code_sessions" ON public.code_sessions FOR ALL USING (auth.role() = 'service_role');
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-ALTER PUBLICATION supabase_realtime ADD TABLE public.code_sessions;
+DO $$ BEGIN
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.code_sessions;
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 -- updated_at trigger
 CREATE OR REPLACE FUNCTION public.update_code_sessions_updated_at()
@@ -123,6 +129,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS update_code_sessions_updated_at ON public.code_sessions;
 CREATE TRIGGER update_code_sessions_updated_at
   BEFORE UPDATE ON public.code_sessions
   FOR EACH ROW

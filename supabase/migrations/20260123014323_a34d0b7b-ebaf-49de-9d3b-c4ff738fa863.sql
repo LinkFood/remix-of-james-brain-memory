@@ -1,5 +1,5 @@
--- Create entries table for brain dump functionality
-CREATE TABLE public.entries (
+-- Create entries table for brain dump functionality (idempotent)
+CREATE TABLE IF NOT EXISTS public.entries (
   id UUID NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
@@ -21,34 +21,31 @@ CREATE TABLE public.entries (
 -- Enable Row Level Security
 ALTER TABLE public.entries ENABLE ROW LEVEL SECURITY;
 
--- Create policies for user access
-CREATE POLICY "Users can view their own entries" 
-ON public.entries 
-FOR SELECT 
-USING (auth.uid() = user_id);
+-- Create policies for user access (guarded)
+DO $$ BEGIN
+  CREATE POLICY "Users can view their own entries" ON public.entries FOR SELECT USING (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Users can create their own entries" 
-ON public.entries 
-FOR INSERT 
-WITH CHECK (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can create their own entries" ON public.entries FOR INSERT WITH CHECK (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Users can update their own entries" 
-ON public.entries 
-FOR UPDATE 
-USING (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can update their own entries" ON public.entries FOR UPDATE USING (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
-CREATE POLICY "Users can delete their own entries" 
-ON public.entries 
-FOR DELETE 
-USING (auth.uid() = user_id);
+DO $$ BEGIN
+  CREATE POLICY "Users can delete their own entries" ON public.entries FOR DELETE USING (auth.uid() = user_id);
+EXCEPTION WHEN duplicate_object THEN null; END $$;
 
 -- Create indexes for common queries
-CREATE INDEX idx_entries_user_id ON public.entries(user_id);
-CREATE INDEX idx_entries_created_at ON public.entries(created_at DESC);
-CREATE INDEX idx_entries_content_type ON public.entries(content_type);
-CREATE INDEX idx_entries_archived ON public.entries(archived);
+CREATE INDEX IF NOT EXISTS idx_entries_user_id ON public.entries(user_id);
+CREATE INDEX IF NOT EXISTS idx_entries_created_at ON public.entries(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_entries_content_type ON public.entries(content_type);
+CREATE INDEX IF NOT EXISTS idx_entries_archived ON public.entries(archived);
 
 -- Create trigger for automatic timestamp updates using existing function
+DROP TRIGGER IF EXISTS update_entries_updated_at ON public.entries;
 CREATE TRIGGER update_entries_updated_at
 BEFORE UPDATE ON public.entries
 FOR EACH ROW

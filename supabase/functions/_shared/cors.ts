@@ -1,13 +1,11 @@
 /**
  * Shared CORS headers for Supabase Edge Functions
- * 
+ *
  * This module provides dynamic CORS handling based on request origin.
- * It allows *.lovable.app domains and localhost in development.
+ * Allows Vercel deployment, custom domain, and localhost in development.
  */
 
 const ALLOWED_ORIGINS = [
-  'https://lovable.dev',
-  'https://www.lovable.dev',
   'https://linkjac.cloud',
   'https://www.linkjac.cloud',
 ];
@@ -24,9 +22,7 @@ export function getCorsHeaders(request: Request): Record<string, string> {
   // Check if origin is allowed
   const isAllowed =
     ALLOWED_ORIGINS.includes(origin) ||
-    origin.endsWith('.lovable.app') ||
-    origin.endsWith('.lovable.dev') ||
-    origin.endsWith('.lovableproject.com') ||
+    origin.endsWith('.vercel.app') ||
     (isDevelopment && (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')));
 
   return {
