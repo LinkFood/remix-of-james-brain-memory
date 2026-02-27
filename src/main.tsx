@@ -6,17 +6,13 @@ import "./index.css";
 // Initialize Sentry before rendering (only activates in production)
 initSentry();
 
-// Register service worker for PWA
+// Unregister any leftover service worker — it caches stale deploys
 if ("serviceWorker" in navigator) {
-  window.addEventListener("load", () => {
-    navigator.serviceWorker
-      .register("/sw.js")
-      .then((registration) => {
-        console.log("SW registered:", registration.scope);
-      })
-      .catch((error) => {
-        console.log("SW registration failed:", error);
-      });
+  navigator.serviceWorker.getRegistrations().then((registrations) => {
+    for (const r of registrations) r.unregister();
+  });
+  caches.keys().then((names) => {
+    for (const name of names) caches.delete(name);
   });
 }
 
