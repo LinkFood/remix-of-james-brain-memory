@@ -292,7 +292,7 @@ serve(async (req) => {
 
           const { data: vectorResults } = await supabase.rpc('search_entries_by_embedding', {
             query_embedding: JSON.stringify(embData.embedding),
-            match_threshold: 0.45,
+            match_threshold: 0.3,
             match_count: 8,
             filter_user_id: userId,
           });

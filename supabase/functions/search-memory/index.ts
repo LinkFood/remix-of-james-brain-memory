@@ -140,7 +140,7 @@ serve(async (req) => {
                 'search_entries_by_embedding',
                 {
                   query_embedding: JSON.stringify(embData.embedding),
-                  match_threshold: 0.5,
+                  match_threshold: 0.3,
                   match_count: limit,
                   filter_user_id: userId,
                 }
