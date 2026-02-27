@@ -1,8 +1,11 @@
 /**
  * backfill-embeddings — Batch embedding generation for entries missing vectors
  *
- * Queries entries WHERE embedding IS NULL, calls generate-embedding for each,
- * updates the entry. Processes in batches of 50.
+ * Queries entries WHERE embedding IS NULL, calls generate-embedding for each
+ * using rich text (title | type | tags | content), updates the entry,
+ * then creates entry_relationships via semantic similarity.
+ *
+ * Processes in batches of 50.
  *
  * No auth gate — this is an internal batch job that uses service role internally.
  * Deploy with --no-verify-jwt. Invoke manually or via cron.
@@ -34,10 +37,10 @@ serve(async (req) => {
       }
     } catch {}
 
-    // Query entries missing embeddings
+    // Query entries missing embeddings — include metadata for rich text
     let query = supabase
       .from('entries')
-      .select('id, content, title')
+      .select('id, content, title, content_type, tags, user_id')
       .is('embedding', null)
       .eq('archived', false)
       .order('created_at', { ascending: false })
@@ -69,10 +72,17 @@ serve(async (req) => {
 
     let processed = 0;
     let failed = 0;
+    let relationshipsCreated = 0;
 
     for (const entry of entries) {
-      const text = ((entry.content as string) || '').slice(0, 8000);
-      if (text.length < 10) {
+      // Construct rich embedding text (matches smart-save format)
+      const title = (entry.title as string) || '';
+      const contentType = (entry.content_type as string) || 'note';
+      const tags = (entry.tags as string[]) || [];
+      const content = (entry.content as string) || '';
+      const richText = `${title} | ${contentType} | ${tags.join(', ')} | ${content}`.slice(0, 8000);
+
+      if (richText.length < 10) {
         failed++;
         continue;
       }
@@ -84,7 +94,7 @@ serve(async (req) => {
             'Authorization': `Bearer ${serviceKey}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ text }),
+          body: JSON.stringify({ text: richText }),
         });
 
         if (!embRes.ok) {
@@ -107,8 +117,46 @@ serve(async (req) => {
         if (updateError) {
           console.warn(`backfill: update failed for ${entry.id}:`, updateError);
           failed++;
-        } else {
-          processed++;
+          continue;
+        }
+
+        processed++;
+
+        // Create entry_relationships via semantic similarity
+        try {
+          const userId = entry.user_id as string;
+          const { data: related } = await supabase.rpc('search_entries_by_embedding', {
+            query_embedding: JSON.stringify(embData.embedding),
+            match_threshold: 0.65,
+            match_count: 6,
+            filter_user_id: userId,
+          });
+
+          if (related && related.length > 0) {
+            const relationships = related
+              .filter((r: any) => r.id !== entry.id)
+              .slice(0, 5)
+              .map((r: any) => ({
+                entry_id: entry.id,
+                related_entry_id: r.id,
+                user_id: userId,
+                similarity_score: r.similarity,
+                relationship_type: 'semantic',
+              }));
+
+            if (relationships.length > 0) {
+              // Delete existing relationships for this entry first (re-embed = re-relate)
+              await supabase
+                .from('entry_relationships')
+                .delete()
+                .eq('entry_id', entry.id);
+
+              await supabase.from('entry_relationships').insert(relationships);
+              relationshipsCreated += relationships.length;
+            }
+          }
+        } catch (relErr) {
+          console.warn(`backfill: relationships failed for ${entry.id}:`, relErr);
         }
       } catch (err) {
         console.warn(`backfill: error for ${entry.id}:`, err);
@@ -129,11 +177,12 @@ serve(async (req) => {
 
     const { count: remaining } = await remainingQuery;
 
-    console.log(`backfill-embeddings: processed=${processed}, failed=${failed}, remaining=${remaining}`);
+    console.log(`backfill-embeddings: processed=${processed}, failed=${failed}, relationships=${relationshipsCreated}, remaining=${remaining}`);
 
     return new Response(JSON.stringify({
       processed,
       failed,
+      relationshipsCreated,
       remaining: remaining ?? 0,
       hasMore: (remaining ?? 0) > 0,
     }), {

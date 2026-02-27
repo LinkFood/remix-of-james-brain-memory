@@ -193,17 +193,19 @@ serve(async (req) => {
     
     const localResult = !imageUrl ? tryLocalClassification(content) : null;
     
+    // Track whether we need a deferred importance update (fast path)
+    let deferImportanceScoring = false;
+
     if (localResult) {
       // Fast path: use local classification
       classification = localResult;
-      importanceScore = 5; // Default importance for fast-path
+      importanceScore = 5; // Default — AI will update async after entry is created
+      deferImportanceScoring = true;
       console.log(`[smart-save] Fast path: ${classification.type}`);
     } else {
-      // AI path: call classify-content and optionally calculate-importance
+      // AI path: call classify-content and calculate-importance in parallel
       console.log('[smart-save] AI classification path...');
-      
-      const shouldCalculateImportance = content.length > 200 || !!imageUrl;
-      
+
       const fetchPromises: Promise<Response>[] = [
         fetch(`${supabaseUrl}/functions/v1/classify-content`, {
           method: 'POST',
@@ -213,24 +215,19 @@ serve(async (req) => {
           },
           body: JSON.stringify({ content, imageUrl }),
         }),
+        fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ content, role: 'user' }),
+        }),
       ];
-      
-      if (shouldCalculateImportance) {
-        fetchPromises.push(
-          fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${supabaseKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ content, role: 'user' }),
-          })
-        );
-      }
 
       const responses = await Promise.all(fetchPromises);
       const classifyResponse = responses[0];
-      const importanceResponseMaybe = responses[1];
+      const importanceResponse = responses[1];
 
       if (!classifyResponse.ok) {
         const errorText = await classifyResponse.text();
@@ -246,11 +243,11 @@ serve(async (req) => {
       } else {
         classification = await classifyResponse.json();
       }
-      
+
       console.log('Classification result:', classification);
 
-      if (importanceResponseMaybe?.ok) {
-        const importanceData = await importanceResponseMaybe.json();
+      if (importanceResponse?.ok) {
+        const importanceData = await importanceResponse.json();
         importanceScore = importanceData.importance_score;
         console.log('Importance calculated:', importanceScore);
       }
@@ -365,15 +362,16 @@ serve(async (req) => {
       console.log('New entry created:', entry.id);
 
       // Generate embedding asynchronously (fire-and-forget for speed)
-      const embeddingContent = entryContent.slice(0, 8000);
-      if (embeddingContent.length > 10) {
+      // Rich text: include metadata for better semantic matching
+      const richEmbeddingText = `${classification.suggestedTitle} | ${classification.type} | ${classification.tags.join(', ')} | ${entryContent}`.slice(0, 8000);
+      if (richEmbeddingText.length > 10) {
         fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${supabaseKey}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ text: embeddingContent }),
+          body: JSON.stringify({ text: richEmbeddingText }),
         })
           .then(async (embRes) => {
             if (embRes.ok) {
@@ -420,6 +418,29 @@ serve(async (req) => {
             }
           })
           .catch((err) => console.warn('Embedding generation failed (non-blocking):', err));
+      }
+
+      // Deferred importance scoring for fast-path entries (fire-and-forget DB update)
+      if (deferImportanceScoring) {
+        fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ content, role: 'user' }),
+        }).then(async (res) => {
+          if (res.ok) {
+            const data = await res.json();
+            if (data.importance_score != null) {
+              await supabase
+                .from('entries')
+                .update({ importance_score: data.importance_score })
+                .eq('id', entry!.id);
+              console.log(`Deferred importance score ${data.importance_score} for entry:`, entry!.id);
+            }
+          }
+        }).catch((err) => console.warn('Deferred importance scoring failed (non-blocking):', err));
       }
     }
 

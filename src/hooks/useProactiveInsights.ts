@@ -1,15 +1,19 @@
 /**
  * useProactiveInsights - Jac's proactive insight engine
- * 
- * Queries for forgotten/overdue entries to surface as a banner.
- * Shows one insight per day (dismissible), prioritizing overdue > forgotten.
+ *
+ * Queries the brain_insights table (populated by AI cron job).
+ * Falls back to simple overdue/forgotten queries if no AI insights exist.
+ * Shows one insight at a time (dismissible).
  */
 
 import { useState, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
+export type InsightType = 'pattern' | 'overdue' | 'stale' | 'schedule' | 'suggestion' | 'forgotten' | 'unchecked';
+
 export interface ProactiveInsight {
-  type: 'forgotten' | 'overdue' | 'unchecked';
+  id?: string;
+  type: InsightType;
   message: string;
   count: number;
   entryIds: string[];
@@ -25,7 +29,7 @@ export function useProactiveInsights(userId: string | undefined) {
       setLoading(false);
       return;
     }
-    
+
     // Check localStorage for today's dismissal
     const dismissKey = `jac-insight-dismissed-${new Date().toDateString()}`;
     if (localStorage.getItem(dismissKey)) {
@@ -36,7 +40,30 @@ export function useProactiveInsights(userId: string | undefined) {
 
     const checkInsights = async () => {
       try {
-        // Check for overdue reminders/events
+        // First: try AI-generated insights from brain_insights table
+        const { data: aiInsights, error: aiError } = await supabase
+          .from('brain_insights')
+          .select('id, type, title, body, priority, entry_ids')
+          .eq('user_id', userId)
+          .eq('dismissed', false)
+          .gt('expires_at', new Date().toISOString())
+          .order('priority', { ascending: true })
+          .limit(1);
+
+        if (!aiError && aiInsights && aiInsights.length > 0) {
+          const ai = aiInsights[0];
+          setInsight({
+            id: ai.id,
+            type: ai.type as InsightType,
+            message: `${ai.title}: ${ai.body}`,
+            count: (ai.entry_ids as string[])?.length || 0,
+            entryIds: (ai.entry_ids as string[]) || [],
+          });
+          setLoading(false);
+          return;
+        }
+
+        // Fallback: simple overdue/forgotten queries (same as before)
         const today = new Date().toISOString().split('T')[0];
         const { data: overdue } = await supabase
           .from('entries')
@@ -50,7 +77,7 @@ export function useProactiveInsights(userId: string | undefined) {
         if (overdue && overdue.length > 0) {
           setInsight({
             type: 'overdue',
-            message: overdue.length === 1 
+            message: overdue.length === 1
               ? `"${overdue[0].title || 'Untitled'}" is overdue`
               : `You have ${overdue.length} overdue items`,
             count: overdue.length,
@@ -91,7 +118,16 @@ export function useProactiveInsights(userId: string | undefined) {
     checkInsights();
   }, [userId, dismissed]);
 
-  const dismiss = () => {
+  const dismiss = async () => {
+    // If it's an AI insight with a DB ID, mark dismissed in DB
+    if (insight?.id) {
+      await supabase
+        .from('brain_insights')
+        .update({ dismissed: true })
+        .eq('id', insight.id)
+        .catch(() => {});
+    }
+
     const dismissKey = `jac-insight-dismissed-${new Date().toDateString()}`;
     localStorage.setItem(dismissKey, 'true');
     setDismissed(true);

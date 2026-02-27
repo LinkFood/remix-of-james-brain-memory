@@ -30,6 +30,7 @@ serve(async (req) => {
 
     const body = await req.json();
     const text = body.text as string;
+    const inputType = (body.input_type === 'query') ? 'query' : 'document';
 
     if (!text || typeof text !== 'string' || text.trim().length === 0) {
       return new Response(
@@ -50,7 +51,7 @@ serve(async (req) => {
       body: JSON.stringify({
         model: VOYAGE_MODEL,
         input: [truncated],
-        input_type: 'document',
+        input_type: inputType,
       }),
     });
 

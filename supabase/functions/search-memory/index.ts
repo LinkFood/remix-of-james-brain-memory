@@ -130,7 +130,7 @@ serve(async (req) => {
               'Authorization': `Bearer ${supabaseServiceKey}`,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ text: query }),
+            body: JSON.stringify({ text: query, input_type: 'query' }),
           });
 
           if (embResponse.ok) {

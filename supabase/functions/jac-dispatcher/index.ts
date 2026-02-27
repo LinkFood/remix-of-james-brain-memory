@@ -263,59 +263,85 @@ serve(async (req) => {
       }), { status: 429, headers: jsonHeaders });
     }
 
-    // 3. Brain context search (keyword-based — embedding endpoint is unreliable)
+    // 3. Brain context search — semantic (vector) + keyword hybrid
     let brainContext = '';
     try {
+      type BrainResult = { id: string; content: string; title?: string; tags?: string[]; similarity?: number };
+      const results: BrainResult[] = [];
+      const seenIds = new Set<string>();
+
+      // Run semantic and keyword search in parallel
       const searchWords = message.toLowerCase().split(/\s+/)
         .filter((w: string) => w.length >= 3 && !/^(the|and|or|is|it|to|a|an|in|on|at|for|of|my|me|do|what|how|when|where|why|can|you|please|could|would|should|this|that|with|from|have|has|just|about|been|want|need|like|find|get|show|tell|help)$/i.test(w))
         .slice(0, 5);
 
-      if (searchWords.length > 0) {
-        // Search across ALL keywords with OR conditions (not just the first one)
-        const orClauses = searchWords
-          .map(w => { const ew = escapeForLike(w); return `content.ilike.%${ew}%,title.ilike.%${ew}%`; })
-          .join(',');
-        const { data: contentResults } = await supabase
-          .from('entries')
-          .select('id, content, title, tags')
-          .eq('user_id', userId)
-          .eq('archived', false)
-          .or(orClauses)
-          .order('created_at', { ascending: false })
-          .limit(10);
+      // Semantic search via embedding
+      const semanticPromise = (async (): Promise<BrainResult[]> => {
+        try {
+          const embRes = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${serviceKey}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ text: message, input_type: 'query' }),
+          });
+          if (!embRes.ok) return [];
+          const embData = await embRes.json();
+          if (!embData.embedding) return [];
 
-        const results: Array<{ id: string; content: string; title?: string; tags?: string[] }> = [];
-        if (contentResults) {
-          for (const r of contentResults) {
-            if (!results.find(e => e.id === r.id)) results.push(r as any);
-          }
+          const { data: vectorResults } = await supabase.rpc('search_entries_by_embedding', {
+            query_embedding: JSON.stringify(embData.embedding),
+            match_threshold: 0.45,
+            match_count: 8,
+            filter_user_id: userId,
+          });
+          return (vectorResults || []).map((r: any) => ({
+            id: r.id, content: r.content, title: r.title, tags: r.tags, similarity: r.similarity,
+          }));
+        } catch (err) {
+          console.warn('[jac-dispatcher] Semantic search failed:', err);
+          return [];
         }
+      })();
 
-        // Tag search for remaining words
-        if (results.length < 5) {
-          for (const word of searchWords.slice(0, 3)) {
-            const { data: tagResults } = await supabase
-              .from('entries')
-              .select('id, content, title, tags')
-              .eq('user_id', userId)
-              .eq('archived', false)
-              .contains('tags', [word])
-              .limit(5);
-            if (tagResults) {
-              for (const r of tagResults) {
-                if (!results.find(e => e.id === r.id)) results.push(r as any);
-              }
-            }
-          }
+      // Keyword search (catches exact matches semantic might miss)
+      const keywordPromise = (async (): Promise<BrainResult[]> => {
+        if (searchWords.length === 0) return [];
+        try {
+          const orClauses = searchWords
+            .map(w => { const ew = escapeForLike(w); return `content.ilike.%${ew}%,title.ilike.%${ew}%`; })
+            .join(',');
+          const { data } = await supabase
+            .from('entries')
+            .select('id, content, title, tags')
+            .eq('user_id', userId)
+            .eq('archived', false)
+            .or(orClauses)
+            .order('created_at', { ascending: false })
+            .limit(8);
+          return (data || []) as BrainResult[];
+        } catch {
+          return [];
         }
+      })();
 
-        if (results.length > 0) {
-          brainContext = results.slice(0, 5)
-            .map((r) =>
-              `[${r.title || 'Untitled'}]: ${r.content.slice(0, 300)}${r.tags?.length ? ` [tags: ${r.tags.join(', ')}]` : ''}`
-            )
-            .join('\n');
-        }
+      const [semanticResults, keywordResults] = await Promise.all([semanticPromise, keywordPromise]);
+
+      // Merge: semantic first (ranked by similarity), then keyword deduped
+      for (const r of semanticResults) {
+        if (!seenIds.has(r.id)) { seenIds.add(r.id); results.push(r); }
+      }
+      for (const r of keywordResults) {
+        if (!seenIds.has(r.id)) { seenIds.add(r.id); results.push(r); }
+      }
+
+      if (results.length > 0) {
+        brainContext = results.slice(0, 5)
+          .map((r) =>
+            `[${r.title || 'Untitled'}]: ${r.content.slice(0, 300)}${r.tags?.length ? ` [tags: ${r.tags.join(', ')}]` : ''}`
+          )
+          .join('\n');
       }
     } catch (err) {
       console.warn('[jac-dispatcher] Brain search failed (non-blocking):', err);

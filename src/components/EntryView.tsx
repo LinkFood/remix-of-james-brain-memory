@@ -47,7 +47,6 @@ import { cn } from "@/lib/utils";
 import { parseListItems } from "@/lib/parseListItems";
 import { useSignedUrl } from "@/hooks/use-signed-url";
 import RelatedEntries from "@/components/RelatedEntries";
-import EnrichmentCard from "@/components/EnrichmentCard";
 import type { Entry } from "./EntryCard";
 
 interface EntryViewProps {
@@ -673,17 +672,6 @@ const EntryView = ({ entry, open, onClose, onUpdate, onDelete, isAssistantOpen }
                   onUpdate(relatedEntry);
                 }
               }}
-            />
-          )}
-
-          {/* External Context — Enrich Layer */}
-          {!isEditing && (
-            <EnrichmentCard
-              entryId={entry.id}
-              content={entry.content}
-              contentType={entry.content_type}
-              title={entry.title}
-              tags={entry.tags}
             />
           )}
 
