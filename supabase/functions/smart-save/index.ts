@@ -393,9 +393,9 @@ serve(async (req) => {
       if (classification.recurrencePattern) {
         entryData.recurrence_pattern = classification.recurrencePattern;
       }
-      if (classification.reminderMinutes) {
+      if (classification.reminderMinutes !== undefined && classification.reminderMinutes !== null) {
         const mins = Number(classification.reminderMinutes);
-        if (!isNaN(mins) && mins > 0 && mins <= 20160) {
+        if (!isNaN(mins) && mins >= 0 && mins <= 20160) {
           entryData.reminder_minutes = Math.round(mins);
         }
       }

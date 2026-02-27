@@ -128,7 +128,9 @@ Guidelines:
 
 === DATE/TIME EXTRACTION (CRITICAL) ===
 Extract dates and times from content to enable calendar features.
-Today's date is: ${new Date().toISOString().split('T')[0]}
+The user's current local date/time is approximately: ${new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())} ${new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date())} (Central Time)
+
+ALWAYS set eventDate as YYYY-MM-DD and eventTime as HH:MM (24-hour format).
 
 === RECURRING PATTERNS ===
 - "every day", "daily" → isRecurring: true, recurrencePattern: "daily"
@@ -136,14 +138,26 @@ Today's date is: ${new Date().toISOString().split('T')[0]}
 - "every month", "monthly" → isRecurring: true, recurrencePattern: "monthly"
 - "every year", "yearly" → isRecurring: true, recurrencePattern: "yearly"
 
-=== REMINDER EXTRACTION ===
-If user says "remind me", extract reminderMinutes:
+=== REMINDER EXTRACTION (CRITICAL — always extract for "remind me") ===
+Any message containing "remind me" MUST be classified as type "reminder" with eventDate, eventTime, and reminderMinutes set.
+
+"remind me AT a specific time" (no "before" offset):
+- "remind me at 3pm" → eventDate: today, eventTime: "15:00", reminderMinutes: 1
+- "remind me at 12:16 AM today" → eventDate: today, eventTime: "00:16", reminderMinutes: 1
+- "remind me at 9am tomorrow" → eventDate: tomorrow, eventTime: "09:00", reminderMinutes: 1
+- When user specifies an exact time, set reminderMinutes: 1 (fires ~1 min before the time)
+
+"remind me BEFORE an event":
 - "remind me 15 minutes before" → reminderMinutes: 15
 - "remind me an hour before" → reminderMinutes: 60
 - "remind me the day before" / "remind me day of" → reminderMinutes: 1440
 - "remind me a week before" → reminderMinutes: 10080
-- "remind me tomorrow to X" → set eventDate to tomorrow, reminderMinutes: 1440
-- "remind me" with no time specified → default reminderMinutes: 1440
+
+"remind me" with relative time but no specific clock time:
+- "remind me tomorrow to X" → eventDate: tomorrow, eventTime: "09:00", reminderMinutes: 1
+- "remind me next Tuesday" → eventDate: next Tuesday, eventTime: "09:00", reminderMinutes: 1
+- "remind me in 30 minutes" → eventDate: today, eventTime: now + 30 min, reminderMinutes: 1
+- "remind me" with no time at all → eventDate: today, eventTime: "09:00", reminderMinutes: 1440
 
 For lists, extract each item as a separate list_item with checked: false.
 ${recentListsContext}`;

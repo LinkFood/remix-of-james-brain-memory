@@ -68,7 +68,7 @@ const INTENT_TOOL = {
       },
       extractedQuery: {
         type: 'string',
-        description: 'The core query/content extracted from the user message, stripped of intent words. For search: just the search terms (e.g. "Lovable" from "search my brain for Lovable"). For save: just the content to save. For research: the research topic.',
+        description: 'The core query/content extracted from the user message. For search: just the search terms (e.g. "Lovable" from "search my brain for Lovable"). For save: PRESERVE THE FULL MESSAGE including "remind me", times, dates — the save agent needs these for reminder extraction. For research: the research topic.',
       },
       response: {
         type: 'string',
