@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/components/ThemeProvider";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { InstallPrompt } from "./components/InstallPrompt";
 import { ActivityTrackingProvider } from "./components/ActivityTrackingProvider";
+import { Ticker } from "./components/jac/Ticker";
 import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
@@ -53,7 +54,10 @@ const TrackedRoutes = () => {
   if (userId) {
     return (
       <ActivityTrackingProvider userId={userId}>
-        {routes}
+        <div className="pb-8">
+          {routes}
+        </div>
+        <Ticker userId={userId} />
       </ActivityTrackingProvider>
     );
   }

@@ -13,6 +13,7 @@ import {
   ArrowRight, CheckCircle2, XCircle, Globe, Brain, FileText, Code2,
 } from 'lucide-react';
 import type { JacMessage, AgentTask } from '@/types/agent';
+import { ArtifactCard } from './artifacts/ArtifactCard';
 
 const AGENT_LABELS: Record<string, string> = {
   'jac-dispatcher': 'JAC',
@@ -119,6 +120,16 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
     );
   };
 
+  const getCompletedTasks = (taskIds?: string[]): AgentTask[] => {
+    if (!taskIds?.length) return [];
+    return tasks.filter(t =>
+      taskIds.includes(t.id) &&
+      t.agent !== 'jac-dispatcher' &&
+      t.status === 'completed' &&
+      t.output != null
+    );
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Messages */}
@@ -191,6 +202,11 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
                 {/* Only show active/failed tasks — hide completed */}
                 {msg.role === 'assistant' && getActiveTasks(msg.taskIds).map(task => (
                   <ActiveTaskIndicator key={task.id} task={task} />
+                ))}
+
+                {/* Inline artifact cards for completed tasks */}
+                {msg.role === 'assistant' && getCompletedTasks(msg.taskIds).map(task => (
+                  <ArtifactCard key={task.id} task={task} />
                 ))}
               </div>
 

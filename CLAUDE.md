@@ -16,7 +16,9 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 | Kill switch (stop all agents) | Working | Slack keywords or web UI -> cancels all running/queued tasks |
 | Dashboard NL queries | Working | jac-dashboard-query (Claude Haiku over entries + relationships) |
 | Token tracking | Working | dispatcher, research-agent, code-agent, dashboard-query record cost_usd/tokens |
-| JAC chat UX | Working | Chat-first layout: full-viewport chat, slim header, working bar, ops behind Sheet drawer |
+| Nerve Center (/jac) | Working | Split layout: chat left (65%) + ContextPanel right (35%) with Activity/Results/Brain/Code tabs. Mobile falls back to Sheet. |
+| Ticker (global bar) | Working | Fixed bottom bar on all auth pages: agent activity, reminders, code status. Realtime subscription for live updates. |
+| Embedded artifacts | Working | Inline cards in chat for save (BrainEntryCard), search (SearchResultsCard), code (CodeSessionCard), research (ResearchBriefCard) |
 | Chat centering | Working | max-w-3xl centered column on wide screens |
 | Chat metadata | Working | Each assistant message shows agent name, relative timestamp, token count, cost |
 | Worker result delivery | Working | Task completion triggers debounced conversation refresh (1.5s) — no page refresh needed |
@@ -54,7 +56,9 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 src/
 ├── pages/          # Route components (Auth, Dashboard, Jac, CodeWorkspace, Settings)
 ├── components/     # UI components (feature + shadcn)
-├── hooks/          # All data + business logic
+│   └── jac/        # JAC components: JacChat, ContextPanel, Ticker, ActivityFeed, AgentRoster, AgentResultsFeed
+│       └── artifacts/  # Inline chat cards: ArtifactCard, BrainEntryCard, SearchResultsCard, CodeSessionCard, ResearchBriefCard
+├── hooks/          # All data + business logic (useJacAgent, useTickerData, useEntries, useUpcomingReminders)
 ├── integrations/supabase/  # client.ts + types.ts
 └── lib/            # utils
 supabase/
@@ -203,7 +207,7 @@ All functions listed in `config.toml` with `verify_jwt = false` — auth is hand
 | `/` | Landing | Public |
 | `/auth` | Google sign-in | Public |
 | `/dashboard` | Brain entries + graph | Required |
-| `/jac` | Chat-first AI interface (ops behind drawer) | Required |
+| `/jac` | Nerve Center: split chat + context panel (desktop), Sheet fallback (mobile) | Required |
 | `/code` | Code workspace | Required |
 | `/settings` | Settings | Required |
 
