@@ -14,8 +14,8 @@ END $$;
 SELECT cron.schedule(
   'sync-all-codebases',
   '0 */6 * * *',
-  $$
-  DO $$
+  $cron$
+  DO $body$
   DECLARE
     project_row RECORD;
     project_url TEXT;
@@ -39,6 +39,6 @@ SELECT cron.schedule(
         )
       );
     END LOOP;
-  END $$;
-  $$
+  END $body$;
+  $cron$
 );
