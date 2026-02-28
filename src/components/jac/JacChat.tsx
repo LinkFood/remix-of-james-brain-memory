@@ -14,6 +14,32 @@ import {
 } from 'lucide-react';
 import type { JacMessage, AgentTask } from '@/types/agent';
 
+const AGENT_LABELS: Record<string, string> = {
+  'jac-dispatcher': 'JAC',
+  'jac-research-agent': 'Research',
+  'jac-save-agent': 'Save',
+  'jac-search-agent': 'Search',
+  'jac-code-agent': 'Code',
+};
+
+function timeAgo(dateStr: string): string {
+  const diff = Date.now() - new Date(dateStr).getTime();
+  if (diff < 60_000) return 'just now';
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return `${Math.floor(diff / 86_400_000)}d ago`;
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
+  return String(n);
+}
+
+function formatCost(usd: number): string {
+  if (usd < 0.01) return '<$0.01';
+  return `$${usd.toFixed(2)}`;
+}
+
 const EXAMPLE_COMMANDS = [
   { text: 'Research React 19 features', icon: <Globe className="w-3.5 h-3.5" /> },
   { text: 'What do I know about investing?', icon: <Brain className="w-3.5 h-3.5" /> },
@@ -141,6 +167,26 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
                 }`}>
                   <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
                 </div>
+
+                {/* Message metadata: agent, timestamp, tokens, cost */}
+                {msg.role === 'assistant' && (() => {
+                  const linkedTasks = msg.taskIds?.length
+                    ? tasks.filter(t => msg.taskIds!.includes(t.id))
+                    : [];
+                  const task = linkedTasks.find(t => t.agent !== 'jac-dispatcher') || linkedTasks[0];
+                  const agentName = task?.agent ? (AGENT_LABELS[task.agent] || task.agent) : null;
+                  const showAgent = agentName && agentName !== 'JAC';
+                  const totalTokens = task ? ((task.tokens_in || 0) + (task.tokens_out || 0)) : 0;
+
+                  return (
+                    <div className={`flex items-center gap-1.5 px-1 text-[10px] text-muted-foreground/50 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+                      <span>{timeAgo(msg.timestamp)}</span>
+                      {showAgent && <><span>·</span><span>{agentName}</span></>}
+                      {totalTokens > 0 && <><span>·</span><span>{formatTokens(totalTokens)} tokens</span></>}
+                      {task?.cost_usd ? <><span>·</span><span>{formatCost(task.cost_usd)}</span></> : null}
+                    </div>
+                  );
+                })()}
 
                 {/* Only show active/failed tasks — hide completed */}
                 {msg.role === 'assistant' && getActiveTasks(msg.taskIds).map(task => (

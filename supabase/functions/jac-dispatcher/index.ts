@@ -130,7 +130,8 @@ serve(async (req) => {
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabaseEarly = createClient(supabaseUrl, serviceKey);
 
-    // Loop detection: 5+ tasks in 60 seconds = runaway
+    // Loop detection: 10+ tasks in 60 seconds = runaway
+    // Each user request creates ~2 tasks (parent + child), so 10 = ~5 real requests
     const loopWindow = new Date(Date.now() - 60_000).toISOString();
     const { count: recentTaskCount } = await supabaseEarly
       .from('agent_tasks')
@@ -138,7 +139,7 @@ serve(async (req) => {
       .eq('user_id', userId)
       .gte('created_at', loopWindow);
 
-    if ((recentTaskCount ?? 0) >= 5) {
+    if ((recentTaskCount ?? 0) >= 10) {
       // Auto-cancel all running/queued tasks
       const { data: cancelled } = await supabaseEarly
         .from('agent_tasks')

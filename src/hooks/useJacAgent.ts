@@ -137,6 +137,45 @@ export function useJacAgent(userId: string) {
 
     const channels: RealtimeChannel[] = [];
 
+    // Refresh conversations from DB (picks up worker results that Realtime may miss)
+    let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+    const refreshConversations = async () => {
+      const { data: convos } = await supabase
+        .from('agent_conversations' as any)
+        .select('role, content, task_ids, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: true })
+        .limit(100);
+
+      if (!convos) return;
+
+      const dbMessages: JacMessage[] = (convos as any[]).map((c: any) => ({
+        role: c.role as 'user' | 'assistant',
+        content: c.content,
+        taskIds: c.task_ids ?? [],
+        timestamp: c.created_at,
+      }));
+
+      setMessages(prev => {
+        // DB is source of truth; keep optimistic messages not yet persisted
+        const optimistic = prev.filter(localMsg => {
+          const localTime = new Date(localMsg.timestamp).getTime();
+          return !dbMessages.some(dbMsg =>
+            dbMsg.role === localMsg.role &&
+            dbMsg.content === localMsg.content &&
+            Math.abs(new Date(dbMsg.timestamp).getTime() - localTime) < 30_000
+          );
+        });
+        return [...dbMessages, ...optimistic];
+      });
+    };
+
+    // Debounced refresh — multiple tasks completing rapidly only triggers one fetch
+    const debouncedRefresh = () => {
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(refreshConversations, 1500);
+    };
+
     // agent_tasks realtime
     const taskChannel = supabase
       .channel(`agent-tasks-${userId}`)
@@ -156,6 +195,8 @@ export function useJacAgent(userId: string) {
             setTasks(prev => prev.map(t => t.id === updated.id ? updated : t));
             if (updated.status === 'completed') {
               toast.success(`Task completed: ${(updated.intent || updated.type).slice(0, 60)}`);
+              // Worker results are in agent_conversations — refresh to show them
+              debouncedRefresh();
             } else if (updated.status === 'failed') {
               toast.error(`Task failed: ${(updated.error || updated.intent || '').slice(0, 80)}`);
             } else if (updated.status === 'cancelled') {
@@ -241,6 +282,7 @@ export function useJacAgent(userId: string) {
     channelsRef.current = channels;
 
     return () => {
+      clearTimeout(refreshTimer);
       channels.forEach(ch => supabase.removeChannel(ch));
       channelsRef.current = [];
     };

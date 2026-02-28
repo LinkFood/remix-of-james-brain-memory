@@ -17,6 +17,9 @@ export interface AgentTask {
   updated_at: string;
   completed_at: string | null;
   cancelled_at: string | null;
+  cost_usd: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
 }
 
 export interface JacMessage {
