@@ -68,32 +68,67 @@ serve(async (req) => {
 
     let relatedEntries: any[] = [];
 
-    // Strategy 1: Use pre-computed relationships from entry_relationships table
-    const { data: storedRelations } = await supabase
-      .from('entry_relationships')
-      .select(`
-        related_entry_id,
-        similarity_score,
-        relationship_type,
-        related_entry:entries!entry_relationships_related_entry_id_fkey (
-          id, content, title, content_type, content_subtype, tags,
-          importance_score, created_at, image_url, starred
-        )
-      `)
-      .eq('entry_id', entryId)
-      .eq('user_id', userId)
-      .order('similarity_score', { ascending: false })
-      .limit(limit);
+    // Strategy 1: Use pre-computed relationships from entry_relationships table (bidirectional)
+    const [{ data: forwardRelations }, { data: reverseRelations }] = await Promise.all([
+      supabase
+        .from('entry_relationships')
+        .select(`
+          related_entry_id,
+          similarity_score,
+          relationship_type,
+          related_entry:entries!entry_relationships_related_entry_id_fkey (
+            id, content, title, content_type, content_subtype, tags,
+            importance_score, created_at, image_url, starred
+          )
+        `)
+        .eq('entry_id', entryId)
+        .eq('user_id', userId)
+        .order('similarity_score', { ascending: false })
+        .limit(limit),
+      supabase
+        .from('entry_relationships')
+        .select(`
+          entry_id,
+          similarity_score,
+          relationship_type,
+          source_entry:entries!entry_relationships_entry_id_fkey (
+            id, content, title, content_type, content_subtype, tags,
+            importance_score, created_at, image_url, starred
+          )
+        `)
+        .eq('related_entry_id', entryId)
+        .eq('user_id', userId)
+        .order('similarity_score', { ascending: false })
+        .limit(limit),
+    ]);
 
-    if (storedRelations && storedRelations.length > 0) {
-      relatedEntries = storedRelations
-        .filter((r: any) => r.related_entry)
-        .map((r: any) => ({
-          ...r.related_entry,
-          similarity: r.similarity_score,
-          relationship_type: r.relationship_type,
-        }));
+    const seenRelIds = new Set<string>();
+    if (forwardRelations) {
+      for (const r of forwardRelations as any[]) {
+        if (r.related_entry && !seenRelIds.has(r.related_entry.id)) {
+          seenRelIds.add(r.related_entry.id);
+          relatedEntries.push({
+            ...r.related_entry,
+            similarity: r.similarity_score,
+            relationship_type: r.relationship_type,
+          });
+        }
+      }
     }
+    if (reverseRelations) {
+      for (const r of reverseRelations as any[]) {
+        if (r.source_entry && !seenRelIds.has(r.source_entry.id)) {
+          seenRelIds.add(r.source_entry.id);
+          relatedEntries.push({
+            ...r.source_entry,
+            similarity: r.similarity_score,
+            relationship_type: r.relationship_type,
+          });
+        }
+      }
+    }
+    // Sort combined results by similarity descending
+    relatedEntries.sort((a: any, b: any) => (b.similarity || 0) - (a.similarity || 0));
 
     // Strategy 2: If not enough stored relationships and entry has embedding, do live vector search
     if (relatedEntries.length < limit && sourceEntry.embedding) {

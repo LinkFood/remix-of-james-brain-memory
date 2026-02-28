@@ -18,6 +18,9 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 | Token tracking | Working | dispatcher, research-agent, code-agent, dashboard-query record cost_usd/tokens |
 | JAC chat UX | Working | Chat-first layout: full-viewport chat, slim header, working bar, ops behind Sheet drawer |
 | Chat centering | Working | max-w-3xl centered column on wide screens |
+| Chat metadata | Working | Each assistant message shows agent name, relative timestamp, token count, cost |
+| Worker result delivery | Working | Task completion triggers debounced conversation refresh (1.5s) — no page refresh needed |
+| Concurrent multi-agent | Working | Stress-tested with 3+ simultaneous tasks across different intent types |
 
 ## What's Broken or Not Wired Up
 
@@ -26,7 +29,7 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 | Self-deploy blocked | `supabase-management.ts` written but needs Management PAT in secrets |
 | File content not viewable in code UI | File tree shows but clicking shows placeholder; server-side read only during coding tasks |
 | `assistant-chat` has duplicate intent detection | Regex-based classify that duplicates/conflicts with dispatcher's Claude-based routing |
-| JAC chat intermittent failures | "Failed to fetch" sometimes — 90s timeout + better errors added, root cause not fully diagnosed |
+| Realtime subscription for agent_conversations | INSERT events unreliable — workaround: refetch on task completion (debounced) |
 
 ## Tech Stack
 
@@ -73,7 +76,7 @@ Every message hits `jac-dispatcher` first. Claude Sonnet with forced tool-use cl
 | `code` | `jac-code-agent` | Any coding request, mentions a registered project name |
 | `general` | Handled inline (not dispatched) | Casual chat, greetings, schedule queries — dispatcher calls Claude directly |
 
-Rate limits: 50 req/min, 10 concurrent tasks, 200 tasks/day. Loop guard: 5+ tasks in 60s -> auto-cancel all.
+Rate limits: 50 req/min, 10 concurrent tasks, 200 tasks/day. Loop guard: 10+ tasks in 60s -> auto-cancel all (each request = ~2 tasks, so 10 = ~5 real requests).
 
 ## Code Agent Capabilities
 
@@ -128,8 +131,10 @@ All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent wo
 
 1. `supabase.auth.signInWithOAuth({ provider: 'google' })`
 2. JWT stored by supabase-js, sent as `Authorization: Bearer` to edge functions
-3. Edge functions: `extractUserId` (JWT) or service-role + userId (Slack/cron path)
-4. RLS enforces per-user data isolation
+3. **Frontend MUST call `getUser()` before `getSession()`** — `getSession()` returns cached/expired tokens, `getUser()` forces server refresh
+4. Edge functions: `extractUserId` (JWT) or `extractUserIdWithServiceRole` (JWT or service-role + userId in body)
+5. Functions called by other functions (classify-content, generate-embedding, search-memory) MUST use `extractUserIdWithServiceRole`
+6. RLS enforces per-user data isolation
 
 ## Security Conventions
 
@@ -157,6 +162,7 @@ All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent wo
 | `jac-save-agent` | Saves content to entries |
 | `jac-search-agent` | Semantic search (embedding + keyword) |
 | `jac-code-agent` | GitHub: read, write, commit, PR |
+| `jac-web-search` | Tavily web search (called by research-agent internally) |
 | `jac-kill-switch` | Cancels all running/queued tasks |
 | `jac-dashboard-query` | NL queries over entries (Claude Haiku) |
 | `slack-incoming` | Slack webhook -> dispatcher (HMAC-SHA256 verified) |
@@ -170,6 +176,9 @@ All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent wo
 | `calculate-importance` | Importance scoring (1-10) — runs on ALL entries now |
 | `backfill-embeddings` | Batch embed with rich text + create relationships (cron every 30 min) |
 | `brain-insights` | AI insight generation via Claude Haiku (cron 10 AM + 8 PM Central) |
+| `elevenlabs-tts` | ElevenLabs text-to-speech |
+
+All functions listed in `config.toml` with `verify_jwt = false` — auth is handled in function code, not at gateway. This is required for internal agent→agent calls that use service role.
 
 ## Shared Modules (`_shared/`)
 
@@ -204,4 +213,9 @@ All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent wo
 **Supabase secrets:** `ANTHROPIC_API_KEY`, `VOYAGE_API_KEY`, `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`, `GITHUB_PAT`, `TAVILY_API_KEY`
 **Future (self-deploy):** `SUPABASE_MANAGEMENT_PAT`
 
-**Note:** Edge function env auto-injects `sb_secret_*` format keys (not JWTs). Vault must store matching format for cron auth.
+**Supabase Vault (for pg_cron):** `project_url`, `supabase_url` (both = `https://rvhyotvklfowklzjahdd.supabase.co`), `service_role_key`. Both URL key names must exist — different crons use different names.
+
+**Critical patterns:**
+- All supabase-js imports MUST pin to `@2.84.0` — unpinned `@2` causes version mismatch in Deno isolates
+- Claude Haiku ignores `type: "array"` in tool schemas ~80% of the time — always normalize with `Array.isArray()` guards
+- `retryWithBackoff` must NOT retry on 4xx errors (auth, rate limit, bad request) — only retry on 5xx/network

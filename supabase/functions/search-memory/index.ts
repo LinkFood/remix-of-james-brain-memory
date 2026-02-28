@@ -184,12 +184,19 @@ serve(async (req) => {
       // Deduplicate conditions
       const uniqueConditions = [...new Set(orConditions)];
 
-      const { data: keywordResults, error: keywordError } = await supabaseClient
+      let keywordQuery = supabaseClient
         .from('entries')
         .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
         .eq('user_id', userId)
         .eq('archived', false)
-        .or(uniqueConditions.join(','))
+        .or(uniqueConditions.join(','));
+      if (startDate) keywordQuery = keywordQuery.gte('created_at', startDate);
+      if (endDate) keywordQuery = keywordQuery.lte('created_at', endDate);
+      if (contentType) keywordQuery = keywordQuery.eq('content_type', contentType);
+      if (minImportance !== undefined) keywordQuery = keywordQuery.gte('importance_score', minImportance);
+      if (maxImportance !== undefined) keywordQuery = keywordQuery.lte('importance_score', maxImportance);
+      if (tags && Array.isArray(tags) && tags.length > 0) keywordQuery = keywordQuery.overlaps('tags', tags);
+      const { data: keywordResults, error: keywordError } = await keywordQuery
         .order('importance_score', { ascending: false, nullsFirst: false })
         .order('created_at', { ascending: false })
         .limit(limit);
@@ -217,12 +224,19 @@ serve(async (req) => {
 
       // Also check tag matches
       if (searchWords.length > 0) {
-        const { data: tagResults, error: tagError } = await supabaseClient
+        let tagQuery = supabaseClient
           .from('entries')
           .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
           .eq('user_id', userId)
           .eq('archived', false)
-          .contains('tags', searchWords)
+          .overlaps('tags', searchWords);
+        if (startDate) tagQuery = tagQuery.gte('created_at', startDate);
+        if (endDate) tagQuery = tagQuery.lte('created_at', endDate);
+        if (contentType) tagQuery = tagQuery.eq('content_type', contentType);
+        if (minImportance !== undefined) tagQuery = tagQuery.gte('importance_score', minImportance);
+        if (maxImportance !== undefined) tagQuery = tagQuery.lte('importance_score', maxImportance);
+        if (tags && Array.isArray(tags) && tags.length > 0) tagQuery = tagQuery.overlaps('tags', tags);
+        const { data: tagResults, error: tagError } = await tagQuery
           .order('importance_score', { ascending: false, nullsFirst: false })
           .limit(limit);
 
@@ -240,58 +254,28 @@ serve(async (req) => {
     } else {
       // Standard keyword search - exact phrase matching only
       console.log('Using keyword search...');
-      const { data: keywordResults, error: keywordError } = await supabaseClient
+      let stdQuery = supabaseClient
         .from('entries')
         .select('id, content, title, content_type, content_subtype, tags, importance_score, created_at')
         .eq('user_id', userId)
         .eq('archived', false)
-        .or(`content.ilike.%${escapedQuery}%,title.ilike.%${escapedQuery}%`)
+        .or(`content.ilike.%${escapedQuery}%,title.ilike.%${escapedQuery}%`);
+      if (startDate) stdQuery = stdQuery.gte('created_at', startDate);
+      if (endDate) stdQuery = stdQuery.lte('created_at', endDate);
+      if (contentType) stdQuery = stdQuery.eq('content_type', contentType);
+      if (minImportance !== undefined) stdQuery = stdQuery.gte('importance_score', minImportance);
+      if (maxImportance !== undefined) stdQuery = stdQuery.lte('importance_score', maxImportance);
+      if (tags && Array.isArray(tags) && tags.length > 0) stdQuery = stdQuery.overlaps('tags', tags);
+      const { data: keywordResults, error: keywordError } = await stdQuery
         .order('created_at', { ascending: false })
-        .limit(limit * 2);
+        .limit(limit);
 
       if (keywordError) throw keywordError;
       entries = keywordResults ?? [];
     }
 
-    // Apply filters
-    let filteredEntries = entries;
-
-    // Date filters
-    if (startDate) {
-      const start = new Date(startDate);
-      filteredEntries = filteredEntries.filter((e) => new Date(e.created_at) >= start);
-    }
-    if (endDate) {
-      const end = new Date(endDate);
-      filteredEntries = filteredEntries.filter((e) => new Date(e.created_at) <= end);
-    }
-
-    // Content type filter
-    if (contentType) {
-      filteredEntries = filteredEntries.filter((e) => e.content_type === contentType);
-    }
-
-    // Importance filters
-    if (minImportance !== undefined) {
-      filteredEntries = filteredEntries.filter(
-        (e) => e.importance_score !== null && e.importance_score >= minImportance
-      );
-    }
-    if (maxImportance !== undefined) {
-      filteredEntries = filteredEntries.filter(
-        (e) => e.importance_score !== null && e.importance_score <= maxImportance
-      );
-    }
-
-    // Tags filter
-    if (tags && Array.isArray(tags) && tags.length > 0) {
-      filteredEntries = filteredEntries.filter(
-        (e) => e.tags && tags.some((tag: string) => e.tags.includes(tag))
-      );
-    }
-
-    // Limit results
-    const results = filteredEntries.slice(0, limit);
+    // Filters already applied in SQL — just enforce limit
+    const results = entries.slice(0, limit);
 
     console.log(`Returning ${results.length} filtered results`);
 

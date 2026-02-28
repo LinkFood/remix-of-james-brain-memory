@@ -359,7 +359,7 @@ serve(async (req) => {
         const embResponse = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${supabaseKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: message }),
+          body: JSON.stringify({ text: message, input_type: 'query' }),
         });
         if (embResponse.ok) {
           const embData = await embResponse.json();

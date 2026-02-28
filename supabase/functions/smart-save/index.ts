@@ -287,6 +287,7 @@ serve(async (req) => {
             content: updatedContent,
             list_items: combinedListItems,
             tags: updatedTags,
+            embedding: null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', classification.appendTo)
@@ -380,45 +381,52 @@ serve(async (req) => {
           body: JSON.stringify({ text: richEmbeddingText }),
         })
           .then(async (embRes) => {
-            if (embRes.ok) {
-              const embData = await embRes.json();
-              if (embData.embedding) {
-                // Store embedding on the entry
-                const { error: embUpdateError } = await supabase
-                  .from('entries')
-                  .update({ embedding: JSON.stringify(embData.embedding) })
-                  .eq('id', entry!.id);
-                if (embUpdateError) {
-                  console.warn('Failed to store embedding:', embUpdateError);
-                } else {
-                  console.log('Embedding stored for entry:', entry!.id);
-                  // Find and store related entries
-                  try {
-                    const { data: related } = await supabase.rpc('search_entries_by_embedding', {
-                      query_embedding: JSON.stringify(embData.embedding),
-                      match_threshold: 0.65,
-                      match_count: 6,
-                      filter_user_id: userId,
-                    });
-                    if (related && related.length > 0) {
-                      const relationships = related
-                        .filter((r: any) => r.id !== entry!.id)
-                        .slice(0, 5)
-                        .map((r: any) => ({
-                          entry_id: entry!.id,
-                          related_entry_id: r.id,
-                          user_id: userId,
-                          similarity_score: r.similarity,
-                          relationship_type: 'semantic',
-                        }));
-                      if (relationships.length > 0) {
-                        await supabase.from('entry_relationships').insert(relationships);
+            if (!embRes.ok) {
+              const errBody = await embRes.text();
+              console.error(`[smart-save] Embedding generation failed: ${embRes.status} — ${errBody}`);
+              return;
+            }
+            const embData = await embRes.json();
+            if (embData.embedding) {
+              // Store embedding on the entry
+              const { error: embUpdateError } = await supabase
+                .from('entries')
+                .update({ embedding: JSON.stringify(embData.embedding) })
+                .eq('id', entry!.id);
+              if (embUpdateError) {
+                console.warn('Failed to store embedding:', embUpdateError);
+              } else {
+                console.log('Embedding stored for entry:', entry!.id);
+                // Find and store related entries
+                try {
+                  const { data: related } = await supabase.rpc('search_entries_by_embedding', {
+                    query_embedding: JSON.stringify(embData.embedding),
+                    match_threshold: 0.65,
+                    match_count: 6,
+                    filter_user_id: userId,
+                  });
+                  if (related && related.length > 0) {
+                    const relationships = related
+                      .filter((r: any) => r.id !== entry!.id)
+                      .slice(0, 5)
+                      .map((r: any) => ({
+                        entry_id: entry!.id,
+                        related_entry_id: r.id,
+                        user_id: userId,
+                        similarity_score: r.similarity,
+                        relationship_type: 'semantic',
+                      }));
+                    if (relationships.length > 0) {
+                      const { error: relInsertErr } = await supabase.from('entry_relationships').insert(relationships);
+                      if (relInsertErr) {
+                        console.error('[smart-save] Failed to insert relationships:', relInsertErr);
+                      } else {
                         console.log(`Stored ${relationships.length} relationships for entry:`, entry!.id);
                       }
                     }
-                  } catch (relErr) {
-                    console.warn('Failed to compute relationships:', relErr);
                   }
+                } catch (relErr) {
+                  console.error('[smart-save] Failed to compute relationships for entry', entry!.id, ':', relErr);
                 }
               }
             }
