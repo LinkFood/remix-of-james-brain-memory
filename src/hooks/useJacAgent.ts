@@ -44,12 +44,13 @@ export function useJacAgent(userId: string) {
 
       try {
         // Load conversations (may fail if table doesn't exist yet)
+        // Query DESC to get the most recent 200, then reverse for chronological display
         const { data: convos, error: convoError } = await supabase
           .from('agent_conversations' as any)
           .select('role, content, task_ids, created_at')
           .eq('user_id', userId)
-          .order('created_at', { ascending: true })
-          .limit(100);
+          .order('created_at', { ascending: false })
+          .limit(200);
 
         if (convoError) {
           console.warn('[useJacAgent] agent_conversations not ready:', convoError.message);
@@ -57,7 +58,7 @@ export function useJacAgent(userId: string) {
         } else if (convos) {
           setBackendReady(true);
           setMessages(
-            (convos as any[]).map((c) => ({
+            (convos as any[]).reverse().map((c: any) => ({
               role: c.role as 'user' | 'assistant',
               content: c.content,
               taskIds: c.task_ids ?? [],
@@ -144,12 +145,12 @@ export function useJacAgent(userId: string) {
         .from('agent_conversations' as any)
         .select('role, content, task_ids, created_at')
         .eq('user_id', userId)
-        .order('created_at', { ascending: true })
-        .limit(100);
+        .order('created_at', { ascending: false })
+        .limit(200);
 
       if (!convos) return;
 
-      const dbMessages: JacMessage[] = (convos as any[]).map((c: any) => ({
+      const dbMessages: JacMessage[] = (convos as any[]).reverse().map((c: any) => ({
         role: c.role as 'user' | 'assistant',
         content: c.content,
         taskIds: c.task_ids ?? [],
