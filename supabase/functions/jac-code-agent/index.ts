@@ -460,7 +460,7 @@ Instructions:
           // Deploy via supabase CLI through the Management API
           // For now, deploy by fetching the function source from GitHub and using the Management API
           const projectRef = 'rvhyotvklfowklzjahdd';
-          const mgmtPat = Deno.env.get('SUPABASE_MANAGEMENT_PAT');
+          const mgmtPat = Deno.env.get('MGMT_API_TOKEN');
 
           if (mgmtPat) {
             for (const slug of slugsToDeploy) {
@@ -505,7 +505,7 @@ Instructions:
               }
             }
           } else {
-            console.warn('[code-agent] SUPABASE_MANAGEMENT_PAT not set — skipping auto-deploy');
+            console.warn('[code-agent] MGMT_API_TOKEN not set — skipping auto-deploy');
           }
         }
 
@@ -536,7 +536,7 @@ Instructions:
                   for (const slug of deployed) {
                     try {
                       const revertedContent = await getFileContent(owner, repo, `supabase/functions/${slug}/index.ts`, defaultBranch);
-                      const mgmtPat = Deno.env.get('SUPABASE_MANAGEMENT_PAT')!;
+                      const mgmtPat = Deno.env.get('MGMT_API_TOKEN')!;
                       const formData = new FormData();
                       const blob = new Blob([revertedContent.content], { type: 'application/typescript' });
                       formData.append('slug', slug);

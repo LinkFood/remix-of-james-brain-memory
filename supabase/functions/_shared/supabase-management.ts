@@ -1,7 +1,7 @@
 /**
  * Supabase Management API utility for JAC Agent OS
  *
- * Pure fetch-based wrapper. No npm deps. Uses SUPABASE_MANAGEMENT_PAT from env.
+ * Pure fetch-based wrapper. No npm deps. Uses MGMT_API_TOKEN from env.
  * Safety: Write operations reject production refs unless explicitly overridden.
  *
  * Follows the same pattern as _shared/github.ts.
@@ -12,8 +12,8 @@ const SUPABASE_MGMT_API = 'https://api.supabase.com';
 // --- Auth ---
 
 function getHeaders(): Record<string, string> {
-  const token = Deno.env.get('SUPABASE_MANAGEMENT_PAT');
-  if (!token) throw new Error('SUPABASE_MANAGEMENT_PAT not configured');
+  const token = Deno.env.get('MGMT_API_TOKEN');
+  if (!token) throw new Error('MGMT_API_TOKEN not configured');
   return {
     'Authorization': `Bearer ${token}`,
     'Content-Type': 'application/json',
@@ -267,8 +267,8 @@ export async function deployFunction(
   formData.append('verify_jwt', String(opts.verifyJwt ?? false));
   formData.append('body', blob, 'index.ts');
 
-  const token = Deno.env.get('SUPABASE_MANAGEMENT_PAT');
-  if (!token) throw new Error('SUPABASE_MANAGEMENT_PAT not configured');
+  const token = Deno.env.get('MGMT_API_TOKEN');
+  if (!token) throw new Error('MGMT_API_TOKEN not configured');
 
   const url = `${SUPABASE_MGMT_API}/v1/projects/${ref}/functions/${slug}`;
 
