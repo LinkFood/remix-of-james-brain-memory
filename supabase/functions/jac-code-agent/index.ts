@@ -58,6 +58,7 @@ serve(async (req) => {
     const repoFullName = (body.repoFullName as string) || '';
     slackChannel = body.slack_channel as string | undefined;
     slackThinkingTs = body.slack_thinking_ts as string | undefined;
+    const brainContext = (body.brainContext as string) || '';
 
     const missingFields = [
       ...(!taskId ? ['taskId'] : []),
@@ -137,6 +138,27 @@ serve(async (req) => {
       });
     }
 
+    // ─── Step 2b: load past sessions for this project ───
+    let pastSessionsBlock = '';
+    try {
+      const { data: pastSessions } = await supabase
+        .from('code_sessions')
+        .select('branch_name, intent, files_changed, created_at')
+        .eq('project_id', projectId)
+        .eq('status', 'completed')
+        .order('created_at', { ascending: false })
+        .limit(3);
+
+      if (pastSessions && pastSessions.length > 0) {
+        pastSessionsBlock = '\n=== RECENT SESSIONS (this project) ===\n' +
+          pastSessions.map((s: { branch_name: string; intent: string; files_changed: string[]; created_at: string }) =>
+            `- ${s.created_at.slice(0, 10)}: "${s.intent}" → branch ${s.branch_name}, changed: ${(s.files_changed || []).join(', ')}`
+          ).join('\n');
+      }
+    } catch (err) {
+      console.warn('[code-agent] Past sessions lookup failed (non-blocking):', err);
+    }
+
     // ─── Step 3: plan ───
     const planStep = await log.step('plan', { query, fileCount: fileTree.length });
 
@@ -166,13 +188,18 @@ serve(async (req) => {
       },
     ];
 
+    const techStack = (project.tech_stack as string[] | null) || [];
+    const projectDescription = (project.description as string) || '';
+
     const planPrompt = `You are an autonomous coding agent. Analyze the user's request and the repo file tree, then plan what changes to make.
 
 PROJECT: ${projectName || repoFull}
 REPO: ${repoFull}
+${techStack.length > 0 ? `TECH STACK: ${techStack.join(', ')}` : ''}
+${projectDescription ? `DESCRIPTION: ${projectDescription}` : ''}
 
 USER REQUEST: ${query}
-
+${brainContext ? `\n=== USER'S BRAIN CONTEXT ===\nThese are related notes, decisions, and past work from the user's brain:\n${brainContext}\n` : ''}${pastSessionsBlock}
 FILE TREE (${fileTree.length} files):
 ${fileTree.join('\n')}
 
@@ -216,14 +243,20 @@ Instructions:
     const fileContents: Array<{ path: string; content: string }> = [];
     const readErrors: string[] = [];
 
-    for (const filePath of filesToRead) {
-      try {
-        const file = await getFileContent(owner, repo, filePath, defaultBranch);
-        fileContents.push({ path: file.path, content: file.content });
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Unknown error';
-        readErrors.push(`${filePath}: ${msg}`);
-      }
+    const readResults = await Promise.all(
+      filesToRead.map(async (filePath) => {
+        try {
+          const file = await getFileContent(owner, repo, filePath, defaultBranch);
+          return { ok: true as const, path: file.path, content: file.content };
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : 'Unknown error';
+          return { ok: false as const, error: `${filePath}: ${msg}` };
+        }
+      })
+    );
+    for (const r of readResults) {
+      if (r.ok) fileContents.push({ path: r.path, content: r.content });
+      else readErrors.push(r.error);
     }
 
     await readStep({ read: fileContents.length, errors: readErrors.length });
@@ -376,6 +409,20 @@ Instructions:
     const pr = await createPR(owner, repo, branchName, defaultBranch, prTitle, prBody);
     await prStep({ prNumber: pr.number, prUrl: pr.url });
 
+    // ─── Step 8b: trigger codebase sync (fire-and-forget) ───
+    fetch(`${supabaseUrl}/functions/v1/sync-codebase`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${serviceKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        projectId,
+        userId,
+        paths: codeFiles.map(f => f.path),
+      }),
+    }).catch(err => console.warn('[code-agent] sync-codebase fire-and-forget failed:', err));
+
     // ─── Step 9: save_session ───
     const sessionStep = await log.step('save_session');
     const { data: session } = await supabase
@@ -386,10 +433,13 @@ Instructions:
         task_id: taskId,
         query,
         plan,
+        intent: query.slice(0, 200),
         branch_name: branchName,
         commit_sha: commitSha,
         pr_number: pr.number,
         pr_url: pr.url,
+        files_read: filesToRead,
+        files_written: codeFiles.map(f => f.path),
         files_changed: codeFiles.map(f => f.path),
         file_count: codeFiles.length,
         total_cost_usd: totalCost,
@@ -488,12 +538,15 @@ Instructions:
     await slackStep();
 
     // Store result as assistant message in conversation
-    await supabase.from('agent_conversations').insert({
+    const { error: convoError } = await supabase.from('agent_conversations').insert({
       user_id: userId,
       role: 'assistant',
       content: `Code complete: ${query}\n\nPR: ${pr.url}\nBranch: ${branchName}\nFiles changed: ${codeFiles.map(f => f.path).join(', ')}${brainEntryId ? `\n\nSaved to brain.` : ''}`,
       task_ids: [taskId],
     });
+    if (convoError) {
+      console.warn('[code-agent] Failed to insert conversation:', convoError.message);
+    }
 
     await log.info('task_completed', {
       durationMs: duration,

@@ -20,7 +20,7 @@ import {
 interface AddProjectDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onAdd: (repoFullName: string, name: string, techStack: string[]) => void;
+  onAdd: (repoFullName: string, name: string, techStack: string[], defaultBranch: string) => void;
 }
 
 function parseRepoFullName(input: string): string | null {
@@ -41,6 +41,7 @@ export function AddProjectDialog({ open, onOpenChange, onAdd }: AddProjectDialog
   const [repoInput, setRepoInput] = useState('');
   const [name, setName] = useState('');
   const [techStackInput, setTechStackInput] = useState('');
+  const [defaultBranch, setDefaultBranch] = useState('main');
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -58,10 +59,11 @@ export function AddProjectDialog({ open, onOpenChange, onAdd }: AddProjectDialog
       .map((t) => t.trim())
       .filter(Boolean);
 
-    onAdd(repoFullName, displayName, techStack);
+    onAdd(repoFullName, displayName, techStack, defaultBranch.trim() || 'main');
     setRepoInput('');
     setName('');
     setTechStackInput('');
+    setDefaultBranch('main');
     setError(null);
   };
 
@@ -106,6 +108,17 @@ export function AddProjectDialog({ open, onOpenChange, onAdd }: AddProjectDialog
               placeholder="React, TypeScript, Supabase"
               value={techStackInput}
               onChange={(e) => setTechStackInput(e.target.value)}
+              className="text-sm"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="branch" className="text-xs">Default Branch (optional)</Label>
+            <Input
+              id="branch"
+              placeholder="main"
+              value={defaultBranch}
+              onChange={(e) => setDefaultBranch(e.target.value)}
               className="text-sm"
             />
           </div>

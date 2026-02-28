@@ -29,6 +29,7 @@ const AGENT_NAMES: Record<string, string> = {
   'jac-search-agent': 'Oracle',
   'jac-report-agent': 'Analyst',
   'jac-monitor-agent': 'Sentinel',
+  'jac-code-agent': 'Coder',
 };
 
 function isSafeUrl(url: string): boolean {

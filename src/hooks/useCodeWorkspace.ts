@@ -307,7 +307,7 @@ export function useCodeWorkspace(userId: string) {
   }, [userId, activeProjectId, activeSession?.id]);
 
   // Add a project
-  const addProject = useCallback(async (repoFullName: string, name: string, techStack: string[]) => {
+  const addProject = useCallback(async (repoFullName: string, name: string, techStack: string[], defaultBranch = 'main') => {
     try {
       const { data, error } = await supabase
         .from('code_projects' as any)
@@ -316,7 +316,7 @@ export function useCodeWorkspace(userId: string) {
           repo_full_name: repoFullName,
           name,
           tech_stack: techStack,
-          default_branch: 'main',
+          default_branch: defaultBranch,
           active: true,
         } as any)
         .select()
@@ -362,19 +362,48 @@ export function useCodeWorkspace(userId: string) {
     }
   }, [projects]);
 
-  // Load file content — placeholder reads from file_tree_cache
-  // Actual file reading is server-side via the code agent
+  // Load file content from GitHub via read-file edge function
   const loadFileContent = useCallback(async (path: string) => {
     setFileLoading(true);
     setSelectedFile(path);
     setSelectedFileContent(null);
 
-    // For now, we can't read file content client-side (no PAT).
-    // The code agent reads files server-side. This is a placeholder
-    // that shows the file is selected and awaits agent-provided content.
-    setSelectedFileContent(`// File: ${path}\n// Content loaded by JAC Code Agent on the server.\n// Use the chat to ask the agent to read or edit this file.`);
+    if (!activeProjectId) {
+      setSelectedFileContent('// No project selected');
+      setFileLoading(false);
+      return;
+    }
+
+    try {
+      await supabase.auth.getUser();
+      const { data: session } = await supabase.auth.getSession();
+      if (!session?.session?.access_token) throw new Error('Not authenticated');
+
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/read-file`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${session.session.access_token}`,
+          'Content-Type': 'application/json',
+          apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+        },
+        body: JSON.stringify({ projectId: activeProjectId, path }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+      setSelectedFileContent(data.content);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to load file';
+      setSelectedFileContent(`// Error loading file: ${msg}\n// ${path}`);
+      console.warn('[useCodeWorkspace] loadFileContent error:', err);
+    }
+
     setFileLoading(false);
-  }, []);
+  }, [activeProjectId]);
 
   // Send a code command to the JAC dispatcher
   const sendCodeCommand = useCallback(async (message: string) => {

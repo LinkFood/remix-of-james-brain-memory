@@ -430,9 +430,42 @@ Be concise. Be confident. Don't ask questions — just act.`;
 
           if (projects && projects.length > 0) {
             const queryLower = extractedQuery.toLowerCase();
-            codeProject = projects.find(
+            const matched = projects.find(
               (p: { id: string; name: string; repo_full_name: string }) => queryLower.includes(p.name.toLowerCase())
-            ) ?? projects[0]; // fallback to first project if no name match
+            );
+            if (matched) {
+              codeProject = matched;
+            } else if (projects.length === 1) {
+              // Auto-select if there's only one project
+              codeProject = projects[0];
+            } else {
+              // Multiple projects, none matched — ask the user
+              const projectList = projects.map((p: { id: string; name: string; repo_full_name: string }) => `- ${p.name} (${p.repo_full_name})`).join('\n');
+              const ambiguousResponse = `Which project do you want me to work on?\n\n${projectList}\n\nMention the project name in your message and I'll get started.`;
+
+              // Reply in Slack if applicable
+              if (slack_channel) {
+                const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+                if (botToken) {
+                  const slackMethod = slack_thinking_ts ? 'chat.update' : 'chat.postMessage';
+                  fetch(`https://slack.com/api/${slackMethod}`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      channel: slack_channel,
+                      text: ambiguousResponse,
+                      ...(slack_thinking_ts ? { ts: slack_thinking_ts } : {}),
+                    }),
+                  }).catch(() => {});
+                }
+              }
+
+              return new Response(JSON.stringify({
+                response: ambiguousResponse,
+                intent,
+                status: 'needs_clarification',
+              }), { status: 200, headers: jsonHeaders });
+            }
           }
         }
       } catch (err) {

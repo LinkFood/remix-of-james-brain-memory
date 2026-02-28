@@ -192,10 +192,22 @@ export async function commitFiles(
   const commitData = await commitRes.json();
   const baseTreeSha = commitData.tree.sha;
 
-  // 3. Create blobs for each file
+  // 3. Filter out secret files, then create blobs
+  const safeFiles = files.filter(file => {
+    if (isSecretFile(file.path)) {
+      console.warn(`[commitFiles] BLOCKED secret file from commit: ${file.path}`);
+      return false;
+    }
+    return true;
+  });
+
+  if (safeFiles.length === 0) {
+    throw new Error('All files were rejected by secret file filter');
+  }
+
   const treeItems: Array<{ path: string; mode: string; type: string; sha: string }> = [];
 
-  for (const file of files) {
+  for (const file of safeFiles) {
     const blobUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/blobs`;
     const blobRes = await fetch(blobUrl, {
       method: 'POST',

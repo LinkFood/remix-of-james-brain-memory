@@ -247,8 +247,8 @@ const CodeWorkspace = () => {
       <AddProjectDialog
         open={addDialogOpen}
         onOpenChange={setAddDialogOpen}
-        onAdd={(repo, name, stack) => {
-          addProject(repo, name, stack);
+        onAdd={(repo, name, stack, branch) => {
+          addProject(repo, name, stack, branch);
           setAddDialogOpen(false);
         }}
       />

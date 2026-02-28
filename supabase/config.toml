@@ -53,3 +53,9 @@ verify_jwt = false
 
 [functions.jac-web-search]
 verify_jwt = false
+
+[functions.sync-codebase]
+verify_jwt = false
+
+[functions.read-file]
+verify_jwt = false

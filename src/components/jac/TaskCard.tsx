@@ -3,7 +3,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import {
-  Search, FileText, Brain, BarChart3, MessageSquare, Eye,
+  Search, FileText, Brain, BarChart3, MessageSquare, Eye, Code2,
   CheckCircle2, XCircle, Loader2, Clock, ChevronDown, ChevronUp, StopCircle,
 } from 'lucide-react';
 import type { AgentTask, ActivityLogEntry } from '@/types/agent';
@@ -15,6 +15,7 @@ const TYPE_ICONS: Record<string, React.ReactNode> = {
   report: <BarChart3 className="w-4 h-4" />,
   general: <MessageSquare className="w-4 h-4" />,
   monitor: <Eye className="w-4 h-4" />,
+  code: <Code2 className="w-4 h-4" />,
 };
 
 const STATUS_CONFIG: Record<string, { color: string; icon: React.ReactNode }> = {
