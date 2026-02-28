@@ -6,7 +6,7 @@
  * Takes text, returns audio. Simple.
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.84.0";
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserId } from '../_shared/auth.ts';
 import { checkRateLimit, getRateLimitHeaders } from '../_shared/rateLimit.ts';

@@ -198,7 +198,8 @@ Rules:
     });
 
     const toolResult = parseToolUse(claudeResponse);
-    const insights = (toolResult?.input?.insights as any[]) || [];
+    const rawInsights = toolResult?.input?.insights;
+    const insights: any[] = Array.isArray(rawInsights) ? rawInsights : [];
 
     if (insights.length > 0) {
       // Delete previous insights for this user
@@ -215,7 +216,7 @@ Rules:
         title: insight.title,
         body: insight.body,
         priority: insight.priority,
-        entry_ids: insight.entry_ids || [],
+        entry_ids: Array.isArray(insight.entry_ids) ? insight.entry_ids : [],
         dismissed: false,
         expires_at: expiresAt,
       }));

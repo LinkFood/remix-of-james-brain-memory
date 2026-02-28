@@ -50,3 +50,6 @@ verify_jwt = false
 
 [functions.calculate-importance]
 verify_jwt = false
+
+[functions.jac-web-search]
+verify_jwt = false

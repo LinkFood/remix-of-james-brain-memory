@@ -7,10 +7,10 @@
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { extractUserId } from '../_shared/auth.ts';
+import { extractUserIdWithServiceRole } from '../_shared/auth.ts';
 import { checkRateLimit, getRateLimitHeaders, RATE_LIMIT_CONFIGS } from '../_shared/rateLimit.ts';
 import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
-import { sanitizeString, validateContentLength, parseJsonBody } from '../_shared/validation.ts';
+import { sanitizeString, validateContentLength } from '../_shared/validation.ts';
 import { callClaude, parseToolUse, CLAUDE_MODELS, ClaudeError } from '../_shared/anthropic.ts';
 
 interface ClassificationResult {
@@ -44,7 +44,16 @@ Deno.serve(async (req) => {
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    const { userId, error: authError } = await extractUserId(req);
+    // Parse body BEFORE auth so extractUserIdWithServiceRole can read userId from it
+    const rawBody = await req.text();
+    let parsedBody: Record<string, unknown>;
+    try {
+      parsedBody = JSON.parse(rawBody);
+    } catch {
+      return errorResponse(req, 'Invalid request body', 400);
+    }
+
+    const { userId, error: authError } = await extractUserIdWithServiceRole(req, parsedBody);
 
     if (userId) {
       const rateLimitResult = checkRateLimit(`classify:${userId}`, RATE_LIMIT_CONFIGS.ai);
@@ -56,11 +65,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    const { data: body, error: parseError } = await parseJsonBody<ClassifyRequest>(req);
-    if (parseError || !body) {
-      return errorResponse(req, parseError || 'Invalid request body', 400);
-    }
-
+    const body = parsedBody as ClassifyRequest;
     const content = body.content ? sanitizeString(body.content) : '';
     const imageUrl = body.imageUrl ? sanitizeString(body.imageUrl) : undefined;
 
@@ -262,14 +267,22 @@ ${recentListsContext}`;
 
     const classification = toolResult.input as unknown as ClassificationResult;
 
+    // Normalize tags — Claude sometimes returns a comma-separated string instead of an array
+    let normalizedTags: string[] = [];
+    if (Array.isArray(classification.tags)) {
+      normalizedTags = classification.tags.map((t: unknown) => String(t).trim()).filter(Boolean);
+    } else if (typeof classification.tags === 'string' && classification.tags) {
+      normalizedTags = (classification.tags as string).split(',').map(t => t.trim()).filter(Boolean);
+    }
+
     const result: ClassificationResult = {
       type: classification.type || (isPdf ? 'document' : (imageUrl ? 'image' : 'note')),
       subtype: classification.subtype,
       suggestedTitle: classification.suggestedTitle || (isPdf ? 'PDF Document' : (imageUrl ? 'Uploaded Image' : 'Untitled')),
-      tags: classification.tags || [],
+      tags: normalizedTags,
       extractedData: classification.extractedData || {},
       appendTo: classification.appendTo,
-      listItems: classification.listItems || [],
+      listItems: Array.isArray(classification.listItems) ? classification.listItems : [],
       imageDescription: classification.imageDescription,
       documentText: classification.documentText,
       eventDate: classification.eventDate,

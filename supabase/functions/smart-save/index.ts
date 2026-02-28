@@ -242,6 +242,12 @@ serve(async (req) => {
         };
       } else {
         classification = await classifyResponse.json();
+        // Normalize tags — classify-content sometimes returns a comma-separated string
+        if (classification.tags && !Array.isArray(classification.tags)) {
+          classification.tags = typeof classification.tags === 'string'
+            ? (classification.tags as string).split(',').map((t: string) => t.trim()).filter(Boolean)
+            : [];
+        }
       }
 
       console.log('Classification result:', classification);

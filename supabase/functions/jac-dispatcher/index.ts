@@ -437,6 +437,32 @@ Be concise. Be confident. Don't ask questions — just act.`;
       } catch (err) {
         console.warn('[jac-dispatcher] Code project lookup failed (non-blocking):', err);
       }
+
+      // If intent is code but no project found, tell the user instead of dispatching a doomed request
+      if (!codeProject) {
+        // Reply in Slack if applicable
+        if (slack_channel) {
+          const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+          if (botToken) {
+            const slackMethod = slack_thinking_ts ? 'chat.update' : 'chat.postMessage';
+            fetch(`https://slack.com/api/${slackMethod}`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                channel: slack_channel,
+                text: "No code projects registered. Go to the Code Workspace to add a GitHub repo first.",
+                ...(slack_thinking_ts ? { ts: slack_thinking_ts } : {}),
+              }),
+            }).catch(() => {});
+          }
+        }
+
+        return new Response(JSON.stringify({
+          response: "I don't have any code projects registered yet. Head to the Code Workspace and add a GitHub repo first, then I can read, modify, and open PRs on it.",
+          intent,
+          status: 'no_project',
+        }), { status: 200, headers: jsonHeaders });
+      }
     }
 
     // 5. Create parent task

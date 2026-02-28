@@ -59,8 +59,14 @@ serve(async (req) => {
     slackChannel = body.slack_channel as string | undefined;
     slackThinkingTs = body.slack_thinking_ts as string | undefined;
 
-    if (!taskId || !userId || !query || !projectId) {
-      return new Response(JSON.stringify({ error: 'Missing required fields' }), {
+    const missingFields = [
+      ...(!taskId ? ['taskId'] : []),
+      ...(!userId ? ['userId'] : []),
+      ...(!query ? ['query'] : []),
+      ...(!projectId ? ['projectId'] : []),
+    ];
+    if (missingFields.length > 0) {
+      return new Response(JSON.stringify({ error: `Missing required fields: ${missingFields.join(', ')}` }), {
         status: 400,
         headers: { 'Content-Type': 'application/json' },
       });
