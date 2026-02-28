@@ -226,7 +226,8 @@ Instructions:
       throw new Error('Claude did not return a plan via tool use');
     }
 
-    const filesToRead = ((planResult.input.filesToRead as string[]) || []).slice(0, 10);
+    const rawFilesToRead = planResult.input.filesToRead;
+    const filesToRead = (Array.isArray(rawFilesToRead) ? rawFilesToRead : rawFilesToRead ? [rawFilesToRead] : []).slice(0, 10) as string[];
     const plan = (planResult.input.plan as string) || '';
     const branchSlug = (planResult.input.branchSlug as string) || 'code-change';
 
@@ -353,7 +354,8 @@ Instructions:
       throw new Error('Claude did not return code via tool use');
     }
 
-    const codeFiles = (codeResult.input.files as Array<{ path: string; content: string }>) || [];
+    const rawFiles = codeResult.input.files;
+    const codeFiles = (Array.isArray(rawFiles) ? rawFiles : rawFiles ? [rawFiles] : []) as Array<{ path: string; content: string }>;
     const commitMessage = (codeResult.input.commitMessage as string) || 'Code changes by jac-code-agent';
     const prTitle = (codeResult.input.prTitle as string) || `JAC: ${query.slice(0, 50)}`;
     const prBody = (codeResult.input.prBody as string) || '';
