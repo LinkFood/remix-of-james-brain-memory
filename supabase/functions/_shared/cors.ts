@@ -6,8 +6,8 @@
  */
 
 const ALLOWED_ORIGINS = [
-  'https://linkjac.cloud',
   'https://www.linkjac.cloud',
+  'https://linkjac.cloud',
 ];
 
 // Check if we're in development mode

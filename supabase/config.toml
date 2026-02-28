@@ -1,8 +1,5 @@
 project_id = "rvhyotvklfowklzjahdd"
 
-[functions.task-dispatcher]
-verify_jwt = false
-
 [functions.jac-dispatcher]
 verify_jwt = false
 
@@ -15,11 +12,41 @@ verify_jwt = false
 [functions.jac-search-agent]
 verify_jwt = false
 
-[functions.slack-incoming]
-verify_jwt = false
-
 [functions.jac-code-agent]
 verify_jwt = false
 
+[functions.slack-incoming]
+verify_jwt = false
+
 [functions.calendar-reminder-check]
+verify_jwt = false
+
+[functions.backfill-embeddings]
+verify_jwt = false
+
+[functions.brain-insights]
+verify_jwt = false
+
+[functions.smart-save]
+verify_jwt = false
+
+[functions.assistant-chat]
+verify_jwt = false
+
+[functions.search-memory]
+verify_jwt = false
+
+[functions.jac-dashboard-query]
+verify_jwt = false
+
+[functions.jac-kill-switch]
+verify_jwt = false
+
+[functions.generate-embedding]
+verify_jwt = false
+
+[functions.classify-content]
+verify_jwt = false
+
+[functions.calculate-importance]
 verify_jwt = false

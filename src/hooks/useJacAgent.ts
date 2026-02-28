@@ -356,10 +356,19 @@ export function useJacAgent(userId: string) {
           throw new Error(errorData.error || `Request failed: ${res.status}`);
         }
 
-        // Don't add assistant response optimistically — let Realtime handle it
-        // to avoid duplicate messages. The dispatcher saves to agent_conversations,
-        // which triggers the Realtime INSERT subscription above.
-        const _data = await res.json();
+        // Use the dispatcher's HTTP response directly for the initial message.
+        // Realtime still delivers worker agent follow-ups (research, code, etc.).
+        // The Realtime subscription has dedup logic to avoid double-showing.
+        const data = await res.json();
+        if (data.response) {
+          const assistantMsg: JacMessage = {
+            role: 'assistant',
+            content: data.response,
+            taskIds: data.taskId ? [data.taskId] : [],
+            timestamp: new Date().toISOString(),
+          };
+          setMessages(prev => [...prev, assistantMsg]);
+        }
       } catch (err) {
         const errorText = err instanceof Error ? err.message : 'Unknown error';
 

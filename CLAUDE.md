@@ -16,7 +16,8 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 | Kill switch (stop all agents) | Working | Slack keywords or web UI -> cancels all running/queued tasks |
 | Dashboard NL queries | Working | jac-dashboard-query (Claude Haiku over entries + relationships) |
 | Token tracking | Working | dispatcher, research-agent, code-agent, dashboard-query record cost_usd/tokens |
-| JAC chat UX | Working | Clean chat bubbles, hidden task internals, typing dots, 90s timeout |
+| JAC chat UX | Working | Chat-first layout: full-viewport chat, slim header, working bar, ops behind Sheet drawer |
+| Chat centering | Working | max-w-3xl centered column on wide screens |
 
 ## What's Broken or Not Wired Up
 
@@ -24,10 +25,8 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 |---|---|
 | Self-deploy blocked | `supabase-management.ts` written but needs Management PAT in secrets |
 | File content not viewable in code UI | File tree shows but clicking shows placeholder; server-side read only during coding tasks |
-| `task-dispatcher` is a dead stub | Never called; `jac-dispatcher` is the real entry point. Delete it. |
 | `assistant-chat` has duplicate intent detection | Regex-based classify that duplicates/conflicts with dispatcher's Claude-based routing |
 | JAC chat intermittent failures | "Failed to fetch" sometimes — 90s timeout + better errors added, root cause not fully diagnosed |
-| JAC doesn't feel like one agent | User feedback: too much task infrastructure visible. Ops panel + Agent Roster still exposed. |
 
 ## Tech Stack
 
@@ -44,7 +43,7 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 | Voice | ElevenLabs (STT + TTS) |
 | Web search | Tavily API |
 | GitHub | REST API via PAT |
-| Hosting | Vercel (frontend), Supabase (backend) |
+| Hosting | Vercel (frontend, `www.linkjac.cloud`), Supabase `rvhyotvklfowklzjahdd` (backend) |
 
 ## Directory Structure
 
@@ -145,6 +144,9 @@ All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent wo
 - Kill switch: Slack keywords or web UI -> cancels all running tasks
 - Kill switch checks in ALL worker agents (research, save, search, code)
 - Code agent file blocks: `.env`, `.pem`, `.key`, `credentials`, `secret`
+- Vercel Deployment Protection: DISABLED (was redirecting to stale deployment URLs, breaking OAuth)
+- Supabase Auth Site URL: must be `https://www.linkjac.cloud` (set in Dashboard > Authentication > URL Configuration)
+- Service worker: REMOVED (was caching stale deploys). `public/sw.js` is a self-destructing stub, `main.tsx` unregisters on load
 
 ## Edge Functions
 
@@ -192,7 +194,7 @@ All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent wo
 | `/` | Landing | Public |
 | `/auth` | Google sign-in | Public |
 | `/dashboard` | Brain entries + graph | Required |
-| `/jac` | Agent command center (chat) | Required |
+| `/jac` | Chat-first AI interface (ops behind drawer) | Required |
 | `/code` | Code workspace | Required |
 | `/settings` | Settings | Required |
 
