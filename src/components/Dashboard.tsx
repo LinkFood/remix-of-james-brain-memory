@@ -8,6 +8,7 @@
  */
 
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp, Calendar, Brain, Archive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -17,8 +18,11 @@ import DumpInput, { DumpInputHandle } from "./DumpInput";
 import { cn } from "@/lib/utils";
 import { parseListItems } from "@/lib/parseListItems";
 import { EmptyState, EntrySection } from "./dashboard/index";
-import DailyBriefing from "./dashboard/DailyBriefing";
-import InsightCarousel from "./dashboard/InsightCarousel";
+import SystemPulse from "./dashboard/SystemPulse";
+import AgentStatusStrip from "./dashboard/AgentStatusStrip";
+import ActivityRail from "./dashboard/ActivityRail";
+import SignalCard from "./dashboard/SignalCard";
+import CommandWindows from "./dashboard/CommandWindows";
 import TriageQueue from "./dashboard/TriageQueue";
 import SynthesisButton from "./dashboard/SynthesisButton";
 import TagFilter from "./TagFilter";
@@ -26,6 +30,7 @@ import { ReminderBanner } from "./ReminderBanner";
 import { useEntries, type DashboardEntry } from "@/hooks/useEntries";
 import { useEntryActions } from "@/hooks/useEntryActions";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
+import { useDashboardActivity } from "@/hooks/useDashboardActivity";
 import JacInsightCard from "@/components/JacInsightCard";
 import { useProactiveInsights } from "@/hooks/useProactiveInsights";
 import type { JacDashboardState } from "@/hooks/useJacDashboard";
@@ -63,8 +68,18 @@ const Dashboard = ({
   onClearJac,
   jacSendQuery,
 }: DashboardProps) => {
+  const navigate = useNavigate();
   const internalDumpRef = useRef<DumpInputHandle>(null);
   const dumpRef = dumpInputRef || internalDumpRef;
+
+  // Dashboard activity data (agents, code, reminders)
+  const {
+    tasks: activityTasks,
+    activeCount: activeAgentCount,
+    latestCodeSession,
+    reminders: activityReminders,
+    loading: activityLoading,
+  } = useDashboardActivity(userId);
 
   // View toggle with localStorage persistence
   const [view, setView] = useState<DashboardView>(() => {
@@ -453,24 +468,57 @@ const Dashboard = ({
         {/* ===== SMART VIEW ===== */}
         {view === 'smart' && (
           <div className="space-y-4">
-            <DailyBriefing
+            {/* Zone 1: SystemPulse hero */}
+            <SystemPulse
               insights={insights}
               stats={stats}
+              activeAgentCount={activeAgentCount}
+              reminders={activityReminders}
+              latestCodeSession={latestCodeSession}
               loading={insightsLoading}
-              onRefresh={refetchInsights}
+              onRefreshInsights={refetchInsights}
             />
 
-            <InsightCarousel
-              insights={insights}
-              onDismiss={dismissInsight}
-              onAction={(insight) => {
-                if (!insight.entryIds.length) return;
-                const firstId = insight.entryIds[0];
-                const entry = entries.find(e => e.id === firstId);
-                if (entry) onViewEntry(entry);
-              }}
+            {/* Zone 2: Agent status strip */}
+            <AgentStatusStrip
+              tasks={activityTasks}
+              onNavigateToJac={() => navigate('/jac')}
             />
 
+            {/* Zone 3: Activity rail */}
+            <ActivityRail
+              tasks={activityTasks}
+              onNavigateToJac={() => navigate('/jac')}
+            />
+
+            {/* Zone 4: Signal cards (insights) */}
+            {insights.length > 0 && (
+              <div className="space-y-2">
+                {insights.map(insight => (
+                  <SignalCard
+                    key={insight.id}
+                    insight={insight}
+                    onDismiss={dismissInsight}
+                    onAction={(ins) => {
+                      if (!ins.entryIds.length) return;
+                      const firstId = ins.entryIds[0];
+                      const entry = entries.find(e => e.id === firstId);
+                      if (entry) onViewEntry(entry);
+                    }}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Zone 5: Command windows */}
+            <CommandWindows
+              latestCodeSession={latestCodeSession}
+              stats={stats}
+              onNavigateToCode={() => navigate('/code')}
+              onNavigateToBrowse={() => setView('browse')}
+            />
+
+            {/* Zone 6: Existing content */}
             <TriageQueue
               entries={entries}
               insightEntryIds={insightEntryIds}
@@ -484,7 +532,6 @@ const Dashboard = ({
               />
             )}
 
-            {/* Recent entries (Smart view shows 10 expanded) */}
             {entries.length > 0 && (
               <EntrySection
                 title="Recent"

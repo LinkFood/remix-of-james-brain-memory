@@ -11,58 +11,17 @@ import {
   Loader2, Zap, Globe, Code2,
 } from 'lucide-react';
 import type { AgentTask, ActivityLogEntry } from '@/types/agent';
+import { AGENT_DEFS, deriveAgentStates, type AgentStatus } from '@/lib/agents';
 import { AgentDeskDrawer } from './AgentDeskDrawer';
 
-interface AgentDef {
-  id: string;
-  name: string;
-  role: string;
-  icon: React.ReactNode;
-  activeClasses: string;
-  doneClasses: string;
-}
-
-const AGENTS: AgentDef[] = [
-  {
-    id: 'jac-dispatcher', name: 'JAC', role: 'Boss · Routes commands',
-    icon: <Zap className="w-5 h-5" />,
-    activeClasses: 'bg-violet-500/20 text-violet-400',
-    doneClasses: 'bg-violet-500/10 text-violet-500/70',
-  },
-  {
-    id: 'jac-research-agent', name: 'Scout', role: 'Research · Web + Brain',
-    icon: <Globe className="w-5 h-5" />,
-    activeClasses: 'bg-blue-500/20 text-blue-400',
-    doneClasses: 'bg-blue-500/10 text-blue-500/70',
-  },
-  {
-    id: 'jac-save-agent', name: 'Scribe', role: 'Save · Classify · Store',
-    icon: <FileText className="w-5 h-5" />,
-    activeClasses: 'bg-emerald-500/20 text-emerald-400',
-    doneClasses: 'bg-emerald-500/10 text-emerald-500/70',
-  },
-  {
-    id: 'jac-search-agent', name: 'Oracle', role: 'Search · Find · Connect',
-    icon: <Brain className="w-5 h-5" />,
-    activeClasses: 'bg-amber-500/20 text-amber-400',
-    doneClasses: 'bg-amber-500/10 text-amber-500/70',
-  },
-  {
-    id: 'jac-code-agent', name: 'Coder', role: 'Code · Commit · PR',
-    icon: <Code2 className="w-5 h-5" />,
-    activeClasses: 'bg-indigo-500/20 text-indigo-400',
-    doneClasses: 'bg-indigo-500/10 text-indigo-500/70',
-  },
-];
-
-type AgentStatus = 'idle' | 'working' | 'done' | 'failed';
-
-interface AgentState {
-  status: AgentStatus;
-  currentTask?: string;
-  lastResult?: string;
-  taskCount: number;
-}
+/** Icons live here (JSX, not extractable to pure data module) */
+const AGENT_ICONS: Record<string, React.ReactNode> = {
+  'jac-dispatcher': <Zap className="w-5 h-5" />,
+  'jac-research-agent': <Globe className="w-5 h-5" />,
+  'jac-save-agent': <FileText className="w-5 h-5" />,
+  'jac-search-agent': <Brain className="w-5 h-5" />,
+  'jac-code-agent': <Code2 className="w-5 h-5" />,
+};
 
 const STATUS_STYLES: Record<AgentStatus, string> = {
   idle: 'opacity-40 border-border',
@@ -71,54 +30,13 @@ const STATUS_STYLES: Record<AgentStatus, string> = {
   failed: 'opacity-70 border-red-500/30',
 };
 
-function getAgentStates(tasks: AgentTask[]): Map<string, AgentState> {
-  const states = new Map<string, AgentState>();
-
-  for (const agent of AGENTS) {
-    const agentTasks = tasks.filter(t => t.agent === agent.id);
-    const running = agentTasks.find(t => t.status === 'running');
-    // Sort by updated_at desc to ensure we get the most recent, not just first in array
-    const sortedByRecent = [...agentTasks].sort((a, b) =>
-      new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
-    );
-    const lastCompleted = sortedByRecent.find(t => t.status === 'completed');
-    const lastFailed = sortedByRecent.find(t => t.status === 'failed');
-
-    let status: AgentStatus = 'idle';
-    let currentTask: string | undefined;
-    let lastResult: string | undefined;
-
-    if (running) {
-      status = 'working';
-      currentTask = running.intent || running.type;
-    } else if (lastCompleted) {
-      status = 'done';
-      const output = lastCompleted.output as Record<string, unknown> | null;
-      lastResult = output?.brief
-        ? String(output.brief).slice(0, 80)
-        : lastCompleted.intent || 'Task completed';
-    } else if (lastFailed && !lastCompleted) {
-      status = 'failed';
-    }
-
-    states.set(agent.id, {
-      status,
-      currentTask,
-      lastResult,
-      taskCount: agentTasks.filter(t => t.status === 'completed').length,
-    });
-  }
-
-  return states;
-}
-
 interface AgentRosterProps {
   tasks: AgentTask[];
   activityLogs?: Map<string, ActivityLogEntry[]>;
 }
 
 export function AgentRoster({ tasks, activityLogs = new Map() }: AgentRosterProps) {
-  const states = useMemo(() => getAgentStates(tasks), [tasks]);
+  const states = useMemo(() => deriveAgentStates(tasks), [tasks]);
   const activeCount = Array.from(states.values()).filter(s => s.status === 'working').length;
   const [selectedAgent, setSelectedAgent] = useState<AgentDef | null>(null);
 
@@ -132,7 +50,7 @@ export function AgentRoster({ tasks, activityLogs = new Map() }: AgentRosterProp
           agentId={selectedAgent.id}
           agentName={selectedAgent.name}
           agentRole={selectedAgent.role}
-          agentIcon={selectedAgent.icon}
+          agentIcon={AGENT_ICONS[selectedAgent.id]}
           tasks={tasks}
           activityLogs={activityLogs}
         />
@@ -153,7 +71,7 @@ export function AgentRoster({ tasks, activityLogs = new Map() }: AgentRosterProp
 
       {/* Agent Grid */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-        {AGENTS.map((agent) => {
+        {AGENT_DEFS.map((agent) => {
           const state = states.get(agent.id) || { status: 'idle' as AgentStatus, taskCount: 0 };
           return (
             <div
@@ -176,7 +94,7 @@ export function AgentRoster({ tasks, activityLogs = new Map() }: AgentRosterProp
                   {state.status === 'working' ? (
                     <Loader2 className="w-5 h-5 animate-spin" />
                   ) : (
-                    agent.icon
+                    AGENT_ICONS[agent.id]
                   )}
                   <div className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-card ${
                     state.status === 'working' ? 'bg-blue-500' :
