@@ -101,32 +101,6 @@ function detectCalendarIntent(message: string): boolean {
   return /\b(cal[ae]nd[ae]r|schedule|scheduled|upcoming|events?|appointments?|plans?|this week|next week|tomorrow|today|weekend|when am i|when do i|what do i have|what'?s? (on|in) my)\b/i.test(message);
 }
 
-function detectSaveIntent(message: string): { hasSaveIntent: boolean; contentToSave: string; listName?: string } {
-  const savePatterns = [
-    /\b(add|put)\s+(.+?)\s+(?:to|on)\s+(?:my\s+)?(.+?)\s*(?:list)?$/i,
-    /\b(add|put)\s+(.+?)\s+(?:to|on)\s+(.+?)$/i,
-    /\b(save|remember|note|dump|store)\s+(?:that\s+)?(.+)/i,
-    /\b(add)\s+(.+?)\s+(?:to\s+)?(?:my\s+)?(?:shopping|grocery|todo|to-do)/i,
-  ];
-  for (const pattern of savePatterns) {
-    const match = message.match(pattern);
-    if (match) {
-      if (pattern === savePatterns[0] || pattern === savePatterns[1]) {
-        return { hasSaveIntent: true, contentToSave: match[2].trim(), listName: match[3]?.trim() };
-      }
-      return { hasSaveIntent: true, contentToSave: match[2].trim() };
-    }
-  }
-  const hasSaveIntent = /\b(save|add|remember|dump|store|note down)\b/i.test(message);
-  if (hasSaveIntent) {
-    const contentToSave = message
-      .replace(/\b(please\s+)?(save|add|remember|dump|store|note down|this|that|to my brain|to linkjac|for me)\b/gi, '')
-      .trim();
-    return { hasSaveIntent: contentToSave.length > 5, contentToSave };
-  }
-  return { hasSaveIntent: false, contentToSave: '' };
-}
-
 function detectWebSearchIntent(message: string, brainContext: string): { shouldSearch: boolean; searchQuery: string; reason: string } {
   const messageLower = message.toLowerCase();
   const personalPatterns = [
@@ -299,28 +273,6 @@ serve(async (req) => {
     }
 
     // === PRE-STREAM ACTIONS ===
-    const saveIntent = detectSaveIntent(message);
-    let savedEntry: Entry | null = null;
-    let saveError: string | null = null;
-    
-    if (saveIntent.hasSaveIntent && saveIntent.contentToSave) {
-      console.log('Save intent detected, executing save before stream...');
-      try {
-        const saveResponse = await fetch(`${supabaseUrl}/functions/v1/smart-save`, {
-          method: 'POST',
-          headers: { 'Authorization': authHeader, 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content: saveIntent.listName ? `${saveIntent.contentToSave} (${saveIntent.listName})` : saveIntent.contentToSave,
-            source: 'assistant',
-          }),
-        });
-        if (saveResponse.ok) {
-          const saveData = await saveResponse.json();
-          if (saveData?.entry) { savedEntry = saveData.entry; console.log('Pre-stream save successful:', savedEntry?.id); }
-        } else { saveError = 'Failed to save'; console.warn('Pre-stream save failed:', await saveResponse.text()); }
-      } catch (err) { saveError = 'Failed to save'; console.error('Pre-stream save error:', err); }
-    }
-
     const weatherIntent = detectWeatherIntent(message);
     const calendarIntent = detectCalendarIntent(message);
     let weatherData: WeatherData | null = null;
@@ -481,11 +433,6 @@ serve(async (req) => {
       .join('\n\n');
 
     let actionContext = '';
-    if (savedEntry) {
-      actionContext += `\n\n=== SAVE COMPLETED ===\nYou just saved "${saveIntent.contentToSave}" to "${savedEntry.title || savedEntry.content_type}". Confirm this briefly.\n`;
-    } else if (saveIntent.hasSaveIntent && saveError) {
-      actionContext += `\n\n=== SAVE FAILED ===\nFailed to save "${saveIntent.contentToSave}". Apologize briefly.\n`;
-    }
     if (weatherData) {
       const snowWarning = isSnowExpected(weatherData.weatherCode) ? '\n⚠️ SNOW IS EXPECTED. Mention this proactively.' : '';
       actionContext += `\n\n=== CURRENT WEATHER (${weatherData.location}) ===\nTemperature: ${weatherData.temperature}°F\nConditions: ${weatherData.description}\nWind: ${weatherData.windSpeed} mph${snowWarning}\n`;
@@ -613,7 +560,7 @@ ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has n
           const metaEvent = `data: ${JSON.stringify({
             sources: sourcesUsed,
             webSources: webSearchResult?.results || [],
-            savedEntry: savedEntry ? { id: savedEntry.id, title: savedEntry.title } : null,
+            savedEntry: null,
             weather: weatherData,
           })}\n\n`;
           controller.enqueue(encoder.encode(metaEvent));
@@ -645,7 +592,7 @@ ${contextText ? `\n\nUser's brain contents:\n\n${contextText}` : '\n\nUser has n
         response: responseText,
         sourcesUsed,
         webSources: webSearchResult?.results || [],
-        savedEntry: savedEntry ? { id: savedEntry.id, title: savedEntry.title } : null,
+        savedEntry: null,
         weather: weatherData,
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

@@ -117,6 +117,16 @@ serve(async (req) => {
     const fileTree = rawTree.filter(f => !isSecretFile(f));
     await treeStep({ totalFiles: rawTree.length, filteredFiles: fileTree.length });
 
+    // ─── Step 2a: fetch CLAUDE.md for project conventions ───
+    let claudeMd = '';
+    try {
+      const claudeMdFile = await getFileContent(owner, repo, 'CLAUDE.md', defaultBranch);
+      claudeMd = claudeMdFile.content.slice(0, 8000);
+      console.log(`[code-agent] Found CLAUDE.md (${claudeMd.length} chars)`);
+    } catch {
+      // No CLAUDE.md in this repo — skip
+    }
+
     // Cache tree on project
     await supabase
       .from('code_projects')
@@ -200,7 +210,7 @@ PROJECT: ${projectName || repoFull}
 REPO: ${repoFull}
 ${techStack.length > 0 ? `TECH STACK: ${techStack.join(', ')}` : ''}
 ${projectDescription ? `DESCRIPTION: ${projectDescription}` : ''}
-
+${claudeMd ? `\n=== PROJECT CONVENTIONS (CLAUDE.md) ===\nFollow these project-specific rules and patterns:\n${claudeMd}\n` : ''}
 USER REQUEST: ${query}
 ${brainContext ? `\n=== USER'S BRAIN CONTEXT ===\nThese are related notes, decisions, and past work from the user's brain:\n${brainContext}\n` : ''}${pastSessionsBlock}
 FILE TREE (${fileTree.length} files):
@@ -322,7 +332,7 @@ Instructions:
 
 PROJECT: ${projectName || repoFull}
 REPO: ${repoFull}
-
+${claudeMd ? `\n=== PROJECT CONVENTIONS (CLAUDE.md) ===\nFollow these project-specific rules and patterns:\n${claudeMd}\n` : ''}
 USER REQUEST: ${query}
 
 PLAN:
