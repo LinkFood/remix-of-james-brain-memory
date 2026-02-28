@@ -5,7 +5,7 @@
  */
 
 import { Badge } from '@/components/ui/badge';
-import { GitBranch, FileText, ExternalLink, GitMerge, CheckCircle2 } from 'lucide-react';
+import { GitBranch, FileText, ExternalLink, GitMerge } from 'lucide-react';
 
 interface CodeSessionCardProps {
   output: Record<string, unknown>;
