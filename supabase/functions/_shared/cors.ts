@@ -22,7 +22,6 @@ export function getCorsHeaders(request: Request): Record<string, string> {
   // Check if origin is allowed
   const isAllowed =
     ALLOWED_ORIGINS.includes(origin) ||
-    origin.endsWith('.vercel.app') ||
     (isDevelopment && (origin.startsWith('http://localhost') || origin.startsWith('http://127.0.0.1')));
 
   return {

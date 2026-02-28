@@ -8,6 +8,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { isServiceRoleRequest } from '../_shared/auth.ts';
 
 const VOYAGE_API_URL = 'https://api.voyageai.com/v1/embeddings';
 const VOYAGE_MODEL = 'voyage-3-lite';
@@ -17,6 +18,13 @@ serve(async (req) => {
   if (corsResponse) return corsResponse;
 
   const corsHeaders = getCorsHeaders(req);
+
+  // Auth gate: only internal service-role calls allowed
+  if (!isServiceRoleRequest(req)) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
 
   try {
     const apiKey = Deno.env.get('VOYAGE_API_KEY');

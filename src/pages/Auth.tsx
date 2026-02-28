@@ -11,13 +11,24 @@ const Auth = () => {
   const { toast } = useToast();
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
       if (session) {
+        // Verify the authenticated user is the owner
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user?.email !== 'jayhillendalepress@gmail.com') {
+          await supabase.auth.signOut();
+          toast({
+            title: 'Access denied',
+            description: 'This is a private application.',
+            variant: 'destructive',
+          });
+          return;
+        }
         navigate('/dashboard');
       }
     });
     return () => subscription.unsubscribe();
-  }, [navigate]);
+  }, [navigate, toast]);
 
   const handleGoogleSignIn = async () => {
     setIsLoading(true);

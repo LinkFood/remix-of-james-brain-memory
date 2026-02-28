@@ -10,6 +10,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
+import { isServiceRoleRequest } from '../_shared/auth.ts';
 
 /** Get today's date string (YYYY-MM-DD) in a specific timezone */
 function getTodayInTimezone(tz: string): string {
@@ -62,13 +63,8 @@ serve(async (req) => {
     return new Response(null, { status: 204 });
   }
 
-  // Accept service role key OR anon key (for pg_cron calls via net.http_post)
-  const authHeader = req.headers.get('authorization');
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  const anonKey = Deno.env.get('SUPABASE_ANON_KEY');
-  const token = authHeader?.replace('Bearer ', '');
-
-  if (!token || (token !== serviceRoleKey && token !== anonKey)) {
+  // Only accept service role key (pg_cron uses service_role_key from Vault)
+  if (!isServiceRoleRequest(req)) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
