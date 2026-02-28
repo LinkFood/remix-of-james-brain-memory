@@ -1,0 +1,45 @@
+name: Deploy Edge Functions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'supabase/functions/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Detect changed functions
+        id: changes
+        run: |
+          # Get changed files in the last commit
+          CHANGED=$(git diff --name-only HEAD~1 HEAD -- supabase/functions/ 2>/dev/null || echo "")
+
+          # Extract unique function slugs (skip _shared)
+          SLUGS=$(echo "$CHANGED" | grep -oP 'supabase/functions/\K[^/]+' | grep -v '_shared' | sort -u | tr '\n' ' ')
+
+          # If _shared changed, deploy core functions
+          if echo "$CHANGED" | grep -q 'supabase/functions/_shared/'; then
+            SLUGS="$SLUGS jac-dispatcher jac-code-agent jac-research-agent jac-save-agent jac-search-agent assistant-chat smart-save"
+            SLUGS=$(echo "$SLUGS" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+          fi
+
+          echo "slugs=$SLUGS" >> $GITHUB_OUTPUT
+          echo "Deploying: $SLUGS"
+
+      - name: Deploy functions
+        if: steps.changes.outputs.slugs != ''
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+        run: |
+          for slug in ${{ steps.changes.outputs.slugs }}; do
+            echo "Deploying $slug..."
+            supabase functions deploy "$slug" --no-verify-jwt --project-ref ${{ secrets.SUPABASE_PROJECT_REF }} || echo "FAILED: $slug"
+          done

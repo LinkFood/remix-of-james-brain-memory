@@ -22,7 +22,7 @@ import { callClaude, CLAUDE_MODELS, parseTextContent, parseToolUse, calculateCos
 import type { ModelTier } from '../_shared/anthropic.ts';
 import { notifySlack } from '../_shared/slack.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
-import { getRepoTree, getFileContent, createBranch, commitFiles, createPR, mergePR, revertCommit, isSecretFile } from '../_shared/github.ts';
+import { getRepoTree, getFileContent, createBranch, commitFiles, createPR, mergePR, isSecretFile } from '../_shared/github.ts';
 import type { FileChange } from '../_shared/github.ts';
 
 serve(async (req) => {
@@ -426,8 +426,8 @@ Instructions:
       console.warn('[code-agent] Auto-merge failed (PR stays open):', mergeErr);
     }
 
-    // ─── Step 8c: auto-deploy edge functions (if this is JAC's own repo) ───
-    let deployResult: { deployed: string[]; failed: string[]; healthStatus?: string; reverted?: boolean } | undefined;
+    // ─── Step 8c: detect deploy targets (CI handles actual deployment) ───
+    let deployResult: { ciTriggered: boolean; functionsToDeploy: string[]; sharedChanged: boolean } | undefined;
     const isJacRepo = repoFull.toLowerCase().includes('remix-of-james-brain-memory') || repoFull.toLowerCase().includes('jac-agent-os');
 
     if (mergeSha && isJacRepo) {
@@ -438,7 +438,6 @@ Instructions:
           .map(f => f.path)
           .filter(p => p.startsWith('supabase/functions/') && !p.startsWith('supabase/functions/_shared/'));
 
-        // Extract unique function slugs
         const functionSlugs = [...new Set(
           edgeFunctionPaths.map(p => {
             const parts = p.split('/');
@@ -446,130 +445,16 @@ Instructions:
           }).filter(Boolean)
         )] as string[];
 
-        // If shared modules changed, we need to redeploy all functions that import them
         const sharedChanged = codeFiles.some(f => f.path.startsWith('supabase/functions/_shared/'));
 
-        const deployed: string[] = [];
-        const failed: string[] = [];
+        // GitHub Actions workflow triggers on push to main with supabase/functions/** changes
+        // The merge already pushed to main, so CI is already running
+        const ciTriggered = functionSlugs.length > 0 || sharedChanged;
 
-        if (functionSlugs.length > 0 || sharedChanged) {
-          const slugsToDeploy = sharedChanged && functionSlugs.length === 0
-            ? ['jac-dispatcher', 'jac-code-agent', 'jac-research-agent'] // shared changed, redeploy core
-            : functionSlugs;
-
-          // Deploy via supabase CLI through the Management API
-          // For now, deploy by fetching the function source from GitHub and using the Management API
-          const projectRef = 'rvhyotvklfowklzjahdd';
-          const mgmtPat = Deno.env.get('MGMT_API_TOKEN');
-
-          if (mgmtPat) {
-            for (const slug of slugsToDeploy) {
-              try {
-                // Fetch the function's index.ts from the repo (post-merge, so from default branch)
-                const funcContent = await getFileContent(owner, repo, `supabase/functions/${slug}/index.ts`, defaultBranch);
-
-                // Deploy via Management API
-                const formData = new FormData();
-                const blob = new Blob([funcContent.content], { type: 'application/typescript' });
-                formData.append('slug', slug);
-                formData.append('name', slug);
-                formData.append('verify_jwt', 'false');
-                formData.append('body', blob, 'index.ts');
-
-                const deployUrl = `https://api.supabase.com/v1/projects/${projectRef}/functions/${slug}`;
-                let deployRes = await fetch(deployUrl, {
-                  method: 'PUT',
-                  headers: { 'Authorization': `Bearer ${mgmtPat}` },
-                  body: formData,
-                });
-
-                if (deployRes.status === 404) {
-                  const createUrl = `https://api.supabase.com/v1/projects/${projectRef}/functions`;
-                  deployRes = await fetch(createUrl, {
-                    method: 'POST',
-                    headers: { 'Authorization': `Bearer ${mgmtPat}` },
-                    body: formData,
-                  });
-                }
-
-                if (deployRes.ok) {
-                  deployed.push(slug);
-                } else {
-                  const errText = await deployRes.text();
-                  console.warn(`[code-agent] Deploy ${slug} failed:`, errText.slice(0, 200));
-                  failed.push(slug);
-                }
-              } catch (deployErr) {
-                console.warn(`[code-agent] Deploy ${slug} error:`, deployErr);
-                failed.push(slug);
-              }
-            }
-          } else {
-            console.warn('[code-agent] MGMT_API_TOKEN not set — skipping auto-deploy');
-          }
-        }
-
-        // Health check after deploy
-        let healthStatus = 'skipped';
-        let reverted = false;
-
-        if (deployed.length > 0) {
-          try {
-            const healthRes = await fetch(`${supabaseUrl}/functions/v1/health-check`, {
-              method: 'GET',
-              headers: { 'Authorization': `Bearer ${serviceKey}` },
-            });
-
-            if (healthRes.ok) {
-              const healthData = await healthRes.json();
-              healthStatus = healthData.systemStatus || 'unknown';
-
-              // If system is unhealthy after our deploy, auto-revert
-              if (healthStatus === 'unhealthy') {
-                console.error('[code-agent] System UNHEALTHY after deploy — reverting');
-                try {
-                  await revertCommit(owner, repo, mergeSha, defaultBranch,
-                    `Revert: auto-deploy caused unhealthy state\n\nReverts ${mergeSha.slice(0, 8)}\nOriginal PR: #${pr.number}`);
-                  reverted = true;
-
-                  // Re-deploy the reverted versions
-                  for (const slug of deployed) {
-                    try {
-                      const revertedContent = await getFileContent(owner, repo, `supabase/functions/${slug}/index.ts`, defaultBranch);
-                      const mgmtPat = Deno.env.get('MGMT_API_TOKEN')!;
-                      const formData = new FormData();
-                      const blob = new Blob([revertedContent.content], { type: 'application/typescript' });
-                      formData.append('slug', slug);
-                      formData.append('name', slug);
-                      formData.append('verify_jwt', 'false');
-                      formData.append('body', blob, 'index.ts');
-                      await fetch(`https://api.supabase.com/v1/projects/rvhyotvklfowklzjahdd/functions/${slug}`, {
-                        method: 'PUT',
-                        headers: { 'Authorization': `Bearer ${mgmtPat}` },
-                        body: formData,
-                      });
-                    } catch (redeployErr) {
-                      console.error(`[code-agent] Failed to redeploy ${slug} after revert:`, redeployErr);
-                    }
-                  }
-                } catch (revertErr) {
-                  console.error('[code-agent] Auto-revert failed:', revertErr);
-                }
-              }
-            } else {
-              healthStatus = 'check_failed';
-            }
-          } catch (healthErr) {
-            console.warn('[code-agent] Health check failed:', healthErr);
-            healthStatus = 'check_error';
-          }
-        }
-
-        deployResult = { deployed, failed, healthStatus, reverted };
-        await deployStep({ deployed, failed, healthStatus, reverted });
-
+        deployResult = { ciTriggered, functionsToDeploy: functionSlugs, sharedChanged };
+        await deployStep({ ciTriggered, functionsToDeploy: functionSlugs, sharedChanged });
       } catch (deployErr) {
-        await deployStep.fail(deployErr instanceof Error ? deployErr.message : 'Deploy failed');
+        await deployStep.fail(deployErr instanceof Error ? deployErr.message : 'Deploy detection failed');
       }
     }
 
@@ -696,7 +581,7 @@ Instructions:
     await notifySlack(supabase, userId, {
       taskId,
       taskType: 'code',
-      summary: `Coded: "${query.slice(0, 60)}"\n<${pr.url}|PR #${pr.number}>${mergeSha ? ' ✅ merged' : ''}${deployResult?.deployed?.length ? ` → deployed: ${deployResult.deployed.join(', ')}` : ''}${deployResult?.reverted ? ' ⚠️ REVERTED (unhealthy)' : ''}\nFiles: ${codeFiles.map(f => f.path).join(', ')}`,
+      summary: `Coded: "${query.slice(0, 60)}"\n<${pr.url}|PR #${pr.number}>${mergeSha ? ' ✅ merged' : ''}${deployResult?.ciTriggered ? ` → CI deploying: ${deployResult.functionsToDeploy.join(', ') || '(shared deps)'}` : ''}\nFiles: ${codeFiles.map(f => f.path).join(', ')}`,
       brainEntryId,
       duration,
       slackChannel,
@@ -708,7 +593,7 @@ Instructions:
     const { error: convoError } = await supabase.from('agent_conversations').insert({
       user_id: userId,
       role: 'assistant',
-      content: `Code complete: ${query}\n\nPR: ${pr.url}${mergeSha ? ' (merged)' : ''}\nBranch: ${branchName}\nFiles changed: ${codeFiles.map(f => f.path).join(', ')}${deployResult?.deployed?.length ? `\nDeployed: ${deployResult.deployed.join(', ')}` : ''}${deployResult?.reverted ? '\n⚠️ Auto-reverted — system went unhealthy after deploy' : ''}${brainEntryId ? `\n\nSaved to brain.` : ''}`,
+      content: `Code complete: ${query}\n\nPR: ${pr.url}${mergeSha ? ' (merged)' : ''}\nBranch: ${branchName}\nFiles changed: ${codeFiles.map(f => f.path).join(', ')}${deployResult?.ciTriggered ? `\nCI deploying: ${deployResult.functionsToDeploy.join(', ') || 'shared deps changed'}` : ''}${brainEntryId ? `\n\nSaved to brain.` : ''}`,
       task_ids: [taskId],
     });
     if (convoError) {
