@@ -285,6 +285,94 @@ export async function createPR(
 }
 
 /**
+ * Merge a pull request via the GitHub API
+ */
+export async function mergePR(
+  owner: string,
+  repo: string,
+  prNumber: number,
+  mergeMethod: 'merge' | 'squash' | 'rebase' = 'squash'
+): Promise<{ sha: string; merged: boolean }> {
+  validateRepoComponent(owner, 'owner');
+  validateRepoComponent(repo, 'repo');
+  const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}/merge`;
+  const res = await fetch(url, {
+    method: 'PUT',
+    headers: getHeaders(),
+    body: JSON.stringify({ merge_method: mergeMethod }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to merge PR #${prNumber} (${res.status}): ${text.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  return { sha: data.sha, merged: data.merged };
+}
+
+/**
+ * Create a revert commit on a branch (reverts a specific commit)
+ */
+export async function revertCommit(
+  owner: string,
+  repo: string,
+  commitSha: string,
+  branch: string,
+  message: string
+): Promise<string> {
+  validateRepoComponent(owner, 'owner');
+  validateRepoComponent(repo, 'repo');
+
+  // Get the commit to find its parent
+  const headers = getHeaders();
+  const ownerEnc = encodeURIComponent(owner);
+  const repoEnc = encodeURIComponent(repo);
+
+  const commitUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/commits/${commitSha}`;
+  const commitRes = await fetch(commitUrl, { headers });
+  if (!commitRes.ok) throw new Error(`Failed to get commit ${commitSha}: ${commitRes.status}`);
+  const commitData = await commitRes.json();
+
+  if (!commitData.parents || commitData.parents.length === 0) {
+    throw new Error(`Cannot revert initial commit ${commitSha}`);
+  }
+
+  // Use the parent's tree as the new tree (effectively reverting)
+  const parentSha = commitData.parents[0].sha;
+  const parentCommitUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/commits/${parentSha}`;
+  const parentRes = await fetch(parentCommitUrl, { headers });
+  if (!parentRes.ok) throw new Error(`Failed to get parent commit: ${parentRes.status}`);
+  const parentData = await parentRes.json();
+
+  // Create a revert commit using the parent's tree
+  const newCommitUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/commits`;
+  const newCommitRes = await fetch(newCommitUrl, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      message,
+      tree: parentData.tree.sha,
+      parents: [commitSha],
+    }),
+  });
+  if (!newCommitRes.ok) throw new Error(`Failed to create revert commit: ${newCommitRes.status}`);
+  const newCommitData = await newCommitRes.json();
+
+  // Update the branch ref
+  const branchEnc = encodeURIComponent(branch);
+  const updateRefUrl = `${GITHUB_API}/repos/${ownerEnc}/${repoEnc}/git/refs/heads/${branchEnc}`;
+  const updateRes = await fetch(updateRefUrl, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify({ sha: newCommitData.sha }),
+  });
+  if (!updateRes.ok) throw new Error(`Failed to update ref for revert: ${updateRes.status}`);
+
+  return newCommitData.sha;
+}
+
+/**
  * Check if a repo exists and is accessible
  */
 export async function repoExists(owner: string, repo: string): Promise<boolean> {
