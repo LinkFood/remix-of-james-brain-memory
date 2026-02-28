@@ -1,33 +1,36 @@
 /**
  * Dashboard — Your Brain at a Glance
- * 
- * GOAL: See what matters without organizing anything.
- * 
- * Important stuff floats up. Lists are actionable. Recent is visible.
+ *
+ * Smart View: AI briefing, insight carousel, triage queue, synthesis.
+ * Browse View: Manual tag filtering, chronological sections.
+ *
  * User never built this view. AI did. That's the magic.
- * 
- * Keep it clean. Keep it fast. Keep it alive (realtime).
  */
 
-import { useState, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo, useEffect } from "react";
 import { RefreshCw, Clock, List, Code, Lightbulb, TrendingUp, Calendar, Brain, Archive } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Entry } from "./EntryCard";
 import DumpInput, { DumpInputHandle } from "./DumpInput";
 import { cn } from "@/lib/utils";
 import { parseListItems } from "@/lib/parseListItems";
-import { StatsGrid, EmptyState, EntrySection } from "./dashboard/index";
-import { QuickStats } from "./dashboard/QuickStats";
+import { EmptyState, EntrySection } from "./dashboard/index";
+import DailyBriefing from "./dashboard/DailyBriefing";
+import InsightCarousel from "./dashboard/InsightCarousel";
+import TriageQueue from "./dashboard/TriageQueue";
+import SynthesisButton from "./dashboard/SynthesisButton";
 import TagFilter from "./TagFilter";
 import { ReminderBanner } from "./ReminderBanner";
 import { useEntries, type DashboardEntry } from "@/hooks/useEntries";
 import { useEntryActions } from "@/hooks/useEntryActions";
 import { useRealtimeSubscription } from "@/hooks/useRealtimeSubscription";
 import JacInsightCard from "@/components/JacInsightCard";
-import JacProactiveInsightBanner from "@/components/JacProactiveInsightBanner";
 import { useProactiveInsights } from "@/hooks/useProactiveInsights";
 import type { JacDashboardState } from "@/hooks/useJacDashboard";
+
+type DashboardView = 'smart' | 'browse';
 
 interface DashboardProps {
   userId: string;
@@ -42,6 +45,8 @@ interface DashboardProps {
   /** Jac dashboard transformation state */
   jacState?: JacDashboardState | null;
   onClearJac?: () => void;
+  /** Send a query to Jac */
+  jacSendQuery?: (query: string) => void;
 }
 
 const Dashboard = ({
@@ -56,11 +61,22 @@ const Dashboard = ({
   onToggleSelect,
   jacState,
   onClearJac,
+  jacSendQuery,
 }: DashboardProps) => {
   const internalDumpRef = useRef<DumpInputHandle>(null);
   const dumpRef = dumpInputRef || internalDumpRef;
 
-  // Collapsible sections
+  // View toggle with localStorage persistence
+  const [view, setView] = useState<DashboardView>(() => {
+    const stored = localStorage.getItem('jac-dashboard-view');
+    return (stored === 'smart' || stored === 'browse') ? stored : 'smart';
+  });
+
+  useEffect(() => {
+    localStorage.setItem('jac-dashboard-view', view);
+  }, [view]);
+
+  // Collapsible sections (Browse view)
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
     upcoming: true,
     today: true,
@@ -71,14 +87,17 @@ const Dashboard = ({
     recent: false,
   });
 
-  // Tag filtering
+  // Tag filtering (Browse view)
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  
-  // Show archived toggle
+
+  // Show archived toggle (Browse view)
   const [showArchived, setShowArchived] = useState(false);
-  
+
+  // Synthesis loading
+  const [synthesisLoading, setSynthesisLoading] = useState(false);
+
   // Proactive insights
-  const { insight, dismiss: dismissInsight } = useProactiveInsights(userId);
+  const { insights, dismiss: dismissInsight, loading: insightsLoading, refetch: refetchInsights } = useProactiveInsights(userId);
 
   const toggleSection = (section: string) => {
     setExpandedSections((prev) => ({
@@ -232,6 +251,16 @@ const Dashboard = ({
     }
   };
 
+  const handleSynthesize = async () => {
+    if (!jacSendQuery || synthesisLoading) return;
+    setSynthesisLoading(true);
+    try {
+      await jacSendQuery("Synthesize my recent activity, themes, open loops, and suggested next actions");
+    } finally {
+      setSynthesisLoading(false);
+    }
+  };
+
   // Memoized computed lists for performance
   const todayStart = useMemo(() => {
     const now = new Date();
@@ -276,11 +305,6 @@ const Dashboard = ({
     [filteredEntries]
   );
 
-  const starredCount = useMemo(
-    () => entries.filter((e) => e.starred).length,
-    [entries]
-  );
-
   // Jac surfaced entries — when Jac answers a query and wants entries shown at top
   const jacSurfacedEntries = useMemo(() => {
     if (!jacState?.active || !jacState.surfaceEntryIds?.length) return [];
@@ -300,7 +324,7 @@ const Dashboard = ({
     }
     return map;
   }, [jacState?.active, jacState?.clusters]);
-  
+
   // Upcoming entries: events/reminders with future event_date
   const upcomingEntries = useMemo(() => {
     return filteredEntries
@@ -316,6 +340,27 @@ const Dashboard = ({
       });
   }, [filteredEntries, todayStr]);
 
+  // Collect all insight entry IDs for triage queue
+  const insightEntryIds = useMemo(
+    () => insights.flatMap(i => i.entryIds),
+    [insights]
+  );
+
+  // Common entry section props
+  const entrySectionProps = {
+    highlightedEntryId,
+    jacHighlightIds: jacState?.highlightEntryIds,
+    jacClusterMap,
+    isSelecting,
+    selectedIds,
+    onToggleSelect,
+    onToggleListItem: handleToggleListItem,
+    onStar: handleStar,
+    onArchive: handleArchive,
+    onDelete: handleDelete,
+    onViewEntry,
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -329,7 +374,6 @@ const Dashboard = ({
       {/* JAC TAKES OVER - Front and center when active */}
       {jacState?.active && (
         <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
-          {/* Jac Insight Card - THE HERO */}
           {jacState.insightCard && (
             <JacInsightCard
               insight={jacState.insightCard}
@@ -348,7 +392,6 @@ const Dashboard = ({
             />
           )}
 
-          {/* Jac Found Section - RIGHT HERE, NOT BURIED */}
           {jacSurfacedEntries.length > 0 && (
             <EntrySection
               title="Jac Found"
@@ -359,44 +402,18 @@ const Dashboard = ({
               onToggle={() => {}}
               color="bg-sky-500/10"
               compact
-              highlightedEntryId={highlightedEntryId}
-              jacHighlightIds={jacState?.highlightEntryIds}
-              jacClusterMap={jacClusterMap}
-              isSelecting={isSelecting}
-              selectedIds={selectedIds}
-              onToggleSelect={onToggleSelect}
-              onToggleListItem={handleToggleListItem}
-              onStar={handleStar}
-              onArchive={handleArchive}
-              onDelete={handleDelete}
-              onViewEntry={onViewEntry}
+              {...entrySectionProps}
             />
           )}
 
-          {/* Clear button to return to normal view */}
-          <Button 
-            variant="ghost" 
+          <Button
+            variant="ghost"
             onClick={onClearJac}
             className="w-full text-muted-foreground hover:text-foreground"
           >
             ← Back to normal view
           </Button>
         </div>
-      )}
-
-      {/* Proactive Jac Insight Banner - only when Jac NOT active */}
-      {!jacState?.active && insight && (
-        <JacProactiveInsightBanner
-          message={insight.message}
-          type={insight.type}
-          onDismiss={dismissInsight}
-          onAction={() => {
-            const firstId = insight.entryIds[0];
-            const entry = entries.find(e => e.id === firstId);
-            if (entry) onViewEntry(entry);
-            dismissInsight();
-          }}
-        />
       )}
 
       {/* Dump Input - Sticky on mobile */}
@@ -419,231 +436,225 @@ const Dashboard = ({
         "space-y-6 transition-opacity duration-300",
         jacState?.active && "opacity-50"
       )}>
-        {/* Reminder Banner */}
+        {/* View Toggle */}
+        <Tabs value={view} onValueChange={(v) => setView(v as DashboardView)}>
+          <TabsList className="w-full">
+            <TabsTrigger value="smart" className="flex-1">Smart</TabsTrigger>
+            <TabsTrigger value="browse" className="flex-1">Browse</TabsTrigger>
+          </TabsList>
+        </Tabs>
+
+        {/* Reminder Banner (both views) */}
         <ReminderBanner userId={userId} onViewEntry={(e) => {
           const entry = entries.find(ent => ent.id === e.id);
           if (entry) onViewEntry(entry);
         }} />
 
-        {/* Quick Stats Banner */}
-        <QuickStats entries={entries} />
-
-        {/* Stats Grid */}
-        <StatsGrid stats={stats} starredCount={starredCount} />
-
-        {/* Tag Filter & Archive Toggle */}
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <div className="flex items-center gap-2">
-            <TagFilter
-              entries={entries}
-              selectedTags={activeFilterTags}
-              onTagsChange={setSelectedTags}
+        {/* ===== SMART VIEW ===== */}
+        {view === 'smart' && (
+          <div className="space-y-4">
+            <DailyBriefing
+              insights={insights}
+              stats={stats}
+              loading={insightsLoading}
+              onRefresh={refetchInsights}
             />
-            {externalFilterTags && externalFilterTags.length > 0 && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={onClearExternalFilter}
-                className="text-xs text-muted-foreground"
-              >
-                Clear Jac filter
-              </Button>
+
+            <InsightCarousel
+              insights={insights}
+              onDismiss={dismissInsight}
+              onAction={(insight) => {
+                if (!insight.entryIds.length) return;
+                const firstId = insight.entryIds[0];
+                const entry = entries.find(e => e.id === firstId);
+                if (entry) onViewEntry(entry);
+              }}
+            />
+
+            <TriageQueue
+              entries={entries}
+              insightEntryIds={insightEntryIds}
+              {...entrySectionProps}
+            />
+
+            {jacSendQuery && (
+              <SynthesisButton
+                onSynthesize={handleSynthesize}
+                loading={synthesisLoading}
+              />
+            )}
+
+            {/* Recent entries (Smart view shows 10 expanded) */}
+            {entries.length > 0 && (
+              <EntrySection
+                title="Recent"
+                icon={<RefreshCw className="w-4 h-4 text-muted-foreground" />}
+                entries={entries.slice(0, 10)}
+                section="recent"
+                expanded={true}
+                onToggle={() => {}}
+                color="bg-muted"
+                limit={10}
+                compact
+                showLoadMore={hasMore}
+                onLoadMore={loadMore}
+                loadingMore={loadingMore}
+                {...entrySectionProps}
+              />
+            )}
+
+            {entries.length === 0 && (
+              <EmptyState
+                onTryExample={handleTryExample}
+                onLoadSampleData={handleLoadSampleData}
+              />
             )}
           </div>
-          <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
-            <Checkbox
-              checked={showArchived}
-              onCheckedChange={(c) => setShowArchived(c as boolean)}
-            />
-            <Archive className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Show archived</span>
-          </label>
-        </div>
-        {/* Sections */}
-        <div className="space-y-4">
-          {/* Upcoming Section */}
-          {upcomingEntries.length > 0 && (
-            <EntrySection
-              title="Upcoming"
-              icon={<Calendar className="w-4 h-4 text-green-500" />}
-              entries={upcomingEntries}
-              section="upcoming"
-              expanded={expandedSections.upcoming}
-              onToggle={toggleSection}
-              color="bg-green-500/10"
-              compact
-              highlightedEntryId={highlightedEntryId}
-              jacHighlightIds={jacState?.highlightEntryIds}
-              jacClusterMap={jacClusterMap}
-              isSelecting={isSelecting}
-              selectedIds={selectedIds}
-              onToggleSelect={onToggleSelect}
-              onToggleListItem={handleToggleListItem}
-              onStar={handleStar}
-              onArchive={handleArchive}
-              onDelete={handleDelete}
-              onViewEntry={onViewEntry}
-            />
-          )}
-
-          {/* Today Section */}
-        {todayEntries.length > 0 && (
-          <EntrySection
-            title="Today"
-            icon={<Clock className="w-4 h-4 text-blue-500" />}
-            entries={todayEntries}
-            section="today"
-            expanded={expandedSections.today}
-            onToggle={toggleSection}
-            color="bg-blue-500/10"
-            compact
-            highlightedEntryId={highlightedEntryId}
-            jacHighlightIds={jacState?.highlightEntryIds}
-            jacClusterMap={jacClusterMap}
-            isSelecting={isSelecting}
-            selectedIds={selectedIds}
-            onToggleSelect={onToggleSelect}
-            onToggleListItem={handleToggleListItem}
-            onStar={handleStar}
-            onArchive={handleArchive}
-            onDelete={handleDelete}
-            onViewEntry={onViewEntry}
-          />
         )}
 
-        {/* Important Section */}
-        {importantEntries.length > 0 && (
-          <EntrySection
-            title="Important"
-            icon={<TrendingUp className="w-4 h-4 text-orange-500" />}
-            entries={importantEntries}
-            section="important"
-            expanded={expandedSections.important}
-            onToggle={toggleSection}
-            color="bg-orange-500/10"
-            compact
-            highlightedEntryId={highlightedEntryId}
-            jacHighlightIds={jacState?.highlightEntryIds}
-            jacClusterMap={jacClusterMap}
-            isSelecting={isSelecting}
-            selectedIds={selectedIds}
-            onToggleSelect={onToggleSelect}
-            onToggleListItem={handleToggleListItem}
-            onStar={handleStar}
-            onArchive={handleArchive}
-            onDelete={handleDelete}
-            onViewEntry={onViewEntry}
-          />
-        )}
+        {/* ===== BROWSE VIEW ===== */}
+        {view === 'browse' && (
+          <div className="space-y-4">
+            {/* Tag Filter & Archive Toggle */}
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div className="flex items-center gap-2">
+                <TagFilter
+                  entries={entries}
+                  selectedTags={activeFilterTags}
+                  onTagsChange={setSelectedTags}
+                />
+                {externalFilterTags && externalFilterTags.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onClearExternalFilter}
+                    className="text-xs text-muted-foreground"
+                  >
+                    Clear Jac filter
+                  </Button>
+                )}
+              </div>
+              <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer hover:text-foreground transition-colors">
+                <Checkbox
+                  checked={showArchived}
+                  onCheckedChange={(c) => setShowArchived(c as boolean)}
+                />
+                <Archive className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Show archived</span>
+              </label>
+            </div>
 
-        {/* Lists Section */}
-        {listEntries.length > 0 && (
-          <EntrySection
-            title="Lists"
-            icon={<List className="w-4 h-4 text-blue-500" />}
-            entries={listEntries}
-            section="lists"
-            expanded={expandedSections.lists}
-            onToggle={toggleSection}
-            color="bg-blue-500/10"
-            highlightedEntryId={highlightedEntryId}
-            jacHighlightIds={jacState?.highlightEntryIds}
-            jacClusterMap={jacClusterMap}
-            isSelecting={isSelecting}
-            selectedIds={selectedIds}
-            onToggleSelect={onToggleSelect}
-            onToggleListItem={handleToggleListItem}
-            onStar={handleStar}
-            onArchive={handleArchive}
-            onDelete={handleDelete}
-            onViewEntry={onViewEntry}
-          />
-        )}
+            {/* Sections */}
+            <div className="space-y-4">
+              {upcomingEntries.length > 0 && (
+                <EntrySection
+                  title="Upcoming"
+                  icon={<Calendar className="w-4 h-4 text-green-500" />}
+                  entries={upcomingEntries}
+                  section="upcoming"
+                  expanded={expandedSections.upcoming}
+                  onToggle={toggleSection}
+                  color="bg-green-500/10"
+                  compact
+                  {...entrySectionProps}
+                />
+              )}
 
-        {/* Code Section */}
-        {codeEntries.length > 0 && (
-          <EntrySection
-            title="Code Snippets"
-            icon={<Code className="w-4 h-4 text-purple-500" />}
-            entries={codeEntries}
-            section="code"
-            expanded={expandedSections.code}
-            onToggle={toggleSection}
-            color="bg-purple-500/10"
-            compact
-            highlightedEntryId={highlightedEntryId}
-            jacHighlightIds={jacState?.highlightEntryIds}
-            jacClusterMap={jacClusterMap}
-            isSelecting={isSelecting}
-            selectedIds={selectedIds}
-            onToggleSelect={onToggleSelect}
-            onStar={handleStar}
-            onArchive={handleArchive}
-            onDelete={handleDelete}
-            onViewEntry={onViewEntry}
-          />
-        )}
+              {todayEntries.length > 0 && (
+                <EntrySection
+                  title="Today"
+                  icon={<Clock className="w-4 h-4 text-blue-500" />}
+                  entries={todayEntries}
+                  section="today"
+                  expanded={expandedSections.today}
+                  onToggle={toggleSection}
+                  color="bg-blue-500/10"
+                  compact
+                  {...entrySectionProps}
+                />
+              )}
 
-        {/* Ideas Section */}
-        {ideaEntries.length > 0 && (
-          <EntrySection
-            title="Ideas"
-            icon={<Lightbulb className="w-4 h-4 text-yellow-500" />}
-            entries={ideaEntries}
-            section="ideas"
-            expanded={expandedSections.ideas}
-            onToggle={toggleSection}
-            color="bg-yellow-500/10"
-            compact
-            highlightedEntryId={highlightedEntryId}
-            jacHighlightIds={jacState?.highlightEntryIds}
-            jacClusterMap={jacClusterMap}
-            isSelecting={isSelecting}
-            selectedIds={selectedIds}
-            onToggleSelect={onToggleSelect}
-            onStar={handleStar}
-            onArchive={handleArchive}
-            onDelete={handleDelete}
-            onViewEntry={onViewEntry}
-          />
-        )}
+              {importantEntries.length > 0 && (
+                <EntrySection
+                  title="Important"
+                  icon={<TrendingUp className="w-4 h-4 text-orange-500" />}
+                  entries={importantEntries}
+                  section="important"
+                  expanded={expandedSections.important}
+                  onToggle={toggleSection}
+                  color="bg-orange-500/10"
+                  compact
+                  {...entrySectionProps}
+                />
+              )}
 
-        {/* Recent Timeline */}
-        {entries.length > 0 && (
-          <EntrySection
-            title="Recent"
-            icon={<RefreshCw className="w-4 h-4 text-muted-foreground" />}
-            entries={entries.slice(0, 10)}
-            section="recent"
-            expanded={expandedSections.recent}
-            onToggle={toggleSection}
-            color="bg-muted"
-            compact
-            highlightedEntryId={highlightedEntryId}
-            jacHighlightIds={jacState?.highlightEntryIds}
-            jacClusterMap={jacClusterMap}
-            isSelecting={isSelecting}
-            selectedIds={selectedIds}
-            onToggleSelect={onToggleSelect}
-            onToggleListItem={handleToggleListItem}
-            onStar={handleStar}
-            onArchive={handleArchive}
-            onDelete={handleDelete}
-            onViewEntry={onViewEntry}
-            showLoadMore={hasMore}
-            onLoadMore={loadMore}
-            loadingMore={loadingMore}
-          />
-        )}
+              {listEntries.length > 0 && (
+                <EntrySection
+                  title="Lists"
+                  icon={<List className="w-4 h-4 text-blue-500" />}
+                  entries={listEntries}
+                  section="lists"
+                  expanded={expandedSections.lists}
+                  onToggle={toggleSection}
+                  color="bg-blue-500/10"
+                  {...entrySectionProps}
+                />
+              )}
 
-          {/* Empty State */}
-          {entries.length === 0 && (
-            <EmptyState
-              onTryExample={handleTryExample}
-              onLoadSampleData={handleLoadSampleData}
-            />
-          )}
-        </div>
+              {codeEntries.length > 0 && (
+                <EntrySection
+                  title="Code Snippets"
+                  icon={<Code className="w-4 h-4 text-purple-500" />}
+                  entries={codeEntries}
+                  section="code"
+                  expanded={expandedSections.code}
+                  onToggle={toggleSection}
+                  color="bg-purple-500/10"
+                  compact
+                  {...entrySectionProps}
+                />
+              )}
+
+              {ideaEntries.length > 0 && (
+                <EntrySection
+                  title="Ideas"
+                  icon={<Lightbulb className="w-4 h-4 text-yellow-500" />}
+                  entries={ideaEntries}
+                  section="ideas"
+                  expanded={expandedSections.ideas}
+                  onToggle={toggleSection}
+                  color="bg-yellow-500/10"
+                  compact
+                  {...entrySectionProps}
+                />
+              )}
+
+              {filteredEntries.length > 0 && (
+                <EntrySection
+                  title="Recent"
+                  icon={<RefreshCw className="w-4 h-4 text-muted-foreground" />}
+                  entries={filteredEntries.slice(0, 10)}
+                  section="recent"
+                  expanded={expandedSections.recent}
+                  onToggle={toggleSection}
+                  color="bg-muted"
+                  compact
+                  showLoadMore={hasMore}
+                  onLoadMore={loadMore}
+                  loadingMore={loadingMore}
+                  {...entrySectionProps}
+                />
+              )}
+
+              {entries.length === 0 && (
+                <EmptyState
+                  onTryExample={handleTryExample}
+                  onLoadSampleData={handleLoadSampleData}
+                />
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

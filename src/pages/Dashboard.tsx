@@ -524,6 +524,7 @@ const Dashboard = () => {
           onToggleSelect={toggleItem}
           jacState={jacState}
           onClearJac={jacClearDashboard}
+          jacSendQuery={jacSendQuery}
         />
       </main>
 

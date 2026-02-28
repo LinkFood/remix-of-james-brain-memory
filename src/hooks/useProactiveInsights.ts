@@ -3,67 +3,61 @@
  *
  * Queries the brain_insights table (populated by AI cron job).
  * Falls back to simple overdue/forgotten queries if no AI insights exist.
- * Shows one insight at a time (dismissible).
+ * Returns all active insights (not just one).
  */
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 export type InsightType = 'pattern' | 'overdue' | 'stale' | 'schedule' | 'suggestion' | 'forgotten' | 'unchecked';
 
-export interface ProactiveInsight {
-  id?: string;
+export interface BrainInsight {
+  id: string;
   type: InsightType;
-  message: string;
-  count: number;
+  title: string;
+  body: string;
+  priority: number;
   entryIds: string[];
 }
 
 export function useProactiveInsights(userId: string | undefined) {
-  const [insight, setInsight] = useState<ProactiveInsight | null>(null);
-  const [dismissed, setDismissed] = useState(false);
+  const [insights, setInsights] = useState<BrainInsight[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!userId || dismissed) {
+  const fetchInsights = useCallback(async () => {
+    if (!userId) {
       setLoading(false);
       return;
     }
 
-    // Check localStorage for today's dismissal
-    const dismissKey = `jac-insight-dismissed-${new Date().toDateString()}`;
-    if (localStorage.getItem(dismissKey)) {
-      setDismissed(true);
-      setLoading(false);
-      return;
-    }
+    setLoading(true);
+    try {
+      // Fetch all active AI-generated insights
+      const { data: aiInsights, error: aiError } = await supabase
+        .from('brain_insights')
+        .select('id, type, title, body, priority, entry_ids')
+        .eq('user_id', userId)
+        .eq('dismissed', false)
+        .gt('expires_at', new Date().toISOString())
+        .order('priority', { ascending: true });
 
-    const checkInsights = async () => {
-      try {
-        // First: try AI-generated insights from brain_insights table
-        const { data: aiInsights, error: aiError } = await supabase
-          .from('brain_insights')
-          .select('id, type, title, body, priority, entry_ids')
-          .eq('user_id', userId)
-          .eq('dismissed', false)
-          .gt('expires_at', new Date().toISOString())
-          .order('priority', { ascending: true })
-          .limit(1);
+      const results: BrainInsight[] = [];
 
-        if (!aiError && aiInsights && aiInsights.length > 0) {
-          const ai = aiInsights[0];
-          setInsight({
+      if (!aiError && aiInsights && aiInsights.length > 0) {
+        for (const ai of aiInsights) {
+          results.push({
             id: ai.id,
             type: ai.type as InsightType,
-            message: `${ai.title}: ${ai.body}`,
-            count: (ai.entry_ids as string[])?.length || 0,
+            title: ai.title,
+            body: ai.body,
+            priority: ai.priority,
             entryIds: (ai.entry_ids as string[]) || [],
           });
-          setLoading(false);
-          return;
         }
+      }
 
-        // Fallback: simple overdue/forgotten queries (same as before)
+      // Fallback: generate synthetic insights from overdue + stale entries
+      if (results.length === 0) {
         const today = new Date().toISOString().split('T')[0];
         const { data: overdue } = await supabase
           .from('entries')
@@ -75,64 +69,74 @@ export function useProactiveInsights(userId: string | undefined) {
           .limit(10);
 
         if (overdue && overdue.length > 0) {
-          setInsight({
+          results.push({
+            id: 'fallback-overdue',
             type: 'overdue',
-            message: overdue.length === 1
-              ? `"${overdue[0].title || 'Untitled'}" is overdue`
-              : `You have ${overdue.length} overdue items`,
-            count: overdue.length,
+            title: `${overdue.length} overdue item${overdue.length === 1 ? '' : 's'}`,
+            body: overdue.length === 1
+              ? `"${overdue[0].title || 'Untitled'}" is past due`
+              : `You have ${overdue.length} items past their due date`,
+            priority: 1,
             entryIds: overdue.map(e => e.id),
           });
-          setLoading(false);
-          return;
         }
 
-        // Check for forgotten entries (not touched in 14 days)
         const twoWeeksAgo = new Date();
         twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
-        const { data: forgotten } = await supabase
+        const { data: stale } = await supabase
           .from('entries')
           .select('id, title')
           .eq('user_id', userId)
           .eq('archived', false)
-          .eq('starred', false)
+          .gte('importance_score', 7)
           .lt('updated_at', twoWeeksAgo.toISOString())
           .order('importance_score', { ascending: false })
-          .limit(3);
+          .limit(5);
 
-        if (forgotten && forgotten.length > 0) {
-          setInsight({
-            type: 'forgotten',
-            message: `"${forgotten[0].title || 'Untitled'}" hasn't been touched in 2 weeks`,
-            count: forgotten.length,
-            entryIds: forgotten.map(e => e.id),
+        if (stale && stale.length > 0) {
+          results.push({
+            id: 'fallback-stale',
+            type: 'stale',
+            title: `${stale.length} important item${stale.length === 1 ? '' : 's'} going stale`,
+            body: `"${stale[0].title || 'Untitled'}" hasn't been touched in 2+ weeks`,
+            priority: 2,
+            entryIds: stale.map(e => e.id),
           });
         }
-      } catch (error) {
-        console.error('Failed to check proactive insights:', error);
-      } finally {
-        setLoading(false);
       }
-    };
 
-    checkInsights();
-  }, [userId, dismissed]);
+      setInsights(results);
+    } catch (error) {
+      console.error('Failed to check proactive insights:', error);
+    } finally {
+      setLoading(false);
+    }
+  }, [userId]);
 
-  const dismiss = async () => {
-    // If it's an AI insight with a DB ID, mark dismissed in DB
-    if (insight?.id) {
-      await supabase
+  useEffect(() => {
+    fetchInsights();
+  }, [fetchInsights]);
+
+  const dismiss = useCallback(async (insightId: string) => {
+    // Optimistic: remove from local state immediately
+    const prev = insights;
+    setInsights(curr => curr.filter(i => i.id !== insightId));
+
+    // If it's a real DB insight, persist the dismissal
+    if (!insightId.startsWith('fallback-')) {
+      const { error } = await supabase
         .from('brain_insights')
         .update({ dismissed: true })
-        .eq('id', insight.id)
-        .catch(() => {});
+        .eq('id', insightId)
+        .eq('user_id', userId);
+
+      if (error) {
+        // Rollback on failure
+        console.error('Failed to dismiss insight:', error);
+        setInsights(prev);
+      }
     }
+  }, [insights, userId]);
 
-    const dismissKey = `jac-insight-dismissed-${new Date().toDateString()}`;
-    localStorage.setItem(dismissKey, 'true');
-    setDismissed(true);
-    setInsight(null);
-  };
-
-  return { insight, dismiss, loading };
+  return { insights, dismiss, loading, refetch: fetchInsights };
 }
