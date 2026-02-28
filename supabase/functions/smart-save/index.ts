@@ -17,7 +17,7 @@
 
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.7.1';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserId, extractUserIdWithServiceRole, isServiceRoleRequest } from '../_shared/auth.ts';
 import { checkRateLimit, RATE_LIMIT_CONFIGS, getRateLimitHeaders } from '../_shared/rateLimit.ts';
@@ -210,10 +210,10 @@ serve(async (req) => {
         fetch(`${supabaseUrl}/functions/v1/classify-content`, {
           method: 'POST',
           headers: {
-            'Authorization': authHeader,
+            'Authorization': `Bearer ${supabaseKey}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ content, imageUrl }),
+          body: JSON.stringify({ content, imageUrl, userId }),
         }),
         fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {
           method: 'POST',

@@ -58,6 +58,7 @@ export function useRelatedEntries(entryId: string | null): UseRelatedEntriesRetu
     setError(null);
 
     try {
+      await supabase.auth.getUser();
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) return;
 

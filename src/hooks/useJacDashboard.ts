@@ -78,6 +78,7 @@ export function useJacDashboard(): UseJacDashboardReturn {
       setState((prev) => ({ ...prev, active: true, loading: true }));
 
       try {
+        await supabase.auth.getUser();
         const {
           data: { session },
         } = await supabase.auth.getSession();

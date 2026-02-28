@@ -266,6 +266,7 @@ export function useJacAgent(userId: string) {
   // Stop a single task
   const stopTask = useCallback(async (taskId: string) => {
     try {
+      await supabase.auth.getUser();
       const { data: session } = await supabase.auth.getSession();
       if (!session?.session?.access_token) throw new Error('Not authenticated');
 
@@ -292,6 +293,7 @@ export function useJacAgent(userId: string) {
   // Stop all running tasks
   const stopAllTasks = useCallback(async () => {
     try {
+      await supabase.auth.getUser();
       const { data: session } = await supabase.auth.getSession();
       if (!session?.session?.access_token) throw new Error('Not authenticated');
 
@@ -332,6 +334,8 @@ export function useJacAgent(userId: string) {
       setMessages(prev => [...prev, userMsg]);
 
       try {
+        // Force token refresh if expired before getting session
+        await supabase.auth.getUser();
         const { data: session } = await supabase.auth.getSession();
         if (!session?.session?.access_token) throw new Error('Not authenticated');
 

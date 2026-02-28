@@ -111,7 +111,12 @@ export function useDumpSave({
         setUploadProgress(analyzeLabel);
       }
 
-      // Get auth session for custom fetch
+      // Get fresh auth session — getUser() forces a token refresh if expired,
+      // then getSession() returns the updated cached token
+      const { error: refreshError } = await supabase.auth.getUser();
+      if (refreshError) {
+        throw new Error("Not authenticated");
+      }
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
         throw new Error("Not authenticated");

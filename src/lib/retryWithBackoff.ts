@@ -32,20 +32,32 @@ export async function retryWithBackoff<T>(
       return result;
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
-      
+
+      // Don't retry on auth or client errors — only retry on network/server issues
+      const msg = lastError.message;
+      const isClientError = msg.includes('401') || msg.includes('403') ||
+        msg.includes('Unauthorized') || msg.includes('Invalid or expired token') ||
+        msg.includes('Not authenticated') || msg.includes('400') ||
+        msg.includes('Rate limit') || msg.includes('429') ||
+        msg.includes('Content too long') || msg.includes('too large');
+      if (isClientError) {
+        if (toastId) toast.dismiss(toastId);
+        throw lastError;
+      }
+
       if (attempt < maxRetries) {
         // Calculate exponential backoff delay
         const delay = baseDelayMs * Math.pow(2, attempt - 1);
-        
+
         // Notify about retry
         if (onRetry) {
           onRetry(attempt, maxRetries);
         }
-        
+
         if (showToast && toastId) {
           toast.loading(`Connection issue - retrying... (${attempt}/${maxRetries})`, { id: toastId });
         }
-        
+
         // Wait before next retry
         await new Promise(resolve => setTimeout(resolve, delay));
       }

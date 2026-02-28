@@ -393,6 +393,7 @@ export function useCodeWorkspace(userId: string) {
     }]);
 
     try {
+      await supabase.auth.getUser();
       const { data: session } = await supabase.auth.getSession();
       if (!session?.session?.access_token) throw new Error('Not authenticated');
 
