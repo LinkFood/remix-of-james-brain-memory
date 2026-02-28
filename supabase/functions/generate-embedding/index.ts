@@ -20,6 +20,8 @@ serve(async (req) => {
   const corsHeaders = getCorsHeaders(req);
 
   // Auth gate: only internal service-role calls allowed
+  // Note: Supabase relay strips auth tokens from external requests, so external
+  // calls always fail here. Internal function-to-function calls bypass the relay.
   if (!isServiceRoleRequest(req)) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
       status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
