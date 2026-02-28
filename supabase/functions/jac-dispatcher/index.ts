@@ -18,7 +18,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserId, extractUserIdWithServiceRole } from '../_shared/auth.ts';
-import { callClaude, CLAUDE_MODELS, parseToolUse, parseTextContent, recordTokenUsage } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseToolUse, parseTextContent, recordTokenUsage, resolveModel } from '../_shared/anthropic.ts';
+import type { ModelTier } from '../_shared/anthropic.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
 import { markdownToMrkdwn } from '../_shared/slack.ts';
 import { getUserContext } from '../_shared/context.ts';
@@ -403,7 +404,42 @@ Be concise. Be confident. Don't ask questions — just act.`;
     const extractedQuery = (toolResult?.input?.extractedQuery as string) || message;
     let response = (toolResult?.input?.response as string) || "I'm on it.";
 
-    // 4b. Code project lookup — find matching project if intent is code
+    // 4b. Model routing — pick the right model tier for this task
+    let modelTier: ModelTier = 'sonnet'; // default
+    try {
+      // Check user preference first
+      const { data: userSettings } = await supabase
+        .from('user_settings')
+        .select('preferred_model')
+        .eq('user_id', userId)
+        .single();
+
+      const preferredModel = userSettings?.preferred_model as string | undefined;
+
+      if (preferredModel?.includes('opus')) {
+        modelTier = 'opus';
+      } else if (preferredModel?.includes('haiku')) {
+        modelTier = 'haiku';
+      } else {
+        // Auto-route based on intent and complexity
+        const msgLen = message.length;
+        const isComplex = msgLen > 300 || /architect|refactor|redesign|overhaul|migrate|complex/i.test(message);
+
+        if (intent === 'code' && isComplex) {
+          modelTier = 'opus';
+        } else if (intent === 'code' || intent === 'research' || intent === 'report') {
+          modelTier = 'sonnet';
+        } else if (intent === 'save' || intent === 'search') {
+          modelTier = 'sonnet'; // these are fast but still need quality
+        } else {
+          modelTier = 'sonnet';
+        }
+      }
+    } catch (err) {
+      console.warn('[jac-dispatcher] Model routing failed (defaulting to sonnet):', err);
+    }
+
+    // 4c. Code project lookup — find matching project if intent is code
     // Accept explicit context.projectId from the Code Workspace UI first
     let codeProject: { id: string; name: string; repo_full_name: string } | null = null;
     if (intent === 'code') {
@@ -528,6 +564,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
     await log.info('intent_parsed', {
       intent,
       agentType,
+      modelTier,
       summary,
       extractedQuery,
       hasBrainContext: brainContext.length > 0,
@@ -549,6 +586,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
             query: extractedQuery,
             originalMessage: message,
             brainContext: brainContext.slice(0, 2000),
+            modelTier,
             slack_channel,
             slack_thinking_ts,
             ...(intent === 'code' && codeProject ? {
@@ -575,7 +613,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
 
     // 8. Fire-and-forget worker dispatch
     if (intent !== 'general' && childTaskId) {
-      await log.info('worker_dispatched', { agentType, childTaskId });
+      await log.info('worker_dispatched', { agentType, childTaskId, modelTier });
       const workerUrl = `${supabaseUrl}/functions/v1/${agentType}`;
       fetch(workerUrl, {
         method: 'POST',
@@ -590,6 +628,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
           query: extractedQuery,
           originalMessage: message,
           brainContext: brainContext.slice(0, 2000),
+          modelTier,
           slack_channel,
           slack_thinking_ts,
           ...(intent === 'code' && codeProject ? {

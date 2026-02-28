@@ -15,7 +15,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
-import { callClaude, CLAUDE_MODELS, parseTextContent, recordTokenUsage } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseTextContent, recordTokenUsage, resolveModel } from '../_shared/anthropic.ts';
+import type { ModelTier } from '../_shared/anthropic.ts';
 import { notifySlack } from '../_shared/slack.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
 
@@ -51,6 +52,8 @@ serve(async (req) => {
     const brainContext = (body.brainContext as string) || '';
     slackChannel = body.slack_channel as string | undefined;
     slackThinkingTs = body.slack_thinking_ts as string | undefined;
+    const modelTier = (body.modelTier as ModelTier) || 'sonnet';
+    const researchModel = resolveModel(modelTier);
 
     if (!taskId || !userId || !query) {
       return new Response(JSON.stringify({ error: 'Missing required fields' }), {
@@ -183,7 +186,7 @@ Instructions:
 - Format with markdown headers and bullet points`;
 
     const claudeResponse = await callClaude({
-      model: CLAUDE_MODELS.sonnet,
+      model: researchModel,
       system: 'You are a thorough research assistant that produces clear, well-structured briefs.',
       messages: [{ role: 'user', content: synthesisPrompt }],
       max_tokens: 2048,
@@ -204,7 +207,7 @@ Instructions:
     });
 
     // Record token usage
-    await recordTokenUsage(supabase, taskId, CLAUDE_MODELS.sonnet, claudeResponse.usage);
+    await recordTokenUsage(supabase, taskId, researchModel, claudeResponse.usage);
 
     // Kill switch check before save
     if (await checkCancelled()) {

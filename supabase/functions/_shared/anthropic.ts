@@ -9,12 +9,21 @@ export const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 export const ANTHROPIC_VERSION = '2023-06-01';
 
 export const CLAUDE_MODELS = {
+  opus: 'claude-opus-4-20250514',
   sonnet: 'claude-sonnet-4-20250514',
   haiku: 'claude-haiku-4-5-20251001',
 } as const;
 
+// Model tiers for routing (dispatcher picks, workers consume)
+export type ModelTier = 'opus' | 'sonnet' | 'haiku';
+
+export function resolveModel(tier: ModelTier): string {
+  return CLAUDE_MODELS[tier] || CLAUDE_MODELS.sonnet;
+}
+
 // Cost per 1M tokens (USD)
 export const CLAUDE_RATES = {
+  [CLAUDE_MODELS.opus]: { input: 15.0, output: 75.0 },
   [CLAUDE_MODELS.sonnet]: { input: 3.0, output: 15.0 },
   [CLAUDE_MODELS.haiku]: { input: 0.80, output: 4.0 },
 } as const;

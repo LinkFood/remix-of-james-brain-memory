@@ -18,7 +18,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
-import { callClaude, CLAUDE_MODELS, parseTextContent, parseToolUse, calculateCost, recordTokenUsage } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseTextContent, parseToolUse, calculateCost, recordTokenUsage, resolveModel } from '../_shared/anthropic.ts';
+import type { ModelTier } from '../_shared/anthropic.ts';
 import { notifySlack } from '../_shared/slack.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
 import { getRepoTree, getFileContent, createBranch, commitFiles, createPR, isSecretFile } from '../_shared/github.ts';
@@ -59,6 +60,8 @@ serve(async (req) => {
     slackChannel = body.slack_channel as string | undefined;
     slackThinkingTs = body.slack_thinking_ts as string | undefined;
     const brainContext = (body.brainContext as string) || '';
+    const modelTier = (body.modelTier as ModelTier) || 'sonnet';
+    const codeModel = resolveModel(modelTier);
 
     const missingFields = [
       ...(!taskId ? ['taskId'] : []),
@@ -82,7 +85,7 @@ serve(async (req) => {
       .update({ status: 'running', updated_at: new Date().toISOString() })
       .eq('id', taskId);
 
-    await log.info('task_started', { query, projectId, projectName });
+    await log.info('task_started', { query, projectId, projectName, modelTier });
 
     // ─── Step 1: resolve_project ───
     const projectStep = await log.step('resolve_project', { projectId });
@@ -211,7 +214,7 @@ Instructions:
 - Use the submit_plan tool to return your plan`;
 
     const planResponse = await callClaude({
-      model: CLAUDE_MODELS.sonnet,
+      model: codeModel,
       system: 'You are a precise coding agent. Plan changes carefully. Use the submit_plan tool.',
       messages: [{ role: 'user', content: planPrompt }],
       tools: planTools,
@@ -339,7 +342,7 @@ Instructions:
 - Use the submit_code tool to return your changes`;
 
     const codeResponse = await callClaude({
-      model: CLAUDE_MODELS.sonnet,
+      model: codeModel,
       system: 'You are a precise coding agent. Write complete, working code. Use the submit_code tool.',
       messages: [{ role: 'user', content: codePrompt }],
       tools: codeTools,
@@ -365,15 +368,15 @@ Instructions:
       throw new Error('Claude returned zero files to commit');
     }
 
-    const totalCost = calculateCost(CLAUDE_MODELS.sonnet, planResponse.usage) +
-      calculateCost(CLAUDE_MODELS.sonnet, codeResponse.usage);
+    const totalCost = calculateCost(codeModel, planResponse.usage) +
+      calculateCost(codeModel, codeResponse.usage);
 
     // Record combined token usage for both plan + code calls
     const combinedUsage = {
       input_tokens: (planResponse.usage?.input_tokens || 0) + (codeResponse.usage?.input_tokens || 0),
       output_tokens: (planResponse.usage?.output_tokens || 0) + (codeResponse.usage?.output_tokens || 0),
     };
-    await recordTokenUsage(supabase, taskId, CLAUDE_MODELS.sonnet, combinedUsage);
+    await recordTokenUsage(supabase, taskId, codeModel, combinedUsage);
 
     await writeStep({
       fileCount: codeFiles.length,
