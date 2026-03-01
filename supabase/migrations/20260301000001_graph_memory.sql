@@ -1,6 +1,8 @@
 -- Graph Memory: brain_entities + entity_mentions
 -- Gives JAC entity awareness across all saved content
 
+SET search_path = public, extensions;
+
 -- Brain entities — people, projects, places, concepts, orgs
 CREATE TABLE brain_entities (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
@@ -11,7 +13,7 @@ CREATE TABLE brain_entities (
   mention_count INT DEFAULT 1,
   first_seen TIMESTAMPTZ DEFAULT now(),
   last_seen TIMESTAMPTZ DEFAULT now(),
-  embedding vector(512),
+  embedding extensions.vector(512),
   created_at TIMESTAMPTZ DEFAULT now()
 );
 
@@ -74,3 +76,5 @@ CREATE POLICY "Service role full access to entity_mentions"
 CREATE INDEX idx_entity_mentions_entity_id ON entity_mentions(entity_id);
 CREATE INDEX idx_entity_mentions_entry_id ON entity_mentions(entry_id);
 CREATE INDEX idx_entity_mentions_reflection_id ON entity_mentions(reflection_id);
+
+RESET search_path;

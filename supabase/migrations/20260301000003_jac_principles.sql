@@ -1,6 +1,8 @@
 -- JAC Principles: strategic learnings distilled from reflections
 -- Weekly cron extracts patterns into reusable operating principles
 
+SET search_path = public, extensions;
+
 CREATE TABLE jac_principles (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES auth.users ON DELETE CASCADE,
@@ -8,7 +10,7 @@ CREATE TABLE jac_principles (
   source_reflection_ids UUID[],
   confidence FLOAT DEFAULT 0.5 CHECK (confidence >= 0 AND confidence <= 1),
   times_applied INT DEFAULT 0,
-  embedding vector(512),
+  embedding extensions.vector(512),
   created_at TIMESTAMPTZ DEFAULT now(),
   last_validated TIMESTAMPTZ DEFAULT now()
 );
@@ -38,3 +40,5 @@ CREATE INDEX idx_jac_principles_confidence ON jac_principles(user_id, confidence
 CREATE INDEX idx_jac_principles_embedding ON jac_principles
   USING hnsw (embedding vector_cosine_ops)
   WITH (m = 16, ef_construction = 64);
+
+RESET search_path;
