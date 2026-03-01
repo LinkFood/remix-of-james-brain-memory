@@ -8,7 +8,7 @@
 import {
   Activity, Users, Brain, Bell, GitBranch,
   Lightbulb, Gauge, AlertTriangle, MessageSquare, CalendarDays,
-  Sparkles, Radio, Globe, Compass, ShieldAlert, Flame,
+  Sparkles, Radio, Globe, Compass, ShieldAlert, Flame, Link2,
 } from 'lucide-react';
 import type { WidgetDefinition, SandboxLayout } from '@/types/widget';
 import type { Layout } from 'react-grid-layout';
@@ -29,6 +29,7 @@ import ResearchResultsWidget from '@/components/sandbox/widgets/ResearchResultsW
 import PrincipleTickerWidget from '@/components/sandbox/widgets/PrincipleTickerWidget';
 import DriftRadarWidget from '@/components/sandbox/widgets/DriftRadarWidget';
 import SparkBoardWidget from '@/components/sandbox/widgets/SparkBoardWidget';
+import TheWireWidget from '@/components/sandbox/widgets/TheWireWidget';
 
 export const WIDGET_DEFS: WidgetDefinition[] = [
   {
@@ -193,6 +194,17 @@ export const WIDGET_DEFS: WidgetDefinition[] = [
     component: SparkBoardWidget,
     category: 'brain',
     tabs: [{ id: 'hot', label: 'Hot' }, { id: 'cold', label: 'Cold' }],
+  },
+  {
+    typeId: 'the-wire',
+    name: 'The Wire',
+    description: 'Surprising connections between your entries',
+    icon: Link2,
+    defaultSize: { w: 6, h: 4 },
+    minSize: { w: 4, h: 3 },
+    component: TheWireWidget,
+    category: 'brain',
+    tabs: [{ id: 'surprising', label: 'Surprising' }, { id: 'strongest', label: 'Strongest' }],
   },
 ];
 
