@@ -8,7 +8,7 @@
 import {
   Activity, Users, Brain, Bell, GitBranch,
   Lightbulb, Gauge, AlertTriangle, MessageSquare, CalendarDays,
-  Sparkles, Radio,
+  Sparkles, Radio, Globe,
 } from 'lucide-react';
 import type { WidgetDefinition, SandboxLayout } from '@/types/widget';
 import type { Layout } from 'react-grid-layout';
@@ -25,6 +25,7 @@ import ReflectionsWidget from '@/components/sandbox/widgets/ReflectionsWidget';
 import CalendarWidget from '@/components/sandbox/widgets/CalendarWidget';
 import AgentOutputsWidget from '@/components/sandbox/widgets/AgentOutputsWidget';
 import AgentLiveStreamWidget from '@/components/sandbox/widgets/AgentLiveStreamWidget';
+import ResearchResultsWidget from '@/components/sandbox/widgets/ResearchResultsWidget';
 
 export const WIDGET_DEFS: WidgetDefinition[] = [
   {
@@ -146,6 +147,17 @@ export const WIDGET_DEFS: WidgetDefinition[] = [
     minSize: { w: 3, h: 3 },
     component: AgentLiveStreamWidget,
     category: 'agents',
+  },
+  {
+    typeId: 'research-results',
+    name: 'Research',
+    description: 'Research briefs and reports from JAC',
+    icon: Globe,
+    defaultSize: { w: 6, h: 4 },
+    minSize: { w: 4, h: 3 },
+    component: ResearchResultsWidget,
+    category: 'insights',
+    tabs: [{ id: 'latest', label: 'Latest' }, { id: 'history', label: 'History' }],
   },
 ];
 
