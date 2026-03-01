@@ -8,18 +8,11 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { startOfDay, addDays, format } from 'date-fns';
 import type { RealtimeChannel } from '@supabase/supabase-js';
+import type { Entry } from '@/types';
+import { parseListItems } from '@/lib/parseListItems';
 
-export interface CalendarEntry {
-  id: string;
-  title: string | null;
-  content: string;
-  content_type: string;
-  event_date: string;
-  event_time: string | null;
-  reminder_minutes: number | null;
-  is_recurring: boolean | null;
-  recurrence_pattern: string | null;
-  created_at: string;
+export interface CalendarEntry extends Entry {
+  event_date: string; // override optional to required — calendar entries always have event_date
 }
 
 export interface CreateEventData {
@@ -65,9 +58,7 @@ export function useCalendarEntries(): UseCalendarEntriesResult {
       setError(null);
       const { data, error: fetchError } = await supabase
         .from('entries')
-        .select(
-          'id, title, content, content_type, event_date, event_time, reminder_minutes, is_recurring, recurrence_pattern, created_at'
-        )
+        .select('*')
         .eq('user_id', userId)
         .eq('archived', false)
         .not('event_date', 'is', null)
@@ -75,7 +66,13 @@ export function useCalendarEntries(): UseCalendarEntriesResult {
         .order('event_time', { ascending: true, nullsFirst: false });
 
       if (fetchError) throw fetchError;
-      setEntries((data as CalendarEntry[]) || []);
+      const parsed = (data || []).map((d: any) => ({
+        ...d,
+        tags: d.tags || [],
+        extracted_data: (d.extracted_data as Record<string, unknown>) || {},
+        list_items: parseListItems(d.list_items),
+      })) as CalendarEntry[];
+      setEntries(parsed);
     } catch (err) {
       // Suppress error toasts on passive load — show empty state instead
       console.warn('[useCalendarEntries] Fetch failed (showing empty state):', err);

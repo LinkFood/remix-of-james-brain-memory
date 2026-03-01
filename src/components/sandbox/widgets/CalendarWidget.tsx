@@ -1,25 +1,22 @@
 /**
- * CalendarWidget — Compact month grid + upcoming items for the dashboard.
+ * CalendarWidget — Compact month grid + upcoming items with create/view/archive actions.
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   format, startOfMonth, endOfMonth, startOfWeek, endOfWeek,
   addMonths, subMonths, eachDayOfInterval, isSameMonth, isSameDay, isToday,
 } from 'date-fns';
-import { ChevronLeft, ChevronRight, CalendarCheck } from 'lucide-react';
+import { ChevronLeft, ChevronRight, CalendarCheck, Plus, Check } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { useEntryActions } from '@/hooks/useEntryActions';
+import { useCalendarEntries, type CalendarEntry } from '@/hooks/useCalendarEntries';
+import { CreateEventModal } from '@/components/calendar/CreateEventModal';
+import EntryView from '@/components/EntryView';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
+import type { Entry } from '@/types';
 import type { WidgetProps } from '@/types/widget';
-
-interface CalEntry {
-  id: string;
-  title: string | null;
-  content: string;
-  content_type: string;
-  event_date: string;
-  event_time: string | null;
-}
 
 const DOT_COLORS: Record<string, string> = {
   reminder: 'bg-amber-400',
@@ -28,33 +25,18 @@ const DOT_COLORS: Record<string, string> = {
 };
 
 export default function CalendarWidget({ compact, onNavigate }: WidgetProps) {
-  const [userId, setUserId] = useState('');
-  const [entries, setEntries] = useState<CalEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { overdue, today, thisWeek, upcoming, isLoading, createEvent } = useCalendarEntries();
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+  const [viewEntry, setViewEntry] = useState<Entry | null>(null);
+  const [createModalDate, setCreateModalDate] = useState<Date | null>(null);
 
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) setUserId(session.user.id);
-    });
-  }, []);
+  const entries = useMemo(
+    () => [...overdue, ...today, ...thisWeek, ...upcoming],
+    [overdue, today, thisWeek, upcoming]
+  );
 
-  useEffect(() => {
-    if (!userId) return;
-    supabase
-      .from('entries')
-      .select('id, title, content, content_type, event_date, event_time')
-      .eq('user_id', userId)
-      .eq('archived', false)
-      .not('event_date', 'is', null)
-      .order('event_date', { ascending: true })
-      .limit(200)
-      .then(({ data }) => {
-        if (data) setEntries(data as CalEntry[]);
-        setLoading(false);
-      });
-  }, [userId]);
+  const { toggleArchive } = useEntryActions();
 
   // Date -> entry info map
   const dateMap = useMemo(() => {
@@ -82,9 +64,14 @@ export default function CalendarWidget({ compact, onNavigate }: WidgetProps) {
 
   const todayStr = format(new Date(), 'yyyy-MM-dd');
 
+  const handleCreateEvent = useCallback(async (data: any) => {
+    await createEvent(data);
+    toast.success('Event created');
+  }, [createEvent]);
+
   return (
     <div className="flex flex-col h-full bg-white/[0.03] backdrop-blur-sm border border-white/10 rounded-lg overflow-hidden">
-      {/* Header with month nav */}
+      {/* Header with month nav + add button */}
       <div className="px-3 py-1.5 border-b border-white/10 shrink-0 flex items-center justify-between">
         <button
           onClick={() => setCurrentMonth(prev => subMonths(prev, 1))}
@@ -98,15 +85,24 @@ export default function CalendarWidget({ compact, onNavigate }: WidgetProps) {
         >
           {format(currentMonth, 'MMM yyyy')}
         </button>
-        <button
-          onClick={() => setCurrentMonth(prev => addMonths(prev, 1))}
-          className="p-0.5 rounded hover:bg-white/10 text-white/40 hover:text-white/70 transition-colors"
-        >
-          <ChevronRight className="w-3 h-3" />
-        </button>
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={(e) => { e.stopPropagation(); setCreateModalDate(new Date()); }}
+            className="p-0.5 rounded hover:bg-white/10 text-white/40 hover:text-emerald-400 transition-colors"
+            title="New event"
+          >
+            <Plus className="w-3 h-3" />
+          </button>
+          <button
+            onClick={() => setCurrentMonth(prev => addMonths(prev, 1))}
+            className="p-0.5 rounded hover:bg-white/10 text-white/40 hover:text-white/70 transition-colors"
+          >
+            <ChevronRight className="w-3 h-3" />
+          </button>
+        </div>
       </div>
 
-      {loading ? (
+      {isLoading ? (
         <div className="flex items-center justify-center flex-1">
           <span className="text-[10px] text-white/30">Loading...</span>
         </div>
@@ -136,13 +132,16 @@ export default function CalendarWidget({ compact, onNavigate }: WidgetProps) {
                 <button
                   key={dateStr}
                   onClick={() => {
-                    if (info) setSelectedDate(prev => prev && isSameDay(prev, day) ? null : day);
+                    if (info) {
+                      setSelectedDate(prev => prev && isSameDay(prev, day) ? null : day);
+                    } else if (inMonth) {
+                      setCreateModalDate(day);
+                    }
                   }}
                   className={cn(
                     'relative flex flex-col items-center py-0.5 rounded transition-colors',
                     inMonth ? 'text-white/60' : 'text-white/10',
-                    info && 'cursor-pointer hover:bg-white/[0.06]',
-                    !info && 'cursor-default',
+                    (info || inMonth) && 'cursor-pointer hover:bg-white/[0.06]',
                     isSelected && 'bg-blue-500/20',
                     today_ && !isSelected && 'bg-white/[0.04]',
                   )}
@@ -188,22 +187,34 @@ export default function CalendarWidget({ compact, onNavigate }: WidgetProps) {
                 {format(selectedDate, 'EEE, MMM d')}
               </div>
               <div className="divide-y divide-white/5">
-                {dayEntries.slice(0, compact ? 3 : 6).map(e => (
-                  <button
-                    key={e.id}
-                    onClick={() => onNavigate('/calendar')}
-                    className="w-full text-left px-2 py-1.5 hover:bg-white/[0.04] transition-colors flex items-center gap-1.5"
-                  >
-                    <span className="text-xs text-white/70 truncate flex-1">
-                      {e.title || e.content.slice(0, 50)}
-                    </span>
-                    {e.event_time && (
-                      <span className="text-[9px] text-white/30 shrink-0">
-                        {e.event_time.slice(0, 5)}
-                      </span>
-                    )}
-                  </button>
-                ))}
+                {dayEntries.slice(0, compact ? 3 : 6).map(e => {
+                  const isPastEntry = e.event_date < todayStr;
+                  return (
+                    <div
+                      key={e.id}
+                      className="group w-full text-left px-2 py-1.5 hover:bg-white/[0.04] transition-colors flex items-center gap-1.5"
+                    >
+                      <button
+                        onClick={() => setViewEntry(e as Entry)}
+                        className="text-xs text-white/70 truncate flex-1 text-left hover:text-white/90 transition-colors"
+                      >
+                        {e.title || e.content.slice(0, 50)}
+                      </button>
+                      {e.event_time && (
+                        <span className="text-[9px] text-white/30 shrink-0">
+                          {e.event_time.slice(0, 5)}
+                        </span>
+                      )}
+                      <button
+                        onClick={(ev) => { ev.stopPropagation(); toggleArchive(e.id); }}
+                        className="shrink-0 p-0.5 text-white/20 hover:text-emerald-400 transition-colors opacity-0 group-hover:opacity-100"
+                        title="Mark done"
+                      >
+                        <Check className="w-3 h-3" />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -217,6 +228,23 @@ export default function CalendarWidget({ compact, onNavigate }: WidgetProps) {
           )}
         </div>
       )}
+
+      {/* EntryView modal */}
+      <EntryView
+        entry={viewEntry}
+        open={!!viewEntry}
+        onClose={() => setViewEntry(null)}
+        onUpdate={(updated) => setViewEntry(updated)}
+        onDelete={() => setViewEntry(null)}
+      />
+
+      {/* Create event modal */}
+      <CreateEventModal
+        open={createModalDate !== null}
+        onOpenChange={(open) => { if (!open) setCreateModalDate(null); }}
+        defaultDate={createModalDate}
+        onSubmit={handleCreateEvent}
+      />
     </div>
   );
 }

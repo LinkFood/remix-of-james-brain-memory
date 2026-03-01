@@ -1,10 +1,10 @@
 /**
  * Calendar page — Month grid + timeline view of reminders and events.
  * Top: navigable month grid with event dots.
- * Bottom: Overdue, Today, This Week, Upcoming sections.
+ * Bottom: Overdue, Today, This Week, Upcoming sections with action menus.
  */
 
-import { useState, useMemo, useRef } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import {
   format, parseISO, startOfMonth, endOfMonth, startOfWeek, endOfWeek,
   addMonths, subMonths, eachDayOfInterval, isSameMonth, isSameDay, isToday,
@@ -19,14 +19,34 @@ import {
   ChevronLeft,
   ChevronRight,
   Plus,
+  MoreVertical,
+  Eye,
+  Check,
+  Trash2,
 } from 'lucide-react';
 import { useCalendarEntries, type CalendarEntry, type CreateEventData } from '@/hooks/useCalendarEntries';
+import { useEntryActions } from '@/hooks/useEntryActions';
 import { cn } from '@/lib/utils';
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
+import { CreateEventModal } from '@/components/calendar/CreateEventModal';
+import EntryView from '@/components/EntryView';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
+import type { Entry } from '@/types';
 
 // --- Category badge colors ---
 const CATEGORY_COLORS: Record<string, string> = {
@@ -84,7 +104,6 @@ function MonthGrid({
 }) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
 
-  // Build a map of date string -> entry count + types
   const dateMap = useMemo(() => {
     const map: Record<string, { count: number; types: Set<string> }> = {};
     for (const entry of allEntries) {
@@ -105,7 +124,6 @@ function MonthGrid({
 
   return (
     <div className="border-b border-white/10 pb-4">
-      {/* Month navigation */}
       <div className="flex items-center justify-between px-6 py-3">
         <button
           onClick={() => setCurrentMonth(prev => subMonths(prev, 1))}
@@ -124,7 +142,6 @@ function MonthGrid({
         </button>
       </div>
 
-      {/* Day headers */}
       <div className="grid grid-cols-7 px-6 mb-1">
         {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map(d => (
           <div key={d} className="text-center text-[10px] text-white/30 font-medium py-1">
@@ -133,7 +150,6 @@ function MonthGrid({
         ))}
       </div>
 
-      {/* Day cells */}
       <div className="grid grid-cols-7 px-6 gap-y-0.5">
         {days.map(day => {
           const dateStr = format(day, 'yyyy-MM-dd');
@@ -171,7 +187,6 @@ function MonthGrid({
               >
                 {format(day, 'd')}
               </span>
-              {/* Event dots */}
               {info && (
                 <div className="flex items-center gap-0.5 mt-0.5">
                   {info.count <= 3 ? (
@@ -200,15 +215,27 @@ function MonthGrid({
   );
 }
 
-// --- Single calendar item row ---
-function CalendarItem({ entry, isOverdue }: { entry: CalendarEntry; isOverdue?: boolean }) {
+// --- Single calendar item row with action menu ---
+function CalendarItem({
+  entry,
+  isOverdue,
+  onView,
+  onArchive,
+  onDelete,
+}: {
+  entry: CalendarEntry;
+  isOverdue?: boolean;
+  onView: (entry: CalendarEntry) => void;
+  onArchive: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
   const categoryStyle = CATEGORY_COLORS[entry.content_type] ?? 'bg-white/10 text-white/50';
   const formattedTime = formatEventTime(entry.event_time);
 
   return (
     <div
       className={cn(
-        'flex items-start gap-3 px-4 py-3 hover:bg-white/[0.04] transition-colors',
+        'group flex items-start gap-3 px-4 py-3 hover:bg-white/[0.04] transition-colors',
         isOverdue && 'border-l-2 border-red-500'
       )}
     >
@@ -225,8 +252,11 @@ function CalendarItem({ entry, isOverdue }: { entry: CalendarEntry; isOverdue?: 
         )}
       </div>
 
-      {/* Content */}
-      <div className="flex-1 min-w-0">
+      {/* Content — clickable */}
+      <button
+        onClick={() => onView(entry)}
+        className="flex-1 min-w-0 text-left"
+      >
         <div className="text-sm text-white/90 truncate">
           {entry.title || entry.content.slice(0, 80) || 'Untitled'}
         </div>
@@ -235,7 +265,7 @@ function CalendarItem({ entry, isOverdue }: { entry: CalendarEntry; isOverdue?: 
             {entry.content.slice(0, 120)}
           </div>
         )}
-      </div>
+      </button>
 
       {/* Badges */}
       <div className="flex items-center gap-1.5 shrink-0">
@@ -253,6 +283,35 @@ function CalendarItem({ entry, isOverdue }: { entry: CalendarEntry; isOverdue?: 
         >
           {entry.content_type}
         </span>
+
+        {/* Three-dot action menu */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button
+              onClick={(e) => e.stopPropagation()}
+              className="p-0.5 text-white/20 hover:text-white/60 transition-colors opacity-0 group-hover:opacity-100"
+            >
+              <MoreVertical className="w-3.5 h-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-36">
+            <DropdownMenuItem onClick={() => onView(entry)}>
+              <Eye className="w-3.5 h-3.5 mr-2" />
+              View / Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onArchive(entry.id)}>
+              <Check className="w-3.5 h-3.5 mr-2" />
+              Mark Done
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              className="text-red-400 focus:text-red-400"
+              onClick={() => onDelete(entry.id)}
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-2" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </div>
   );
@@ -268,6 +327,9 @@ function Section({
   isOverdue,
   emptyText,
   sectionRef,
+  onView,
+  onArchive,
+  onDelete,
 }: {
   title: string;
   icon: React.ComponentType<{ className?: string }>;
@@ -277,6 +339,9 @@ function Section({
   isOverdue?: boolean;
   emptyText?: string;
   sectionRef?: React.RefObject<HTMLDivElement | null>;
+  onView: (entry: CalendarEntry) => void;
+  onArchive: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   if (entries.length === 0 && !emptyText) return null;
 
@@ -306,7 +371,14 @@ function Section({
       ) : (
         <div className="divide-y divide-white/5">
           {entries.map((entry) => (
-            <CalendarItem key={entry.id} entry={entry} isOverdue={isOverdue} />
+            <CalendarItem
+              key={entry.id}
+              entry={entry}
+              isOverdue={isOverdue}
+              onView={onView}
+              onArchive={onArchive}
+              onDelete={onDelete}
+            />
           ))}
         </div>
       )}
@@ -320,11 +392,17 @@ function DayDetail({
   entries,
   onClose,
   onAddEvent,
+  onView,
+  onArchive,
+  onDelete,
 }: {
   date: Date;
   entries: CalendarEntry[];
   onClose: () => void;
   onAddEvent: () => void;
+  onView: (entry: CalendarEntry) => void;
+  onArchive: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   const isPast = date < new Date() && !isToday(date);
 
@@ -358,229 +436,31 @@ function DayDetail({
       </div>
       <div className="divide-y divide-white/5">
         {entries.map((entry) => (
-          <CalendarItem key={entry.id} entry={entry} isOverdue={isPast && !isToday(date)} />
+          <CalendarItem
+            key={entry.id}
+            entry={entry}
+            isOverdue={isPast && !isToday(date)}
+            onView={onView}
+            onArchive={onArchive}
+            onDelete={onDelete}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-// --- Create Event Modal ---
-function CreateEventModal({
-  open,
-  onOpenChange,
-  defaultDate,
-  onSubmit,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  defaultDate: Date | null;
-  onSubmit: (data: CreateEventData) => Promise<void>;
-}) {
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [date, setDate] = useState('');
-  const [time, setTime] = useState('');
-  const [type, setType] = useState<'event' | 'reminder'>('event');
-  const [reminderMinutes, setReminderMinutes] = useState(30);
-  const [isRecurring, setIsRecurring] = useState(false);
-  const [recurrencePattern, setRecurrencePattern] = useState('weekly');
-  const [submitting, setSubmitting] = useState(false);
-
-  // Reset form when modal opens with a new date
-  const dateStr = defaultDate ? format(defaultDate, 'yyyy-MM-dd') : '';
-  useMemo(() => {
-    if (open) {
-      setTitle('');
-      setDescription('');
-      setDate(dateStr);
-      setTime('');
-      setType('event');
-      setReminderMinutes(30);
-      setIsRecurring(false);
-      setRecurrencePattern('weekly');
-    }
-  }, [open, dateStr]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!title.trim() || !date) return;
-    setSubmitting(true);
-    try {
-      await onSubmit({
-        title: title.trim(),
-        description: description.trim() || undefined,
-        date,
-        time: time || undefined,
-        type,
-        reminderMinutes: type === 'reminder' ? reminderMinutes : undefined,
-        isRecurring,
-        recurrencePattern: isRecurring ? recurrencePattern : undefined,
-      });
-      onOpenChange(false);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="bg-zinc-900 border-white/10 text-white max-w-md">
-        <DialogHeader>
-          <DialogTitle className="text-white">New event</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Title */}
-          <div>
-            <label className="text-xs text-white/50 mb-1 block">Title *</label>
-            <Input
-              value={title}
-              onChange={e => setTitle(e.target.value)}
-              placeholder="What's happening?"
-              className="bg-white/5 border-white/10 text-white placeholder:text-white/30"
-              autoFocus
-              required
-            />
-          </div>
-
-          {/* Description */}
-          <div>
-            <label className="text-xs text-white/50 mb-1 block">Description</label>
-            <textarea
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              placeholder="Optional details..."
-              rows={2}
-              className="w-full rounded-md bg-white/5 border border-white/10 text-white placeholder:text-white/30 px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500/40"
-            />
-          </div>
-
-          {/* Date + Time row */}
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="text-xs text-white/50 mb-1 block">Date *</label>
-              <Input
-                type="date"
-                value={date}
-                onChange={e => setDate(e.target.value)}
-                className="bg-white/5 border-white/10 text-white"
-                required
-              />
-            </div>
-            <div className="flex-1">
-              <label className="text-xs text-white/50 mb-1 block">Time</label>
-              <Input
-                type="time"
-                value={time}
-                onChange={e => setTime(e.target.value)}
-                className="bg-white/5 border-white/10 text-white"
-              />
-            </div>
-          </div>
-
-          {/* Type toggle */}
-          <div>
-            <label className="text-xs text-white/50 mb-1 block">Type</label>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setType('event')}
-                className={cn(
-                  'flex-1 text-xs py-2 rounded-md border transition-colors',
-                  type === 'event'
-                    ? 'bg-blue-500/20 border-blue-500/40 text-blue-400'
-                    : 'bg-white/5 border-white/10 text-white/50 hover:text-white/70',
-                )}
-              >
-                Event
-              </button>
-              <button
-                type="button"
-                onClick={() => setType('reminder')}
-                className={cn(
-                  'flex-1 text-xs py-2 rounded-md border transition-colors',
-                  type === 'reminder'
-                    ? 'bg-amber-500/20 border-amber-500/40 text-amber-400'
-                    : 'bg-white/5 border-white/10 text-white/50 hover:text-white/70',
-                )}
-              >
-                Reminder
-              </button>
-            </div>
-          </div>
-
-          {/* Reminder minutes (only for reminders) */}
-          {type === 'reminder' && (
-            <div>
-              <label className="text-xs text-white/50 mb-1 block">Remind me (minutes before)</label>
-              <Input
-                type="number"
-                value={reminderMinutes}
-                onChange={e => setReminderMinutes(parseInt(e.target.value, 10) || 0)}
-                min={0}
-                className="bg-white/5 border-white/10 text-white w-32"
-              />
-            </div>
-          )}
-
-          {/* Recurring */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Checkbox
-                id="recurring"
-                checked={isRecurring}
-                onCheckedChange={(checked) => setIsRecurring(checked === true)}
-                className="border-white/20 data-[state=checked]:bg-blue-500 data-[state=checked]:border-blue-500"
-              />
-              <label htmlFor="recurring" className="text-xs text-white/60 cursor-pointer">
-                Recurring
-              </label>
-            </div>
-            {isRecurring && (
-              <div className="flex gap-2 pl-6">
-                {['daily', 'weekly', 'monthly', 'yearly'].map(p => (
-                  <button
-                    key={p}
-                    type="button"
-                    onClick={() => setRecurrencePattern(p)}
-                    className={cn(
-                      'text-[10px] px-2 py-1 rounded border transition-colors capitalize',
-                      recurrencePattern === p
-                        ? 'bg-violet-500/20 border-violet-500/40 text-violet-400'
-                        : 'bg-white/5 border-white/10 text-white/40 hover:text-white/60',
-                    )}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Submit */}
-          <div className="flex justify-end pt-2">
-            <Button
-              type="submit"
-              disabled={!title.trim() || !date || submitting}
-              className="bg-blue-600 hover:bg-blue-700 text-white text-xs px-4"
-            >
-              {submitting ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Plus className="w-3 h-3 mr-1" />}
-              Create
-            </Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 // --- Main page ---
 const Calendar = () => {
-  const { overdue, today, thisWeek, upcoming, isLoading, error, createEvent, userId } = useCalendarEntries();
+  const { overdue, today, thisWeek, upcoming, isLoading, error, createEvent } = useCalendarEntries();
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [createModalDate, setCreateModalDate] = useState<Date | null>(null);
+  const [viewEntry, setViewEntry] = useState<Entry | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
+
+  const { toggleArchive, deleteEntry } = useEntryActions();
 
   const allEntries = useMemo(
     () => [...overdue, ...today, ...thisWeek, ...upcoming],
@@ -589,7 +469,6 @@ const Calendar = () => {
 
   const totalCount = allEntries.length;
 
-  // Entries for the selected date
   const selectedDateEntries = useMemo(() => {
     if (!selectedDate) return [];
     const dateStr = format(selectedDate, 'yyyy-MM-dd');
@@ -604,6 +483,18 @@ const Calendar = () => {
     await createEvent(data);
     toast({ title: 'Event created', description: data.title });
   };
+
+  const handleView = useCallback((entry: CalendarEntry) => {
+    setViewEntry(entry as Entry);
+  }, []);
+
+  const handleArchive = useCallback((id: string) => {
+    toggleArchive(id);
+  }, [toggleArchive]);
+
+  const handleDelete = useCallback((id: string) => {
+    setDeleteId(id);
+  }, []);
 
   return (
     <div className="h-[calc(100vh-3.5rem)] bg-black flex flex-col overflow-hidden">
@@ -647,6 +538,9 @@ const Calendar = () => {
                 entries={selectedDateEntries}
                 onClose={() => setSelectedDate(null)}
                 onAddEvent={() => setCreateModalDate(selectedDate)}
+                onView={handleView}
+                onArchive={handleArchive}
+                onDelete={handleDelete}
               />
             )}
 
@@ -665,6 +559,9 @@ const Calendar = () => {
                   headerClass="text-red-400"
                   countClass="bg-red-500/20 text-red-400"
                   isOverdue
+                  onView={handleView}
+                  onArchive={handleArchive}
+                  onDelete={handleDelete}
                 />
                 <Section
                   title="Today"
@@ -673,6 +570,9 @@ const Calendar = () => {
                   headerClass="text-amber-400"
                   countClass="bg-amber-500/20 text-amber-400"
                   emptyText="Nothing scheduled today"
+                  onView={handleView}
+                  onArchive={handleArchive}
+                  onDelete={handleDelete}
                 />
                 <Section
                   title="This Week"
@@ -680,6 +580,9 @@ const Calendar = () => {
                   entries={thisWeek}
                   headerClass="text-blue-400"
                   countClass="bg-blue-500/20 text-blue-400"
+                  onView={handleView}
+                  onArchive={handleArchive}
+                  onDelete={handleDelete}
                 />
                 <Section
                   title="Upcoming"
@@ -687,6 +590,9 @@ const Calendar = () => {
                   entries={upcoming}
                   headerClass="text-emerald-400"
                   countClass="bg-emerald-500/20 text-emerald-400"
+                  onView={handleView}
+                  onArchive={handleArchive}
+                  onDelete={handleDelete}
                 />
               </>
             )}
@@ -701,6 +607,39 @@ const Calendar = () => {
         defaultDate={createModalDate}
         onSubmit={handleCreateEvent}
       />
+
+      {/* EntryView modal */}
+      <EntryView
+        entry={viewEntry}
+        open={!!viewEntry}
+        onClose={() => setViewEntry(null)}
+        onUpdate={(updated) => setViewEntry(updated)}
+        onDelete={() => setViewEntry(null)}
+      />
+
+      {/* Delete confirmation */}
+      <AlertDialog open={!!deleteId} onOpenChange={(open) => { if (!open) setDeleteId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => {
+                if (deleteId) deleteEntry(deleteId);
+                setDeleteId(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };

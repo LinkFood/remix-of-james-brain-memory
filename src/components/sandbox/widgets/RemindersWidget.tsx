@@ -1,21 +1,27 @@
 /**
- * RemindersWidget — Today and overdue reminders.
+ * RemindersWidget — Today and overdue reminders with done/delete/view actions.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
 import { useDashboardActivity } from '@/hooks/useDashboardActivity';
-import { CheckCircle } from 'lucide-react';
+import { useEntryActions } from '@/hooks/useEntryActions';
+import { CheckCircle, Check, Trash2 } from 'lucide-react';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import EntryView from '@/components/EntryView';
+import { parseListItems } from '@/lib/parseListItems';
+import type { Entry } from '@/types';
 import type { WidgetProps } from '@/types/widget';
-
-interface ReminderEntry {
-  id: string;
-  title: string | null;
-  content: string | null;
-  event_date: string | null;
-  content_type: string;
-}
 
 function dateLabel(eventDate: string): { label: string; className: string } {
   const todayStr = new Date().toISOString().split('T')[0];
@@ -24,10 +30,21 @@ function dateLabel(eventDate: string): { label: string; className: string } {
   return { label: 'Upcoming', className: 'text-emerald-400' };
 }
 
+function toEntry(data: any): Entry {
+  return {
+    ...data,
+    tags: data.tags || [],
+    extracted_data: (data.extracted_data as Record<string, unknown>) || {},
+    list_items: parseListItems(data.list_items),
+  };
+}
+
 export default function RemindersWidget({ onNavigate }: WidgetProps) {
   const [userId, setUserId] = useState('');
-  const [reminderEntries, setReminderEntries] = useState<ReminderEntry[]>([]);
+  const [reminderEntries, setReminderEntries] = useState<Entry[]>([]);
   const [loadingEntries, setLoadingEntries] = useState(true);
+  const [viewEntry, setViewEntry] = useState<Entry | null>(null);
+  const [deleteId, setDeleteId] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -37,12 +54,27 @@ export default function RemindersWidget({ onNavigate }: WidgetProps) {
 
   const { reminders, loading: activityLoading } = useDashboardActivity(userId);
 
+  const handleRemove = useCallback((entryId: string) => {
+    setReminderEntries(prev => prev.filter(e => e.id !== entryId));
+  }, []);
+
+  const handleUpdate = useCallback((entryId: string, updates: Partial<Entry>) => {
+    setReminderEntries(prev =>
+      prev.map(e => (e.id === entryId ? { ...e, ...updates } : e))
+    );
+  }, []);
+
+  const { toggleArchive, deleteEntry } = useEntryActions({
+    onEntryRemove: handleRemove,
+    onEntryUpdate: handleUpdate,
+  });
+
   useEffect(() => {
     if (!userId) return;
     const todayStr = new Date().toISOString().split('T')[0];
     supabase
       .from('entries')
-      .select('id, title, content, event_date, content_type')
+      .select('*')
       .eq('user_id', userId)
       .eq('archived', false)
       .lte('event_date', todayStr)
@@ -50,7 +82,7 @@ export default function RemindersWidget({ onNavigate }: WidgetProps) {
       .order('event_date', { ascending: true })
       .limit(10)
       .then(({ data }) => {
-        if (data) setReminderEntries(data as ReminderEntry[]);
+        if (data) setReminderEntries(data.map(toEntry));
         setLoadingEntries(false);
       });
   }, [userId]);
@@ -91,10 +123,9 @@ export default function RemindersWidget({ onNavigate }: WidgetProps) {
                 ? dateLabel(entry.event_date)
                 : { label: '', className: '' };
               return (
-                <button
+                <div
                   key={entry.id}
-                  onClick={() => onNavigate('/dashboard')}
-                  className="w-full flex items-center gap-2 px-3 py-2 hover:bg-white/[0.04] transition-colors text-left"
+                  className="group w-full flex items-center gap-2 px-3 py-2 hover:bg-white/[0.04] transition-colors text-left"
                 >
                   <span
                     className={cn(
@@ -104,20 +135,71 @@ export default function RemindersWidget({ onNavigate }: WidgetProps) {
                   >
                     {label}
                   </span>
-                  <span className="text-xs text-white/70 flex-1 truncate">
+                  <button
+                    onClick={() => setViewEntry(entry)}
+                    className="text-xs text-white/70 flex-1 truncate text-left hover:text-white/90 transition-colors"
+                  >
                     {entry.title || entry.content?.slice(0, 60) || 'Untitled'}
-                  </span>
-                  {entry.event_date && (
-                    <span className="text-[10px] text-white/30 shrink-0">
-                      {entry.event_date}
-                    </span>
-                  )}
-                </button>
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); toggleArchive(entry.id); }}
+                    className="shrink-0 p-0.5 text-white/20 hover:text-emerald-400 transition-colors opacity-0 group-hover:opacity-100"
+                    title="Mark done"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setDeleteId(entry.id); }}
+                    className="shrink-0 p-0.5 text-white/20 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                    title="Delete"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               );
             })}
           </div>
         )}
       </div>
+
+      {/* EntryView modal */}
+      <EntryView
+        entry={viewEntry}
+        open={!!viewEntry}
+        onClose={() => setViewEntry(null)}
+        onUpdate={(updated) => {
+          handleUpdate(updated.id, updated);
+          setViewEntry(updated);
+        }}
+        onDelete={(id) => {
+          handleRemove(id);
+          setViewEntry(null);
+        }}
+      />
+
+      {/* Delete confirmation */}
+      <AlertDialog open={!!deleteId} onOpenChange={(open) => { if (!open) setDeleteId(null); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete reminder?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => {
+                if (deleteId) deleteEntry(deleteId);
+                setDeleteId(null);
+              }}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
