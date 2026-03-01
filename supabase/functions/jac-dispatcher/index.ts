@@ -29,7 +29,7 @@ import { escapeForLike } from '../_shared/validation.ts';
 const rateLimitMap = new Map<string, { count: number; resetTime: number }>();
 const RATE_LIMIT = 50;
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const MAX_CONCURRENT_TASKS = 10;
+const MAX_CONCURRENT_TASKS = 18;
 const DAILY_TASK_LIMIT = 200;
 
 function checkRateLimit(userId: string): boolean {
@@ -49,34 +49,44 @@ type IntentType = 'research' | 'save' | 'search' | 'report' | 'general' | 'code'
 
 const INTENT_TOOL = {
   name: 'route_intent',
-  description: 'Parse the user message and route to the correct JAC agent.',
+  description: 'Parse the user message and route to the correct JAC agent(s). If the message contains multiple distinct requests, return multiple intents.',
   input_schema: {
     type: 'object' as const,
     properties: {
-      intent: {
-        type: 'string',
-        enum: ['research', 'save', 'search', 'report', 'general', 'code'],
-        description: 'Use "research" for any question about the real world or current information. Use "search" ONLY when user explicitly asks to find their own saved brain entries (e.g. "search my brain", "what did I save").',
-      },
-      summary: {
-        type: 'string',
-        description: 'A brief 1-sentence summary of what the user wants',
-      },
-      agentType: {
-        type: 'string',
-        enum: ['jac-research-agent', 'jac-save-agent', 'jac-search-agent', 'jac-code-agent', 'assistant-chat'],
-        description: 'Which worker edge function to dispatch',
-      },
-      extractedQuery: {
-        type: 'string',
-        description: 'The core query/content extracted from the user message. For search: just the search terms (e.g. "Lovable" from "search my brain for Lovable"). For save: PRESERVE THE FULL MESSAGE including "remind me", times, dates — the save agent needs these for reminder extraction. For research: the research topic.',
+      intents: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            intent: {
+              type: 'string',
+              enum: ['research', 'save', 'search', 'report', 'general', 'code'],
+              description: 'Use "research" for real-world/current info questions. Use "search" ONLY when user explicitly references their own saved data. Use "save" for notes/reminders. Use "code" for coding tasks.',
+            },
+            summary: {
+              type: 'string',
+              description: 'Brief 1-sentence summary of this specific request',
+            },
+            agentType: {
+              type: 'string',
+              enum: ['jac-research-agent', 'jac-save-agent', 'jac-search-agent', 'jac-code-agent', 'assistant-chat'],
+              description: 'Which worker to dispatch for this request',
+            },
+            extractedQuery: {
+              type: 'string',
+              description: 'Core query/content for this request. For search: just search terms. For save: PRESERVE FULL MESSAGE including "remind me", times, dates. For research: the topic. For code: the coding request.',
+            },
+          },
+          required: ['intent', 'summary', 'agentType', 'extractedQuery'],
+        },
+        description: 'One entry per distinct request. Most messages have 1 intent. Use multiple ONLY when the user explicitly asks for multiple different things (e.g. "research X, save Y, and build Z").',
       },
       response: {
         type: 'string',
-        description: 'A brief, natural response to the user acknowledging the request (1-2 sentences)',
+        description: 'A brief, natural response acknowledging all request(s) (1-2 sentences)',
       },
     },
-    required: ['intent', 'summary', 'agentType', 'extractedQuery', 'response'],
+    required: ['intents', 'response'],
   },
 };
 
@@ -131,8 +141,8 @@ serve(async (req) => {
     const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabaseEarly = createClient(supabaseUrl, serviceKey);
 
-    // Loop detection: 10+ tasks in 60 seconds = runaway
-    // Each user request creates ~2 tasks (parent + child), so 10 = ~5 real requests
+    // Loop detection: 20+ tasks in 60 seconds = runaway
+    // Multi-intent creates 1 parent + N children per request, so 20 ≈ 4 multi-intent requests
     const loopWindow = new Date(Date.now() - 60_000).toISOString();
     const { count: recentTaskCount } = await supabaseEarly
       .from('agent_tasks')
@@ -140,7 +150,7 @@ serve(async (req) => {
       .eq('user_id', userId)
       .gte('created_at', loopWindow);
 
-    if ((recentTaskCount ?? 0) >= 10) {
+    if ((recentTaskCount ?? 0) >= 20) {
       // Auto-cancel all running/queued tasks
       const { data: cancelled } = await supabaseEarly
         .from('agent_tasks')
@@ -417,6 +427,8 @@ Intent routing rules (follow these STRICTLY):
 6. "code" → jac-code-agent: User wants to write, fix, modify, refactor, or deploy code in a registered project.
    TRIGGERS: "fix", "add feature", "update code", "refactor", "implement", "PR", "pull request", project names like "pixel-perfect" or "exact-match", code-related requests.
 
+MULTI-INTENT: If the user's message contains multiple DISTINCT requests (e.g. "research X, also save Y, and build Z"), return each as a separate entry in the intents array. Each gets its own intent, summary, agentType, and extractedQuery. Most messages have just 1 intent — only split when there are genuinely separate requests.
+
 IMPORTANT: Brain context below is for YOUR reference only — do NOT route to search just because matching entries exist.
 ${brainContext ? `\nUser's brain context (for reference only):\n${brainContext}` : ''}${reflectionsContext}${principlesContext}
 
@@ -434,20 +446,41 @@ Be concise. Be confident. Don't ask questions — just act.`;
 
     const toolResult = parseToolUse(claudeResponse);
 
-    // Record token usage for intent parsing (will be overwritten with totals for general intent)
-    // parentTask.id set below — record after task creation
+    // Parse intents — normalize to array (defense against models ignoring array schema)
+    interface ParsedIntent {
+      intent: IntentType;
+      summary: string;
+      agentType: string;
+      extractedQuery: string;
+    }
 
-    // Fallback if tool parsing fails
-    const intent: IntentType = (toolResult?.input?.intent as IntentType) || 'general';
-    const summary = (toolResult?.input?.summary as string) || message.slice(0, 100);
-    const agentType = (toolResult?.input?.agentType as string) || AGENT_MAP[intent] || 'assistant-chat';
-    const extractedQuery = (toolResult?.input?.extractedQuery as string) || message;
+    const rawIntents = toolResult?.input?.intents;
     let response = (toolResult?.input?.response as string) || "I'm on it.";
 
-    // 4b. Model routing — pick the right model tier for this task
-    let modelTier: ModelTier = 'sonnet'; // default
+    let parsedIntents: ParsedIntent[];
+    if (Array.isArray(rawIntents) && rawIntents.length > 0) {
+      parsedIntents = rawIntents.map((i: Record<string, unknown>) => ({
+        intent: (i.intent as IntentType) || 'general',
+        summary: (i.summary as string) || message.slice(0, 100),
+        agentType: (i.agentType as string) || AGENT_MAP[i.intent as string] || 'assistant-chat',
+        extractedQuery: (i.extractedQuery as string) || message,
+      }));
+    } else {
+      // Fallback: single intent from old schema or malformed output
+      parsedIntents = [{
+        intent: (toolResult?.input?.intent as IntentType) || 'general',
+        summary: (toolResult?.input?.summary as string) || message.slice(0, 100),
+        agentType: (toolResult?.input?.agentType as string) || 'assistant-chat',
+        extractedQuery: (toolResult?.input?.extractedQuery as string) || message,
+      }];
+    }
+
+    // Separate dispatchable intents from general
+    let dispatchIntents = parsedIntents.filter(i => i.intent !== 'general');
+
+    // 4b. Model routing — pick highest tier across all intents
+    let modelTier: ModelTier = 'sonnet';
     try {
-      // Check user preference first
       const { data: userSettings } = await supabase
         .from('user_settings')
         .select('preferred_model')
@@ -461,16 +494,12 @@ Be concise. Be confident. Don't ask questions — just act.`;
       } else if (preferredModel?.includes('haiku')) {
         modelTier = 'haiku';
       } else {
-        // Auto-route based on intent and complexity
+        const allIntentTypes = parsedIntents.map(i => i.intent);
         const msgLen = message.length;
         const isComplex = msgLen > 300 || /architect|refactor|redesign|overhaul|migrate|complex/i.test(message);
 
-        if (intent === 'code' && isComplex) {
+        if (allIntentTypes.includes('code') && isComplex) {
           modelTier = 'opus';
-        } else if (intent === 'code' || intent === 'research' || intent === 'report') {
-          modelTier = 'sonnet';
-        } else if (intent === 'save' || intent === 'search') {
-          modelTier = 'sonnet'; // these are fast but still need quality
         } else {
           modelTier = 'sonnet';
         }
@@ -479,13 +508,11 @@ Be concise. Be confident. Don't ask questions — just act.`;
       console.warn('[jac-dispatcher] Model routing failed (defaulting to sonnet):', err);
     }
 
-    // 4c. Code project lookup — find matching project if intent is code
-    // Accept explicit context.projectId from the Code Workspace UI first
+    // 4c. Code project lookup — if any intent is code
     let codeProject: { id: string; name: string; repo_full_name: string } | null = null;
-    if (intent === 'code') {
+    if (dispatchIntents.some(i => i.intent === 'code')) {
       try {
         if (body.context?.projectId) {
-          // Explicit project context from Code Workspace UI — use directly
           const { data: explicitProject } = await supabase
             .from('code_projects')
             .select('id, name, repo_full_name')
@@ -497,7 +524,6 @@ Be concise. Be confident. Don't ask questions — just act.`;
           }
         }
 
-        // Fallback: name-match lookup from message text (for Slack/general use)
         if (!codeProject) {
           const { data: projects } = await supabase
             .from('code_projects')
@@ -505,21 +531,23 @@ Be concise. Be confident. Don't ask questions — just act.`;
             .eq('user_id', userId);
 
           if (projects && projects.length > 0) {
-            const queryLower = extractedQuery.toLowerCase();
+            const codeIntent = dispatchIntents.find(i => i.intent === 'code')!;
+            const queryLower = codeIntent.extractedQuery.toLowerCase();
             const matched = projects.find(
               (p: { id: string; name: string; repo_full_name: string }) => queryLower.includes(p.name.toLowerCase())
             );
             if (matched) {
               codeProject = matched;
             } else if (projects.length === 1) {
-              // Auto-select if there's only one project
               codeProject = projects[0];
+            } else if (dispatchIntents.length > 1) {
+              // Multi-intent: skip code, dispatch the rest
+              console.warn('[jac-dispatcher] Ambiguous code project in multi-intent — skipping code intent');
+              dispatchIntents = dispatchIntents.filter(i => i.intent !== 'code');
             } else {
-              // Multiple projects, none matched — ask the user
+              // Single code intent — ask for clarification
               const projectList = projects.map((p: { id: string; name: string; repo_full_name: string }) => `- ${p.name} (${p.repo_full_name})`).join('\n');
               const ambiguousResponse = `Which project do you want me to work on?\n\n${projectList}\n\nMention the project name in your message and I'll get started.`;
-
-              // Reply in Slack if applicable
               if (slack_channel) {
                 const botToken = Deno.env.get('SLACK_BOT_TOKEN');
                 if (botToken) {
@@ -527,20 +555,11 @@ Be concise. Be confident. Don't ask questions — just act.`;
                   fetch(`https://slack.com/api/${slackMethod}`, {
                     method: 'POST',
                     headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      channel: slack_channel,
-                      text: ambiguousResponse,
-                      ...(slack_thinking_ts ? { ts: slack_thinking_ts } : {}),
-                    }),
+                    body: JSON.stringify({ channel: slack_channel, text: ambiguousResponse, ...(slack_thinking_ts ? { ts: slack_thinking_ts } : {}) }),
                   }).catch(() => {});
                 }
               }
-
-              return new Response(JSON.stringify({
-                response: ambiguousResponse,
-                intent,
-                status: 'needs_clarification',
-              }), { status: 200, headers: jsonHeaders });
+              return new Response(JSON.stringify({ response: ambiguousResponse, intent: 'code', status: 'needs_clarification' }), { status: 200, headers: jsonHeaders });
             }
           }
         }
@@ -548,41 +567,45 @@ Be concise. Be confident. Don't ask questions — just act.`;
         console.warn('[jac-dispatcher] Code project lookup failed (non-blocking):', err);
       }
 
-      // If intent is code but no project found, tell the user instead of dispatching a doomed request
-      if (!codeProject) {
-        // Reply in Slack if applicable
-        if (slack_channel) {
-          const botToken = Deno.env.get('SLACK_BOT_TOKEN');
-          if (botToken) {
-            const slackMethod = slack_thinking_ts ? 'chat.update' : 'chat.postMessage';
-            fetch(`https://slack.com/api/${slackMethod}`, {
-              method: 'POST',
-              headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                channel: slack_channel,
-                text: "No code projects registered. Go to the Code Workspace to add a GitHub repo first.",
-                ...(slack_thinking_ts ? { ts: slack_thinking_ts } : {}),
-              }),
-            }).catch(() => {});
+      // No project found — skip code for multi-intent, error for single
+      if (!codeProject && dispatchIntents.some(i => i.intent === 'code')) {
+        if (dispatchIntents.length > 1) {
+          dispatchIntents = dispatchIntents.filter(i => i.intent !== 'code');
+        } else {
+          if (slack_channel) {
+            const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+            if (botToken) {
+              const slackMethod = slack_thinking_ts ? 'chat.update' : 'chat.postMessage';
+              fetch(`https://slack.com/api/${slackMethod}`, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channel: slack_channel, text: "No code projects registered. Go to the Code Workspace to add a GitHub repo first.", ...(slack_thinking_ts ? { ts: slack_thinking_ts } : {}) }),
+              }).catch(() => {});
+            }
           }
+          return new Response(JSON.stringify({ response: "No code projects registered. Head to the Code Workspace to add a GitHub repo first.", intent: 'code', status: 'no_project' }), { status: 200, headers: jsonHeaders });
         }
-
-        return new Response(JSON.stringify({
-          response: "I don't have any code projects registered yet. Head to the Code Workspace and add a GitHub repo first, then I can read, modify, and open PRs on it.",
-          intent,
-          status: 'no_project',
-        }), { status: 200, headers: jsonHeaders });
       }
     }
 
+    // Recheck after code project filtering
+    const isGeneralOnly = dispatchIntents.length === 0;
+
     // 5. Create parent task
+    const primaryIntent = isGeneralOnly ? (parsedIntents[0]?.intent || 'general') : dispatchIntents[0].intent;
+    const parentSummary = isGeneralOnly
+      ? parsedIntents[0]?.summary || message.slice(0, 100)
+      : dispatchIntents.length === 1
+        ? dispatchIntents[0].summary
+        : dispatchIntents.map(i => i.summary.slice(0, 60)).join(' | ');
+
     const { data: parentTask, error: parentError } = await supabase
       .from('agent_tasks')
       .insert({
         user_id: userId,
-        type: intent,
+        type: primaryIntent,
         status: 'running',
-        intent: summary,
+        intent: parentSummary,
         agent: 'jac-dispatcher',
         input: { message, brainContext: brainContext.slice(0, 1000), slack_channel, slack_thinking_ts, source: source || 'web' },
       })
@@ -596,148 +619,153 @@ Be concise. Be confident. Don't ask questions — just act.`;
       });
     }
 
-    // Record intent parse token usage
     await recordTokenUsage(supabase, parentTask.id, CLAUDE_MODELS.sonnet, claudeResponse.usage);
 
-    // Initialize logger now that we have a taskId
     const log = createAgentLogger(supabase, parentTask.id, userId, 'jac-dispatcher');
     await log.info('intent_parsed', {
-      intent,
-      agentType,
+      intentCount: parsedIntents.length,
+      intents: parsedIntents.map(i => i.intent),
+      dispatchCount: dispatchIntents.length,
       modelTier,
-      summary,
-      extractedQuery,
-      hasBrainContext: brainContext.length > 0,
     });
 
-    // 6. Create child task (if dispatching to a worker)
-    let childTaskId: string | null = null;
-    if (intent !== 'general') {
-      const { data: childTask } = await supabase
-        .from('agent_tasks')
-        .insert({
-          user_id: userId,
-          type: intent,
-          status: 'queued',
-          intent: summary,
-          agent: agentType,
-          parent_task_id: parentTask.id,
-          input: {
-            query: extractedQuery,
-            originalMessage: message,
-            brainContext: brainContext.slice(0, 2000),
-            modelTier,
-            slack_channel,
-            slack_thinking_ts,
-            ...(intent === 'code' && codeProject ? {
-              projectId: codeProject.id,
-              projectName: codeProject.name,
-              repoFullName: codeProject.repo_full_name,
-            } : {}),
-          },
-        })
-        .select('id')
-        .single();
-
-      childTaskId = childTask?.id ?? null;
+    // 6. Create child tasks (one per dispatch intent)
+    const childTaskIds: string[] = [];
+    if (!isGeneralOnly) {
+      for (const di of dispatchIntents) {
+        const { data: childTask } = await supabase
+          .from('agent_tasks')
+          .insert({
+            user_id: userId,
+            type: di.intent,
+            status: 'queued',
+            intent: di.summary,
+            agent: di.agentType,
+            parent_task_id: parentTask.id,
+            input: {
+              query: di.extractedQuery,
+              originalMessage: message,
+              brainContext: brainContext.slice(0, 2000),
+              modelTier,
+              slack_channel,
+              slack_thinking_ts: childTaskIds.length === 0 ? slack_thinking_ts : undefined,
+              ...(di.intent === 'code' && codeProject ? {
+                projectId: codeProject.id,
+                projectName: codeProject.name,
+                repoFullName: codeProject.repo_full_name,
+              } : {}),
+            },
+          })
+          .select('id')
+          .single();
+        if (childTask) childTaskIds.push(childTask.id);
+      }
     }
 
     // 7. Store conversation
-    const taskIds = [parentTask.id];
-    if (childTaskId) taskIds.push(childTaskId);
-
+    const taskIds = [parentTask.id, ...childTaskIds];
     const { data: insertedConvos } = await supabase.from('agent_conversations').insert([
       { user_id: userId, role: 'user', content: message, task_ids: taskIds },
       { user_id: userId, role: 'assistant', content: response, task_ids: taskIds },
     ]).select('id, role');
 
-    // 8. Fire-and-forget worker dispatch
-    if (intent !== 'general' && childTaskId) {
-      await log.info('worker_dispatched', { agentType, childTaskId, modelTier });
-      const workerUrl = `${supabaseUrl}/functions/v1/${agentType}`;
-      fetch(workerUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${serviceKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          taskId: childTaskId,
-          parentTaskId: parentTask.id,
-          userId,
-          query: extractedQuery,
-          originalMessage: message,
-          brainContext: brainContext.slice(0, 2000),
-          modelTier,
-          slack_channel,
-          slack_thinking_ts,
-          ...(intent === 'code' && codeProject ? {
-            projectId: codeProject.id,
-            projectName: codeProject.name,
-            repoFullName: codeProject.repo_full_name,
-          } : {}),
-        }),
-      }).then(async (res) => {
-        if (!res.ok) {
-          const errText = await res.text().catch(() => 'unknown');
-          console.error(`[jac-dispatcher] Worker ${agentType} returned ${res.status}: ${errText}`);
-          // Mark child task as failed so it doesn't stay stuck
-          await supabase.from('agent_tasks')
-            .update({ status: 'failed', error: `Dispatch failed: ${res.status}`, completed_at: new Date().toISOString() })
-            .eq('id', childTaskId);
-          // Mark parent as failed too
-          await supabase.from('agent_tasks')
-            .update({ status: 'failed', error: `Worker ${agentType} failed to start`, completed_at: new Date().toISOString() })
-            .eq('id', parentTask.id);
-        } else if (intent === 'research' || intent === 'code') {
-          // Auto-save significant threads as brain entries
-          try {
-            // Read the worker's conversation response
-            const { data: workerConvo } = await supabase
-              .from('agent_conversations')
-              .select('content')
-              .eq('user_id', userId)
-              .eq('role', 'assistant')
-              .contains('task_ids', [childTaskId!])
-              .order('created_at', { ascending: false })
-              .limit(1)
-              .single();
+    // 8. Dispatch workers or handle general
+    if (!isGeneralOnly) {
+      for (let i = 0; i < dispatchIntents.length; i++) {
+        const di = dispatchIntents[i];
+        const childId = childTaskIds[i];
+        if (!childId) continue;
 
-            const assistantContent = workerConvo?.content as string | undefined;
-            if (assistantContent && assistantContent.length > 100) {
-              const threadContent = `${message}\n---\n${assistantContent}`.slice(0, 4000);
-              // Insert directly — smart-save ignores content_type overrides
-              supabase.from('entries').insert({
-                user_id: userId,
-                content: threadContent,
-                content_type: 'thread',
-                title: `Thread: ${summary.slice(0, 80)}`,
-                tags: ['thread', intent],
-                source: 'agent',
-              }).then(() => {
-                console.log('[jac-dispatcher] Thread auto-saved');
-              }).catch(() => {});
+        await log.info('worker_dispatched', { agentType: di.agentType, childTaskId: childId, modelTier, intent: di.intent });
+        const workerUrl = `${supabaseUrl}/functions/v1/${di.agentType}`;
+        fetch(workerUrl, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${serviceKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            taskId: childId,
+            parentTaskId: parentTask.id,
+            userId,
+            query: di.extractedQuery,
+            originalMessage: message,
+            brainContext: brainContext.slice(0, 2000),
+            modelTier,
+            slack_channel,
+            slack_thinking_ts: i === 0 ? slack_thinking_ts : undefined,
+            ...(di.intent === 'code' && codeProject ? {
+              projectId: codeProject.id,
+              projectName: codeProject.name,
+              repoFullName: codeProject.repo_full_name,
+            } : {}),
+          }),
+        }).then(async (res) => {
+          if (!res.ok) {
+            const errText = await res.text().catch(() => 'unknown');
+            console.error(`[jac-dispatcher] Worker ${di.agentType} returned ${res.status}: ${errText}`);
+            await supabase.from('agent_tasks')
+              .update({ status: 'failed', error: `Dispatch failed: ${res.status}`, completed_at: new Date().toISOString() })
+              .eq('id', childId);
+            // Check if parent should complete (all children done)
+            const { count: pending } = await supabase
+              .from('agent_tasks')
+              .select('id', { count: 'exact', head: true })
+              .eq('parent_task_id', parentTask.id)
+              .in('status', ['queued', 'running']);
+            if ((pending ?? 0) === 0) {
+              await supabase.from('agent_tasks')
+                .update({ status: 'completed', completed_at: new Date().toISOString() })
+                .eq('id', parentTask.id)
+                .in('status', ['running']);
             }
-          } catch (threadErr) {
-            // Thread auto-save is best-effort — never block
-            console.warn('[jac-dispatcher] Thread auto-save failed:', threadErr);
+          } else if (di.intent === 'research' || di.intent === 'code') {
+            // Auto-save thread as brain entry
+            try {
+              const { data: workerConvo } = await supabase
+                .from('agent_conversations')
+                .select('content')
+                .eq('user_id', userId)
+                .eq('role', 'assistant')
+                .contains('task_ids', [childId])
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .single();
+              const assistantContent = workerConvo?.content as string | undefined;
+              if (assistantContent && assistantContent.length > 100) {
+                supabase.from('entries').insert({
+                  user_id: userId,
+                  content: `${message}\n---\n${assistantContent}`.slice(0, 4000),
+                  content_type: 'thread',
+                  title: `Thread: ${di.summary.slice(0, 80)}`,
+                  tags: ['thread', di.intent],
+                  source: 'agent',
+                }).then(() => {}).catch(() => {});
+              }
+            } catch {}
           }
-        }
-      }).catch(async (err) => {
-        console.error(`[jac-dispatcher] Worker dispatch failed for ${agentType}:`, err);
-        // Mark tasks as failed so they don't stay stuck in queued/running
-        await supabase.from('agent_tasks')
-          .update({ status: 'failed', error: `Dispatch error: ${err.message || 'network error'}`, completed_at: new Date().toISOString() })
-          .eq('id', childTaskId);
-        await supabase.from('agent_tasks')
-          .update({ status: 'failed', error: `Worker ${agentType} unreachable`, completed_at: new Date().toISOString() })
-          .eq('id', parentTask.id);
-      });
-    } else if (intent === 'general') {
-      // Enrich general responses — always call Claude for general intent (not just when brain context exists)
+        }).catch(async (err) => {
+          console.error(`[jac-dispatcher] Worker dispatch failed for ${di.agentType}:`, err);
+          await supabase.from('agent_tasks')
+            .update({ status: 'failed', error: `Dispatch error: ${err.message || 'network error'}`, completed_at: new Date().toISOString() })
+            .eq('id', childId);
+          const { count: pending } = await supabase
+            .from('agent_tasks')
+            .select('id', { count: 'exact', head: true })
+            .eq('parent_task_id', parentTask.id)
+            .in('status', ['queued', 'running']);
+          if ((pending ?? 0) === 0) {
+            await supabase.from('agent_tasks')
+              .update({ status: 'completed', completed_at: new Date().toISOString() })
+              .eq('id', parentTask.id)
+              .in('status', ['running']);
+          }
+        });
+      }
+    } else {
+      // General intent — enrich with Claude, reply, mark complete
       const originalResponse = response;
 
-      // Look up code_projects for the user so general intent can answer questions about them
       let codeProjectsContext = '';
       try {
         const { data: userProjects } = await supabase
@@ -752,7 +780,6 @@ Be concise. Be confident. Don't ask questions — just act.`;
         console.warn('[jac-dispatcher] Code projects lookup for general failed:', err);
       }
 
-      // Fetch user context (schedule, overdue items, upcoming events)
       let userContextText = '';
       try {
         const userContext = await getUserContext(supabase, userId);
@@ -782,7 +809,6 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}
         });
         const enriched = parseTextContent(generalClaude);
         if (enriched) response = enriched;
-        // Update token usage with general enrichment totals (overwrites intent parse)
         const totalUsage = {
           input_tokens: (claudeResponse.usage?.input_tokens || 0) + (generalClaude.usage?.input_tokens || 0),
           output_tokens: (claudeResponse.usage?.output_tokens || 0) + (generalClaude.usage?.output_tokens || 0),
@@ -792,7 +818,6 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}
         console.warn('[jac-dispatcher] General enrichment failed (non-blocking):', err);
       }
 
-      // Update conversation with enriched response using row ID (not content match)
       if (response !== originalResponse) {
         const assistantConvoId = insertedConvos?.find(c => c.role === 'assistant')?.id;
         if (assistantConvoId) {
@@ -802,13 +827,11 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}
         }
       }
 
-      // For general intent, mark parent as completed immediately
       await supabase
         .from('agent_tasks')
         .update({ status: 'completed', completed_at: new Date().toISOString() })
         .eq('id', parentTask.id);
 
-      // Reply in Slack — update the thinking message if we have one, otherwise post new
       if (slack_channel) {
         const botToken = Deno.env.get('SLACK_BOT_TOKEN');
         if (botToken) {
@@ -843,10 +866,11 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}
     return new Response(JSON.stringify({
       response,
       taskId: parentTask.id,
-      childTaskId,
-      intent,
-      agentType,
-      status: intent === 'general' ? 'completed' : 'dispatched',
+      childTaskId: childTaskIds[0] ?? null,
+      childTaskIds,
+      intent: primaryIntent,
+      agentType: dispatchIntents[0]?.agentType ?? 'assistant-chat',
+      status: isGeneralOnly ? 'completed' : 'dispatched',
     }), { status: 200, headers: jsonHeaders });
 
   } catch (error) {

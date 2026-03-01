@@ -140,6 +140,12 @@ All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent wo
 5. Functions called by other functions (classify-content, generate-embedding, search-memory) MUST use `extractUserIdWithServiceRole`
 6. RLS enforces per-user data isolation
 
+## Embedding Rule
+
+**Nothing ships without embedding.** Every feature that produces, stores, or surfaces data MUST flow through the embedding pipeline (`generate-embedding` → Voyage AI → pgvector). If JAC can't search it, connect it, or learn from it, it's not a feature — it's a dead end. No exceptions.
+
+Before merging any feature: *"Does this data get embedded? If not, it's not done."*
+
 ## Security Conventions
 
 - CORS: dynamic origin checking via `_shared/cors.ts` — NEVER use `'*'`

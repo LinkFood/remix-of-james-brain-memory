@@ -61,6 +61,7 @@ export interface CodeProject {
   tech_stack: string[] | null;
   last_synced_at: string | null;
   file_tree_cache: string[] | null;
+  pages_url: string | null;
   active: boolean;
   created_at: string;
   updated_at: string;

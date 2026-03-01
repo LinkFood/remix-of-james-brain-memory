@@ -8,7 +8,7 @@
 import {
   Activity, Users, Brain, Bell, GitBranch,
   Lightbulb, Gauge, AlertTriangle, MessageSquare, CalendarDays,
-  Sparkles,
+  Sparkles, Radio,
 } from 'lucide-react';
 import type { WidgetDefinition, SandboxLayout } from '@/types/widget';
 import type { Layout } from 'react-grid-layout';
@@ -24,6 +24,7 @@ import TriageQueueWidget from '@/components/sandbox/widgets/TriageQueueWidget';
 import ReflectionsWidget from '@/components/sandbox/widgets/ReflectionsWidget';
 import CalendarWidget from '@/components/sandbox/widgets/CalendarWidget';
 import AgentOutputsWidget from '@/components/sandbox/widgets/AgentOutputsWidget';
+import AgentLiveStreamWidget from '@/components/sandbox/widgets/AgentLiveStreamWidget';
 
 export const WIDGET_DEFS: WidgetDefinition[] = [
   {
@@ -134,6 +135,16 @@ export const WIDGET_DEFS: WidgetDefinition[] = [
     defaultSize: { w: 6, h: 4 },
     minSize: { w: 3, h: 3 },
     component: AgentOutputsWidget,
+    category: 'agents',
+  },
+  {
+    typeId: 'agent-live-stream',
+    name: 'Live Stream',
+    description: 'Real-time agent activity log',
+    icon: Radio,
+    defaultSize: { w: 6, h: 4 },
+    minSize: { w: 3, h: 3 },
+    component: AgentLiveStreamWidget,
     category: 'agents',
   },
 ];

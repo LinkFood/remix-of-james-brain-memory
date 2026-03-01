@@ -5,7 +5,7 @@
  */
 
 import { Badge } from '@/components/ui/badge';
-import { GitBranch, FileText, ExternalLink, GitMerge } from 'lucide-react';
+import { GitBranch, FileText, ExternalLink, GitMerge, Play } from 'lucide-react';
 
 interface CodeSessionCardProps {
   output: Record<string, unknown>;
@@ -15,9 +15,21 @@ export function CodeSessionCard({ output }: CodeSessionCardProps) {
   const branch = output.branch ? String(output.branch) : null;
   const prUrl = output.prUrl ? String(output.prUrl) : null;
   const filesWritten = Array.isArray(output.filesWritten) ? output.filesWritten.map(String) : [];
+  const filesChanged = Array.isArray(output.filesChanged) ? output.filesChanged.map(String) : filesWritten;
   const merged = Boolean(output.merged);
   const mergeSha = output.mergeSha ? String(output.mergeSha) : null;
   const prNumber = output.prNumber ? Number(output.prNumber) : null;
+
+  // Derive GitHub Pages preview URL from PR URL + HTML files
+  let previewUrl: string | null = null;
+  if (merged && prUrl) {
+    const repoMatch = prUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
+    const htmlFile = filesChanged.find(f => f.endsWith('.html'));
+    if (repoMatch && htmlFile) {
+      const [, owner, repo] = repoMatch;
+      previewUrl = `https://${owner}.github.io/${repo}/${htmlFile}`;
+    }
+  }
 
   return (
     <div className="mt-2 p-3 rounded-lg border border-indigo-500/20 bg-indigo-500/[0.03] max-w-[85%]">
@@ -62,6 +74,17 @@ export function CodeSessionCard({ output }: CodeSessionCardProps) {
                 Open
               </Badge>
             ) : null}
+            {previewUrl && (
+              <a
+                href={previewUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-1 text-xs text-emerald-400 hover:underline"
+              >
+                <Play className="w-3 h-3" />
+                Preview
+              </a>
+            )}
           </div>
 
           {/* Merge SHA */}
