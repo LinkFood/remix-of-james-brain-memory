@@ -2,10 +2,12 @@
  * BrainEntryCard — Inline artifact for save results
  *
  * Shows a compact card when JAC saves something to the brain.
+ * Clickable — navigates to Brain Inspector with entry pre-selected.
  */
 
 import { Badge } from '@/components/ui/badge';
-import { Brain } from 'lucide-react';
+import { Brain, ChevronRight } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 const TYPE_BADGES: Record<string, string> = {
   note: 'bg-blue-500/10 text-blue-400',
@@ -25,13 +27,27 @@ interface BrainEntryCardProps {
 }
 
 export function BrainEntryCard({ output }: BrainEntryCardProps) {
+  const navigate = useNavigate();
   const title = output.title ? String(output.title) : null;
   const contentType = output.content_type ? String(output.content_type) : 'note';
   const tags = Array.isArray(output.tags) ? output.tags.map(String) : [];
   const entryId = output.brainEntryId || output.entryId;
+  const isClickable = !!entryId;
+
+  const handleClick = () => {
+    if (entryId) {
+      navigate(`/brain?entryId=${entryId}`);
+    }
+  };
 
   return (
-    <div className="mt-2 p-3 rounded-lg border border-violet-500/20 bg-violet-500/[0.03] max-w-[85%]">
+    <button
+      onClick={handleClick}
+      disabled={!isClickable}
+      className={`mt-2 p-3 rounded-lg border border-violet-500/20 bg-violet-500/[0.03] max-w-[85%] w-full text-left transition-colors ${
+        isClickable ? 'cursor-pointer hover:bg-violet-500/[0.06] hover:border-violet-500/30' : ''
+      }`}
+    >
       <div className="flex items-start gap-2">
         <div className="w-6 h-6 rounded-full bg-violet-500/10 flex items-center justify-center shrink-0">
           <Brain className="w-3.5 h-3.5 text-violet-500" />
@@ -61,7 +77,10 @@ export function BrainEntryCard({ output }: BrainEntryCardProps) {
             </p>
           )}
         </div>
+        {isClickable && (
+          <ChevronRight className="w-4 h-4 text-violet-400/40 shrink-0 mt-1" />
+        )}
       </div>
-    </div>
+    </button>
   );
 }

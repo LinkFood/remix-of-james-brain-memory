@@ -9,7 +9,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
-  LayoutDashboard, Code2, CalendarDays, Search, Activity, Brain,
+  LayoutDashboard, Code2, CalendarDays, Search, Activity, Users, Brain, Timer,
   Clock, Zap, DollarSign, OctagonX, Settings, Heart,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
@@ -39,7 +39,9 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/calendar', label: 'Calendar', icon: <CalendarDays className="w-4 h-4" /> },
   { path: '/search', label: 'Search', icon: <Search className="w-4 h-4" /> },
   { path: '/activity', label: 'Activity', icon: <Activity className="w-4 h-4" /> },
+  { path: '/agents', label: 'Agents', icon: <Users className="w-4 h-4" /> },
   { path: '/brain', label: 'Brain', icon: <Brain className="w-4 h-4" /> },
+  { path: '/crons', label: 'Crons', icon: <Timer className="w-4 h-4" /> },
 ];
 
 interface TopNavProps {

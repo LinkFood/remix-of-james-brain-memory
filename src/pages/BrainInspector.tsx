@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { cn } from '@/lib/utils';
 import {
@@ -416,6 +416,7 @@ function InspectorPanel({
 
 const BrainInspector = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [userId, setUserId] = useState('');
 
   useEffect(() => {
@@ -447,6 +448,22 @@ const BrainInspector = () => {
   // Extended tab state (includes entities + principles beyond what the hook supports)
   type ExtendedTab = 'all' | 'entries' | 'reflections' | 'entities' | 'principles';
   const [activeTab, setActiveTab] = useState<ExtendedTab>('all');
+
+  // Auto-select entry from URL param (?entryId=xxx)
+  useEffect(() => {
+    const entryId = searchParams.get('entryId');
+    if (!entryId || entries.length === 0) return;
+
+    const found = entries.find((e) => e.id === entryId);
+    if (found) {
+      setActiveTab('entries');
+      setTab('entries');
+      selectItem({ ...found, kind: 'entry' });
+      // Clear the param so refreshing doesn't re-trigger
+      searchParams.delete('entryId');
+      setSearchParams(searchParams, { replace: true });
+    }
+  }, [entries, searchParams, setSearchParams, selectItem, setTab]);
 
   const handleTabChange = (t: ExtendedTab) => {
     setActiveTab(t);
