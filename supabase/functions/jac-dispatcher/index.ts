@@ -706,19 +706,16 @@ Be concise. Be confident. Don't ask questions — just act.`;
             const assistantContent = workerConvo?.content as string | undefined;
             if (assistantContent && assistantContent.length > 100) {
               const threadContent = `${message}\n---\n${assistantContent}`.slice(0, 4000);
-              fetch(`${supabaseUrl}/functions/v1/smart-save`, {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${serviceKey}`,
-                  'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                  userId,
-                  content: threadContent,
-                  content_type: 'thread',
-                  title: `Thread: ${summary.slice(0, 80)}`,
-                  tags: ['thread', intent],
-                }),
+              // Insert directly — smart-save ignores content_type overrides
+              supabase.from('entries').insert({
+                user_id: userId,
+                content: threadContent,
+                content_type: 'thread',
+                title: `Thread: ${summary.slice(0, 80)}`,
+                tags: ['thread', intent],
+                source: 'agent',
+              }).then(() => {
+                console.log('[jac-dispatcher] Thread auto-saved');
               }).catch(() => {});
             }
           } catch (threadErr) {
