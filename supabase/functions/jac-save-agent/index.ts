@@ -149,6 +149,16 @@ serve(async (req) => {
     });
     await slackStep();
 
+    // Fire-and-forget reflection
+    fetch(`${supabaseUrl}/functions/v1/jac-reflect`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${serviceKey}`,
+      },
+      body: JSON.stringify({ userId, taskId }),
+    }).catch(() => {});
+
     // 6. Store result as assistant message
     await supabase.from('agent_conversations').insert({
       user_id: userId,

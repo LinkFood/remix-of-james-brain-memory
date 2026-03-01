@@ -7,7 +7,7 @@
 
 import {
   Activity, Users, Brain, Bell, GitBranch,
-  Lightbulb, Gauge, AlertTriangle,
+  Lightbulb, Gauge, AlertTriangle, MessageSquare,
 } from 'lucide-react';
 import type { WidgetDefinition, SandboxLayout } from '@/types/widget';
 import type { Layout } from 'react-grid-layout';
@@ -20,6 +20,7 @@ import CodeSessionsWidget from '@/components/sandbox/widgets/CodeSessionsWidget'
 import InsightsWidget from '@/components/sandbox/widgets/InsightsWidget';
 import SystemPulseWidget from '@/components/sandbox/widgets/SystemPulseWidget';
 import TriageQueueWidget from '@/components/sandbox/widgets/TriageQueueWidget';
+import ReflectionsWidget from '@/components/sandbox/widgets/ReflectionsWidget';
 
 export const WIDGET_DEFS: WidgetDefinition[] = [
   {
@@ -101,6 +102,16 @@ export const WIDGET_DEFS: WidgetDefinition[] = [
     minSize: { w: 3, h: 2 },
     component: TriageQueueWidget,
     category: 'brain',
+  },
+  {
+    typeId: 'reflections',
+    name: 'Reflections',
+    description: "JAC's reflections on completed tasks",
+    icon: MessageSquare,
+    defaultSize: { w: 6, h: 3 },
+    minSize: { w: 3, h: 2 },
+    component: ReflectionsWidget,
+    category: 'insights',
   },
 ];
 

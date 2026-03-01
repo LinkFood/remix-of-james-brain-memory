@@ -349,6 +349,26 @@ serve(async (req) => {
       console.warn('[jac-dispatcher] Brain search failed (non-blocking):', err);
     }
 
+    // 3b. Recent reflections for JAC self-awareness
+    let reflectionsContext = '';
+    try {
+      const { data: recentReflections } = await supabase
+        .from('jac_reflections')
+        .select('task_type, intent, summary, created_at')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (recentReflections && recentReflections.length > 0) {
+        reflectionsContext = '\n\n=== JAC\'S RECENT REFLECTIONS ===\n' +
+          recentReflections.map((r: { task_type: string; intent: string | null; summary: string }) =>
+            `- ${r.task_type}: ${r.intent || 'no intent'} -> ${r.summary}`
+          ).join('\n');
+      }
+    } catch (err) {
+      console.warn('[jac-dispatcher] Reflections lookup failed (non-blocking):', err);
+    }
+
     // 4. Intent parsing via Claude Sonnet
     const systemPrompt = `You are JAC, a personal AI agent dispatcher. The user sends you a message and you decide what to do with it.
 
@@ -378,7 +398,7 @@ Intent routing rules (follow these STRICTLY):
    TRIGGERS: "fix", "add feature", "update code", "refactor", "implement", "PR", "pull request", project names like "pixel-perfect" or "exact-match", code-related requests.
 
 IMPORTANT: Brain context below is for YOUR reference only — do NOT route to search just because matching entries exist.
-${brainContext ? `\nUser's brain context (for reference only):\n${brainContext}` : ''}
+${brainContext ? `\nUser's brain context (for reference only):\n${brainContext}` : ''}${reflectionsContext}
 
 Be concise. Be confident. Don't ask questions — just act.`;
 

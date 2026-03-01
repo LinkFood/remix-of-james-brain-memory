@@ -16,6 +16,9 @@ export interface WidgetProps {
   compact: boolean;
   onRemove: () => void;
   onNavigate: (path: string) => void;
+  activeTab?: string;
+  onTabChange?: (tabId: string) => void;
+  expanded?: boolean;
 }
 
 export type WidgetCategory = 'agents' | 'brain' | 'code' | 'insights' | 'custom';
@@ -30,6 +33,8 @@ export interface WidgetDefinition {
   minSize?: { w: number; h: number };
   component: ComponentType<WidgetProps>;
   category: WidgetCategory;
+  tabs?: { id: string; label: string }[];
+  refreshInterval?: number;
 }
 
 /** Persisted layout state */

@@ -599,6 +599,16 @@ Instructions:
     });
     await slackStep();
 
+    // Fire-and-forget reflection
+    fetch(`${supabaseUrl}/functions/v1/jac-reflect`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${serviceKey}`,
+      },
+      body: JSON.stringify({ userId, taskId }),
+    }).catch(() => {});
+
     // Store result as assistant message in conversation
     const { error: convoError } = await supabase.from('agent_conversations').insert({
       user_id: userId,

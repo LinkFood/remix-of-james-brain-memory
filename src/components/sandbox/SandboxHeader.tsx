@@ -14,7 +14,7 @@ const SandboxHeader = ({ activeTypeIds, onAddWidget, onResetLayout }: SandboxHea
       <div className="flex items-center gap-3 px-3 h-10">
         <div className="flex items-center gap-2">
           <Zap className="w-4 h-4 text-primary/60" />
-          <span className="text-sm font-semibold">JAC Sandbox</span>
+          <span className="text-sm font-semibold">JAC Dashboard</span>
         </div>
 
         <div className="ml-auto flex items-center gap-2">

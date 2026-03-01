@@ -12,9 +12,10 @@ interface WidgetGridProps {
   layout: SandboxLayout;
   onLayoutChange: (layout: Layout[]) => void;
   onRemoveWidget: (instanceId: string) => void;
+  onExpandWidget?: (typeId: string) => void;
 }
 
-const WidgetGrid = ({ layout, onLayoutChange, onRemoveWidget }: WidgetGridProps) => {
+const WidgetGrid = ({ layout, onLayoutChange, onRemoveWidget, onExpandWidget }: WidgetGridProps) => {
   const navigate = useNavigate();
   const { width, containerRef, mounted } = useContainerWidth({ initialWidth: 1200 });
 
@@ -33,6 +34,7 @@ const WidgetGrid = ({ layout, onLayoutChange, onRemoveWidget }: WidgetGridProps)
               definition={def}
               instanceId={item.i}
               onRemove={() => onRemoveWidget(item.i)}
+              onExpand={onExpandWidget ? () => onExpandWidget(typeId) : undefined}
             >
               <WidgetComponent
                 instanceId={item.i}
@@ -45,7 +47,7 @@ const WidgetGrid = ({ layout, onLayoutChange, onRemoveWidget }: WidgetGridProps)
         );
       })
       .filter(Boolean);
-  }, [layout, onRemoveWidget, navigate]);
+  }, [layout, onRemoveWidget, onExpandWidget, navigate]);
 
   const handleLayoutChange = useCallback(
     (currentLayout: Layout[]) => {

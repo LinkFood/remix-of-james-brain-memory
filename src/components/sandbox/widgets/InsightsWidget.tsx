@@ -13,6 +13,7 @@ import {
   Calendar,
   Lightbulb,
   Brain,
+  Activity,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -25,7 +26,7 @@ interface TypeConfig {
   bg: string;
 }
 
-const TYPE_CONFIG: Record<InsightType, TypeConfig> = {
+const TYPE_CONFIG: Record<string, TypeConfig> = {
   pattern:    { icon: TrendingUp,    color: 'text-purple-400',  bg: 'bg-purple-500/15' },
   overdue:    { icon: AlertTriangle, color: 'text-red-400',     bg: 'bg-red-500/15' },
   stale:      { icon: Clock,         color: 'text-amber-400',   bg: 'bg-amber-500/15' },
@@ -33,6 +34,7 @@ const TYPE_CONFIG: Record<InsightType, TypeConfig> = {
   suggestion: { icon: Lightbulb,     color: 'text-cyan-400',    bg: 'bg-cyan-500/15' },
   forgotten:  { icon: Clock,         color: 'text-amber-400',   bg: 'bg-amber-500/15' },
   unchecked:  { icon: Brain,         color: 'text-blue-400',    bg: 'bg-blue-500/15' },
+  activity:   { icon: Activity,      color: 'text-rose-400',    bg: 'bg-rose-500/15' },
 };
 
 export default function InsightsWidget({ compact }: WidgetProps) {
@@ -87,6 +89,9 @@ export default function InsightsWidget({ compact }: WidgetProps) {
                     <div className="text-[10px] text-white/50 line-clamp-2 mt-0.5">
                       {insight.body}
                     </div>
+                    <span className="text-[9px] text-white/20 mt-0.5">
+                      {insight.type === 'activity' ? 'from reflections' : 'from entries'}
+                    </span>
                   </div>
                   <button
                     onClick={() => dismiss(insight.id)}

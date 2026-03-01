@@ -26,8 +26,8 @@ const INSIGHT_TOOL = {
           properties: {
             type: {
               type: 'string',
-              enum: ['pattern', 'overdue', 'stale', 'schedule', 'suggestion'],
-              description: 'pattern = recurring theme detected. overdue = past-due items. stale = high-importance entries not touched recently. schedule = upcoming event prep. suggestion = actionable recommendation.',
+              enum: ['pattern', 'overdue', 'stale', 'schedule', 'suggestion', 'activity'],
+              description: 'pattern = recurring theme detected. overdue = past-due items. stale = high-importance entries not touched recently. schedule = upcoming event prep. suggestion = actionable recommendation. activity = insight about recent agent work/reflections.',
             },
             title: { type: 'string', description: 'Short title (under 60 chars)' },
             body: { type: 'string', description: 'One paragraph explanation' },
@@ -46,6 +46,15 @@ const INSIGHT_TOOL = {
     required: ['insights'],
   },
 };
+
+function getTimeAgo(dateStr: string): string {
+  const diffMs = Date.now() - new Date(dateStr).getTime();
+  const hours = Math.floor(diffMs / (1000 * 60 * 60));
+  if (hours < 1) return 'just now';
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
 
 serve(async (req) => {
   const corsResponse = handleCors(req);
@@ -139,6 +148,26 @@ serve(async (req) => {
       .order('event_date', { ascending: true })
       .limit(10);
 
+    // 6. Recent reflections (past 7 days)
+    const { data: recentReflections } = await supabase
+      .from('jac_reflections')
+      .select('task_type, intent, summary, created_at')
+      .eq('user_id', userId)
+      .gte('created_at', weekAgo)
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    // 7. Recent completed tasks (past 3 days)
+    const threeDaysAgo = new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: recentTasks } = await supabase
+      .from('agent_tasks')
+      .select('type, intent, status, created_at')
+      .eq('user_id', userId)
+      .eq('status', 'completed')
+      .gte('created_at', threeDaysAgo)
+      .order('created_at', { ascending: false })
+      .limit(10);
+
     // Build context for Claude
     const contextParts: string[] = [];
 
@@ -171,6 +200,22 @@ serve(async (req) => {
       contextParts.push(`\nUPCOMING (next 3 days):`);
       for (const e of upcomingEntries) {
         contextParts.push(`  [${e.id}] "${e.title || 'Untitled'}" (${e.event_date}${e.event_time ? ' at ' + e.event_time : ''})`);
+      }
+    }
+
+    if (recentReflections && recentReflections.length > 0) {
+      contextParts.push(`\n=== JAC'S RECENT WORK ===`);
+      for (const r of recentReflections) {
+        const timeAgo = getTimeAgo(r.created_at);
+        contextParts.push(`  Task: ${r.intent || r.task_type} -> Result: ${r.summary} (${timeAgo})`);
+      }
+    }
+
+    if (recentTasks && recentTasks.length > 0) {
+      contextParts.push(`\n=== COMPLETED TASKS ===`);
+      for (const t of recentTasks) {
+        const timeAgo = getTimeAgo(t.created_at);
+        contextParts.push(`  ${t.type}: ${t.intent || 'no intent'} (${t.status}, ${timeAgo})`);
       }
     }
 

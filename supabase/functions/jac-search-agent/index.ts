@@ -163,6 +163,16 @@ serve(async (req) => {
     });
     await slackStep();
 
+    // Fire-and-forget reflection
+    fetch(`${supabaseUrl}/functions/v1/jac-reflect`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${serviceKey}`,
+      },
+      body: JSON.stringify({ userId, taskId }),
+    }).catch(() => {});
+
     // 7. Store result as assistant message
     const responseContent = resultCount > 0
       ? `Found ${resultCount} brain entries matching "${query}":\n\n${resultSummary}`

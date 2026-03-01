@@ -15,6 +15,9 @@ verify_jwt = false
 [functions.jac-code-agent]
 verify_jwt = false
 
+[functions.jac-reflect]
+verify_jwt = false
+
 [functions.slack-incoming]
 verify_jwt = false
 
