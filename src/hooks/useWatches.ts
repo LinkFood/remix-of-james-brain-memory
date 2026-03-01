@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export interface Watch {
@@ -141,5 +142,136 @@ export function useWatches() {
     setWatches(prev => prev.map(w => w.id === id ? { ...w, input: newInput } : w));
   }, [watches]);
 
-  return { watches, loading, userId, fetchWatches, toggleWatch, deleteWatch, updateModelTier };
+  const createWatch = useCallback(async (params: {
+    watchName: string;
+    query: string;
+    cronExpression: string;
+    modelTier: string;
+    agentType: string;
+  }): Promise<string | null> => {
+    if (!userId) return null;
+
+    // Get user's Slack channel
+    const { data: settings } = await supabase
+      .from('user_settings')
+      .select('settings')
+      .eq('user_id', userId)
+      .single();
+    const slackChannel = (settings?.settings as Record<string, unknown>)?.slack_channel_id as string | undefined;
+
+    const nextRunAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+    const { data, error } = await supabase
+      .from('agent_tasks')
+      .insert({
+        user_id: userId,
+        type: 'research',
+        status: 'running',
+        intent: params.watchName,
+        agent: 'jac-watch-scheduler',
+        cron_expression: params.cronExpression,
+        cron_active: true,
+        next_run_at: nextRunAt,
+        input: {
+          query: params.query,
+          watchName: params.watchName,
+          agentType: params.agentType,
+          modelTier: params.modelTier,
+          timezone: 'America/Chicago',
+          slack_channel: slackChannel || null,
+          createdAt: new Date().toISOString(),
+        },
+      })
+      .select('id')
+      .single();
+
+    if (error || !data) {
+      toast.error('Failed to create watch');
+      return null;
+    }
+
+    toast.success(`Watch created: "${params.watchName}"`);
+    fetchWatches();
+    return data.id;
+  }, [userId, fetchWatches]);
+
+  const updateWatch = useCallback(async (id: string, params: {
+    watchName?: string;
+    query?: string;
+    cronExpression?: string;
+    modelTier?: string;
+    agentType?: string;
+  }) => {
+    const watch = watches.find(w => w.id === id);
+    if (!watch) return;
+
+    const updates: Record<string, unknown> = {};
+    const newInput = { ...watch.input };
+
+    if (params.watchName !== undefined) {
+      updates.intent = params.watchName;
+      newInput.watchName = params.watchName;
+    }
+    if (params.query !== undefined) {
+      newInput.query = params.query;
+    }
+    if (params.modelTier !== undefined) {
+      newInput.modelTier = params.modelTier;
+    }
+    if (params.agentType !== undefined) {
+      newInput.agentType = params.agentType;
+    }
+    if (params.cronExpression !== undefined) {
+      updates.cron_expression = params.cronExpression;
+      updates.next_run_at = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    }
+
+    updates.input = newInput;
+
+    const { error } = await supabase
+      .from('agent_tasks')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) {
+      toast.error('Failed to update watch');
+      return;
+    }
+
+    toast.success('Watch updated');
+    fetchWatches();
+  }, [watches, fetchWatches]);
+
+  const triggerRun = useCallback(async (watchId: string) => {
+    const { data, error } = await supabase.functions.invoke('trigger-watch-run', {
+      body: { action: 'run_now', watchId },
+    });
+
+    if (error || !data?.success) {
+      toast.error('Failed to trigger run');
+      return;
+    }
+
+    toast.success('Watch run triggered');
+  }, []);
+
+  const skipNextRun = useCallback(async (watchId: string) => {
+    const { data, error } = await supabase.functions.invoke('trigger-watch-run', {
+      body: { action: 'skip_next', watchId },
+    });
+
+    if (error || !data?.success) {
+      toast.error('Failed to skip next run');
+      return;
+    }
+
+    toast.success(`Next run skipped`);
+    fetchWatches();
+  }, [fetchWatches]);
+
+  return {
+    watches, loading, userId, fetchWatches,
+    toggleWatch, deleteWatch, updateModelTier,
+    createWatch, updateWatch, triggerRun, skipNextRun,
+  };
 }

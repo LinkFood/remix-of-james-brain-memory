@@ -1,15 +1,17 @@
 /**
- * CronJobs — View and manage pg_cron jobs.
+ * CronJobs — System Jobs + Watches control panel.
  *
- * Lists all cron jobs with schedule, last run status, and enable/disable toggle.
+ * System Jobs tab: pg_cron infrastructure (toggle only).
+ * Watches tab: full CRUD — create, edit, run now, skip next, delete.
  */
 
 import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { cn } from '@/lib/utils';
 import { useCronJobs, type CronJob } from '@/hooks/useCronJobs';
 import { useWatches, type Watch } from '@/hooks/useWatches';
+import { CreateWatchDialog } from '@/components/watches/CreateWatchDialog';
 import {
   Timer,
   Loader2,
@@ -19,11 +21,23 @@ import {
   RefreshCw,
   AlertCircle,
   Eye,
+  Plus,
+  MoreVertical,
+  Play,
+  SkipForward,
+  Pencil,
   Trash2,
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 const STATUS_CONFIG: Record<string, { icon: typeof CheckCircle2; color: string; label: string }> = {
   succeeded: { icon: CheckCircle2, color: 'text-emerald-400', label: 'Success' },
@@ -39,54 +53,40 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
-/** Parse the command column to extract the function name or a short description */
 function parseTarget(command: string): string {
-  // Match invoke_edge_function('function-name', ...) or similar
   const edgeFnMatch = command.match(/invoke_edge_function\s*\(\s*'([^']+)'/);
   if (edgeFnMatch) return edgeFnMatch[1];
-
-  // Match net.http_post with edge function URL
   const httpMatch = command.match(/functions\/v1\/([a-z0-9-]+)/);
   if (httpMatch) return httpMatch[1];
-
-  // Match SELECT ... FROM or CALL ...
   const sqlMatch = command.match(/(?:SELECT|CALL)\s+(\w+)/i);
   if (sqlMatch) return sqlMatch[1];
-
-  // Fallback: truncate
   return command.slice(0, 40) + (command.length > 40 ? '...' : '');
 }
 
-/** Convert cron schedule to human-readable */
 function prettyCron(schedule: string): string {
   const parts = schedule.trim().split(/\s+/);
   if (parts.length !== 5) return schedule;
-
   const [min, hour, , , dow] = parts;
 
-  // Every N minutes
   const everyMinMatch = min.match(/^\*\/(\d+)$/);
   if (everyMinMatch && hour === '*') return `Every ${everyMinMatch[1]} min`;
 
-  // Specific time
   if (min.match(/^\d+$/) && hour.match(/^\d+$/)) {
     const h = parseInt(hour);
     const m = parseInt(min);
     const ampm = h >= 12 ? 'PM' : 'AM';
     const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    const time = `${h12}:${m.toString().padStart(2, '0')} ${ampm} UTC`;
-
+    const time = `${h12}:${m.toString().padStart(2, '0')} ${ampm} CT`;
     if (dow === '0') return `Sun ${time}`;
+    if (dow === '1-5') return `Weekdays ${time}`;
     if (dow !== '*') return `${time} (dow=${dow})`;
     return `Daily ${time}`;
   }
-
   return schedule;
 }
 
 function formatDuration(interval: string | null): string {
   if (!interval) return '--';
-  // Postgres interval format: "00:00:01.234567" or "1 day 02:03:04"
   const match = interval.match(/(\d+):(\d+):(\d+)/);
   if (match) {
     const [, h, m, s] = match;
@@ -97,11 +97,29 @@ function formatDuration(interval: string | null): string {
   return interval;
 }
 
-function WatchCard({ watch, onToggle, onDelete, onModelChange }: {
+function timeUntil(dateStr: string): string {
+  const diffMs = new Date(dateStr).getTime() - Date.now();
+  if (diffMs < 0) return 'due';
+  const diffMin = Math.floor(diffMs / 60000);
+  if (diffMin < 60) return `in ${diffMin}m`;
+  const diffH = Math.floor(diffMin / 60);
+  if (diffH < 24) return `in ${diffH}h`;
+  return `in ${Math.floor(diffH / 24)}d`;
+}
+
+const MODEL_BADGE: Record<string, string> = {
+  opus: 'bg-purple-500/20 text-purple-400',
+  sonnet: 'bg-blue-500/20 text-blue-400',
+  haiku: 'bg-white/5 text-white/40',
+};
+
+function WatchCard({ watch, onToggle, onEdit, onRunNow, onSkipNext, onDelete }: {
   watch: Watch;
   onToggle: (id: string, active: boolean) => void;
+  onEdit: (watch: Watch) => void;
+  onRunNow: (id: string) => void;
+  onSkipNext: (id: string) => void;
   onDelete: (id: string) => void;
-  onModelChange: (id: string, tier: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [runs, setRuns] = useState<Array<{ id: string; status: string; completed_at: string | null; output: Record<string, unknown> | null; cost_usd: number | null }>>([]);
@@ -118,11 +136,13 @@ function WatchCard({ watch, onToggle, onDelete, onModelChange }: {
     setExpanded(true);
   };
 
+  const tier = watch.input.modelTier || 'haiku';
+
   return (
     <div className="border border-white/10 rounded-lg overflow-hidden">
       <div className="px-4 py-3 flex items-center gap-3">
         {/* Status dot */}
-        <div className={cn('w-2 h-2 rounded-full', watch.cron_active ? 'bg-emerald-400' : 'bg-white/20')} />
+        <div className={cn('w-2 h-2 rounded-full shrink-0', watch.cron_active ? 'bg-emerald-400' : 'bg-white/20')} />
 
         {/* Name + query */}
         <div className="flex-1 min-w-0">
@@ -137,15 +157,9 @@ function WatchCard({ watch, onToggle, onDelete, onModelChange }: {
         </div>
 
         {/* Model tier badge */}
-        <select
-          value={watch.input.modelTier || 'haiku'}
-          onChange={(e) => onModelChange(watch.id, e.target.value)}
-          className="text-[10px] bg-white/5 border border-white/10 rounded px-1.5 py-0.5 text-white/50 outline-none"
-        >
-          <option value="haiku">Haiku</option>
-          <option value="sonnet">Sonnet</option>
-          <option value="opus">Opus</option>
-        </select>
+        <span className={cn('text-[10px] px-1.5 py-0.5 rounded shrink-0', MODEL_BADGE[tier] || MODEL_BADGE.haiku)}>
+          {tier}
+        </span>
 
         {/* Stats */}
         <div className="text-right shrink-0">
@@ -165,13 +179,38 @@ function WatchCard({ watch, onToggle, onDelete, onModelChange }: {
           {expanded ? <ChevronUp className="w-3.5 h-3.5 text-white/30" /> : <ChevronDown className="w-3.5 h-3.5 text-white/30" />}
         </button>
 
-        {/* Delete */}
-        <button
-          onClick={() => { if (confirm('Delete this watch?')) onDelete(watch.id); }}
-          className="p-1 rounded hover:bg-red-500/20"
-        >
-          <Trash2 className="w-3.5 h-3.5 text-white/30 hover:text-red-400" />
-        </button>
+        {/* Kebab menu */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="p-1 rounded hover:bg-white/10">
+              <MoreVertical className="w-3.5 h-3.5 text-white/30" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="bg-zinc-900 border-white/10 min-w-[140px]">
+            <DropdownMenuItem onClick={() => onEdit(watch)} className="text-xs text-white/70 focus:text-white focus:bg-white/10">
+              <Pencil className="w-3 h-3 mr-2" />
+              Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onRunNow(watch.id)} className="text-xs text-white/70 focus:text-white focus:bg-white/10">
+              <Play className="w-3 h-3 mr-2" />
+              Run Now
+            </DropdownMenuItem>
+            {watch.cron_active && watch.next_run_at && (
+              <DropdownMenuItem onClick={() => onSkipNext(watch.id)} className="text-xs text-white/70 focus:text-white focus:bg-white/10">
+                <SkipForward className="w-3 h-3 mr-2" />
+                Skip Next
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator className="bg-white/10" />
+            <DropdownMenuItem
+              onClick={() => { if (confirm('Delete this watch?')) onDelete(watch.id); }}
+              className="text-xs text-red-400 focus:text-red-300 focus:bg-red-500/10"
+            >
+              <Trash2 className="w-3 h-3 mr-2" />
+              Delete
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Last run + next run info */}
@@ -206,21 +245,21 @@ function WatchCard({ watch, onToggle, onDelete, onModelChange }: {
   );
 }
 
-/** Time until a future date, human-readable */
-function timeUntil(dateStr: string): string {
-  const diffMs = new Date(dateStr).getTime() - Date.now();
-  if (diffMs < 0) return 'due';
-  const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 60) return `in ${diffMin}m`;
-  const diffH = Math.floor(diffMin / 60);
-  if (diffH < 24) return `in ${diffH}h`;
-  return `in ${Math.floor(diffH / 24)}d`;
-}
-
 const CronJobs = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [userId, setUserId] = useState('');
-  const [activeTab, setActiveTab] = useState<'system' | 'watches'>('system');
+
+  // URL param-driven tab
+  const tabParam = searchParams.get('tab');
+  const activeTab = tabParam === 'watches' ? 'watches' : 'system';
+  const setActiveTab = (tab: 'system' | 'watches') => {
+    setSearchParams(tab === 'system' ? {} : { tab });
+  };
+
+  // Dialog state
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingWatch, setEditingWatch] = useState<Watch | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -233,10 +272,43 @@ const CronJobs = () => {
   }, [navigate]);
 
   const { jobs, loading, error, refetch, toggleJob } = useCronJobs();
-  const { watches, loading: watchesLoading, fetchWatches, toggleWatch, deleteWatch, updateModelTier } = useWatches();
+  const {
+    watches, loading: watchesLoading, fetchWatches,
+    toggleWatch, deleteWatch, createWatch, updateWatch, triggerRun, skipNextRun,
+  } = useWatches();
 
   const handleToggle = async (job: CronJob) => {
     await toggleJob(job.jobname, !job.active);
+  };
+
+  const handleSave = async (params: {
+    watchName: string;
+    query: string;
+    cronExpression: string;
+    modelTier: string;
+    agentType: string;
+  }): Promise<string | null> => {
+    if (editingWatch) {
+      await updateWatch(editingWatch.id, {
+        watchName: params.watchName,
+        query: params.query,
+        cronExpression: params.cronExpression,
+        modelTier: params.modelTier,
+        agentType: params.agentType,
+      });
+      return editingWatch.id;
+    }
+    return createWatch(params);
+  };
+
+  const openCreate = () => {
+    setEditingWatch(null);
+    setDialogOpen(true);
+  };
+
+  const openEdit = (watch: Watch) => {
+    setEditingWatch(watch);
+    setDialogOpen(true);
   };
 
   if (!userId) return null;
@@ -274,6 +346,18 @@ const CronJobs = () => {
         <span className="text-[10px] text-white/30 font-mono ml-auto">
           {activeTab === 'system' ? `${jobs.length} jobs` : `${watches.length} watches`}
         </span>
+
+        {/* Add Watch button (watches tab only) */}
+        {activeTab === 'watches' && (
+          <button
+            onClick={openCreate}
+            className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors"
+          >
+            <Plus className="w-3 h-3" />
+            Add Watch
+          </button>
+        )}
+
         <button
           onClick={activeTab === 'system' ? refetch : fetchWatches}
           className="p-1 rounded hover:bg-white/10 transition-colors"
@@ -307,7 +391,6 @@ const CronJobs = () => {
             ) : (
               <div className="max-w-4xl mx-auto p-4">
                 <div className="rounded-lg border border-white/10 overflow-hidden">
-                  {/* Table header */}
                   <div className="grid grid-cols-[1fr_140px_120px_100px_80px_60px] gap-2 px-4 py-2 border-b border-white/10 bg-white/[0.02]">
                     <span className="text-[10px] text-white/40 uppercase tracking-wide font-medium">Job</span>
                     <span className="text-[10px] text-white/40 uppercase tracking-wide font-medium">Schedule</span>
@@ -317,7 +400,6 @@ const CronJobs = () => {
                     <span className="text-[10px] text-white/40 uppercase tracking-wide font-medium text-right">Active</span>
                   </div>
 
-                  {/* Rows */}
                   {jobs.map((job) => {
                     const statusCfg = job.last_run_status
                       ? STATUS_CONFIG[job.last_run_status] ?? { icon: Clock, color: 'text-white/30', label: job.last_run_status }
@@ -332,39 +414,28 @@ const CronJobs = () => {
                           !job.active && 'opacity-50',
                         )}
                       >
-                        {/* Job name + target */}
                         <div className="min-w-0">
                           <p className="text-xs text-white/70 font-medium truncate">{job.jobname}</p>
                           <p className="text-[10px] text-white/30 truncate">{parseTarget(job.command)}</p>
                         </div>
-
-                        {/* Schedule */}
                         <div>
                           <p className="text-[11px] text-white/50">{prettyCron(job.schedule)}</p>
                           <p className="text-[9px] text-white/20 font-mono">{job.schedule}</p>
                         </div>
-
-                        {/* Last run time */}
                         <div>
                           <p className="text-[11px] text-white/50">
                             {job.last_run_at ? timeAgo(job.last_run_at) : 'Never'}
                           </p>
                         </div>
-
-                        {/* Status */}
                         <div className="flex items-center gap-1.5">
                           <StatusIcon className={cn('w-3.5 h-3.5', statusCfg.color, job.last_run_status === 'starting' && 'animate-spin')} />
                           <span className={cn('text-[11px]', statusCfg.color)}>{statusCfg.label}</span>
                         </div>
-
-                        {/* Duration */}
                         <div>
                           <span className="text-[11px] text-white/40 font-mono">
                             {formatDuration(job.last_run_duration)}
                           </span>
                         </div>
-
-                        {/* Toggle */}
                         <div className="flex justify-end">
                           <Switch
                             checked={job.active}
@@ -391,22 +462,48 @@ const CronJobs = () => {
               <Loader2 className="w-5 h-5 text-white/30 animate-spin" />
             </div>
           ) : watches.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-32 gap-2">
-              <Eye className="w-6 h-6 text-white/20" />
-              <span className="text-sm text-white/30">No watches yet</span>
-              <span className="text-[10px] text-white/20 max-w-sm text-center">
-                Tell JAC to watch something: &quot;Watch Zillow every morning for 3bed houses in Austin under $400k&quot;
-              </span>
+            <div className="flex flex-col items-center justify-center h-48 gap-3">
+              <Eye className="w-8 h-8 text-white/15" />
+              <div className="text-center">
+                <p className="text-sm text-white/40">No watches yet</p>
+                <p className="text-[11px] text-white/20 mt-1 max-w-sm">
+                  Watches run recurring tasks on a schedule. Create one to monitor prices, track news, or automate research.
+                </p>
+              </div>
+              <button
+                onClick={openCreate}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white transition-colors mt-1"
+              >
+                <Plus className="w-3 h-3" />
+                Create your first watch
+              </button>
             </div>
           ) : (
             <div className="max-w-4xl mx-auto p-4 space-y-2">
               {watches.map(w => (
-                <WatchCard key={w.id} watch={w} onToggle={toggleWatch} onDelete={deleteWatch} onModelChange={updateModelTier} />
+                <WatchCard
+                  key={w.id}
+                  watch={w}
+                  onToggle={toggleWatch}
+                  onEdit={openEdit}
+                  onRunNow={triggerRun}
+                  onSkipNext={skipNextRun}
+                  onDelete={deleteWatch}
+                />
               ))}
             </div>
           )
         )}
       </div>
+
+      {/* Create/Edit Watch Dialog */}
+      <CreateWatchDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        editWatch={editingWatch}
+        onSave={handleSave}
+        onTriggerRun={triggerRun}
+      />
     </div>
   );
 };

@@ -86,3 +86,6 @@ verify_jwt = false
 
 [functions.jac-watch-scheduler]
 verify_jwt = false
+
+[functions.trigger-watch-run]
+verify_jwt = false

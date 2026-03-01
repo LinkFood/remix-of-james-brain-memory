@@ -70,7 +70,7 @@ function prettyCron(schedule: string): string {
   return schedule;
 }
 
-export default function WatchesWidget({ compact }: WidgetProps) {
+export default function WatchesWidget({ compact, onNavigate }: WidgetProps) {
   const [userId, setUserId] = useState('');
   const [watches, setWatches] = useState<WatchSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -173,11 +173,21 @@ export default function WatchesWidget({ compact }: WidgetProps) {
     <div className="flex flex-col h-full bg-white/[0.03] backdrop-blur-sm border border-white/10 rounded-lg overflow-hidden">
       <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between shrink-0">
         <span className="text-xs font-medium text-white/70">Watches</span>
-        {!loading && (
-          <span className="text-[10px] text-white/30">
-            {watches.filter(w => w.cron_active).length} active
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {!loading && (
+            <span className="text-[10px] text-white/30">
+              {watches.filter(w => w.cron_active).length} active
+            </span>
+          )}
+          {onNavigate && (
+            <button
+              onClick={() => onNavigate('/crons?tab=watches')}
+              className="text-[10px] text-blue-400/70 hover:text-blue-400 transition-colors"
+            >
+              View all
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
