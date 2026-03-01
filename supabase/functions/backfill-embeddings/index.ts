@@ -5,7 +5,7 @@
  * using rich text (title | type | tags | content), updates the entry,
  * then creates entry_relationships via semantic similarity.
  *
- * Processes in batches of 50.
+ * Processes in batches of 20 (kept small to avoid edge function timeout).
  *
  * No auth gate — this is an internal batch job that uses service role internally.
  * Deploy with --no-verify-jwt. Invoke manually or via cron.
@@ -16,7 +16,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 
-const BATCH_SIZE = 50;
+const BATCH_SIZE = 20;
 
 serve(async (req) => {
   const corsResponse = handleCors(req);
