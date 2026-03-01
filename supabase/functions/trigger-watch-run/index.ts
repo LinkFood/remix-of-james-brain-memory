@@ -96,6 +96,7 @@ serve(async (req) => {
         .insert({
           user_id: userId,
           type: watch.type,
+          intent: watch.intent || (watchInput.watchName as string) || 'Watch run',
           agent: agentType,
           status: 'queued',
           input: {
