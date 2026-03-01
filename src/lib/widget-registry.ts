@@ -8,6 +8,7 @@
 import {
   Activity, Users, Brain, Bell, GitBranch,
   Lightbulb, Gauge, AlertTriangle, MessageSquare, CalendarDays,
+  Sparkles,
 } from 'lucide-react';
 import type { WidgetDefinition, SandboxLayout } from '@/types/widget';
 import type { Layout } from 'react-grid-layout';
@@ -22,6 +23,7 @@ import SystemPulseWidget from '@/components/sandbox/widgets/SystemPulseWidget';
 import TriageQueueWidget from '@/components/sandbox/widgets/TriageQueueWidget';
 import ReflectionsWidget from '@/components/sandbox/widgets/ReflectionsWidget';
 import CalendarWidget from '@/components/sandbox/widgets/CalendarWidget';
+import AgentOutputsWidget from '@/components/sandbox/widgets/AgentOutputsWidget';
 
 export const WIDGET_DEFS: WidgetDefinition[] = [
   {
@@ -123,6 +125,16 @@ export const WIDGET_DEFS: WidgetDefinition[] = [
     minSize: { w: 3, h: 3 },
     component: CalendarWidget,
     category: 'brain',
+  },
+  {
+    typeId: 'agent-outputs',
+    name: 'Agent Outputs',
+    description: 'Recent results from agent tasks',
+    icon: Sparkles,
+    defaultSize: { w: 6, h: 4 },
+    minSize: { w: 3, h: 3 },
+    component: AgentOutputsWidget,
+    category: 'agents',
   },
 ];
 
