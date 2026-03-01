@@ -568,6 +568,9 @@ const BrainInspector = () => {
                 <div className="flex flex-col items-center justify-center h-32 gap-2">
                   <BookOpen className="w-6 h-6 text-white/20" />
                   <span className="text-sm text-white/30">No principles yet</span>
+                  <span className="text-[10px] text-white/15 max-w-[240px] text-center">
+                    Principles are distilled weekly from reflections (Sunday 3 AM UTC)
+                  </span>
                 </div>
               ) : (
                 principles.map((p) => (
@@ -617,6 +620,11 @@ const BrainInspector = () => {
                     ? 'No reflections yet'
                     : 'No entries yet'}
                 </span>
+                {tab === 'reflections' && (
+                  <span className="text-[10px] text-white/15 max-w-[240px] text-center">
+                    Reflections are generated when JAC completes agent tasks
+                  </span>
+                )}
               </div>
             ) : (
               allItems.map((item) => (
@@ -681,6 +689,7 @@ const BrainInspector = () => {
             </div>
           ) : selectedItem ? (
             <InspectorPanel
+              key={`${selectedItem.kind}-${selectedItem.id}`}
               item={selectedItem}
               relationships={relationships}
               relationshipsLoading={relationshipsLoading}

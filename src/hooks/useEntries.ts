@@ -93,6 +93,10 @@ export function useEntries({ userId, pageSize = 50, showArchived = false }: UseE
   });
 
   const fetchEntries = useCallback(async (cursor?: string) => {
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
     try {
       let query = supabase
         .from("entries")
@@ -147,8 +151,7 @@ export function useEntries({ userId, pageSize = 50, showArchived = false }: UseE
         setStats(calculatedStats);
       }
     } catch (error) {
-      console.error("Failed to fetch entries:", error);
-      toast.error("Failed to load entries");
+      console.warn("[useEntries] Failed to fetch entries:", error);
     } finally {
       setLoading(false);
       setLoadingMore(false);

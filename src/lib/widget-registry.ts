@@ -7,7 +7,7 @@
 
 import {
   Activity, Users, Brain, Bell, GitBranch,
-  Lightbulb, Gauge, AlertTriangle, MessageSquare,
+  Lightbulb, Gauge, AlertTriangle, MessageSquare, CalendarDays,
 } from 'lucide-react';
 import type { WidgetDefinition, SandboxLayout } from '@/types/widget';
 import type { Layout } from 'react-grid-layout';
@@ -21,6 +21,7 @@ import InsightsWidget from '@/components/sandbox/widgets/InsightsWidget';
 import SystemPulseWidget from '@/components/sandbox/widgets/SystemPulseWidget';
 import TriageQueueWidget from '@/components/sandbox/widgets/TriageQueueWidget';
 import ReflectionsWidget from '@/components/sandbox/widgets/ReflectionsWidget';
+import CalendarWidget from '@/components/sandbox/widgets/CalendarWidget';
 
 export const WIDGET_DEFS: WidgetDefinition[] = [
   {
@@ -112,6 +113,16 @@ export const WIDGET_DEFS: WidgetDefinition[] = [
     minSize: { w: 3, h: 2 },
     component: ReflectionsWidget,
     category: 'insights',
+  },
+  {
+    typeId: 'calendar',
+    name: 'Calendar',
+    description: 'Month grid with events and reminders',
+    icon: CalendarDays,
+    defaultSize: { w: 6, h: 4 },
+    minSize: { w: 3, h: 3 },
+    component: CalendarWidget,
+    category: 'brain',
   },
 ];
 

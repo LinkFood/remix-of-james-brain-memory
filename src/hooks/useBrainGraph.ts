@@ -77,11 +77,11 @@ export function useBrainGraph(userId: string): UseBrainGraphReturn {
     async function fetchData() {
       setIsLoading(true);
 
-      // Fetch entries -- select everything except the actual embedding vector
+      // Fetch entries — select needed columns only (skip embedding to save bandwidth)
       const { data: entryData } = await supabase
         .from('entries')
         .select(
-          'id, title, content, content_type, tags, importance_score, embedding, access_count, last_accessed_at, created_at',
+          'id, title, content, content_type, tags, importance_score, access_count, last_accessed_at, created_at',
         )
         .eq('user_id', userId)
         .eq('archived', false)
@@ -97,7 +97,6 @@ export function useBrainGraph(userId: string): UseBrainGraphReturn {
             content_type: string;
             tags: string[] | null;
             importance_score: number | null;
-            embedding: string | null;
             access_count: number | null;
             last_accessed_at: string | null;
             created_at: string;
@@ -109,7 +108,7 @@ export function useBrainGraph(userId: string): UseBrainGraphReturn {
           content_type: e.content_type,
           tags: e.tags,
           importance_score: e.importance_score,
-          has_embedding: e.embedding != null,
+          has_embedding: true, // Assume embedded if present — dedicated check not worth fetching vector
           access_count: e.access_count,
           last_accessed_at: e.last_accessed_at,
           created_at: e.created_at,

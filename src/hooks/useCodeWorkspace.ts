@@ -66,11 +66,32 @@ export function useCodeWorkspace(userId: string) {
           console.warn('[useCodeWorkspace] code_sessions not ready:', sessError.message);
         } else if (sessionData) {
           setSessions(sessionData as unknown as CodeSession[]);
-          // Set active session if one exists
+          // Set active session only if its task is still running
           const active = (sessionData as unknown as CodeSession[]).find(s => s.status === 'active');
           if (active) {
-            setActiveSession(active);
-            setActiveProjectId(active.project_id);
+            let isStale = true;
+            if (active.task_id) {
+              const { data: taskData } = await supabase
+                .from('agent_tasks')
+                .select('status')
+                .eq('id', active.task_id)
+                .single();
+              if (taskData && (taskData as { status: string }).status === 'running') {
+                isStale = false;
+              }
+            }
+            if (isStale) {
+              // Clean up stale session
+              await supabase
+                .from('code_sessions' as any)
+                .update({ status: 'completed', updated_at: new Date().toISOString() } as any)
+                .eq('id', active.id);
+              const cleaned = { ...active, status: 'completed' };
+              setSessions(prev => prev.map(s => s.id === active.id ? cleaned as CodeSession : s));
+            } else {
+              setActiveSession(active);
+              setActiveProjectId(active.project_id);
+            }
           }
           // Backfill terminal logs for code agent
           try {
