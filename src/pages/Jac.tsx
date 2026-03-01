@@ -1,14 +1,16 @@
 /**
- * JAC — The Nerve Center
+ * JAC — Focused Chat Mode
  *
- * Split layout: chat on the left, reactive context panel on the right.
- * Mobile: context panel behind a Sheet (same as before).
- * The context panel auto-reacts to what's happening — agents, brain, code.
+ * Full-width chat with reactive context panel on the right.
+ * The sidebar still exists (from AuthLayout), but this page is for
+ * when you want the full immersive JAC experience.
+ *
+ * Mobile: context panel behind a Sheet.
  */
 
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState, useMemo } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import {
   Sheet,
@@ -22,9 +24,9 @@ import {
   ResizableHandle,
 } from '@/components/ui/resizable';
 import {
-  ArrowLeft, Zap, PanelRight, PanelRightClose, Square,
+  Zap, PanelRight, PanelRightClose, Square,
 } from 'lucide-react';
-import { useJacAgent } from '@/hooks/useJacAgent';
+import { useJacContext } from '@/contexts/JacContext';
 import { JacChat } from '@/components/jac/JacChat';
 import { ContextPanel } from '@/components/jac/ContextPanel';
 
@@ -68,7 +70,7 @@ const Jac = () => {
     });
   }, [navigate]);
 
-  const { messages, tasks, activityLogs, loading, sending, backendReady, sendMessage, loadTaskLogs, stopTask, stopAllTasks } = useJacAgent(userId);
+  const { messages, tasks, activityLogs, loading, sending, backendReady, sendMessage, loadTaskLogs, stopTask, stopAllTasks } = useJacContext();
 
   // Derive the type of the most recent task for context auto-switching
   const lastMessageType = useMemo(() => {
@@ -85,7 +87,7 @@ const Jac = () => {
   const completedCount = tasks.filter(t => t.status === 'completed').length;
 
   const activeAgentLabels = [...new Set(
-    runningTasks.map(t => AGENT_LABELS[t.agent] || t.agent).filter(Boolean)
+    runningTasks.map(t => AGENT_LABELS[t.agent || ''] || t.agent).filter(Boolean)
   )];
 
   const contextPanelProps = {
@@ -99,16 +101,37 @@ const Jac = () => {
     lastMessageType,
   };
 
-  const header = (
-    <header className="border-b border-border bg-card/50 backdrop-blur-sm shrink-0 z-40">
-      <div className="flex items-center gap-3 px-3 h-10">
-        <Button variant="ghost" size="icon" className="shrink-0 h-7 w-7" onClick={() => navigate('/dashboard')}>
-          <ArrowLeft className="w-4 h-4" />
-        </Button>
+  const workingBar = runningCount > 0 ? (
+    <div className="border-b border-border bg-blue-500/5 px-3 flex items-center gap-2 h-8 shrink-0">
+      <div className="flex items-center gap-1.5 text-xs text-blue-400 min-w-0 flex-1">
+        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse shrink-0" />
+        <span className="truncate">{activeAgentLabels.join(' · ')}</span>
+      </div>
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-6 px-2 text-[10px] text-muted-foreground hover:text-red-400 shrink-0"
+        onClick={stopAllTasks}
+      >
+        <Square className="w-3 h-3 mr-1" />
+        Stop all
+      </Button>
+    </div>
+  ) : null;
 
+  const backendWarning = !backendReady ? (
+    <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 text-center text-xs text-amber-400 shrink-0">
+      Backend not deployed yet. Deploy edge functions to activate agents.
+    </div>
+  ) : null;
+
+  // Toolbar: status + panel toggle
+  const toolbar = (
+    <div className="border-b border-border bg-card/50 backdrop-blur-sm shrink-0 z-40">
+      <div className="flex items-center gap-3 px-3 h-8">
         <div className="flex items-center gap-2">
           <Zap className={`w-4 h-4 ${runningCount > 0 ? 'text-blue-400' : 'text-primary/60'}`} />
-          <span className="text-sm font-semibold">JAC</span>
+          <span className="text-xs font-semibold">Focused Chat</span>
         </div>
 
         <div className="ml-auto flex items-center gap-2">
@@ -144,38 +167,14 @@ const Jac = () => {
           </Button>
         </div>
       </div>
-    </header>
+    </div>
   );
-
-  const workingBar = runningCount > 0 ? (
-    <div className="border-b border-border bg-blue-500/5 px-3 flex items-center gap-2 h-8 shrink-0">
-      <div className="flex items-center gap-1.5 text-xs text-blue-400 min-w-0 flex-1">
-        <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse shrink-0" />
-        <span className="truncate">{activeAgentLabels.join(' · ')}</span>
-      </div>
-      <Button
-        variant="ghost"
-        size="sm"
-        className="h-6 px-2 text-[10px] text-muted-foreground hover:text-red-400 shrink-0"
-        onClick={stopAllTasks}
-      >
-        <Square className="w-3 h-3 mr-1" />
-        Stop all
-      </Button>
-    </div>
-  ) : null;
-
-  const backendWarning = !backendReady ? (
-    <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2 text-center text-xs text-amber-400 shrink-0">
-      Backend not deployed yet. Deploy edge functions to activate agents.
-    </div>
-  ) : null;
 
   // Mobile layout — context panel behind a Sheet
   if (isMobile) {
     return (
-      <div className="h-[calc(100vh-2rem)] bg-background flex flex-col overflow-hidden">
-        {header}
+      <div className="h-full flex flex-col overflow-hidden">
+        {toolbar}
         {backendWarning}
         {workingBar}
 
@@ -199,14 +198,13 @@ const Jac = () => {
 
   // Desktop layout — resizable split panels
   return (
-    <div className="h-[calc(100vh-2rem)] bg-background flex flex-col overflow-hidden">
-      {header}
+    <div className="h-full flex flex-col overflow-hidden">
+      {toolbar}
       {backendWarning}
       {workingBar}
 
       <div className="flex-1 overflow-hidden">
         {panelCollapsed ? (
-          // Full-width chat when panel collapsed
           <JacChat messages={messages} tasks={tasks} sending={sending} onSend={sendMessage} />
         ) : (
           <ResizablePanelGroup direction="horizontal">

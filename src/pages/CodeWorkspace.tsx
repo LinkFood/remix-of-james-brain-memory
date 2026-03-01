@@ -12,10 +12,9 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
-  ArrowLeft, Code2, FolderTree, Terminal, MessageSquare, History,
+  Code2, FolderTree, Terminal, MessageSquare, History,
 } from 'lucide-react';
 import { useCodeWorkspace } from '@/hooks/useCodeWorkspace';
 import { ProjectList } from '@/components/code/ProjectList';
@@ -56,43 +55,26 @@ const CodeWorkspace = () => {
   if (!userId) return null;
 
   return (
-    <div className="min-h-screen bg-background flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-40">
-        <div className="container mx-auto px-4 py-2.5 flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => navigate('/dashboard')}>
-            <ArrowLeft className="w-4 h-4" />
-          </Button>
-          <div className="flex items-center gap-2">
-            <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-              activeSession ? 'bg-blue-500/10' : 'bg-primary/5'
-            }`}>
-              <Code2 className={`w-5 h-5 ${activeSession ? 'text-blue-400' : 'text-primary/60'}`} />
-            </div>
-            <div>
-              <h1 className="text-sm font-semibold leading-tight">Code Workspace</h1>
-              <p className="text-[10px] text-muted-foreground">JAC Code Agent</p>
-            </div>
+    <div className="h-full bg-background flex flex-col overflow-hidden">
+      {/* Status bar */}
+      <div className="border-b border-border bg-card/50 px-3 h-8 flex items-center gap-2 shrink-0">
+        <Code2 className={`w-4 h-4 ${activeSession ? 'text-blue-400' : 'text-primary/60'}`} />
+        <span className="text-xs font-semibold">Code Workspace</span>
+        {activeSession && (
+          <div className="flex items-center gap-1.5 text-xs text-blue-400 ml-auto">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
+            </span>
+            Session active
           </div>
-
-          <div className="ml-auto flex items-center gap-3">
-            {activeSession && (
-              <div className="flex items-center gap-1.5 text-xs text-blue-400">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-500" />
-                </span>
-                Session active
-              </div>
-            )}
-            {activeProject && (
-              <div className="text-xs text-muted-foreground hidden sm:block">
-                {activeProject.repo_full_name}
-              </div>
-            )}
+        )}
+        {!activeSession && activeProject && (
+          <div className="text-xs text-muted-foreground ml-auto hidden sm:block">
+            {activeProject.repo_full_name}
           </div>
-        </div>
-      </header>
+        )}
+      </div>
 
       {/* Main content */}
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">

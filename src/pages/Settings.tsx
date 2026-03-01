@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Brain, ArrowLeft, Download, Trash2, Database, User, Tag, AlertTriangle, Bot, Send } from "lucide-react";
+import { Brain, Download, Trash2, Database, User, Tag, AlertTriangle, Bot, Send } from "lucide-react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AlertDialog,
@@ -276,17 +276,8 @@ const Settings = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-bg p-4">
+    <div className="h-full overflow-auto p-4">
       <div className="max-w-lg mx-auto">
-        <Button
-          variant="ghost"
-          onClick={() => navigate("/dashboard")}
-          className="mb-6"
-        >
-          <ArrowLeft className="w-4 h-4 mr-2" />
-          Back to Dashboard
-        </Button>
-
         <Card className="p-6 bg-card border-border">
           {/* Header */}
           <div className="flex items-center gap-3 mb-6">

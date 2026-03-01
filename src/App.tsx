@@ -8,6 +8,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { InstallPrompt } from "./components/InstallPrompt";
 import { ActivityTrackingProvider } from "./components/ActivityTrackingProvider";
 import { Ticker } from "./components/jac/Ticker";
+import { AuthLayout } from "./layouts/AuthLayout";
 import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
 import Auth from "./pages/Auth";
@@ -16,6 +17,10 @@ import Privacy from "./pages/Privacy";
 import NotFound from "./pages/NotFound";
 import Jac from "./pages/Jac";
 import CodeWorkspace from "./pages/CodeWorkspace";
+import Calendar from "./pages/Calendar";
+import Search from "./pages/Search";
+import ActivityLog from "./pages/ActivityLog";
+import BrainInspector from "./pages/BrainInspector";
 import Landing from "./pages/Landing";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -38,14 +43,22 @@ const TrackedRoutes = () => {
 
   const routes = (
     <Routes>
+      {/* Public routes */}
       <Route path="/" element={<Landing />} />
       <Route path="/auth" element={<Auth />} />
-      <Route path="/dashboard" element={<Dashboard />} />
-      <Route path="/settings" element={<Settings />} />
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
-      <Route path="/jac" element={<Jac />} />
-      <Route path="/code" element={<CodeWorkspace />} />
+
+      {/* Authenticated routes — wrapped in AuthLayout */}
+      <Route path="/dashboard" element={<AuthLayout><Dashboard /></AuthLayout>} />
+      <Route path="/code" element={<AuthLayout><CodeWorkspace /></AuthLayout>} />
+      <Route path="/jac" element={<AuthLayout><Jac /></AuthLayout>} />
+      <Route path="/settings" element={<AuthLayout><Settings /></AuthLayout>} />
+      <Route path="/calendar" element={<AuthLayout><Calendar /></AuthLayout>} />
+      <Route path="/search" element={<AuthLayout><Search /></AuthLayout>} />
+      <Route path="/activity" element={<AuthLayout><ActivityLog /></AuthLayout>} />
+      <Route path="/brain" element={<AuthLayout><BrainInspector /></AuthLayout>} />
+
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
@@ -54,9 +67,7 @@ const TrackedRoutes = () => {
   if (userId) {
     return (
       <ActivityTrackingProvider userId={userId}>
-        <div className="pb-8">
-          {routes}
-        </div>
+        {routes}
         <Ticker userId={userId} />
       </ActivityTrackingProvider>
     );
