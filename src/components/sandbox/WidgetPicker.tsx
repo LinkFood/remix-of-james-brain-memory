@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus } from 'lucide-react';
+import { Plus, Check } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
@@ -18,13 +18,12 @@ const CATEGORY_ORDER: WidgetCategory[] = ['agents', 'brain', 'code', 'insights',
 
 interface WidgetPickerProps {
   activeTypeIds: Set<string>;
-  onAdd: (typeId: string) => void;
+  onToggle: (typeId: string) => void;
 }
 
-export default function WidgetPicker({ activeTypeIds, onAdd }: WidgetPickerProps) {
+export default function WidgetPicker({ activeTypeIds, onToggle }: WidgetPickerProps) {
   const [open, setOpen] = useState(false);
 
-  // Group WIDGET_DEFS by category, preserving CATEGORY_ORDER
   const grouped = CATEGORY_ORDER.reduce<Record<WidgetCategory, typeof WIDGET_DEFS[number][]>>(
     (acc, cat) => {
       acc[cat] = WIDGET_DEFS.filter(d => d.category === cat);
@@ -33,17 +32,12 @@ export default function WidgetPicker({ activeTypeIds, onAdd }: WidgetPickerProps
     { agents: [], brain: [], code: [], insights: [], custom: [] }
   );
 
-  function handleAdd(typeId: string) {
-    onAdd(typeId);
-    setOpen(false);
-  }
-
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm">
           <Plus className="w-3.5 h-3.5 mr-1.5" />
-          Add Widget
+          Widgets
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-72 p-0" align="end">
@@ -62,26 +56,31 @@ export default function WidgetPicker({ activeTypeIds, onAdd }: WidgetPickerProps
                   return (
                     <button
                       key={def.typeId}
-                      disabled={active}
-                      onClick={() => handleAdd(def.typeId)}
-                      className={cn(
-                        'w-full flex items-start gap-3 px-3 py-2 text-left transition-colors',
-                        active
-                          ? 'opacity-50 cursor-not-allowed'
-                          : 'hover:bg-white/5 cursor-pointer'
-                      )}
+                      onClick={() => onToggle(def.typeId)}
+                      className="w-full flex items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-white/5 cursor-pointer"
                     >
-                      <def.icon className="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
+                      {/* Toggle indicator */}
+                      <div
+                        className={cn(
+                          'w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors',
+                          active
+                            ? 'bg-primary border-primary'
+                            : 'border-muted-foreground/30'
+                        )}
+                      >
+                        {active && <Check className="w-3 h-3 text-primary-foreground" />}
+                      </div>
+                      <def.icon className={cn(
+                        'w-4 h-4 shrink-0 transition-colors',
+                        active ? 'text-foreground' : 'text-muted-foreground'
+                      )} />
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium truncate">{def.name}</span>
-                          {active && (
-                            <span className="text-[10px] text-muted-foreground shrink-0">
-                              (active)
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-muted-foreground truncate">{def.description}</p>
+                        <span className={cn(
+                          'text-sm font-medium truncate block',
+                          !active && 'text-muted-foreground'
+                        )}>
+                          {def.name}
+                        </span>
                       </div>
                     </button>
                   );

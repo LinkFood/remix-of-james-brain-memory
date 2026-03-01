@@ -22,7 +22,10 @@ const Dashboard = () => {
     });
   }, [navigate]);
 
-  const { layout, onLayoutChange, addWidget, removeWidget, resetLayout } = useSandboxLayout();
+  const {
+    layout, onLayoutChange, removeWidget, toggleWidget, resetLayout,
+    presets, loadPreset, saveCurrentAsPreset, deletePreset,
+  } = useSandboxLayout();
 
   const activeTypeIds = useMemo(
     () => new Set(Object.values(layout.typeMap)),
@@ -35,8 +38,12 @@ const Dashboard = () => {
     <div className="h-full flex flex-col overflow-hidden">
       <SandboxHeader
         activeTypeIds={activeTypeIds}
-        onAddWidget={addWidget}
+        onToggleWidget={toggleWidget}
         onResetLayout={resetLayout}
+        presets={presets}
+        onLoadPreset={loadPreset}
+        onSavePreset={saveCurrentAsPreset}
+        onDeletePreset={deletePreset}
       />
       <CompactDumpInput userId={userId} />
       <div className="flex-1 overflow-auto">
