@@ -45,7 +45,7 @@ function checkRateLimit(userId: string): boolean {
 }
 
 // Intent types the dispatcher can route
-type IntentType = 'research' | 'save' | 'search' | 'report' | 'general' | 'code';
+type IntentType = 'research' | 'save' | 'search' | 'report' | 'general' | 'code' | 'schedule';
 
 const INTENT_TOOL = {
   name: 'route_intent',
@@ -60,8 +60,8 @@ const INTENT_TOOL = {
           properties: {
             intent: {
               type: 'string',
-              enum: ['research', 'save', 'search', 'report', 'general', 'code'],
-              description: 'Use "research" for real-world/current info questions. Use "search" ONLY when user explicitly references their own saved data. Use "save" for notes/reminders. Use "code" for coding tasks.',
+              enum: ['research', 'save', 'search', 'report', 'general', 'code', 'schedule'],
+              description: 'Use "research" for real-world/current info questions. Use "search" ONLY when user explicitly references their own saved data. Use "save" for notes/reminders. Use "code" for coding tasks. Use "schedule" for recurring automated watches/monitors.',
             },
             summary: {
               type: 'string',
@@ -69,12 +69,25 @@ const INTENT_TOOL = {
             },
             agentType: {
               type: 'string',
-              enum: ['jac-research-agent', 'jac-save-agent', 'jac-search-agent', 'jac-code-agent', 'assistant-chat'],
+              enum: ['jac-research-agent', 'jac-save-agent', 'jac-search-agent', 'jac-code-agent', 'jac-watch-scheduler', 'assistant-chat'],
               description: 'Which worker to dispatch for this request',
             },
             extractedQuery: {
               type: 'string',
               description: 'Core query/content for this request. For search: just search terms. For save: PRESERVE FULL MESSAGE including "remind me", times, dates. For research: the topic. For code: the coding request.',
+            },
+            frequency: {
+              type: 'string',
+              description: 'How often to run this watch: "daily at 9am", "every weekday at 8am", "weekly on monday", "every 6 hours". Only for schedule intent.',
+            },
+            watchName: {
+              type: 'string',
+              description: 'Short name for this watch, e.g. "Austin Zillow Watch". Only for schedule intent.',
+            },
+            modelTier: {
+              type: 'string',
+              enum: ['haiku', 'sonnet', 'opus'],
+              description: 'AI model quality for the watch. Default haiku (cheapest). Only for schedule intent.',
             },
           },
           required: ['intent', 'summary', 'agentType', 'extractedQuery'],
@@ -98,6 +111,7 @@ const AGENT_MAP: Record<string, string> = {
   report: 'jac-research-agent',
   general: 'assistant-chat',
   code: 'jac-code-agent',
+  schedule: 'jac-watch-scheduler',
 };
 
 serve(async (req) => {
@@ -427,6 +441,11 @@ Intent routing rules (follow these STRICTLY):
 6. "code" → jac-code-agent: User wants to write, fix, modify, refactor, or deploy code in a registered project.
    TRIGGERS: "fix", "add feature", "update code", "refactor", "implement", "PR", "pull request", project names like "pixel-perfect" or "exact-match", code-related requests.
 
+7. "schedule" → jac-watch-scheduler: User wants to set up a RECURRING automated task.
+   TRIGGERS: "watch", "monitor", "check every", "daily search", "recurring", "every morning", "schedule a search", "keep an eye on".
+   Extract the frequency (how often), what to do each time, and a short watch name.
+   Default to haiku model unless user says "detailed", "thorough", "use sonnet/opus", etc.
+
 MULTI-INTENT: If the user's message contains multiple DISTINCT requests (e.g. "research X, also save Y, and build Z"), return each as a separate entry in the intents array. Each gets its own intent, summary, agentType, and extractedQuery. Most messages have just 1 intent — only split when there are genuinely separate requests.
 
 IMPORTANT: Brain context below is for YOUR reference only — do NOT route to search just because matching entries exist.
@@ -452,6 +471,9 @@ Be concise. Be confident. Don't ask questions — just act.`;
       summary: string;
       agentType: string;
       extractedQuery: string;
+      frequency?: string;
+      watchName?: string;
+      modelTier?: string;
     }
 
     const rawIntents = toolResult?.input?.intents;
@@ -464,6 +486,9 @@ Be concise. Be confident. Don't ask questions — just act.`;
         summary: (i.summary as string) || message.slice(0, 100),
         agentType: (i.agentType as string) || AGENT_MAP[i.intent as string] || 'assistant-chat',
         extractedQuery: (i.extractedQuery as string) || message,
+        frequency: i.frequency as string | undefined,
+        watchName: i.watchName as string | undefined,
+        modelTier: i.modelTier as string | undefined,
       }));
     } else {
       // Fallback: single intent from old schema or malformed output
@@ -588,7 +613,13 @@ Be concise. Be confident. Don't ask questions — just act.`;
       }
     }
 
-    // Recheck after code project filtering
+    // Extract schedule intents before dispatch filtering (handled inline after parent task creation)
+    const scheduleIntents = dispatchIntents.filter(i => i.intent === 'schedule');
+    if (scheduleIntents.length > 0) {
+      dispatchIntents = dispatchIntents.filter(i => i.intent !== 'schedule');
+    }
+
+    // Recheck after code project and schedule filtering
     const isGeneralOnly = dispatchIntents.length === 0;
 
     // 5. Create parent task
@@ -628,6 +659,83 @@ Be concise. Be confident. Don't ask questions — just act.`;
       dispatchCount: dispatchIntents.length,
       modelTier,
     });
+
+    // Handle schedule intents inline (create watch template tasks)
+    if (scheduleIntents.length > 0) {
+      for (const si of scheduleIntents) {
+        try {
+          // Parse frequency → cron expression via Haiku
+          const cronParseResult = await callClaude({
+            model: CLAUDE_MODELS.haiku,
+            system: `Convert the frequency description to a cron expression. The user is in America/Chicago timezone. Return ONLY valid JSON: { "cron": "cron_expression_here", "description": "human readable description" }. Examples: "daily at 9am" → {"cron": "0 14 * * *", "description": "Daily at 9:00 AM CT"}, "every weekday at 8am" → {"cron": "0 13 * * 1-5", "description": "Weekdays at 8:00 AM CT"}, "weekly on monday" → {"cron": "0 14 * * 1", "description": "Mondays at 9:00 AM CT"}, "every 6 hours" → {"cron": "0 */6 * * *", "description": "Every 6 hours"}`,
+            messages: [{ role: 'user', content: `Frequency: "${si.frequency || si.extractedQuery}"` }],
+            max_tokens: 100,
+            temperature: 0,
+          });
+
+          const cronText = parseTextContent(cronParseResult) || '';
+          let parsedCron = '0 14 * * *'; // default daily 9am CT
+          let cronDescription = 'Daily at 9:00 AM CT';
+          try {
+            const cronJson = JSON.parse(cronText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
+            parsedCron = cronJson.cron || parsedCron;
+            cronDescription = cronJson.description || cronDescription;
+          } catch {
+            console.warn('[jac-dispatcher] Failed to parse cron JSON, using default');
+          }
+
+          // Set next_run_at 5 min from now (scheduler will pick it up)
+          const nextRunAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+          const watchName = si.watchName || si.summary.slice(0, 60);
+          const watchModelTier = si.modelTier || 'haiku';
+
+          // Get user's Slack channel
+          let userSlackChannel = slack_channel;
+          if (!userSlackChannel) {
+            try {
+              const { data: userSettings } = await supabase
+                .from('user_settings')
+                .select('settings')
+                .eq('user_id', userId)
+                .single();
+              userSlackChannel = (userSettings?.settings as Record<string, unknown>)?.slack_channel_id as string | undefined;
+            } catch {}
+          }
+
+          // Create the watch template task
+          await supabase.from('agent_tasks').insert({
+            user_id: userId,
+            type: 'research',
+            status: 'running', // template stays 'running' while active
+            intent: watchName,
+            agent: 'jac-watch-scheduler',
+            parent_task_id: parentTask.id,
+            cron_expression: parsedCron,
+            cron_active: true,
+            next_run_at: nextRunAt,
+            input: {
+              query: si.extractedQuery,
+              watchName,
+              frequency: si.frequency || '',
+              originalMessage: message,
+              agentType: 'jac-research-agent',
+              modelTier: watchModelTier,
+              timezone: 'America/Chicago',
+              slack_channel: userSlackChannel,
+              createdAt: new Date().toISOString(),
+            },
+          });
+
+          response = `Watch created: "${watchName}". Runs ${cronDescription}. I'll start monitoring and send results to Slack.`;
+
+          await log.info('watch_created', { watchName, cron: parsedCron, cronDescription, modelTier: watchModelTier });
+        } catch (err) {
+          console.error('[jac-dispatcher] Schedule intent failed:', err);
+          response = 'Failed to create watch. Try again with a clearer schedule.';
+        }
+      }
+    }
 
     // 6. Create child tasks (one per dispatch intent)
     const childTaskIds: string[] = [];
@@ -670,7 +778,30 @@ Be concise. Be confident. Don't ask questions — just act.`;
     ]).select('id, role');
 
     // 8. Dispatch workers or handle general
-    if (!isGeneralOnly) {
+    const scheduleOnly = scheduleIntents.length > 0 && isGeneralOnly;
+    if (scheduleOnly) {
+      // Schedule intents were handled inline — complete parent task, notify Slack
+      await supabase
+        .from('agent_tasks')
+        .update({ status: 'completed', completed_at: new Date().toISOString() })
+        .eq('id', parentTask.id);
+
+      if (slack_channel) {
+        const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+        if (botToken) {
+          const slackMethod = slack_thinking_ts ? 'chat.update' : 'chat.postMessage';
+          fetch(`https://slack.com/api/${slackMethod}`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              channel: slack_channel,
+              text: markdownToMrkdwn(response).slice(0, 3900),
+              ...(slack_thinking_ts ? { ts: slack_thinking_ts } : {}),
+            }),
+          }).catch(() => {});
+        }
+      }
+    } else if (!isGeneralOnly) {
       for (let i = 0; i < dispatchIntents.length; i++) {
         const di = dispatchIntents[i];
         const childId = childTaskIds[i];

@@ -8,7 +8,7 @@
 import {
   Activity, Users, Brain, Bell, GitBranch,
   Lightbulb, Gauge, AlertTriangle, MessageSquare, CalendarDays,
-  Sparkles, Radio, Globe, Compass, ShieldAlert, Flame, Link2,
+  Sparkles, Radio, Globe, Compass, ShieldAlert, Flame, Link2, Eye,
 } from 'lucide-react';
 import type { WidgetDefinition, SandboxLayout } from '@/types/widget';
 import type { Layout } from 'react-grid-layout';
@@ -30,6 +30,7 @@ import PrincipleTickerWidget from '@/components/sandbox/widgets/PrincipleTickerW
 import DriftRadarWidget from '@/components/sandbox/widgets/DriftRadarWidget';
 import SparkBoardWidget from '@/components/sandbox/widgets/SparkBoardWidget';
 import TheWireWidget from '@/components/sandbox/widgets/TheWireWidget';
+import WatchesWidget from '@/components/sandbox/widgets/WatchesWidget';
 
 export const WIDGET_DEFS: WidgetDefinition[] = [
   {
@@ -150,6 +151,16 @@ export const WIDGET_DEFS: WidgetDefinition[] = [
     defaultSize: { w: 6, h: 4 },
     minSize: { w: 3, h: 3 },
     component: AgentLiveStreamWidget,
+    category: 'agents',
+  },
+  {
+    typeId: 'watches',
+    name: 'Watches',
+    description: 'Recurring automated tasks and their status',
+    icon: Eye,
+    defaultSize: { w: 6, h: 3 },
+    minSize: { w: 3, h: 2 },
+    component: WatchesWidget,
     category: 'agents',
   },
   {

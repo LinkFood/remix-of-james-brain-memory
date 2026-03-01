@@ -83,3 +83,6 @@ verify_jwt = false
 
 [functions.jac-morning-brief]
 verify_jwt = false
+
+[functions.jac-watch-scheduler]
+verify_jwt = false

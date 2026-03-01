@@ -52,6 +52,9 @@ serve(async (req) => {
     const brainContext = (body.brainContext as string) || '';
     slackChannel = body.slack_channel as string | undefined;
     slackThinkingTs = body.slack_thinking_ts as string | undefined;
+    const previousRunContext = (body.previousRunContext as string) || '';
+    const runNumber = (body.runNumber as number) || 1;
+    const watchId = (body.watchId as string) || '';
     const modelTier = (body.modelTier as ModelTier) || 'sonnet';
     const researchModel = resolveModel(modelTier);
 
@@ -185,10 +188,23 @@ Instructions:
 - Be specific with facts, numbers, and actionable recommendations
 - Format with markdown headers and bullet points`;
 
+    const deltaPrompt = previousRunContext
+      ? `\n\nIMPORTANT — DELTA ANALYSIS: This is run #${runNumber} of a recurring watch.
+Here are results from previous runs:\n${previousRunContext}\n
+Compare current results against previous runs. Clearly highlight:
+- NEW: items appearing for the first time
+- CHANGED: items with different details (price changes, status updates)
+- PERSISTENT: items that keep appearing (reliable/important)
+- GONE: items from previous runs that no longer appear
+Start your brief with a delta summary before the full results.`
+      : '';
+
+    const fullSynthesisPrompt = synthesisPrompt + deltaPrompt;
+
     const claudeResponse = await callClaude({
       model: researchModel,
       system: 'You are a thorough research assistant that produces clear, well-structured briefs.',
-      messages: [{ role: 'user', content: synthesisPrompt }],
+      messages: [{ role: 'user', content: fullSynthesisPrompt }],
       max_tokens: 2048,
       temperature: 0.4,
     });
@@ -220,6 +236,7 @@ Instructions:
     // 5. Save brief to brain via smart-save (pass userId for service role auth)
     let brainEntryId: string | undefined;
     const saveStep = await log.step('save_to_brain');
+    const watchPrefix = watchId ? `[Watch Run #${runNumber}] ` : '';
     try {
       const saveRes = await fetch(`${supabaseUrl}/functions/v1/smart-save`, {
         method: 'POST',
@@ -229,7 +246,7 @@ Instructions:
         },
         body: JSON.stringify({
           userId,
-          content: `# Research: ${query}\n\n${brief}\n\n---\nSources: ${webSources.map(s => `[${s.title}](${s.url})`).join(', ')}`,
+          content: `${watchPrefix}# Research: ${query}\n\n${brief}\n\n---\nSources: ${webSources.map(s => `[${s.title}](${s.url})`).join(', ')}`,
           source: 'jac-agent',
         }),
       });
