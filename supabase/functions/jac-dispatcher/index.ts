@@ -689,6 +689,42 @@ Be concise. Be confident. Don't ask questions — just act.`;
           await supabase.from('agent_tasks')
             .update({ status: 'failed', error: `Worker ${agentType} failed to start`, completed_at: new Date().toISOString() })
             .eq('id', parentTask.id);
+        } else if (intent === 'research' || intent === 'code') {
+          // Auto-save significant threads as brain entries
+          try {
+            // Read the worker's conversation response
+            const { data: workerConvo } = await supabase
+              .from('agent_conversations')
+              .select('content')
+              .eq('user_id', userId)
+              .eq('role', 'assistant')
+              .contains('task_ids', [childTaskId!])
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .single();
+
+            const assistantContent = workerConvo?.content as string | undefined;
+            if (assistantContent && assistantContent.length > 100) {
+              const threadContent = `${message}\n---\n${assistantContent}`.slice(0, 4000);
+              fetch(`${supabaseUrl}/functions/v1/smart-save`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${serviceKey}`,
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  userId,
+                  content: threadContent,
+                  content_type: 'thread',
+                  title: `Thread: ${summary.slice(0, 80)}`,
+                  tags: ['thread', intent],
+                }),
+              }).catch(() => {});
+            }
+          } catch (threadErr) {
+            // Thread auto-save is best-effort — never block
+            console.warn('[jac-dispatcher] Thread auto-save failed:', threadErr);
+          }
         }
       }).catch(async (err) => {
         console.error(`[jac-dispatcher] Worker dispatch failed for ${agentType}:`, err);

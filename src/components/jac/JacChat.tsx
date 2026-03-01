@@ -11,9 +11,12 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Send, Loader2, Bot, User, Sparkles,
   ArrowRight, CheckCircle2, XCircle, Globe, Brain, FileText, Code2,
+  BookmarkPlus,
 } from 'lucide-react';
 import type { JacMessage, AgentTask } from '@/types/agent';
 import { ArtifactCard } from './artifacts/ArtifactCard';
+import { supabase } from '@/integrations/supabase/client';
+import { useToast } from '@/hooks/use-toast';
 
 const AGENT_LABELS: Record<string, string> = {
   'jac-dispatcher': 'JAC',
@@ -86,6 +89,8 @@ function ActiveTaskIndicator({ task }: { task: AgentTask }) {
 
 export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
   const [input, setInput] = useState('');
+  const [savingThread, setSavingThread] = useState(false);
+  const { toast } = useToast();
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -108,6 +113,36 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
+    }
+  };
+
+  const handleSaveThread = async () => {
+    if (messages.length === 0 || savingThread) return;
+    setSavingThread(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const userId = session?.user?.id;
+      if (!userId) return;
+
+      const threadMessages = messages.slice(-20);
+      const threadText = threadMessages
+        .map(m => `${m.role === 'user' ? 'You' : 'JAC'}: ${m.content}`)
+        .join('\n\n---\n\n');
+
+      await supabase.from('entries').insert({
+        user_id: userId,
+        title: `Chat thread — ${new Date().toLocaleDateString()}`,
+        content: threadText.slice(0, 8000),
+        content_type: 'thread',
+        tags: ['thread', 'manual'],
+      });
+
+      toast({ title: 'Thread saved to brain' });
+    } catch (err) {
+      console.error('Failed to save thread:', err);
+      toast({ title: 'Failed to save thread', variant: 'destructive' });
+    } finally {
+      setSavingThread(false);
     }
   };
 
@@ -253,6 +288,19 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
               className="flex-1 min-h-[40px] max-h-[120px] resize-none text-sm"
               rows={1}
             />
+            {messages.length > 0 && (
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                onClick={handleSaveThread}
+                disabled={savingThread}
+                className="shrink-0 h-10 w-10 text-muted-foreground hover:text-foreground"
+                title="Save thread to brain"
+              >
+                {savingThread ? <Loader2 className="w-4 h-4 animate-spin" /> : <BookmarkPlus className="w-4 h-4" />}
+              </Button>
+            )}
             <Button
               type="submit"
               size="icon"

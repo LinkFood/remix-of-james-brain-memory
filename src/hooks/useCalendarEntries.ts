@@ -22,6 +22,17 @@ export interface CalendarEntry {
   created_at: string;
 }
 
+export interface CreateEventData {
+  title: string;
+  description?: string;
+  date: string; // YYYY-MM-DD
+  time?: string; // HH:MM
+  type: 'event' | 'reminder';
+  reminderMinutes?: number;
+  isRecurring?: boolean;
+  recurrencePattern?: string;
+}
+
 export interface UseCalendarEntriesResult {
   overdue: CalendarEntry[];
   today: CalendarEntry[];
@@ -30,6 +41,8 @@ export interface UseCalendarEntriesResult {
   isLoading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
+  createEvent: (data: CreateEventData) => Promise<void>;
+  userId: string;
 }
 
 export function useCalendarEntries(): UseCalendarEntriesResult {
@@ -135,5 +148,22 @@ export function useCalendarEntries(): UseCalendarEntriesResult {
     };
   }, [entries]);
 
-  return { overdue, today, thisWeek, upcoming, isLoading, error, refresh: fetchEntries };
+  const createEvent = useCallback(async (data: CreateEventData) => {
+    if (!userId) throw new Error('Not authenticated');
+    const { error } = await supabase.from('entries').insert({
+      user_id: userId,
+      title: data.title,
+      content: data.description || data.title,
+      content_type: data.type,
+      event_date: data.date,
+      event_time: data.time || null,
+      reminder_minutes: data.reminderMinutes || null,
+      is_recurring: data.isRecurring || false,
+      recurrence_pattern: data.recurrencePattern || null,
+    });
+    if (error) throw error;
+    // Realtime subscription handles refresh automatically
+  }, [userId]);
+
+  return { overdue, today, thisWeek, upcoming, isLoading, error, refresh: fetchEntries, createEvent, userId };
 }

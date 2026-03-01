@@ -80,3 +80,6 @@ verify_jwt = false
 
 [functions.distill-principles]
 verify_jwt = false
+
+[functions.jac-morning-brief]
+verify_jwt = false

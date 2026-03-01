@@ -15,6 +15,7 @@ import {
   Brain,
   Activity,
   Heart,
+  Sunrise,
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -36,7 +37,8 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
   forgotten:  { icon: Clock,         color: 'text-amber-400',   bg: 'bg-amber-500/15' },
   unchecked:  { icon: Brain,         color: 'text-blue-400',    bg: 'bg-blue-500/15' },
   activity:   { icon: Activity,      color: 'text-rose-400',    bg: 'bg-rose-500/15' },
-  heartbeat:  { icon: Heart,        color: 'text-pink-400',    bg: 'bg-pink-500/15' },
+  heartbeat:      { icon: Heart,    color: 'text-pink-400',    bg: 'bg-pink-500/15' },
+  morning_brief:  { icon: Sunrise,  color: 'text-orange-400',  bg: 'bg-orange-500/15' },
 };
 
 export default function InsightsWidget({ compact }: WidgetProps) {
@@ -92,7 +94,7 @@ export default function InsightsWidget({ compact }: WidgetProps) {
                       {insight.body}
                     </div>
                     <span className="text-[9px] text-white/20 mt-0.5">
-                      {insight.type === 'activity' ? 'from reflections' : insight.type === 'heartbeat' ? 'autonomous' : 'from entries'}
+                      {insight.type === 'activity' ? 'from reflections' : insight.type === 'heartbeat' ? 'autonomous' : insight.type === 'morning_brief' ? 'daily brief' : 'from entries'}
                     </span>
                   </div>
                   <button

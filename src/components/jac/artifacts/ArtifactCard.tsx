@@ -9,6 +9,7 @@ import { BrainEntryCard } from './BrainEntryCard';
 import { SearchResultsCard } from './SearchResultsCard';
 import { CodeSessionCard } from './CodeSessionCard';
 import { ResearchBriefCard } from './ResearchBriefCard';
+import { ThreadCard } from './ThreadCard';
 
 interface ArtifactCardProps {
   task: AgentTask;
@@ -29,7 +30,11 @@ export function ArtifactCard({ task }: ArtifactCardProps) {
     case 'research':
     case 'report':
       return <ResearchBriefCard output={output} />;
-    default:
+    default: {
+      if (output.content_type === 'thread') {
+        return <ThreadCard output={output} />;
+      }
       return null;
+    }
   }
 }
