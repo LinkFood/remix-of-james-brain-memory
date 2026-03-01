@@ -123,7 +123,6 @@ export function useTickerData(userId: string): TickerData {
           filter: `user_id=eq.${userId}`,
         },
         () => {
-          // Refetch running tasks on any task change
           fetchRunningTasks();
         }
       )
@@ -134,11 +133,29 @@ export function useTickerData(userId: string): TickerData {
     };
   }, [userId, fetchRunningTasks]);
 
-  // Refresh reminders every 5 minutes (they don't change often)
+  // Realtime subscription on entries for live reminder counts
   useEffect(() => {
     if (!userId) return;
-    const interval = setInterval(fetchReminders, 5 * 60 * 1000);
-    return () => clearInterval(interval);
+
+    const channel: RealtimeChannel = supabase
+      .channel(`ticker-entries-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'entries',
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          fetchReminders();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [userId, fetchReminders]);
 
   return { runningTasks, reminders, latestCodeSession, loading };

@@ -125,11 +125,27 @@ export function useDashboardActivity(userId: string): DashboardActivity {
     return () => { supabase.removeChannel(channel); };
   }, [userId, fetchTasks]);
 
-  // Refresh reminders every 5 minutes
+  // Realtime subscription on entries for live reminder counts
   useEffect(() => {
     if (!userId) return;
-    const interval = setInterval(fetchReminders, 5 * 60 * 1000);
-    return () => clearInterval(interval);
+
+    const channel: RealtimeChannel = supabase
+      .channel(`dashboard-entries-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'entries',
+          filter: `user_id=eq.${userId}`,
+        },
+        () => {
+          fetchReminders();
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [userId, fetchReminders]);
 
   return { tasks, activeCount, latestCodeSession, reminders, loading };

@@ -2,10 +2,9 @@
  * RemindersWidget — Today and overdue reminders with done/delete/view actions.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { cn } from '@/lib/utils';
 import { supabase } from '@/integrations/supabase/client';
-import { useDashboardActivity } from '@/hooks/useDashboardActivity';
 import { useEntryActions } from '@/hooks/useEntryActions';
 import { CheckCircle, Check, Trash2 } from 'lucide-react';
 import {
@@ -52,8 +51,6 @@ export default function RemindersWidget({ onNavigate }: WidgetProps) {
     });
   }, []);
 
-  const { reminders, loading: activityLoading } = useDashboardActivity(userId);
-
   const handleRemove = useCallback((entryId: string) => {
     setReminderEntries(prev => prev.filter(e => e.id !== entryId));
   }, []);
@@ -87,21 +84,33 @@ export default function RemindersWidget({ onNavigate }: WidgetProps) {
       });
   }, [userId]);
 
-  const loading = activityLoading || loadingEntries;
-  const allClear = !loading && reminders.overdueCount === 0 && reminders.todayCount === 0;
+  // Derive counts from local state for instant feedback
+  const { overdueCount, todayCount } = useMemo(() => {
+    const todayStr = new Date().toISOString().split('T')[0];
+    let overdue = 0;
+    let today = 0;
+    for (const e of reminderEntries) {
+      if (e.event_date && e.event_date < todayStr) overdue++;
+      else if (e.event_date === todayStr) today++;
+    }
+    return { overdueCount: overdue, todayCount: today };
+  }, [reminderEntries]);
+
+  const loading = loadingEntries;
+  const allClear = !loading && overdueCount === 0 && todayCount === 0;
 
   return (
     <div className="flex flex-col h-full bg-white/[0.03] backdrop-blur-sm border border-white/10 rounded-lg overflow-hidden">
       <div className="px-3 py-2 border-b border-white/10 shrink-0 flex items-center gap-2">
         <span className="text-xs font-medium text-white/70">Reminders</span>
-        {!loading && reminders.overdueCount > 0 && (
+        {!loading && overdueCount > 0 && (
           <span className="text-[9px] px-1.5 py-0.5 rounded bg-red-500/20 text-red-400 font-medium">
-            {reminders.overdueCount} overdue
+            {overdueCount} overdue
           </span>
         )}
-        {!loading && reminders.todayCount > 0 && (
+        {!loading && todayCount > 0 && (
           <span className="text-[9px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 font-medium">
-            {reminders.todayCount} today
+            {todayCount} today
           </span>
         )}
       </div>
