@@ -8,7 +8,7 @@
 import {
   Activity, Users, Brain, Bell, GitBranch,
   Lightbulb, Gauge, AlertTriangle, MessageSquare, CalendarDays,
-  Sparkles, Radio, Globe,
+  Sparkles, Radio, Globe, Compass, ShieldAlert, Flame,
 } from 'lucide-react';
 import type { WidgetDefinition, SandboxLayout } from '@/types/widget';
 import type { Layout } from 'react-grid-layout';
@@ -26,6 +26,9 @@ import CalendarWidget from '@/components/sandbox/widgets/CalendarWidget';
 import AgentOutputsWidget from '@/components/sandbox/widgets/AgentOutputsWidget';
 import AgentLiveStreamWidget from '@/components/sandbox/widgets/AgentLiveStreamWidget';
 import ResearchResultsWidget from '@/components/sandbox/widgets/ResearchResultsWidget';
+import PrincipleTickerWidget from '@/components/sandbox/widgets/PrincipleTickerWidget';
+import DriftRadarWidget from '@/components/sandbox/widgets/DriftRadarWidget';
+import SparkBoardWidget from '@/components/sandbox/widgets/SparkBoardWidget';
 
 export const WIDGET_DEFS: WidgetDefinition[] = [
   {
@@ -158,6 +161,38 @@ export const WIDGET_DEFS: WidgetDefinition[] = [
     component: ResearchResultsWidget,
     category: 'insights',
     tabs: [{ id: 'latest', label: 'Latest' }, { id: 'history', label: 'History' }],
+  },
+  {
+    typeId: 'principle-ticker',
+    name: 'Principles',
+    description: "JAC's distilled operating principles",
+    icon: Compass,
+    defaultSize: { w: 6, h: 3 },
+    minSize: { w: 3, h: 2 },
+    component: PrincipleTickerWidget,
+    category: 'insights',
+  },
+  {
+    typeId: 'drift-radar',
+    name: 'Drift Radar',
+    description: 'Important entries you may be neglecting',
+    icon: ShieldAlert,
+    defaultSize: { w: 6, h: 4 },
+    minSize: { w: 3, h: 3 },
+    component: DriftRadarWidget,
+    category: 'brain',
+    tabs: [{ id: 'drifting', label: 'Drifting' }, { id: 'stats', label: 'Stats' }],
+  },
+  {
+    typeId: 'spark-board',
+    name: 'Spark Board',
+    description: 'Ideas ranked by potential — hot to cold',
+    icon: Flame,
+    defaultSize: { w: 6, h: 4 },
+    minSize: { w: 3, h: 3 },
+    component: SparkBoardWidget,
+    category: 'brain',
+    tabs: [{ id: 'hot', label: 'Hot' }, { id: 'cold', label: 'Cold' }],
   },
 ];
 
