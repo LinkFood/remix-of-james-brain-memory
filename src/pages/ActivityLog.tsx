@@ -159,6 +159,11 @@ function TaskRow({ item }: { item: ActivityItem & { kind: 'task' } }) {
         <p className="text-xs text-white/70 mt-1 line-clamp-2">
           {item.intent || item.type}
         </p>
+        {item.type === 'code' && item.status === 'completed' && (
+          <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+            validated
+          </span>
+        )}
         <div className="flex items-center gap-3 mt-1 flex-wrap">
           {duration && (
             <span className="text-[10px] text-white/30 font-mono">

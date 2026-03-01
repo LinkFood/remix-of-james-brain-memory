@@ -18,6 +18,8 @@ export interface BrainEntry {
   tags: string[] | null;
   importance_score: number | null;
   has_embedding: boolean;
+  access_count: number | null;
+  last_accessed_at: string | null;
   created_at: string;
 }
 
@@ -79,7 +81,7 @@ export function useBrainGraph(userId: string): UseBrainGraphReturn {
       const { data: entryData } = await supabase
         .from('entries')
         .select(
-          'id, title, content, content_type, tags, importance_score, embedding, created_at',
+          'id, title, content, content_type, tags, importance_score, embedding, access_count, last_accessed_at, created_at',
         )
         .eq('user_id', userId)
         .eq('archived', false)
@@ -96,6 +98,8 @@ export function useBrainGraph(userId: string): UseBrainGraphReturn {
             tags: string[] | null;
             importance_score: number | null;
             embedding: string | null;
+            access_count: number | null;
+            last_accessed_at: string | null;
             created_at: string;
           }>
         ).map((e) => ({
@@ -106,6 +110,8 @@ export function useBrainGraph(userId: string): UseBrainGraphReturn {
           tags: e.tags,
           importance_score: e.importance_score,
           has_embedding: e.embedding != null,
+          access_count: e.access_count,
+          last_accessed_at: e.last_accessed_at,
           created_at: e.created_at,
         }));
         setEntries(mapped);

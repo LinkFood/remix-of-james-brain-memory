@@ -64,8 +64,9 @@ export function useCalendarEntries(): UseCalendarEntriesResult {
       if (fetchError) throw fetchError;
       setEntries((data as CalendarEntry[]) || []);
     } catch (err) {
-      console.error('Failed to fetch calendar entries:', err);
-      setError(err instanceof Error ? err.message : 'Failed to load calendar entries');
+      // Suppress error toasts on passive load — show empty state instead
+      console.warn('[useCalendarEntries] Fetch failed (showing empty state):', err);
+      setEntries([]);
     } finally {
       setIsLoading(false);
     }

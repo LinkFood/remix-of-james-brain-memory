@@ -10,8 +10,10 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   LayoutDashboard, Code2, CalendarDays, Search, Activity, Brain,
-  Clock, Zap, DollarSign, OctagonX, Settings,
+  Clock, Zap, DollarSign, OctagonX, Settings, Heart,
 } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { supabase } from '@/integrations/supabase/client';
 import { useClock } from '@/hooks/useClock';
 import { useKillSwitch } from '@/hooks/useKillSwitch';
 import { useTokenCounter } from '@/hooks/useTokenCounter';
@@ -63,6 +65,25 @@ export function TopNav({ userId }: TopNavProps) {
   const { killAll, isKilling } = useKillSwitch();
   const { totalCostToday, recentTasks } = useTokenCounter(userId);
   const { runningTasks, reminders } = useTickerData(userId);
+
+  const [lastHeartbeat, setLastHeartbeat] = useState<string | null>(null);
+
+  // Check for last heartbeat insight
+  useEffect(() => {
+    if (!userId) return;
+    supabase
+      .from('brain_insights')
+      .select('created_at')
+      .eq('user_id', userId)
+      .eq('type', 'heartbeat')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .then(({ data }) => {
+        if (data && data.length > 0) {
+          setLastHeartbeat((data[0] as { created_at: string }).created_at);
+        }
+      });
+  }, [userId]);
 
   return (
     <nav className="h-10 border-b border-border bg-card/80 backdrop-blur-sm flex items-center px-3 shrink-0 z-50">
@@ -124,6 +145,13 @@ export function TopNav({ userId }: TopNavProps) {
             )}
           </PopoverContent>
         </Popover>
+
+        {/* Heartbeat indicator */}
+        {lastHeartbeat && (
+          <div className="flex items-center gap-1 px-1.5 py-1 text-xs text-muted-foreground" title={`Last heartbeat: ${new Date(lastHeartbeat).toLocaleTimeString()}`}>
+            <Heart className="w-3 h-3 text-pink-400 animate-pulse" />
+          </div>
+        )}
 
         {/* Clock + overdue badge */}
         <div className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground">

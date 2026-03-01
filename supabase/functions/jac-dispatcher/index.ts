@@ -369,6 +369,26 @@ serve(async (req) => {
       console.warn('[jac-dispatcher] Reflections lookup failed (non-blocking):', err);
     }
 
+    // 3c. Operating principles for strategic context
+    let principlesContext = '';
+    try {
+      const { data: principles } = await supabase
+        .from('jac_principles')
+        .select('principle, confidence, times_applied')
+        .eq('user_id', userId)
+        .order('confidence', { ascending: false })
+        .limit(5);
+
+      if (principles && principles.length > 0) {
+        principlesContext = '\n\n=== JAC\'S OPERATING PRINCIPLES ===\n' +
+          principles.map((p: { principle: string; confidence: number; times_applied: number }) =>
+            `- [${Math.round(p.confidence * 100)}%] ${p.principle}`
+          ).join('\n');
+      }
+    } catch (err) {
+      console.warn('[jac-dispatcher] Principles lookup failed (non-blocking):', err);
+    }
+
     // 4. Intent parsing via Claude Sonnet
     const systemPrompt = `You are JAC, a personal AI agent dispatcher. The user sends you a message and you decide what to do with it.
 
@@ -398,7 +418,7 @@ Intent routing rules (follow these STRICTLY):
    TRIGGERS: "fix", "add feature", "update code", "refactor", "implement", "PR", "pull request", project names like "pixel-perfect" or "exact-match", code-related requests.
 
 IMPORTANT: Brain context below is for YOUR reference only — do NOT route to search just because matching entries exist.
-${brainContext ? `\nUser's brain context (for reference only):\n${brainContext}` : ''}${reflectionsContext}
+${brainContext ? `\nUser's brain context (for reference only):\n${brainContext}` : ''}${reflectionsContext}${principlesContext}
 
 Be concise. Be confident. Don't ask questions — just act.`;
 

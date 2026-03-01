@@ -277,6 +277,14 @@ serve(async (req) => {
     // Filters already applied in SQL — just enforce limit
     const results = entries.slice(0, limit);
 
+    // Fire-and-forget: bump access counts for returned entries
+    if (results.length > 0) {
+      const resultIds = results.map(r => r.id);
+      supabaseClient.rpc('bump_access', { entry_ids: resultIds })
+        .then(() => console.log(`[search-memory] Bumped access for ${resultIds.length} entries`))
+        .catch((err: unknown) => console.warn('[search-memory] bump_access failed (non-blocking):', err));
+    }
+
     console.log(`Returning ${results.length} filtered results`);
 
     return successResponse(

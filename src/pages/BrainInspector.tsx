@@ -19,12 +19,17 @@ import {
   Tag,
   Zap,
   ChevronRight,
+  Users,
+  BookOpen,
+  Eye,
 } from 'lucide-react';
 import {
   useBrainGraph,
   type BrainItem,
   type EntryRelationship,
 } from '@/hooks/useBrainGraph';
+import { useBrainEntities, type BrainEntity } from '@/hooks/useBrainEntities';
+import { usePrinciples, type JacPrinciple } from '@/hooks/usePrinciples';
 
 // --------------- Constants ---------------
 
@@ -240,6 +245,11 @@ function InspectorPanel({
                 importance: {item.importance_score}/10
               </span>
             )}
+            {item.access_count != null && item.access_count > 0 && (
+              <span className="text-[10px] text-white/40 font-mono">
+                accessed: {item.access_count}x
+              </span>
+            )}
             <span className="text-[10px] text-white/30">
               {new Date(item.created_at).toLocaleDateString()}
             </span>
@@ -285,6 +295,18 @@ function InspectorPanel({
             </span>
           </div>
         </div>
+
+        {/* Freshness */}
+        {item.last_accessed_at && (
+          <div className="px-4 py-2 border-b border-white/10">
+            <div className="flex items-center gap-2">
+              <Eye className="w-3.5 h-3.5 text-white/30" />
+              <span className="text-[10px] text-white/40 font-mono">
+                Last accessed: {timeAgo(item.last_accessed_at)}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Semantic neighbors */}
         <div className="px-4 py-3 flex-1 overflow-y-auto">
@@ -419,6 +441,20 @@ const BrainInspector = () => {
     setTab,
   } = useBrainGraph(userId);
 
+  const { entities: brainEntities, mentions, selectedEntityId, fetchMentions, isLoading: entitiesLoading } = useBrainEntities(userId);
+  const { principles, isLoading: principlesLoading } = usePrinciples(userId);
+
+  // Extended tab state (includes entities + principles beyond what the hook supports)
+  type ExtendedTab = 'all' | 'entries' | 'reflections' | 'entities' | 'principles';
+  const [activeTab, setActiveTab] = useState<ExtendedTab>('all');
+
+  const handleTabChange = (t: ExtendedTab) => {
+    setActiveTab(t);
+    if (t === 'all' || t === 'entries' || t === 'reflections') {
+      setTab(t);
+    }
+  };
+
   // Handle selecting a related entry by ID
   const handleSelectRelated = (entryId: string) => {
     const found = entries.find((e) => e.id === entryId);
@@ -438,7 +474,7 @@ const BrainInspector = () => {
           Brain Inspector
         </span>
         <span className="text-[10px] text-white/30 font-mono ml-auto">
-          {entries.length} entries / {reflections.length} reflections
+          {entries.length} entries / {reflections.length} reflections / {brainEntities.length} entities / {principles.length} principles
         </span>
       </div>
 
@@ -448,29 +484,128 @@ const BrainInspector = () => {
         <div className="w-[60%] border-r border-white/10 flex flex-col overflow-hidden">
           {/* Tab bar */}
           <div className="shrink-0 border-b border-white/10 flex">
-            {(['all', 'entries', 'reflections'] as const).map((t) => (
+            {([
+              { key: 'all', label: 'All' },
+              { key: 'entries', label: 'Entries' },
+              { key: 'reflections', label: 'Reflections' },
+              { key: 'entities', label: 'Entities' },
+              { key: 'principles', label: 'Principles' },
+            ] as const).map((t) => (
               <button
-                key={t}
-                onClick={() => setTab(t)}
+                key={t.key}
+                onClick={() => handleTabChange(t.key as ExtendedTab)}
                 className={cn(
                   'px-4 py-2 text-xs font-medium transition-colors border-b-2',
-                  tab === t
+                  activeTab === t.key
                     ? 'text-white/80 border-blue-500'
                     : 'text-white/40 border-transparent hover:text-white/60',
                 )}
               >
-                {t === 'all'
-                  ? 'All'
-                  : t === 'entries'
-                    ? 'Entries'
-                    : 'Reflections'}
+                {t.label}
               </button>
             ))}
           </div>
 
           {/* Item list */}
           <div className="flex-1 overflow-y-auto">
-            {isLoading ? (
+            {activeTab === 'entities' ? (
+              entitiesLoading ? (
+                <div className="flex items-center justify-center h-32">
+                  <Loader2 className="w-5 h-5 text-white/30 animate-spin" />
+                </div>
+              ) : brainEntities.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-32 gap-2">
+                  <Users className="w-6 h-6 text-white/20" />
+                  <span className="text-sm text-white/30">No entities yet</span>
+                </div>
+              ) : (
+                (() => {
+                  const grouped: Record<string, BrainEntity[]> = {};
+                  for (const e of brainEntities) {
+                    const key = e.entity_type || 'unknown';
+                    if (!grouped[key]) grouped[key] = [];
+                    grouped[key].push(e);
+                  }
+                  return Object.entries(grouped).map(([type, entities]) => (
+                    <div key={type}>
+                      <div className="px-3 py-1.5 bg-white/[0.02] border-b border-white/5">
+                        <span className="text-[10px] text-white/40 uppercase tracking-wide font-medium">
+                          {type}
+                        </span>
+                        <span className="text-[10px] text-white/20 ml-2">{entities.length}</span>
+                      </div>
+                      {entities.map((entity) => (
+                        <button
+                          key={entity.id}
+                          onClick={() => fetchMentions(entity.id)}
+                          className={cn(
+                            'w-full text-left px-3 py-2.5 border-b border-white/5 hover:bg-white/[0.03] transition-colors flex items-start gap-2',
+                            selectedEntityId === entity.id && 'bg-white/[0.05] border-l-2 border-l-blue-500',
+                          )}
+                        >
+                          <Users className="w-3.5 h-3.5 text-white/30 shrink-0 mt-0.5" />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs text-white/70 font-medium">{entity.name}</span>
+                              <span className="text-[10px] text-white/30 font-mono">{entity.mention_count}x</span>
+                            </div>
+                            <span className="text-[10px] text-white/30">
+                              first: {timeAgo(entity.first_seen)} / last: {timeAgo(entity.last_seen)}
+                            </span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  ));
+                })()
+              )
+            ) : activeTab === 'principles' ? (
+              principlesLoading ? (
+                <div className="flex items-center justify-center h-32">
+                  <Loader2 className="w-5 h-5 text-white/30 animate-spin" />
+                </div>
+              ) : principles.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-32 gap-2">
+                  <BookOpen className="w-6 h-6 text-white/20" />
+                  <span className="text-sm text-white/30">No principles yet</span>
+                </div>
+              ) : (
+                principles.map((p) => (
+                  <div
+                    key={p.id}
+                    className="w-full text-left px-3 py-2.5 border-b border-white/5 hover:bg-white/[0.03] transition-colors"
+                  >
+                    <div className="flex items-start gap-2">
+                      <BookOpen className="w-3.5 h-3.5 text-white/30 shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs text-white/70 line-clamp-2">{p.principle}</p>
+                        <div className="flex items-center gap-3 mt-1.5">
+                          {/* Confidence bar */}
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-white/30">confidence:</span>
+                            <div className="w-16 h-1.5 bg-white/10 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-emerald-400 rounded-full"
+                                style={{ width: `${Math.round(p.confidence * 100)}%` }}
+                              />
+                            </div>
+                            <span className="text-[10px] text-white/40 font-mono">
+                              {Math.round(p.confidence * 100)}%
+                            </span>
+                          </div>
+                          <span className="text-[10px] text-white/30 font-mono">
+                            applied: {p.times_applied}x
+                          </span>
+                          <span className="text-[10px] text-white/20">
+                            validated: {timeAgo(p.last_validated)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )
+            ) : isLoading ? (
               <div className="flex items-center justify-center h-32">
                 <Loader2 className="w-5 h-5 text-white/30 animate-spin" />
               </div>
@@ -501,7 +636,50 @@ const BrainInspector = () => {
 
         {/* Right column: Inspector (40%) */}
         <div className="w-[40%] flex flex-col overflow-hidden bg-white/[0.01]">
-          {selectedItem ? (
+          {activeTab === 'entities' && selectedEntityId ? (
+            <div className="flex flex-col h-full">
+              <div className="px-4 py-3 border-b border-white/10">
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4 text-white/40" />
+                  <span className="text-sm font-medium text-white/70">
+                    {brainEntities.find(e => e.id === selectedEntityId)?.name ?? 'Entity'}
+                  </span>
+                </div>
+                <span className="text-[10px] text-white/30 mt-1 block">
+                  {mentions.length} mention{mentions.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+              <div className="flex-1 overflow-y-auto px-4 py-2">
+                {mentions.length === 0 ? (
+                  <p className="text-[10px] text-white/20 italic">No mentions loaded</p>
+                ) : (
+                  <div className="flex flex-col gap-1.5">
+                    {mentions.map((m) => (
+                      <div key={m.id} className="px-2 py-1.5 rounded bg-white/5 border border-white/10">
+                        {m.context_snippet && (
+                          <p className="text-[11px] text-white/60 line-clamp-2">{m.context_snippet}</p>
+                        )}
+                        <div className="flex items-center gap-2 mt-1">
+                          {m.entry_id && (
+                            <button
+                              onClick={() => handleSelectRelated(m.entry_id!)}
+                              className="text-[9px] text-blue-400 hover:text-blue-300 font-mono"
+                            >
+                              entry
+                            </button>
+                          )}
+                          {m.reflection_id && (
+                            <span className="text-[9px] text-purple-400 font-mono">reflection</span>
+                          )}
+                          <span className="text-[9px] text-white/20 ml-auto">{timeAgo(m.created_at)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : selectedItem ? (
             <InspectorPanel
               item={selectedItem}
               relationships={relationships}

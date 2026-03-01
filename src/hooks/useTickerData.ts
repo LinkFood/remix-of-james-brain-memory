@@ -32,59 +32,71 @@ export function useTickerData(userId: string): TickerData {
   const [loading, setLoading] = useState(true);
 
   const fetchRunningTasks = useCallback(async () => {
-    const { data } = await supabase
-      .from('agent_tasks')
-      .select('agent')
-      .eq('user_id', userId)
-      .eq('status', 'running');
+    try {
+      const { data } = await supabase
+        .from('agent_tasks')
+        .select('agent')
+        .eq('user_id', userId)
+        .eq('status', 'running');
 
-    if (data) {
-      const agents = [...new Set(
-        (data as { agent: string }[])
-          .map(t => AGENT_LABELS[t.agent] || t.agent)
-          .filter(Boolean)
-      )];
-      setRunningTasks({ count: data.length, agents });
+      if (data) {
+        const agents = [...new Set(
+          (data as { agent: string }[])
+            .map(t => AGENT_LABELS[t.agent] || t.agent)
+            .filter(Boolean)
+        )];
+        setRunningTasks({ count: data.length, agents });
+      }
+    } catch (err) {
+      console.warn('[useTickerData] fetchRunningTasks failed (non-blocking):', err);
     }
   }, [userId]);
 
   const fetchReminders = useCallback(async () => {
-    const todayStr = new Date().toISOString().split('T')[0];
+    try {
+      const todayStr = new Date().toISOString().split('T')[0];
 
-    const { data } = await supabase
-      .from('entries')
-      .select('event_date')
-      .eq('user_id', userId)
-      .eq('archived', false)
-      .not('event_date', 'is', null)
-      .lte('event_date', todayStr);
+      const { data } = await supabase
+        .from('entries')
+        .select('event_date')
+        .eq('user_id', userId)
+        .eq('archived', false)
+        .not('event_date', 'is', null)
+        .lte('event_date', todayStr);
 
-    if (data) {
-      let todayCount = 0;
-      let overdueCount = 0;
-      for (const entry of data as { event_date: string }[]) {
-        if (entry.event_date === todayStr) todayCount++;
-        else if (entry.event_date < todayStr) overdueCount++;
+      if (data) {
+        let todayCount = 0;
+        let overdueCount = 0;
+        for (const entry of data as { event_date: string }[]) {
+          if (entry.event_date === todayStr) todayCount++;
+          else if (entry.event_date < todayStr) overdueCount++;
+        }
+        setReminders({ todayCount, overdueCount });
       }
-      setReminders({ todayCount, overdueCount });
+    } catch (err) {
+      console.warn('[useTickerData] fetchReminders failed (non-blocking):', err);
     }
   }, [userId]);
 
   const fetchLatestCodeSession = useCallback(async () => {
-    const { data } = await supabase
-      .from('code_sessions')
-      .select('branch_name, status, pr_url')
-      .eq('user_id', userId)
-      .order('updated_at', { ascending: false })
-      .limit(1);
+    try {
+      const { data } = await supabase
+        .from('code_sessions')
+        .select('branch_name, status, pr_url')
+        .eq('user_id', userId)
+        .order('updated_at', { ascending: false })
+        .limit(1);
 
-    if (data && data.length > 0) {
-      const session = data[0] as { branch_name: string; status: string; pr_url: string | null };
-      setLatestCodeSession({
-        branch: session.branch_name,
-        status: session.status,
-        prUrl: session.pr_url,
-      });
+      if (data && data.length > 0) {
+        const session = data[0] as { branch_name: string; status: string; pr_url: string | null };
+        setLatestCodeSession({
+          branch: session.branch_name,
+          status: session.status,
+          prUrl: session.pr_url,
+        });
+      }
+    } catch (err) {
+      console.warn('[useTickerData] fetchLatestCodeSession failed (non-blocking):', err);
     }
   }, [userId]);
 

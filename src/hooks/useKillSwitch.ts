@@ -37,7 +37,8 @@ export function useKillSwitch() {
         { style: { backgroundColor: '#f97316', color: 'white' } }
       );
     } catch (err) {
-      toast.error('Failed to stop tasks');
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      toast.error(`Failed to stop tasks: ${msg}`);
       console.error('[useKillSwitch] error:', err);
     } finally {
       setIsKilling(false);

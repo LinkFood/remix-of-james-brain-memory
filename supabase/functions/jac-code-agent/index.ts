@@ -508,6 +508,33 @@ Instructions:
       .single();
     await sessionStep({ sessionId: session?.id });
 
+    // ─── Step 9b: record validation ───
+    if (session?.id) {
+      try {
+        const workflowFiles = fileTree.filter(f => f.startsWith('.github/workflows/'));
+        const hasCI = workflowFiles.length > 0;
+        await supabase
+          .from('code_validations')
+          .insert({
+            session_id: session.id,
+            validation_type: 'build',
+            passed: !!mergeSha,
+            output: mergeSha
+              ? `Merge successful (${mergeSha.slice(0, 8)})${hasCI ? `. CI workflows: ${workflowFiles.join(', ')}` : ''}`
+              : 'PR created but merge failed — manual review needed',
+            duration_ms: Date.now() - startTime,
+          });
+
+        // Update code_sessions.validated
+        await supabase
+          .from('code_sessions')
+          .update({ validated: !!mergeSha })
+          .eq('id', session.id);
+      } catch (valErr) {
+        console.warn('[code-agent] Validation recording failed (non-blocking):', valErr);
+      }
+    }
+
     // ─── Step 10: save_to_brain ───
     let brainEntryId: string | undefined;
     const saveStep = await log.step('save_to_brain');

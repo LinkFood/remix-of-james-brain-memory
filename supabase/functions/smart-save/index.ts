@@ -434,6 +434,20 @@ serve(async (req) => {
           .catch((err) => console.warn('Embedding generation failed (non-blocking):', err));
       }
 
+      // Fire-and-forget entity extraction
+      fetch(`${supabaseUrl}/functions/v1/extract-entities`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${supabaseKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId,
+          content: entryContent,
+          sourceEntryId: entry!.id,
+        }),
+      }).catch((err) => console.warn('[smart-save] Entity extraction failed (non-blocking):', err));
+
       // Deferred importance scoring for fast-path entries (fire-and-forget DB update)
       if (deferImportanceScoring) {
         fetch(`${supabaseUrl}/functions/v1/calculate-importance`, {

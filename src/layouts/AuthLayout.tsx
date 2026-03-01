@@ -5,7 +5,7 @@
  * Provides single useJacAgent instance shared across all pages via JacContext.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useJacAgent } from '@/hooks/useJacAgent';
@@ -36,19 +36,29 @@ interface AuthLayoutProps {
 export function AuthLayout({ children }: AuthLayoutProps) {
   const navigate = useNavigate();
   const [userId, setUserId] = useState<string>('');
+  const [authLoading, setAuthLoading] = useState(true);
   const isMobile = useMediaQuery('(max-width: 768px)');
   const { isCollapsed, toggleCollapsed } = useSidebarState();
+  const initialCheckDone = useRef(false);
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session?.user) {
+    // Use getUser() instead of getSession() — server-validated, no stale tokens
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!user) {
         navigate('/auth');
         return;
       }
-      setUserId(session.user.id);
+      setUserId(user.id);
+      setAuthLoading(false);
+      initialCheckDone.current = true;
+    }).catch(() => {
+      navigate('/auth');
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      // Don't redirect during initial mount — getUser() handles that
+      if (!initialCheckDone.current) return;
+
       if (!session?.user) {
         navigate('/auth');
         return;
@@ -61,7 +71,8 @@ export function AuthLayout({ children }: AuthLayoutProps) {
 
   const jacAgent = useJacAgent(userId);
 
-  if (!userId) return null;
+  // Show nothing while auth is loading — prevents flash redirect
+  if (authLoading || !userId) return null;
 
   return (
     <JacContext.Provider value={jacAgent}>

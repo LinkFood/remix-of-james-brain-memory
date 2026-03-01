@@ -139,7 +139,7 @@ Generate a 1-2 sentence reflection.`,
     }
 
     // 6. Insert into jac_reflections
-    const { error: insertError } = await supabase
+    const { data: reflectionRow, error: insertError } = await supabase
       .from('jac_reflections')
       .insert({
         user_id: userId,
@@ -149,7 +149,9 @@ Generate a 1-2 sentence reflection.`,
         summary,
         connections: connections.length > 0 ? connections : null,
         embedding: embedding ? JSON.stringify(embedding) : null,
-      });
+      })
+      .select('id')
+      .single();
 
     if (insertError) {
       console.error('[jac-reflect] Insert error:', insertError);
@@ -160,6 +162,20 @@ Generate a 1-2 sentence reflection.`,
     }
 
     console.log(`[jac-reflect] Reflection saved for task ${taskId}: ${summary.slice(0, 100)}`);
+
+    // Fire-and-forget entity extraction
+    fetch(`${supabaseUrl}/functions/v1/extract-entities`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${serviceKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        userId,
+        content: `${task.intent || ''} ${summary}`,
+        sourceReflectionId: reflectionRow?.id,
+      }),
+    }).catch(() => {});
 
     return new Response(JSON.stringify({
       success: true,

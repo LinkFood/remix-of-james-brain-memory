@@ -71,3 +71,12 @@ verify_jwt = false
 
 [functions.ping]
 verify_jwt = false
+
+[functions.extract-entities]
+verify_jwt = false
+
+[functions.jac-heartbeat]
+verify_jwt = false
+
+[functions.distill-principles]
+verify_jwt = false

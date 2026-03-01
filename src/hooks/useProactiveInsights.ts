@@ -9,7 +9,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
-export type InsightType = 'pattern' | 'overdue' | 'stale' | 'schedule' | 'suggestion' | 'forgotten' | 'unchecked';
+export type InsightType = 'pattern' | 'overdue' | 'stale' | 'schedule' | 'suggestion' | 'forgotten' | 'unchecked' | 'heartbeat' | 'activity';
 
 export interface BrainInsight {
   id: string;
