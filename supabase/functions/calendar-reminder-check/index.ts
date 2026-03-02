@@ -5,7 +5,7 @@
  * Finds entries with pending reminders that are now due and sends Slack notifications.
  *
  * All date/time calculations use the user's timezone (from user_settings),
- * defaulting to America/Chicago if not set.
+ * defaulting to America/New_York if not set.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -81,7 +81,7 @@ serve(async (req) => {
     const timedOnly = body.timed_only === true;
 
     // Get the single user's timezone from settings (default: Central)
-    let userTz = 'America/Chicago';
+    let userTz = 'America/New_York';
     try {
       const { data: profile } = await supabase
         .from('profiles')

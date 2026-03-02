@@ -667,15 +667,15 @@ Be concise. Be confident. Don't ask questions — just act.`;
           // Parse frequency → cron expression via Haiku
           const cronParseResult = await callClaude({
             model: CLAUDE_MODELS.haiku,
-            system: `Convert the frequency description to a cron expression. The user is in America/Chicago timezone. Return ONLY valid JSON: { "cron": "cron_expression_here", "description": "human readable description" }. Examples: "daily at 9am" → {"cron": "0 14 * * *", "description": "Daily at 9:00 AM CT"}, "every weekday at 8am" → {"cron": "0 13 * * 1-5", "description": "Weekdays at 8:00 AM CT"}, "weekly on monday" → {"cron": "0 14 * * 1", "description": "Mondays at 9:00 AM CT"}, "every 6 hours" → {"cron": "0 */6 * * *", "description": "Every 6 hours"}`,
+            system: `Convert the frequency description to a cron expression. The user is in America/New_York timezone. Return ONLY valid JSON: { "cron": "cron_expression_here", "description": "human readable description" }. Examples: "daily at 9am" → {"cron": "0 14 * * *", "description": "Daily at 9:00 AM ET"}, "every weekday at 8am" → {"cron": "0 13 * * 1-5", "description": "Weekdays at 8:00 AM ET"}, "weekly on monday" → {"cron": "0 14 * * 1", "description": "Mondays at 9:00 AM ET"}, "every 6 hours" → {"cron": "0 */6 * * *", "description": "Every 6 hours"}`,
             messages: [{ role: 'user', content: `Frequency: "${si.frequency || si.extractedQuery}"` }],
             max_tokens: 100,
             temperature: 0,
           });
 
           const cronText = parseTextContent(cronParseResult) || '';
-          let parsedCron = '0 14 * * *'; // default daily 9am CT
-          let cronDescription = 'Daily at 9:00 AM CT';
+          let parsedCron = '0 14 * * *'; // default daily 9am ET
+          let cronDescription = 'Daily at 9:00 AM ET';
           try {
             const cronJson = JSON.parse(cronText.replace(/```json?\n?/g, '').replace(/```/g, '').trim());
             parsedCron = cronJson.cron || parsedCron;
@@ -721,7 +721,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
               originalMessage: message,
               agentType: 'jac-research-agent',
               modelTier: watchModelTier,
-              timezone: 'America/Chicago',
+              timezone: 'America/New_York',
               slack_channel: userSlackChannel,
               createdAt: new Date().toISOString(),
             },

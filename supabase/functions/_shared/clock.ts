@@ -22,9 +22,9 @@ export interface ClockSnapshot {
 
 /**
  * Get a timezone-aware clock snapshot.
- * Default timezone: America/Chicago (Central Time)
+ * Default timezone: America/New_York (Eastern Time)
  */
-export function now(tz = 'America/Chicago'): ClockSnapshot {
+export function now(tz = 'America/New_York'): ClockSnapshot {
   const d = new Date();
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz,
@@ -61,7 +61,7 @@ export function now(tz = 'America/Chicago'): ClockSnapshot {
 /**
  * Get a date string in the user's timezone.
  */
-export function dateInTz(date: Date | string, tz = 'America/Chicago'): string {
+export function dateInTz(date: Date | string, tz = 'America/New_York'): string {
   const d = typeof date === 'string' ? new Date(date) : date;
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: tz,
@@ -72,7 +72,7 @@ export function dateInTz(date: Date | string, tz = 'America/Chicago'): string {
 }
 
 /**
- * Get user's timezone from user_settings, or default to America/Chicago.
+ * Get user's timezone from user_settings, or default to America/New_York.
  */
 export async function getUserTimezone(
   supabase: { from: (table: string) => any },
@@ -90,5 +90,5 @@ export async function getUserTimezone(
   } catch (err) {
     console.warn('getUserTimezone failed:', err);
   }
-  return 'America/Chicago';
+  return 'America/New_York';
 }

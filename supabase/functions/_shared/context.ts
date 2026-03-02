@@ -7,7 +7,7 @@
  * for injection into agent system prompts.
  *
  * All dates are calculated in the user's timezone (from user_settings),
- * defaulting to America/Chicago if not set.
+ * defaulting to America/New_York if not set.
  */
 
 import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
@@ -35,7 +35,7 @@ export async function getUserContext(
   userId: string,
 ): Promise<UserContext> {
   // Get user's timezone from settings
-  let userTz = 'America/Chicago';
+  let userTz = 'America/New_York';
   try {
     const { data: settings } = await supabase
       .from('user_settings')

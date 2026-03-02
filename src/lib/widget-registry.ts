@@ -9,6 +9,7 @@ import {
   Activity, Users, Brain, Bell, GitBranch,
   Lightbulb, Gauge, AlertTriangle, MessageSquare, CalendarDays,
   Sparkles, Radio, Globe, Compass, ShieldAlert, Flame, Link2, Eye,
+  TrendingUp,
 } from 'lucide-react';
 import type { WidgetDefinition, SandboxLayout } from '@/types/widget';
 import type { Layout } from 'react-grid-layout';
@@ -31,6 +32,7 @@ import DriftRadarWidget from '@/components/sandbox/widgets/DriftRadarWidget';
 import SparkBoardWidget from '@/components/sandbox/widgets/SparkBoardWidget';
 import TheWireWidget from '@/components/sandbox/widgets/TheWireWidget';
 import WatchesWidget from '@/components/sandbox/widgets/WatchesWidget';
+import MarketOverviewWidget from '@/components/sandbox/widgets/MarketOverviewWidget';
 
 export const WIDGET_DEFS: WidgetDefinition[] = [
   {
@@ -216,6 +218,18 @@ export const WIDGET_DEFS: WidgetDefinition[] = [
     component: TheWireWidget,
     category: 'brain',
     tabs: [{ id: 'surprising', label: 'Surprising' }, { id: 'strongest', label: 'Strongest' }],
+  },
+  {
+    typeId: 'market-overview',
+    name: 'Market Overview',
+    description: 'Live market quotes and crypto prices',
+    icon: TrendingUp,
+    defaultSize: { w: 4, h: 4 },
+    minSize: { w: 3, h: 3 },
+    component: MarketOverviewWidget,
+    category: 'insights',
+    tabs: [{ id: 'markets', label: 'Markets' }, { id: 'crypto', label: 'Crypto' }],
+    refreshInterval: 300000,
   },
 ];
 

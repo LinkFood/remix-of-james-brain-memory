@@ -89,3 +89,9 @@ verify_jwt = false
 
 [functions.trigger-watch-run]
 verify_jwt = false
+
+[functions.market-quotes]
+verify_jwt = false
+
+[functions.market-snapshot]
+verify_jwt = false

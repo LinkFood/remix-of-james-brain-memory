@@ -1,7 +1,7 @@
 /**
  * jac-morning-brief — Daily Morning Brief for JAC Agent OS
  *
- * Cron: 7 AM Central (13:00 UTC). Compiles overnight activity, schedule,
+ * Cron: 8 AM Eastern (12:00 UTC). Compiles overnight activity, schedule,
  * reflections, and insights into a structured brief. Stores as brain_insight
  * and sends to Slack.
  *
@@ -25,6 +25,7 @@ const BRIEF_TOOL = {
       activity: { type: 'string', description: 'What JAC Did section -- summary of agent work in last 24h' },
       brain: { type: 'string', description: 'Brain Activity section -- new entries, reflections, patterns' },
       heads_up: { type: 'string', description: 'Heads Up section -- anything notable or requiring attention' },
+      markets: { type: 'string', description: 'Brief market summary -- key moves, direction, notable changes. Only include if market data was provided.' },
     },
     required: ['schedule', 'activity', 'brain', 'heads_up'],
   },
@@ -90,6 +91,7 @@ serve(async (req) => {
         reflectionsRes,
         entriesRes,
         insightsRes,
+        marketData,
       ] = await Promise.all([
         // Schedule context (today + overdue + upcoming week)
         getUserContext(supabase, userId),
@@ -128,12 +130,26 @@ serve(async (req) => {
           .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
           .order('priority', { ascending: true })
           .limit(5),
+        // Market quotes (best-effort)
+        fetch(`${supabaseUrl}/functions/v1/market-quotes`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${serviceKey}`,
+            'apikey': serviceKey,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({}),
+        }).then(r => r.json()).catch(() => null),
       ]);
 
       const tasks = tasksRes.data || [];
       const reflections = reflectionsRes.data || [];
       const entries = entriesRes.data || [];
       const insights = insightsRes.data || [];
+
+      const marketContext = marketData?.quotes
+        ? marketData.quotes.map((q: any) => `${q.name}: $${q.price} (${q.change >= 0 ? '+' : ''}${q.change} / ${q.changePercent >= 0 ? '+' : ''}${q.changePercent}%)`).join('\n')
+        : '';
 
       // 4. Build context string
       const contextParts: string[] = [];
@@ -191,6 +207,11 @@ serve(async (req) => {
         }
       }
 
+      // Markets
+      if (marketContext) {
+        contextParts.push(`\nMARKETS:\n${marketContext}`);
+      }
+
       // 5. Call Claude Haiku with forced tool use
       const dateDisplay = new Date().toLocaleDateString('en-US', {
         month: 'short',
@@ -208,6 +229,7 @@ Rules:
 - Brain: new entries saved, reflections generated, any patterns noticed.
 - Heads Up: anything that needs attention — overdue items, stale tasks, important upcoming deadlines.
 - If a section has nothing, say "Nothing to report" — keep it brief.
+- If market data is available, summarize key moves and direction.
 - Write in second person ("You have 3 events today...").`,
         messages: [{
           role: 'user',
@@ -228,12 +250,16 @@ Rules:
       }
 
       // 6. Format the brief body
-      const briefBody = [
+      const briefSections = [
         `*Schedule*\n${brief.schedule}`,
         `*What JAC Did*\n${brief.activity}`,
         `*Brain Activity*\n${brief.brain}`,
         `*Heads Up*\n${brief.heads_up}`,
-      ].join('\n\n');
+      ];
+      if (brief.markets) {
+        briefSections.push(`*Markets*\n${brief.markets}`);
+      }
+      const briefBody = briefSections.join('\n\n');
 
       const titleDate = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 
@@ -277,6 +303,7 @@ Rules:
             + `:robot_face: *What JAC Did*\n${brief.activity}\n\n`
             + `:brain: *Brain Activity*\n${brief.brain}\n\n`
             + `:warning: *Heads Up*\n${brief.heads_up}\n\n`
+            + (brief.markets ? `:chart_with_upwards_trend: *Markets*\n${brief.markets}\n\n` : '')
             + `<https://www.linkjac.cloud/dashboard|Open Dashboard>`;
 
           const slackRes = await fetch('https://slack.com/api/chat.postMessage', {

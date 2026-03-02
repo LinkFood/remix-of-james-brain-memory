@@ -111,8 +111,8 @@ Rate limits: 50 req/min, 10 concurrent tasks, 200 tasks/day. Loop guard: 10+ tas
 - Sends Slack message with bell emoji, title, date, countdown
 - Sets `reminder_sent = true` after send
 - Schedule context (`_shared/context.ts`): today's events, overdue items, next 7 days — injected into every dispatcher and assistant-chat conversation
-- **pg_cron active:** reminders every 5 min, 8 AM + 6 PM Central (date-only), stale task cleanup every 30 min, backfill-embeddings every 30 min, brain-insights 10 AM + 8 PM Central, expired insights cleanup 3 AM UTC
-- All date calcs use user's timezone from user_settings (default America/Chicago)
+- **pg_cron active:** reminders every 5 min, 8 AM + 6 PM Eastern (date-only), stale task cleanup every 30 min, backfill-embeddings every 30 min, brain-insights 10 AM + 8 PM Eastern, expired insights cleanup 2 AM UTC
+- All date calcs use user's timezone from user_settings (default America/New_York)
 
 ## Database (core tables)
 
@@ -174,6 +174,8 @@ Before merging any feature: *"Does this data get embedded? If not, it's not done
 | `jac-code-agent` | GitHub: read, write, commit, PR |
 | `jac-web-search` | Tavily web search (called by research-agent internally) |
 | `jac-kill-switch` | Cancels all running/queued tasks |
+| `trigger-watch-run` | Frontend bridge for Run Now + Skip Next watch actions (JWT auth) |
+| `jac-watch-scheduler` | Cron: fires due watches, creates child tasks, advances next_run_at |
 | `jac-dashboard-query` | NL queries over entries (Claude Haiku) |
 | `slack-incoming` | Slack webhook -> dispatcher (HMAC-SHA256 verified) |
 | `calendar-reminder-check` | Cron: due entries -> Slack reminders |
@@ -185,7 +187,7 @@ Before merging any feature: *"Does this data get embedded? If not, it's not done
 | `classify-content` | Claude Haiku content classification |
 | `calculate-importance` | Importance scoring (1-10) — runs on ALL entries now |
 | `backfill-embeddings` | Batch embed with rich text + create relationships (cron every 30 min) |
-| `brain-insights` | AI insight generation via Claude Haiku (cron 10 AM + 8 PM Central) |
+| `brain-insights` | AI insight generation via Claude Haiku (cron 10 AM + 8 PM Eastern) |
 | `elevenlabs-tts` | ElevenLabs text-to-speech |
 
 All functions listed in `config.toml` with `verify_jwt = false` — auth is handled in function code, not at gateway. This is required for internal agent→agent calls that use service role.
