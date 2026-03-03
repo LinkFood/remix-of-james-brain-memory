@@ -49,6 +49,7 @@ serve(async (req) => {
         })
         .eq('user_id', userId)
         .in('status', ['running', 'queued', 'pending'])
+        .is('cron_expression', null)
         .select('id');
 
       const count = cancelled?.length ?? 0;

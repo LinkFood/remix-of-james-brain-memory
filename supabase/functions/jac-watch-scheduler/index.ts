@@ -65,8 +65,8 @@ serve(async (req) => {
       try {
         const log = createAgentLogger(supabase, watch.id, watch.user_id, 'jac-watch-scheduler');
         const watchInput = (watch.input as Record<string, unknown>) || {};
-        const watchName = (watchInput.query as string) || 'Unnamed watch';
-        const agentType = watch.agent || 'jac-research-agent';
+        const watchName = (watchInput.query as string) || (watchInput.watchName as string) || 'Unnamed watch';
+        const agentType = (watchInput.agentType as string) || watch.agent || 'jac-research-agent';
 
         // 2. Fetch last 3 completed children
         const { data: recentChildren } = await supabase
@@ -195,7 +195,7 @@ serve(async (req) => {
         // 7. Advance next_run_at
         try {
           const interval = CronParser.parseExpression(watch.cron_expression, {
-            tz: watchInput.timezone as string || 'America/Chicago',
+            tz: watchInput.timezone as string || 'America/New_York',
           });
           const nextRun = interval.next().toISOString();
 

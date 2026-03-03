@@ -231,3 +231,4 @@ All functions listed in `config.toml` with `verify_jwt = false` — auth is hand
 - All supabase-js imports MUST pin to `@2.84.0` — unpinned `@2` causes version mismatch in Deno isolates
 - Claude Haiku ignores `type: "array"` in tool schemas ~80% of the time — always normalize with `Array.isArray()` guards
 - `retryWithBackoff` must NOT retry on 4xx errors (auth, rate limit, bad request) — only retry on 5xx/network
+- Watch templates (`cron_expression IS NOT NULL`) sit in `running` status permanently — any query that bulk-cancels/fails running tasks MUST exclude them with `AND cron_expression IS NULL` or `.is('cron_expression', null)`
