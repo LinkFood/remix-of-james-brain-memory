@@ -263,6 +263,29 @@ Start your brief with a delta summary before the full results.`
       await saveStep.fail(err instanceof Error ? err.message : 'Unknown error');
     }
 
+    // Archive to brain_reports
+    try {
+      await supabase.from('brain_reports').insert({
+        user_id: userId,
+        report_type: 'research',
+        source: 'jac-research-agent',
+        title: `Research: ${query.slice(0, 100)}`,
+        summary: brief.slice(0, 500),
+        body_markdown: brief,
+        metadata: {
+          sources: webSources,
+          watchId: watchId || null,
+          watchName: watchId ? `Watch Run #${runNumber}` : null,
+          query,
+          modelTier,
+        },
+        entry_id: brainEntryId || null,
+        task_id: taskId,
+      });
+    } catch (reportErr) {
+      console.warn('[research-agent] brain_reports insert failed:', reportErr);
+    }
+
     const duration = Date.now() - startTime;
 
     // 6. Update task → completed (guard: only if still running — cancelled tasks stay cancelled)

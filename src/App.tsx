@@ -23,6 +23,7 @@ import ActivityLog from "./pages/ActivityLog";
 import BrainInspector from "./pages/BrainInspector";
 import Agents from "./pages/Agents";
 import CronJobs from "./pages/CronJobs";
+import Reports from "./pages/Reports";
 import Landing from "./pages/Landing";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -62,6 +63,7 @@ const TrackedRoutes = () => {
       <Route path="/agents" element={<AuthLayout><Agents /></AuthLayout>} />
       <Route path="/brain" element={<AuthLayout><BrainInspector /></AuthLayout>} />
       <Route path="/crons" element={<AuthLayout><CronJobs /></AuthLayout>} />
+      <Route path="/reports" element={<AuthLayout><Reports /></AuthLayout>} />
 
       <Route path="*" element={<NotFound />} />
     </Routes>

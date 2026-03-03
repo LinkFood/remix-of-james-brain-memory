@@ -9,7 +9,7 @@ import {
   Activity, Users, Brain, Bell, GitBranch,
   Lightbulb, Gauge, AlertTriangle, MessageSquare, CalendarDays,
   Sparkles, Radio, Globe, Compass, ShieldAlert, Flame, Link2, Eye,
-  TrendingUp,
+  TrendingUp, FileBarChart,
 } from 'lucide-react';
 import type { WidgetDefinition, SandboxLayout } from '@/types/widget';
 import type { Layout } from 'react-grid-layout';
@@ -33,6 +33,7 @@ import SparkBoardWidget from '@/components/sandbox/widgets/SparkBoardWidget';
 import TheWireWidget from '@/components/sandbox/widgets/TheWireWidget';
 import WatchesWidget from '@/components/sandbox/widgets/WatchesWidget';
 import MarketOverviewWidget from '@/components/sandbox/widgets/MarketOverviewWidget';
+import ReportsWidget from '@/components/sandbox/widgets/ReportsWidget';
 
 export const WIDGET_DEFS: WidgetDefinition[] = [
   {
@@ -218,6 +219,17 @@ export const WIDGET_DEFS: WidgetDefinition[] = [
     component: TheWireWidget,
     category: 'brain',
     tabs: [{ id: 'surprising', label: 'Surprising' }, { id: 'strongest', label: 'Strongest' }],
+  },
+  {
+    typeId: 'reports',
+    name: 'Reports',
+    description: 'All reports — briefs, research, market snapshots',
+    icon: FileBarChart,
+    defaultSize: { w: 6, h: 4 },
+    minSize: { w: 3, h: 3 },
+    component: ReportsWidget,
+    category: 'insights',
+    tabs: [{ id: 'latest', label: 'Latest' }, { id: 'feed', label: 'Feed' }],
   },
   {
     typeId: 'market-overview',

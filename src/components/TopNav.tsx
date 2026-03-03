@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   LayoutDashboard, Code2, CalendarDays, Search, Activity, Users, Brain, Timer,
-  Clock, Zap, DollarSign, OctagonX, Settings, Heart,
+  Clock, Zap, DollarSign, OctagonX, Settings, Heart, FileBarChart,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
@@ -42,6 +42,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: '/agents', label: 'Agents', icon: <Users className="w-4 h-4" /> },
   { path: '/brain', label: 'Brain', icon: <Brain className="w-4 h-4" /> },
   { path: '/crons', label: 'Crons', icon: <Timer className="w-4 h-4" /> },
+  { path: '/reports', label: 'Reports', icon: <FileBarChart className="w-4 h-4" /> },
 ];
 
 interface TopNavProps {

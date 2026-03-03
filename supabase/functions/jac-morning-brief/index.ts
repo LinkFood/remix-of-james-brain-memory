@@ -283,6 +283,29 @@ Rules:
         continue;
       }
 
+      // Archive to brain_reports (permanent — insights expire, reports don't)
+      try {
+        await supabase.from('brain_reports').insert({
+          user_id: userId,
+          report_type: 'morning_brief',
+          source: 'jac-morning-brief',
+          title: `Morning Brief — ${titleDate}`,
+          summary: (brief.schedule || '').slice(0, 500),
+          body_markdown: briefBody,
+          metadata: {
+            sections: {
+              schedule: brief.schedule,
+              activity: brief.activity,
+              brain: brief.brain,
+              heads_up: brief.heads_up,
+              markets: brief.markets || null,
+            },
+          },
+        });
+      } catch (reportErr) {
+        console.warn('[jac-morning-brief] brain_reports insert failed:', reportErr);
+      }
+
       totalBriefs++;
       console.log(`[jac-morning-brief] Brief generated for user ${userId}`);
 

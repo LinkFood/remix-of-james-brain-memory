@@ -143,6 +143,11 @@ Generate a report with:
       reportData = toolResult.input as typeof reportData;
     }
 
+    const dateStr = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    const themesText = Array.isArray(reportData.key_themes) ? reportData.key_themes.map((t: string) => `- ${t}`).join('\n') : '';
+    const decisionsText = Array.isArray(reportData.decisions) ? reportData.decisions.map((d: string) => `- ${d}`).join('\n') : '';
+    const insightsText = Array.isArray(reportData.insights) ? reportData.insights.map((i: string) => `- ${i}`).join('\n') : '';
+
     const { data: savedReport, error: saveError } = await serviceClient
       .from('brain_reports')
       .insert({
@@ -155,6 +160,10 @@ Generate a report with:
         decisions: reportData.decisions,
         insights: reportData.insights,
         conversation_stats: stats,
+        source: 'generate-brain-report',
+        title: `${reportType.charAt(0).toUpperCase() + reportType.slice(1)} Report — ${dateStr}`,
+        body_markdown: `## Summary\n${reportData.summary}\n\n## Key Themes\n${themesText}\n\n## Decisions\n${decisionsText}\n\n## Insights\n${insightsText}`,
+        metadata: {},
       })
       .select()
       .single();

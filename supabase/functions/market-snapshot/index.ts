@@ -86,8 +86,9 @@ serve(async (req) => {
       const userId = user.id as string;
 
       // Save via smart-save (triggers classify -> embed -> relationship pipeline)
+      let entryId: string | undefined;
       try {
-        await fetch(`${supabaseUrl}/functions/v1/smart-save`, {
+        const saveRes = await fetch(`${supabaseUrl}/functions/v1/smart-save`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${serviceRoleKey}`,
@@ -100,10 +101,30 @@ serve(async (req) => {
             source: 'market-snapshot',
           }),
         });
+        if (saveRes.ok) {
+          const saveData = await saveRes.json();
+          entryId = saveData.entry?.id;
+        }
         saved++;
         console.log(`[market-snapshot] Saved for user ${userId}`);
       } catch (saveErr) {
         console.error(`[market-snapshot] Save failed for user ${userId}:`, saveErr);
+      }
+
+      // Archive to brain_reports
+      try {
+        await supabase.from('brain_reports').insert({
+          user_id: userId,
+          report_type: 'market_snapshot',
+          source: 'market-snapshot',
+          title,
+          summary: `Market close: ${marketData.quotes.length} assets tracked`,
+          body_markdown: content,
+          metadata: { quotes: marketData.quotes },
+          entry_id: entryId || null,
+        });
+      } catch (reportErr) {
+        console.warn(`[market-snapshot] brain_reports insert failed for user ${userId}:`, reportErr);
       }
     }
 
