@@ -306,7 +306,7 @@ Start your brief with a delta summary before the full results.`
       .eq('id', taskId)
       .in('status', ['running']);
 
-    // Check if parent task should be completed
+    // Check if parent task should be completed (skip watch templates — they stay running forever)
     if (parentTaskId) {
       const { count: pendingChildren } = await supabase
         .from('agent_tasks')
@@ -323,7 +323,8 @@ Start your brief with a delta summary before the full results.`
             updated_at: new Date().toISOString(),
           })
           .eq('id', parentTaskId)
-          .in('status', ['running']);
+          .in('status', ['running'])
+          .is('cron_expression', null);
       }
     }
 

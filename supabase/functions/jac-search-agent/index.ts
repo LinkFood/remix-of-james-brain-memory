@@ -130,7 +130,7 @@ serve(async (req) => {
       .eq('id', taskId)
       .in('status', ['running']);
 
-    // 5. Check if parent task should be completed
+    // 5. Check if parent task should be completed (skip watch templates — they stay running forever)
     if (parentTaskId) {
       const { count: pendingChildren } = await supabase
         .from('agent_tasks')
@@ -147,7 +147,8 @@ serve(async (req) => {
             updated_at: new Date().toISOString(),
           })
           .eq('id', parentTaskId)
-          .in('status', ['running']);
+          .in('status', ['running'])
+          .is('cron_expression', null);
       }
     }
 
