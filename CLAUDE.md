@@ -128,6 +128,11 @@ Rate limits: 50 req/min, 10 concurrent tasks, 200 tasks/day. Loop guard: 10+ tas
 | `code_sessions` | Active coding sessions |
 | `user_settings` | Per-user settings JSONB (includes slack_channel_id, location, timezone) |
 | `entry_relationships` | Semantic links between entries |
+| `brain_reports` | Unified report index: morning briefs, research, market snapshots, generated reports. All producers write here. |
+| `jac_reflections` | JAC's reflections on completed tasks (Haiku summary + embedding) |
+| `jac_principles` | Strategic principles distilled weekly from reflections (Sonnet) |
+| `brain_entities` | Extracted entities (person/project/place/concept/org) |
+| `entity_mentions` | Entity mention instances across entries and reflections |
 
 All tables have RLS (`auth.uid() = user_id`). Service role bypasses for agent workers.
 
@@ -188,6 +193,14 @@ Before merging any feature: *"Does this data get embedded? If not, it's not done
 | `calculate-importance` | Importance scoring (1-10) — runs on ALL entries now |
 | `backfill-embeddings` | Batch embed with rich text + create relationships (cron every 30 min) |
 | `brain-insights` | AI insight generation via Claude Haiku (cron 10 AM + 8 PM Eastern) |
+| `generate-brain-report` | Claude Haiku analyzes entries in date range → structured report (on-demand) |
+| `jac-morning-brief` | Daily 8 AM ET cron: compiles schedule, activity, brain, markets into brief → insights + reports + Slack |
+| `market-snapshot` | Weekday 5 PM ET cron: fetches market quotes, saves to brain + reports |
+| `market-quotes` | Fetches Finnhub API for SPY, QQQ, DIA, GLD, USO, BTC, ETH |
+| `jac-reflect` | Fire-and-forget from all workers: Haiku reflection + Voyage embed |
+| `extract-entities` | Haiku entity extraction from entries and reflections |
+| `jac-heartbeat` | Cron every 30 min: proactive heartbeat insights |
+| `distill-principles` | Weekly cron (Sunday 3 AM UTC): Sonnet distills principles from reflections |
 | `elevenlabs-tts` | ElevenLabs text-to-speech |
 
 All functions listed in `config.toml` with `verify_jwt = false` — auth is handled in function code, not at gateway. This is required for internal agent→agent calls that use service role.
@@ -214,9 +227,16 @@ All functions listed in `config.toml` with `verify_jwt = false` — auth is hand
 |---|---|---|
 | `/` | Landing | Public |
 | `/auth` | Google sign-in | Public |
-| `/dashboard` | Brain entries + graph | Required |
+| `/dashboard` | Widget grid dashboard (20 widgets) | Required |
 | `/jac` | Nerve Center: split chat + context panel (desktop), Sheet fallback (mobile) | Required |
 | `/code` | Code workspace | Required |
+| `/calendar` | Calendar view | Required |
+| `/search` | Search page | Required |
+| `/activity` | Activity log | Required |
+| `/agents` | Agent cards with stats, status, task history | Required |
+| `/brain` | Brain Inspector: entries, reflections, entities, principles | Required |
+| `/crons` | System jobs (pg_cron) + Watches control panel | Required |
+| `/reports` | Unified report hub: briefs, research, market snapshots, generated reports | Required |
 | `/settings` | Settings | Required |
 
 ## Env Vars
@@ -226,6 +246,35 @@ All functions listed in `config.toml` with `verify_jwt = false` — auth is hand
 **Future (self-deploy):** `SUPABASE_MANAGEMENT_PAT`
 
 **Supabase Vault (for pg_cron):** `project_url`, `supabase_url` (both = `https://rvhyotvklfowklzjahdd.supabase.co`), `service_role_key`. Both URL key names must exist — different crons use different names.
+
+## Roadmap (March 2026)
+
+Priority order. User may push back on some — these are candidates, not commitments.
+
+| # | Feature | What | Why | Scope |
+|---|---------|------|-----|-------|
+| 1 | **Conversational Memory** | Group `agent_conversations` into sessions. Inject recent session context into dispatcher. JAC remembers "we talked about X yesterday." | Biggest gap between tool and OS. Data already exists in agent_conversations — needs session boundaries + context injection. | `conversation_sessions` table or session_id on agent_conversations, dispatcher context injection, session boundary detection |
+| 2 | **Inline JAC on Dashboard** | Slide-up command bar or persistent bottom panel on dashboard. Type anywhere, results update widgets in place. | Dashboard is passive display — can't act on anything without navigating to /jac. "Chat IS the navigation" vision. | CommandBar component, widget action dispatch, dashboard integration |
+| 3 | **Widget Action Hooks** | Every widget gets 1-2 inline actions that dispatch to JAC. DriftRadar: "Remind me" / "Archive." SparkBoard: "Research this." Agent Outputs: "Follow up." | Turns dashboard from read-only into control surface. | Per-widget action buttons, dispatcher integration, toast feedback |
+| 4 | **Proactive Actionable Outreach** | Heartbeat insights become actionable: "You saved 3 ideas about X but never followed up. Want me to synthesize?" with one-click "Yes" / "Snooze." | Current heartbeat insights are passive banners. Making them actionable closes the loop. | Heartbeat enhancement, Slack action buttons or web UI action cards |
+| 5 | **Entity Graph Visualization** | Click entity in BrainInspector → see all mentions, related entities (co-occurrence), timeline, connected entries ranked by relevance. | Graph data exists (`brain_entities`, `entity_mentions`, `entry_relationships`) but displayed as flat list. | BrainInspector entity detail view, co-occurrence queries, timeline component |
+
+### Tech Debt to Address
+- `assistant-chat` is legacy dead weight — duplicates dispatcher intent detection. Delete or fold into dispatcher general handler.
+- `Dashboard.tsx` uses `getSession()` without `getUser()` first — violates own gotcha list.
+- Dashboard layout in localStorage only — should persist to `user_settings.dashboard_layout` for cross-device.
+- 40+ edge functions each bundle `_shared/` — missed redeploy = stale auth code. No automated drift detection.
+- No error alerting — crons can fail silently for days. Heartbeat should check cron health.
+- `enrich-entry` function is dormant — delete or use.
+- `agent_conversations` loads last 200 rows with no pagination or session concept.
+
+### Backlog (lower priority)
+- Agent Replay widget (animated task timelines)
+- Agent config UI (model selection, skills, creating new agents)
+- Model escalation (Sonnet fails → retry with Opus)
+- Search result thread linking
+- Live preview iframe for code tasks
+- Deploy agent Phase 2
 
 **Critical patterns:**
 - All supabase-js imports MUST pin to `@2.84.0` — unpinned `@2` causes version mismatch in Deno isolates
