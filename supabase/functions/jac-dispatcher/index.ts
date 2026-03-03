@@ -289,129 +289,161 @@ serve(async (req) => {
       }), { status: 429, headers: jsonHeaders });
     }
 
-    // 3. Brain context search — semantic (vector) + keyword hybrid
-    let brainContext = '';
-    try {
-      type BrainResult = { id: string; content: string; title?: string; tags?: string[]; similarity?: number };
-      const results: BrainResult[] = [];
-      const seenIds = new Set<string>();
+    // 3. Context lookups — brain search, reflections, principles, conversation history (all parallel)
+    type BrainResult = { id: string; content: string; title?: string; tags?: string[]; similarity?: number };
 
-      // Run semantic and keyword search in parallel
-      const searchWords = message.toLowerCase().split(/\s+/)
-        .filter((w: string) => w.length >= 3 && !/^(the|and|or|is|it|to|a|an|in|on|at|for|of|my|me|do|what|how|when|where|why|can|you|please|could|would|should|this|that|with|from|have|has|just|about|been|want|need|like|find|get|show|tell|help)$/i.test(w))
-        .slice(0, 5);
+    const [brainResult, reflectionsResult, principlesResult, conversationResult] = await Promise.allSettled([
+      // 3a. Brain context search — semantic (vector) + keyword hybrid
+      (async (): Promise<string> => {
+        const results: BrainResult[] = [];
+        const seenIds = new Set<string>();
 
-      // Semantic search via embedding
-      const semanticPromise = (async (): Promise<BrainResult[]> => {
-        try {
-          const embRes = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${serviceKey}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ text: message, input_type: 'query' }),
-          });
-          if (!embRes.ok) return [];
-          const embData = await embRes.json();
-          if (!embData.embedding) return [];
+        const searchWords = message.toLowerCase().split(/\s+/)
+          .filter((w: string) => w.length >= 3 && !/^(the|and|or|is|it|to|a|an|in|on|at|for|of|my|me|do|what|how|when|where|why|can|you|please|could|would|should|this|that|with|from|have|has|just|about|been|want|need|like|find|get|show|tell|help)$/i.test(w))
+          .slice(0, 5);
 
-          const { data: vectorResults } = await supabase.rpc('search_entries_by_embedding', {
-            query_embedding: JSON.stringify(embData.embedding),
-            match_threshold: 0.3,
-            match_count: 8,
-            filter_user_id: userId,
-          });
-          return (vectorResults || []).map((r: any) => ({
-            id: r.id, content: r.content, title: r.title, tags: r.tags, similarity: r.similarity,
-          }));
-        } catch (err) {
-          console.warn('[jac-dispatcher] Semantic search failed:', err);
-          return [];
+        // Semantic search via embedding
+        const semanticPromise = (async (): Promise<BrainResult[]> => {
+          try {
+            const embRes = await fetch(`${supabaseUrl}/functions/v1/generate-embedding`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${serviceKey}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({ text: message, input_type: 'query' }),
+            });
+            if (!embRes.ok) return [];
+            const embData = await embRes.json();
+            if (!embData.embedding) return [];
+
+            const { data: vectorResults } = await supabase.rpc('search_entries_by_embedding', {
+              query_embedding: JSON.stringify(embData.embedding),
+              match_threshold: 0.3,
+              match_count: 8,
+              filter_user_id: userId,
+            });
+            return (vectorResults || []).map((r: any) => ({
+              id: r.id, content: r.content, title: r.title, tags: r.tags, similarity: r.similarity,
+            }));
+          } catch (err) {
+            console.warn('[jac-dispatcher] Semantic search failed:', err);
+            return [];
+          }
+        })();
+
+        // Keyword search (catches exact matches semantic might miss)
+        const keywordPromise = (async (): Promise<BrainResult[]> => {
+          if (searchWords.length === 0) return [];
+          try {
+            const orClauses = searchWords
+              .map(w => { const ew = escapeForLike(w); return `content.ilike.%${ew}%,title.ilike.%${ew}%`; })
+              .join(',');
+            const { data } = await supabase
+              .from('entries')
+              .select('id, content, title, tags')
+              .eq('user_id', userId)
+              .eq('archived', false)
+              .or(orClauses)
+              .order('created_at', { ascending: false })
+              .limit(8);
+            return (data || []) as BrainResult[];
+          } catch {
+            return [];
+          }
+        })();
+
+        const [semanticResults, keywordResults] = await Promise.all([semanticPromise, keywordPromise]);
+
+        for (const r of semanticResults) {
+          if (!seenIds.has(r.id)) { seenIds.add(r.id); results.push(r); }
         }
-      })();
-
-      // Keyword search (catches exact matches semantic might miss)
-      const keywordPromise = (async (): Promise<BrainResult[]> => {
-        if (searchWords.length === 0) return [];
-        try {
-          const orClauses = searchWords
-            .map(w => { const ew = escapeForLike(w); return `content.ilike.%${ew}%,title.ilike.%${ew}%`; })
-            .join(',');
-          const { data } = await supabase
-            .from('entries')
-            .select('id, content, title, tags')
-            .eq('user_id', userId)
-            .eq('archived', false)
-            .or(orClauses)
-            .order('created_at', { ascending: false })
-            .limit(8);
-          return (data || []) as BrainResult[];
-        } catch {
-          return [];
+        for (const r of keywordResults) {
+          if (!seenIds.has(r.id)) { seenIds.add(r.id); results.push(r); }
         }
-      })();
 
-      const [semanticResults, keywordResults] = await Promise.all([semanticPromise, keywordPromise]);
+        if (results.length > 0) {
+          return results.slice(0, 5)
+            .map((r) =>
+              `[${r.title || 'Untitled'}]: ${r.content.slice(0, 300)}${r.tags?.length ? ` [tags: ${r.tags.join(', ')}]` : ''}`
+            )
+            .join('\n');
+        }
+        return '';
+      })(),
 
-      // Merge: semantic first (ranked by similarity), then keyword deduped
-      for (const r of semanticResults) {
-        if (!seenIds.has(r.id)) { seenIds.add(r.id); results.push(r); }
-      }
-      for (const r of keywordResults) {
-        if (!seenIds.has(r.id)) { seenIds.add(r.id); results.push(r); }
-      }
+      // 3b. Recent reflections for JAC self-awareness
+      (async (): Promise<string> => {
+        const { data: recentReflections } = await supabase
+          .from('jac_reflections')
+          .select('task_type, intent, summary, created_at')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(5);
 
-      if (results.length > 0) {
-        brainContext = results.slice(0, 5)
-          .map((r) =>
-            `[${r.title || 'Untitled'}]: ${r.content.slice(0, 300)}${r.tags?.length ? ` [tags: ${r.tags.join(', ')}]` : ''}`
-          )
-          .join('\n');
-      }
-    } catch (err) {
-      console.warn('[jac-dispatcher] Brain search failed (non-blocking):', err);
+        if (recentReflections && recentReflections.length > 0) {
+          return '\n\n=== JAC\'S RECENT REFLECTIONS ===\n' +
+            recentReflections.map((r: { task_type: string; intent: string | null; summary: string }) =>
+              `- ${r.task_type}: ${r.intent || 'no intent'} -> ${r.summary}`
+            ).join('\n');
+        }
+        return '';
+      })(),
+
+      // 3c. Operating principles for strategic context
+      (async (): Promise<string> => {
+        const { data: principles } = await supabase
+          .from('jac_principles')
+          .select('principle, confidence, times_applied')
+          .eq('user_id', userId)
+          .order('confidence', { ascending: false })
+          .limit(5);
+
+        if (principles && principles.length > 0) {
+          return '\n\n=== JAC\'S OPERATING PRINCIPLES ===\n' +
+            principles.map((p: { principle: string; confidence: number; times_applied: number }) =>
+              `- [${Math.round(p.confidence * 100)}%] ${p.principle}`
+            ).join('\n');
+        }
+        return '';
+      })(),
+
+      // 3d. Recent conversation history for continuity
+      (async () => {
+        const { data: recentConvos } = await supabase
+          .from('agent_conversations')
+          .select('role, content, created_at')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(15);
+        return recentConvos;
+      })(),
+    ]);
+
+    // Extract results (fulfilled → value, rejected → fallback)
+    const brainContext = brainResult.status === 'fulfilled' ? brainResult.value : '';
+    const reflectionsContext = reflectionsResult.status === 'fulfilled' ? reflectionsResult.value : '';
+    const principlesContext = principlesResult.status === 'fulfilled' ? principlesResult.value : '';
+    const recentConvos = conversationResult.status === 'fulfilled' ? conversationResult.value : null;
+
+    // Format conversation history for context injection
+    let conversationContext = '';
+    if (recentConvos && recentConvos.length > 0) {
+      const chronological = [...recentConvos].reverse();
+      conversationContext = '\n\n=== RECENT CONVERSATION ===\n' +
+        chronological.map((c: { role: string; content: string; created_at: string }) => {
+          const truncated = c.content.length > 300 ? c.content.slice(0, 300) + '...' : c.content;
+          return `${c.role === 'user' ? 'User' : 'JAC'}: ${truncated}`;
+        }).join('\n');
     }
 
-    // 3b. Recent reflections for JAC self-awareness
-    let reflectionsContext = '';
-    try {
-      const { data: recentReflections } = await supabase
-        .from('jac_reflections')
-        .select('task_type, intent, summary, created_at')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
-        .limit(5);
-
-      if (recentReflections && recentReflections.length > 0) {
-        reflectionsContext = '\n\n=== JAC\'S RECENT REFLECTIONS ===\n' +
-          recentReflections.map((r: { task_type: string; intent: string | null; summary: string }) =>
-            `- ${r.task_type}: ${r.intent || 'no intent'} -> ${r.summary}`
-          ).join('\n');
-      }
-    } catch (err) {
-      console.warn('[jac-dispatcher] Reflections lookup failed (non-blocking):', err);
-    }
-
-    // 3c. Operating principles for strategic context
-    let principlesContext = '';
-    try {
-      const { data: principles } = await supabase
-        .from('jac_principles')
-        .select('principle, confidence, times_applied')
-        .eq('user_id', userId)
-        .order('confidence', { ascending: false })
-        .limit(5);
-
-      if (principles && principles.length > 0) {
-        principlesContext = '\n\n=== JAC\'S OPERATING PRINCIPLES ===\n' +
-          principles.map((p: { principle: string; confidence: number; times_applied: number }) =>
-            `- [${Math.round(p.confidence * 100)}%] ${p.principle}`
-          ).join('\n');
-      }
-    } catch (err) {
-      console.warn('[jac-dispatcher] Principles lookup failed (non-blocking):', err);
-    }
+    // Build light conversation context for worker agents (last 3 exchanges, shorter truncation)
+    const workerConvoContext = recentConvos && recentConvos.length > 0
+      ? [...recentConvos].reverse().slice(-6).map((c: { role: string; content: string }) => {
+          const truncated = c.content.length > 200 ? c.content.slice(0, 200) + '...' : c.content;
+          return `${c.role === 'user' ? 'User' : 'JAC'}: ${truncated}`;
+        }).join('\n')
+      : '';
 
     // 4. Intent parsing via Claude Sonnet
     const systemPrompt = `You are JAC, a personal AI agent dispatcher. The user sends you a message and you decide what to do with it.
@@ -437,6 +469,7 @@ Intent routing rules (follow these STRICTLY):
 
 5. "general" → assistant-chat: Casual chat, greetings, meta questions about JAC.
    ALSO USE FOR: Calendar/schedule queries ("what's on my calendar", "do I have anything today/tomorrow/this week", "upcoming events", "my schedule", "my plans"). The assistant-chat has full calendar access.
+   ALSO USE FOR: Conversational follow-ups and references to recent chat. If the user references something from RECENT CONVERSATION ("did I tell you about", "what were we talking about", "do you remember", "that thing I mentioned", "tell me more about that", "what about X") — handle as general. You have the conversation history and brain context to answer directly. Do NOT dispatch to search for conversational questions.
 
 6. "code" → jac-code-agent: User wants to write, fix, modify, refactor, or deploy code in a registered project.
    TRIGGERS: "fix", "add feature", "update code", "refactor", "implement", "PR", "pull request", project names like "pixel-perfect" or "exact-match", code-related requests.
@@ -449,7 +482,7 @@ Intent routing rules (follow these STRICTLY):
 MULTI-INTENT: If the user's message contains multiple DISTINCT requests (e.g. "research X, also save Y, and build Z"), return each as a separate entry in the intents array. Each gets its own intent, summary, agentType, and extractedQuery. Most messages have just 1 intent — only split when there are genuinely separate requests.
 
 IMPORTANT: Brain context below is for YOUR reference only — do NOT route to search just because matching entries exist.
-${brainContext ? `\nUser's brain context (for reference only):\n${brainContext}` : ''}${reflectionsContext}${principlesContext}
+${brainContext ? `\nUser's brain context (for reference only):\n${brainContext}` : ''}${conversationContext}${reflectionsContext}${principlesContext}
 
 Be concise. Be confident. Don't ask questions — just act.`;
 
@@ -754,6 +787,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
               query: di.extractedQuery,
               originalMessage: message,
               brainContext: brainContext.slice(0, 2000),
+              conversation_context: workerConvoContext,
               modelTier,
               slack_channel,
               slack_thinking_ts: childTaskIds.length === 0 ? slack_thinking_ts : undefined,
@@ -770,17 +804,18 @@ Be concise. Be confident. Don't ask questions — just act.`;
       }
     }
 
-    // 7. Store conversation
-    const taskIds = [parentTask.id, ...childTaskIds];
-    const { data: insertedConvos } = await supabase.from('agent_conversations').insert([
-      { user_id: userId, role: 'user', content: message, task_ids: taskIds },
-      { user_id: userId, role: 'assistant', content: response, task_ids: taskIds },
-    ]).select('id, role');
-
-    // 8. Dispatch workers or handle general
+    // 7. Store conversation + dispatch workers or handle general
+    // NOTE: For dispatched intents, store conversation immediately (workers add their own responses later).
+    // For general intents, defer conversation INSERT until AFTER enrichment to avoid realtime race condition
+    // where the initial response leaks through before the enriched response overwrites it.
     const scheduleOnly = scheduleIntents.length > 0 && isGeneralOnly;
     if (scheduleOnly) {
-      // Schedule intents were handled inline — complete parent task, notify Slack
+      // Schedule intents were handled inline — store conversation, complete parent task, notify Slack
+      await supabase.from('agent_conversations').insert([
+        { user_id: userId, role: 'user', content: message, task_ids: [parentTask.id] },
+        { user_id: userId, role: 'assistant', content: response, task_ids: [parentTask.id] },
+      ]);
+
       await supabase
         .from('agent_tasks')
         .update({ status: 'completed', completed_at: new Date().toISOString() })
@@ -802,6 +837,12 @@ Be concise. Be confident. Don't ask questions — just act.`;
         }
       }
     } else if (!isGeneralOnly) {
+      // Store conversation immediately for dispatched intents (workers add their own responses)
+      await supabase.from('agent_conversations').insert([
+        { user_id: userId, role: 'user', content: message, task_ids: [parentTask.id] },
+        { user_id: userId, role: 'assistant', content: response, task_ids: [parentTask.id] },
+      ]);
+
       for (let i = 0; i < dispatchIntents.length; i++) {
         const di = dispatchIntents[i];
         const childId = childTaskIds[i];
@@ -822,6 +863,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
             query: di.extractedQuery,
             originalMessage: message,
             brainContext: brainContext.slice(0, 2000),
+            conversation_context: workerConvoContext,
             modelTier,
             slack_channel,
             slack_thinking_ts: i === 0 ? slack_thinking_ts : undefined,
@@ -922,7 +964,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
       try {
         const generalClaude = await callClaude({
           model: CLAUDE_MODELS.sonnet,
-          system: `You are Jac, a personal AI agent. Answer the user's question concisely and thoroughly.
+          system: `You are Jac, a personal AI agent. You're conversational, concise, and have memory. Answer like someone who knows the user and remembers what you've discussed.
 
 You have several specialized agents:
 - Research agent: looks up real-time information from the internet
@@ -933,7 +975,13 @@ You have several specialized agents:
 If the user asks about your capabilities, mention these agents. For coding questions like "can you code?" — yes, you can write, fix, and modify code in registered GitHub projects via the code agent. If they ask about their projects, check the project list below.
 
 When the user asks about their calendar, schedule, events, overdue items, or what they have coming up — use the schedule context below to give a specific, accurate answer. List actual items with dates and times.
-${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}${userContextText ? `\n\n${userContextText}` : ''}`,
+
+CONVERSATION MEMORY: You have recent conversation history below. Use it naturally:
+- If the user references something you discussed ("that", "what we talked about", "the thing I mentioned") — resolve it from conversation history and respond directly.
+- If the user asks "did I tell you about X" — check both conversation history and brain context. If you find it, confirm and summarize what you know. If not, say you don't have it and offer to save/search.
+- If the user asks a follow-up ("what about Y" after discussing X) — connect it to the previous topic.
+- Never say "I don't have memory of our conversations" — you DO. Use it.
+${brainContext ? `\nBrain context:\n${brainContext}` : ''}${conversationContext}${codeProjectsContext}${userContextText ? `\n\n${userContextText}` : ''}`,
           messages: [{ role: 'user', content: message }],
           max_tokens: 2048,
           temperature: 0.4,
@@ -949,14 +997,11 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${codeProjectsContext}
         console.warn('[jac-dispatcher] General enrichment failed (non-blocking):', err);
       }
 
-      if (response !== originalResponse) {
-        const assistantConvoId = insertedConvos?.find(c => c.role === 'assistant')?.id;
-        if (assistantConvoId) {
-          await supabase.from('agent_conversations')
-            .update({ content: response })
-            .eq('id', assistantConvoId);
-        }
-      }
+      // Store conversation AFTER enrichment (no realtime race — final response only)
+      await supabase.from('agent_conversations').insert([
+        { user_id: userId, role: 'user', content: message, task_ids: [parentTask.id] },
+        { user_id: userId, role: 'assistant', content: response, task_ids: [parentTask.id] },
+      ]);
 
       await supabase
         .from('agent_tasks')
