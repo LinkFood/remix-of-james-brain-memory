@@ -193,16 +193,27 @@ export function useJacAgent(userId: string) {
             setTasks(prev => [payload.new as AgentTask, ...prev]);
           } else if (payload.eventType === 'UPDATE') {
             const updated = payload.new as AgentTask;
-            setTasks(prev => prev.map(t => t.id === updated.id ? updated : t));
-            if (updated.status === 'completed') {
-              toast.success(`Task completed: ${(updated.intent || updated.type).slice(0, 60)}`);
-              // Worker results are in agent_conversations — refresh to show them
-              debouncedRefresh();
-            } else if (updated.status === 'failed') {
-              toast.error(`Task failed: ${(updated.error || updated.intent || '').slice(0, 80)}`);
-            } else if (updated.status === 'cancelled') {
-              toast.info(`Task cancelled: ${(updated.intent || updated.type).slice(0, 60)}`, { style: { backgroundColor: '#f97316', color: 'white' } });
+            // Skip toasts for watch templates (their status changes are system-level, not user-facing)
+            if (updated.cron_expression) {
+              setTasks(prev => prev.map(t => t.id === updated.id ? updated : t));
+              return;
             }
+            // Only toast for real state transitions — tasks that were active in our session
+            setTasks(prev => {
+              const existing = prev.find(t => t.id === updated.id);
+              const wasActive = existing && (existing.status === 'running' || existing.status === 'queued');
+              if (wasActive) {
+                if (updated.status === 'completed') {
+                  toast.success(`Task completed: ${(updated.intent || updated.type).slice(0, 60)}`);
+                  debouncedRefresh();
+                } else if (updated.status === 'failed') {
+                  toast.error(`Task failed: ${(updated.error || updated.intent || '').slice(0, 80)}`);
+                } else if (updated.status === 'cancelled') {
+                  toast.info(`Task cancelled: ${(updated.intent || updated.type).slice(0, 60)}`, { style: { backgroundColor: '#f97316', color: 'white' } });
+                }
+              }
+              return prev.map(t => t.id === updated.id ? updated : t);
+            });
           } else if (payload.eventType === 'DELETE') {
             setTasks(prev => prev.filter(t => t.id !== (payload.old as { id: string }).id));
           }
