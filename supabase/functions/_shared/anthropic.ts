@@ -89,29 +89,47 @@ export async function callClaude(options: ClaudeOptions): Promise<ClaudeResponse
   if (tools) body.tools = tools;
   if (tool_choice) body.tool_choice = tool_choice;
 
-  const response = await fetch(ANTHROPIC_API_URL, {
-    method: 'POST',
-    headers: getAnthropicHeaders(),
-    body: JSON.stringify(body),
-  });
+  const MAX_RETRIES = 3;
+  const BASE_DELAY_MS = 1000;
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('Claude API error:', response.status, errorText);
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const response = await fetch(ANTHROPIC_API_URL, {
+      method: 'POST',
+      headers: getAnthropicHeaders(),
+      body: JSON.stringify(body),
+    });
 
-    if (response.status === 429) {
-      throw new ClaudeError('Rate limit exceeded', 429);
+    if (response.ok) {
+      return await response.json();
     }
-    if (response.status === 402 || response.status === 400) {
-      // Check if it's a billing error
-      if (errorText.includes('credit') || errorText.includes('billing')) {
+
+    const errorText = await response.text();
+    console.error(`Claude API error (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`, response.status, errorText);
+
+    // 4xx errors are permanent — don't retry (auth, billing, bad request)
+    if (response.status < 500) {
+      if (response.status === 429) {
+        throw new ClaudeError('Rate limit exceeded', 429);
+      }
+      if ((response.status === 402 || response.status === 400) &&
+          (errorText.includes('credit') || errorText.includes('billing'))) {
         throw new ClaudeError('API credits exhausted', 402);
       }
+      throw new ClaudeError(`Claude API request failed: ${response.status}`, response.status);
     }
-    throw new ClaudeError(`Claude API request failed: ${response.status}`, response.status);
+
+    // 5xx errors (500, 502, 503, 529 overloaded) — retry with exponential backoff
+    if (attempt < MAX_RETRIES) {
+      const delay = BASE_DELAY_MS * Math.pow(2, attempt); // 1s, 2s, 4s
+      console.warn(`Claude API ${response.status}, retrying in ${delay}ms...`);
+      await new Promise(r => setTimeout(r, delay));
+      continue;
+    }
+
+    throw new ClaudeError(`Claude API request failed: ${response.status} (after ${MAX_RETRIES + 1} attempts)`, response.status);
   }
 
-  return await response.json();
+  throw new ClaudeError('Claude API request failed: unknown error', 500);
 }
 
 /**

@@ -398,7 +398,8 @@ Start your brief with a delta summary before the full results.`
             updated_at: new Date().toISOString(),
           })
           .eq('id', parentTaskId)
-          .in('status', ['running', 'queued']);
+          .in('status', ['running', 'queued'])
+          .is('cron_expression', null);
       }
 
       if (userId) {
