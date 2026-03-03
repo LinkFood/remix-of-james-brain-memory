@@ -48,7 +48,7 @@ export function ActivityFeed({ tasks, activityLogs, loading, onExpandTask, onSto
   const runningCount = tasks.filter(t => t.status === 'running').length;
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full min-w-0 overflow-hidden">
       {/* Filter bar */}
       <div className="flex items-center gap-1 p-2 border-b border-border overflow-x-auto">
         {FILTER_OPTIONS.map((opt) => {

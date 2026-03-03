@@ -164,7 +164,7 @@ export function ContextPanel({
   };
 
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex flex-col h-full bg-background min-w-0 overflow-hidden">
       <Tabs value={activeTab} onValueChange={handleTabChange} className="flex-1 flex flex-col overflow-hidden">
         <TabsList className="mx-2 mt-2 grid grid-cols-4 h-8 shrink-0">
           <TabsTrigger value="activity" className="text-[10px] gap-1 h-7 px-1">

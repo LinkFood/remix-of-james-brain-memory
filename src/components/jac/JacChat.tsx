@@ -211,7 +211,7 @@ export function JacChat({ messages, tasks, sending, onSend }: JacChatProps) {
                     ? 'bg-primary text-primary-foreground rounded-br-md'
                     : 'bg-muted/40 border border-border/50 rounded-bl-md'
                 }`}>
-                  <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                  <p className="whitespace-pre-wrap break-words leading-relaxed">{msg.content}</p>
                 </div>
 
                 {/* Message metadata: agent, timestamp, tokens, cost */}
