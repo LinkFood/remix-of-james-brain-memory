@@ -96,7 +96,7 @@ serve(async (req) => {
     const saveData = await saveRes.json();
     const entryId = saveData.entry?.id;
     const entryTitle = saveData.entry?.title || 'Untitled';
-    const entryType = saveData.entry?.type || 'note';
+    const entryType = saveData.entry?.content_type || 'note';
 
     await saveStep();
     await log.info('save_result', { entryId, entryTitle, entryType });

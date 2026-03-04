@@ -37,7 +37,8 @@ export function useTickerData(userId: string): TickerData {
         .from('agent_tasks')
         .select('agent')
         .eq('user_id', userId)
-        .eq('status', 'running');
+        .eq('status', 'running')
+        .is('cron_expression', null);
 
       if (data) {
         const agents = [...new Set(

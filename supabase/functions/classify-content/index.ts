@@ -125,7 +125,7 @@ Guidelines:
 - IDEA: Concepts, brainstorms, "what if", feature ideas
 - LINK: URLs, website references
 - CONTACT: Names with phone/email/address
-- EVENT: Dates, meetings, appointments with specific dates/times
+- EVENT: Dates, meetings, appointments with specific dates/times. "Add to calendar", "add to my calendar", "schedule", "put on my calendar" → ALWAYS type "event" with eventDate extracted.
 - REMINDER: Tasks with "tomorrow", "remember to", deadlines
 - NOTE: Everything else - random thoughts, information
 - IMAGE: Photos, screenshots, diagrams, visual content
@@ -133,7 +133,7 @@ Guidelines:
 
 === DATE/TIME EXTRACTION (CRITICAL) ===
 Extract dates and times from content to enable calendar features.
-The user's current local date/time is approximately: ${new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Chicago', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())} ${new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date())} (Central Time)
+The user's current local date/time is approximately: ${new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date())} ${new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date())} (Eastern Time)
 
 ALWAYS set eventDate as YYYY-MM-DD and eventTime as HH:MM (24-hour format).
 

@@ -259,6 +259,30 @@ serve(async (req) => {
       }
     }
 
+    // Safety net: override to 'event' if content has calendar keywords + a date
+    // Haiku misclassifies "add to calendar" ~50% of the time
+    if (classification.type !== 'event' && classification.type !== 'reminder') {
+      const lower = content.toLowerCase();
+      const hasCalendarKeyword = /\b(calendar|calender|schedule|add.{0,10}(to|on).{0,10}cal)\b/i.test(lower);
+      const hasDateKeyword = /\b(january|february|march|april|may|june|july|august|september|october|november|december|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next\s+\w+|\d{1,2}(st|nd|rd|th)?)\b/i.test(lower);
+      if (hasCalendarKeyword && hasDateKeyword) {
+        console.log('[smart-save] Calendar override: forcing type=event');
+        classification.type = 'event';
+        // Try to extract date if Haiku didn't
+        if (!classification.eventDate) {
+          const monthMatch = lower.match(/\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+(\d{1,2})/i);
+          if (monthMatch) {
+            const months: Record<string, string> = { january:'01', february:'02', march:'03', april:'04', may:'05', june:'06', july:'07', august:'08', september:'09', october:'10', november:'11', december:'12' };
+            const m = months[monthMatch[1].toLowerCase()];
+            const d = monthMatch[2].padStart(2, '0');
+            const year = new Date().getFullYear();
+            classification.eventDate = `${year}-${m}-${d}`;
+            console.log(`[smart-save] Extracted date: ${classification.eventDate}`);
+          }
+        }
+      }
+    }
+
     // Step 3: Check if we should append to an existing entry
     let action: 'created' | 'appended' = 'created';
     let entry: Entry;

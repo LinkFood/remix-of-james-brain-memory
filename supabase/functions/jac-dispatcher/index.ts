@@ -230,16 +230,18 @@ serve(async (req) => {
       .select('id, input')
       .eq('user_id', userId)
       .in('status', ['running', 'queued'])
-      .lt('created_at', staleThreshold);
+      .lt('created_at', staleThreshold)
+      .is('cron_expression', null);
 
     if (staleTasks && staleTasks.length > 0) {
-      // Mark stale tasks as failed
+      // Mark stale tasks as failed (exclude watch templates — they stay running forever)
       await supabase
         .from('agent_tasks')
         .update({ status: 'failed', error: 'Timed out (stale >10min)', completed_at: new Date().toISOString() })
         .eq('user_id', userId)
         .in('status', ['running', 'queued'])
-        .lt('created_at', staleThreshold);
+        .lt('created_at', staleThreshold)
+        .is('cron_expression', null);
 
       // Update any stuck Slack "Thinking..." messages
       const botToken = Deno.env.get('SLACK_BOT_TOKEN');
@@ -890,7 +892,8 @@ Be concise. Be confident. Don't ask questions — just act.`;
               await supabase.from('agent_tasks')
                 .update({ status: 'completed', completed_at: new Date().toISOString() })
                 .eq('id', parentTask.id)
-                .in('status', ['running']);
+                .in('status', ['running'])
+                .is('cron_expression', null);
             }
           } else if (di.intent === 'research' || di.intent === 'code') {
             // Auto-save thread as brain entry
@@ -931,7 +934,8 @@ Be concise. Be confident. Don't ask questions — just act.`;
             await supabase.from('agent_tasks')
               .update({ status: 'completed', completed_at: new Date().toISOString() })
               .eq('id', parentTask.id)
-              .in('status', ['running']);
+              .in('status', ['running'])
+              .is('cron_expression', null);
           }
         });
       }
