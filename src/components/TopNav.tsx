@@ -10,7 +10,8 @@ import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   LayoutDashboard, Code2, CalendarDays, Search, Activity, Users, Brain, Timer,
-  Clock, Zap, DollarSign, OctagonX, Settings, Heart, FileBarChart,
+  Clock, Zap, DollarSign, OctagonX, Settings, Heart, FileBarChart, MessageSquare,
+  AlertTriangle, X,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
@@ -34,6 +35,7 @@ interface NavItem {
 }
 
 const NAV_ITEMS: NavItem[] = [
+  { path: '/jac', label: 'JAC', icon: <MessageSquare className="w-4 h-4" /> },
   { path: '/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
   { path: '/code', label: 'Code', icon: <Code2 className="w-4 h-4" /> },
   { path: '/calendar', label: 'Calendar', icon: <CalendarDays className="w-4 h-4" /> },
@@ -70,6 +72,7 @@ export function TopNav({ userId }: TopNavProps) {
   const { runningTasks, reminders } = useTickerData(userId);
 
   const [lastHeartbeat, setLastHeartbeat] = useState<string | null>(null);
+  const [healthAlerts, setHealthAlerts] = useState<{ id: string; title: string; body: string }[]>([]);
 
   // Check for last heartbeat insight
   useEffect(() => {
@@ -87,6 +90,37 @@ export function TopNav({ userId }: TopNavProps) {
         }
       });
   }, [userId]);
+
+  // Check for active system_health alerts
+  useEffect(() => {
+    if (!userId) return;
+    const fetchAlerts = () => {
+      supabase
+        .from('brain_insights')
+        .select('id, title, body')
+        .eq('user_id', userId)
+        .eq('type', 'system_health')
+        .eq('dismissed', false)
+        .gt('expires_at', new Date().toISOString())
+        .order('created_at', { ascending: false })
+        .limit(5)
+        .then(({ data }) => {
+          setHealthAlerts((data as { id: string; title: string; body: string }[]) || []);
+        });
+    };
+    fetchAlerts();
+    const interval = setInterval(fetchAlerts, 60_000); // refresh every minute
+    return () => clearInterval(interval);
+  }, [userId]);
+
+  const dismissHealthAlert = async (id: string) => {
+    setHealthAlerts(prev => prev.filter(a => a.id !== id));
+    await supabase
+      .from('brain_insights')
+      .update({ dismissed: true })
+      .eq('id', id)
+      .eq('user_id', userId);
+  };
 
   return (
     <nav className="h-10 border-b border-border bg-card/80 backdrop-blur-sm flex items-center px-3 shrink-0 z-50">
@@ -148,6 +182,43 @@ export function TopNav({ userId }: TopNavProps) {
             )}
           </PopoverContent>
         </Popover>
+
+        {/* System health alerts */}
+        {healthAlerts.length > 0 && (
+          <Popover>
+            <PopoverTrigger asChild>
+              <button className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-red-400 hover:bg-red-500/10 transition-colors animate-pulse">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">{healthAlerts.length} alert{healthAlerts.length > 1 ? 's' : ''}</span>
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-80 p-0 bg-zinc-900 border-red-500/30" align="end">
+              <div className="px-3 py-2 border-b border-white/10 flex items-center gap-2">
+                <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+                <span className="text-xs font-medium text-red-400">System Health</span>
+              </div>
+              <div className="divide-y divide-white/5 max-h-64 overflow-y-auto">
+                {healthAlerts.map(alert => (
+                  <div key={alert.id} className="px-3 py-2.5">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium text-white/80">{alert.title}</div>
+                        <div className="text-[11px] text-white/50 mt-1 whitespace-pre-line">{alert.body}</div>
+                      </div>
+                      <button
+                        onClick={() => dismissHealthAlert(alert.id)}
+                        className="shrink-0 p-0.5 text-white/20 hover:text-white/50 transition-colors"
+                        title="Dismiss"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
 
         {/* Heartbeat indicator */}
         {lastHeartbeat && (
