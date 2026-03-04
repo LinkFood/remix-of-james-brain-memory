@@ -122,16 +122,24 @@ serve(async (req) => {
             }
           }
 
-          // c. Failed watches
+          // c. Failed watches — auto-recover and alert
           const { data: failedWatches } = await supabase
             .from('agent_tasks')
-            .select('intent')
+            .select('id, intent')
             .eq('user_id', userId)
             .eq('status', 'failed')
             .not('cron_expression', 'is', null)
             .limit(5);
           if (failedWatches && failedWatches.length > 0) {
-            issues.push(`${failedWatches.length} watch(es) in failed state`);
+            // Auto-recover: reset to running so scheduler picks them up next cycle
+            const failedIds = failedWatches.map(w => w.id);
+            await supabase
+              .from('agent_tasks')
+              .update({ status: 'running', error: null, updated_at: new Date().toISOString() })
+              .in('id', failedIds);
+            const names = failedWatches.map(w => w.intent || 'unnamed').join(', ');
+            issues.push(`${failedWatches.length} watch(es) recovered from failed state: ${names}`);
+            console.log(`[jac-heartbeat] Auto-recovered ${failedWatches.length} failed watch(es): ${names}`);
           }
 
           // d. Stale watches (next_run_at > 2h overdue)
