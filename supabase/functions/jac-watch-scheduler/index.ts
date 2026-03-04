@@ -15,7 +15,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
 import { notifySlack } from '../_shared/slack.ts';
-import { parseExpression } from 'npm:cron-parser@4.9.0';
+import CronParser from 'npm:cron-parser@4.9.0';
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -194,7 +194,7 @@ serve(async (req) => {
 
         // 7. Advance next_run_at
         try {
-          const interval = parseExpression(watch.cron_expression, {
+          const interval = CronParser.parseExpression(watch.cron_expression, {
             tz: watchInput.timezone as string || 'America/New_York',
           });
           const nextRun = interval.next().toISOString();

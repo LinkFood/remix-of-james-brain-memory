@@ -149,9 +149,9 @@ serve(async (req) => {
       }
 
       // Parse cron and compute next occurrence after current next_run_at
-      const { parseExpression } = await import('npm:cron-parser@4.9.0');
+      const CronParser = (await import('npm:cron-parser@4.9.0')).default;
       const tz = (watchInput.timezone as string) || 'America/New_York';
-      const interval = parseExpression(watch.cron_expression, {
+      const interval = CronParser.parseExpression(watch.cron_expression, {
         currentDate: new Date(watch.next_run_at),
         tz,
       });
