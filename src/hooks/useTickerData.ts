@@ -62,6 +62,7 @@ export function useTickerData(userId: string): TickerData {
         .eq('user_id', userId)
         .eq('archived', false)
         .not('event_date', 'is', null)
+        .in('content_type', ['reminder', 'event'])
         .lte('event_date', todayStr);
 
       if (data) {

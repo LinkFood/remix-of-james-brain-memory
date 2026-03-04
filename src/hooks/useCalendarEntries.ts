@@ -62,6 +62,7 @@ export function useCalendarEntries(): UseCalendarEntriesResult {
         .eq('user_id', userId)
         .eq('archived', false)
         .not('event_date', 'is', null)
+        .in('content_type', ['reminder', 'event'])
         .order('event_date', { ascending: true })
         .order('event_time', { ascending: true, nullsFirst: false });
 

@@ -30,6 +30,7 @@ export function Ticker({ userId }: TickerProps) {
   const { runningTasks, reminders, latestCodeSession, loading } = useTickerData(userId);
   const [overdueEntries, setOverdueEntries] = useState<OverdueEntry[]>([]);
   const [popoverOpen, setPopoverOpen] = useState(false);
+  const [popoverLoaded, setPopoverLoaded] = useState(false);
 
   const handleRemove = useCallback((entryId: string) => {
     setOverdueEntries(prev => prev.filter(e => e.id !== entryId));
@@ -42,6 +43,7 @@ export function Ticker({ userId }: TickerProps) {
   // Fetch overdue entries when popover opens
   useEffect(() => {
     if (!popoverOpen || !userId) return;
+    setPopoverLoaded(false);
     const todayStr = new Date().toISOString().split('T')[0];
     supabase
       .from('entries')
@@ -53,7 +55,8 @@ export function Ticker({ userId }: TickerProps) {
       .order('event_date', { ascending: true })
       .limit(5)
       .then(({ data }) => {
-        if (data) setOverdueEntries(data as OverdueEntry[]);
+        setOverdueEntries(data ? (data as OverdueEntry[]) : []);
+        setPopoverLoaded(true);
       });
   }, [popoverOpen, userId]);
 
@@ -157,7 +160,7 @@ export function Ticker({ userId }: TickerProps) {
               </div>
             ) : (
               <div className="px-3 py-4 text-center text-[10px] text-white/30">
-                {hasOverdue ? 'Loading...' : 'No overdue items'}
+                {!popoverLoaded ? 'Loading...' : 'No overdue items'}
               </div>
             )}
             <button
