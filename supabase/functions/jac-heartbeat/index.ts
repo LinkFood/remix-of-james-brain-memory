@@ -12,6 +12,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { callClaude, CLAUDE_MODELS, parseToolUse } from '../_shared/anthropic.ts';
+import { now } from '../_shared/clock.ts';
 
 const HEARTBEAT_TOOL = {
   name: 'heartbeat_decision',
@@ -70,9 +71,148 @@ serve(async (req) => {
     for (const user of users) {
       const userId = user.id as string;
 
-      // 2. Rate limit: max 3 heartbeat insights per day
+      // Shared: todayStart for both health check and rate limit
       const todayStart = new Date();
       todayStart.setUTCHours(0, 0, 0, 0);
+
+      // === SYSTEMS HEALTH CHECK (deterministic, no AI) ===
+      // Bypasses the 3/day heartbeat rate limit — system_health is separate type
+      try {
+        // Dedup: skip if undismissed system_health insight from last 4h
+        const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+        const { count: recentHealthCount } = await supabase
+          .from('brain_insights')
+          .select('id', { count: 'exact', head: true })
+          .eq('user_id', userId)
+          .eq('type', 'system_health')
+          .eq('dismissed', false)
+          .gte('created_at', fourHoursAgo);
+
+        if ((recentHealthCount ?? 0) === 0) {
+          const etNow = now(); // Eastern Time
+          const etHour = parseInt(etNow.time.split(':')[0], 10);
+          const dayOfWeek = new Date().getDay(); // 0=Sun, 6=Sat
+          const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
+
+          const issues: string[] = [];
+
+          // a. Morning brief missing (after 7 AM ET)
+          if (etHour >= 7) {
+            const { count: briefCount } = await supabase
+              .from('brain_reports')
+              .select('id', { count: 'exact', head: true })
+              .eq('user_id', userId)
+              .eq('report_type', 'morning_brief')
+              .gte('created_at', todayStart.toISOString());
+            if ((briefCount ?? 0) === 0) {
+              issues.push('Morning brief has not fired today');
+            }
+          }
+
+          // b. Market snapshot missing (weekdays, after 6 PM ET)
+          if (isWeekday && etHour >= 18) {
+            const { count: snapshotCount } = await supabase
+              .from('brain_reports')
+              .select('id', { count: 'exact', head: true })
+              .eq('user_id', userId)
+              .eq('report_type', 'market_snapshot')
+              .gte('created_at', todayStart.toISOString());
+            if ((snapshotCount ?? 0) === 0) {
+              issues.push('Market snapshot has not fired today');
+            }
+          }
+
+          // c. Failed watches
+          const { data: failedWatches } = await supabase
+            .from('agent_tasks')
+            .select('intent')
+            .eq('user_id', userId)
+            .eq('status', 'failed')
+            .not('cron_expression', 'is', null)
+            .limit(5);
+          if (failedWatches && failedWatches.length > 0) {
+            issues.push(`${failedWatches.length} watch(es) in failed state`);
+          }
+
+          // d. Stale watches (next_run_at > 2h overdue)
+          const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+          const { data: staleWatches } = await supabase
+            .from('agent_tasks')
+            .select('intent')
+            .eq('user_id', userId)
+            .eq('status', 'running')
+            .not('cron_expression', 'is', null)
+            .eq('cron_active', true)
+            .lt('next_run_at', twoHoursAgo)
+            .limit(5);
+          if (staleWatches && staleWatches.length > 0) {
+            issues.push(`${staleWatches.length} watch(es) overdue by 2+ hours`);
+          }
+
+          // e. Recent task failures (3+ in 2h, excluding watches)
+          const { count: recentFailCount } = await supabase
+            .from('agent_tasks')
+            .select('id', { count: 'exact', head: true })
+            .eq('user_id', userId)
+            .eq('status', 'failed')
+            .is('cron_expression', null)
+            .gte('created_at', new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString());
+          if ((recentFailCount ?? 0) >= 3) {
+            issues.push(`${recentFailCount} task failures in last 2 hours`);
+          }
+
+          if (issues.length > 0) {
+            const alertBody = issues.map(i => `• ${i}`).join('\n');
+            console.log(`[jac-heartbeat] SYSTEM HEALTH ALERT for ${userId}:\n${alertBody}`);
+
+            // Insert system_health insight (12h TTL)
+            const healthExpiresAt = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
+            await supabase.from('brain_insights').insert({
+              user_id: userId,
+              type: 'system_health',
+              title: `System Alert: ${issues.length} issue${issues.length > 1 ? 's' : ''} detected`,
+              body: alertBody,
+              priority: 1,
+              entry_ids: [],
+              dismissed: false,
+              expires_at: healthExpiresAt,
+            });
+
+            totalSurfaced++;
+
+            // Slack alert (best-effort)
+            try {
+              const { data: settings } = await supabase
+                .from('user_settings')
+                .select('settings')
+                .eq('user_id', userId)
+                .single();
+              const slackChannelId = (settings?.settings as Record<string, unknown>)?.slack_channel_id as string | undefined;
+              const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+              if (slackChannelId && botToken) {
+                await fetch('https://slack.com/api/chat.postMessage', {
+                  method: 'POST',
+                  headers: {
+                    'Authorization': `Bearer ${botToken}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({
+                    channel: slackChannelId,
+                    text: `:rotating_light: *System Health Alert*\n${alertBody}`,
+                  }),
+                });
+              }
+            } catch (slackErr) {
+              console.warn('[jac-heartbeat] Health alert Slack failed:', slackErr);
+            }
+          }
+        }
+      } catch (healthErr) {
+        console.error('[jac-heartbeat] Health check failed:', healthErr);
+      }
+      // === END HEALTH CHECK ===
+
+      // 2. Rate limit: max 3 heartbeat insights per day
       const { count: heartbeatCount } = await supabase
         .from('brain_insights')
         .select('id', { count: 'exact', head: true })

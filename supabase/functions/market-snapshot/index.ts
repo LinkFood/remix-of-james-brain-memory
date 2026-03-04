@@ -55,10 +55,13 @@ serve(async (req) => {
     });
     const marketData = await marketRes.json();
 
+    if (!marketRes.ok) {
+      console.error(`[market-snapshot] market-quotes returned ${marketRes.status}`);
+    }
     if (!marketData?.quotes?.length) {
-      console.log('[market-snapshot] No market data available');
+      console.error('[market-snapshot] No market data — market-quotes failed or returned empty');
       return new Response(JSON.stringify({ error: 'No market data available' }), {
-        status: 200,
+        status: 502,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }

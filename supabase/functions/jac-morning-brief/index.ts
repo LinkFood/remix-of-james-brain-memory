@@ -138,7 +138,7 @@ serve(async (req) => {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ userId }),
-        }).then(r => r.json()).catch(() => null),
+        }).then(r => r.json()).catch((err) => { console.error('[jac-morning-brief] market-quotes failed:', err); return null; }),
       ]);
 
       const tasks = tasksRes.data || [];

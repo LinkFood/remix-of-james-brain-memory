@@ -39,6 +39,7 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
   activity:   { icon: Activity,      color: 'text-rose-400',    bg: 'bg-rose-500/15' },
   heartbeat:      { icon: Heart,    color: 'text-pink-400',    bg: 'bg-pink-500/15' },
   morning_brief:  { icon: Sunrise,  color: 'text-orange-400',  bg: 'bg-orange-500/15' },
+  system_health:  { icon: AlertTriangle, color: 'text-red-500', bg: 'bg-red-500/20' },
 };
 
 export default function InsightsWidget({ compact }: WidgetProps) {
@@ -94,7 +95,7 @@ export default function InsightsWidget({ compact }: WidgetProps) {
                       {insight.body}
                     </div>
                     <span className="text-[9px] text-white/20 mt-0.5">
-                      {insight.type === 'activity' ? 'from reflections' : insight.type === 'heartbeat' ? 'autonomous' : insight.type === 'morning_brief' ? 'daily brief' : 'from entries'}
+                      {insight.type === 'system_health' ? 'system alert' : insight.type === 'activity' ? 'from reflections' : insight.type === 'heartbeat' ? 'autonomous' : insight.type === 'morning_brief' ? 'daily brief' : 'from entries'}
                     </span>
                   </div>
                   <button
