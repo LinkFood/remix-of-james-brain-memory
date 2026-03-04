@@ -40,7 +40,9 @@ function elapsedTime(start: string, end?: string | null): string {
   const diffMs = endDate.getTime() - startDate.getTime();
   if (diffMs < 1000) return '<1s';
   if (diffMs < 60_000) return `${Math.round(diffMs / 1000)}s`;
-  return `${Math.round(diffMs / 60_000)}m`;
+  if (diffMs < 3_600_000) return `${Math.round(diffMs / 60_000)}m`;
+  if (diffMs < 86_400_000) return `${Math.round(diffMs / 3_600_000)}h`;
+  return `${Math.round(diffMs / 86_400_000)}d`;
 }
 
 function isSafeUrl(url: string): boolean {
