@@ -161,6 +161,40 @@ serve(async (req) => {
             issues.push(`${recentFailCount} task failures in last 2 hours`);
           }
 
+          // f. Function boot health — catch BOOT_ERROR on critical functions
+          const criticalFunctions = [
+            'jac-dispatcher', 'jac-research-agent', 'jac-save-agent',
+            'jac-search-agent', 'jac-code-agent', 'jac-watch-scheduler',
+            'trigger-watch-run', 'smart-save', 'search-memory',
+            'generate-embedding', 'market-quotes',
+          ];
+          const bootResults = await Promise.allSettled(
+            criticalFunctions.map(fn =>
+              fetch(`${supabaseUrl}/functions/v1/${fn}`, {
+                method: 'POST',
+                headers: {
+                  'Authorization': `Bearer ${serviceKey}`,
+                  'Content-Type': 'application/json',
+                },
+                body: '{}',
+              }).then(async (res) => {
+                const text = await res.text();
+                return { fn, status: res.status, boot_error: text.includes('BOOT_ERROR') };
+              })
+            )
+          );
+          const deadFunctions: string[] = [];
+          for (const result of bootResults) {
+            if (result.status === 'fulfilled' && result.value.boot_error) {
+              deadFunctions.push(result.value.fn);
+            } else if (result.status === 'rejected') {
+              deadFunctions.push(`${criticalFunctions[bootResults.indexOf(result)]} (unreachable)`);
+            }
+          }
+          if (deadFunctions.length > 0) {
+            issues.push(`${deadFunctions.length} function(s) won't start: ${deadFunctions.join(', ')}`);
+          }
+
           if (issues.length > 0) {
             const alertBody = issues.map(i => `• ${i}`).join('\n');
             console.log(`[jac-heartbeat] SYSTEM HEALTH ALERT for ${userId}:\n${alertBody}`);
