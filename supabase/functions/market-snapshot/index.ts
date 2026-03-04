@@ -44,15 +44,14 @@ serve(async (req) => {
       });
     }
 
-    // Fetch market quotes
+    // Fetch market quotes (pass userId for auth — market-quotes uses extractUserIdWithServiceRole)
     const marketRes = await fetch(`${supabaseUrl}/functions/v1/market-quotes`, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${serviceRoleKey}`,
-        'apikey': serviceRoleKey,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ userId: users[0].id }),
     });
     const marketData = await marketRes.json();
 

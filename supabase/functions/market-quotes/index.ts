@@ -79,11 +79,21 @@ serve(async (req) => {
 
     for (const result of results) {
       if (result.status === 'fulfilled') {
-        quotes.push(result.value);
+        // Skip quotes with all-zero data (Finnhub returns zeros for invalid/unsupported symbols)
+        if (result.value.price === 0 && result.value.previousClose === 0) {
+          errors.push(`${result.value.symbol}: returned zero data (unsupported or market closed)`);
+          console.warn(`[market-quotes] Zero data for ${result.value.symbol}`);
+        } else {
+          quotes.push(result.value);
+        }
       } else {
-        errors.push(result.reason?.message || 'Unknown error');
+        const errMsg = result.reason?.message || 'Unknown error';
+        errors.push(errMsg);
+        console.error(`[market-quotes] Symbol fetch failed: ${errMsg}`);
       }
     }
+
+    console.log(`[market-quotes] ${quotes.length} quotes fetched, ${errors.length} errors`);
 
     const response: Record<string, unknown> = {
       quotes,

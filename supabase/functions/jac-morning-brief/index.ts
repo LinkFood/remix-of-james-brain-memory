@@ -130,15 +130,14 @@ serve(async (req) => {
           .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
           .order('priority', { ascending: true })
           .limit(5),
-        // Market quotes (best-effort)
+        // Market quotes (best-effort — pass userId for auth)
         fetch(`${supabaseUrl}/functions/v1/market-quotes`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${serviceKey}`,
-            'apikey': serviceKey,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({}),
+          body: JSON.stringify({ userId }),
         }).then(r => r.json()).catch(() => null),
       ]);
 
