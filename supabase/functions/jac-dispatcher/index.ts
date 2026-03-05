@@ -474,7 +474,8 @@ Intent routing rules (follow these STRICTLY):
    ALSO USE FOR: Conversational follow-ups and references to recent chat. If the user references something from RECENT CONVERSATION ("did I tell you about", "what were we talking about", "do you remember", "that thing I mentioned", "tell me more about that", "what about X") — handle as general. You have the conversation history and brain context to answer directly. Do NOT dispatch to search for conversational questions.
 
 6. "code" → jac-code-agent: User wants to write, fix, modify, refactor, or deploy code in a registered project.
-   TRIGGERS: "fix", "add feature", "update code", "refactor", "implement", "PR", "pull request", project names like "pixel-perfect" or "exact-match", code-related requests.
+   TRIGGERS: the word "code" anywhere in the message, "fix", "add feature", "update code", "refactor", "implement", "PR", "pull request", "build", "deploy", project names like "jac-agent-os", "pixel-perfect" or "exact-match", code-related requests.
+   IMPORTANT: If the user says "code" or "coding" in any context related to work, route to code agent.
 
 7. "schedule" → jac-watch-scheduler: User wants to set up a RECURRING automated task.
    TRIGGERS: "watch", "monitor", "check every", "daily search", "recurring", "every morning", "schedule a search", "keep an eye on".
@@ -533,6 +534,29 @@ Be concise. Be confident. Don't ask questions — just act.`;
         agentType: (toolResult?.input?.agentType as string) || 'assistant-chat',
         extractedQuery: (toolResult?.input?.extractedQuery as string) || message,
       }];
+    }
+
+    // Keyword override: if user says "code"/"coding" and Claude missed it, force code intent
+    const codeKeywordMatch = /\b(code|coding)\b/i.test(message);
+    if (codeKeywordMatch && !parsedIntents.some(i => i.intent === 'code')) {
+      console.log('[jac-dispatcher] Keyword override: "code" detected, forcing code intent');
+      // Replace the first general intent, or add one
+      const generalIdx = parsedIntents.findIndex(i => i.intent === 'general');
+      const codeIntent: ParsedIntent = {
+        intent: 'code',
+        summary: message.slice(0, 100),
+        agentType: 'jac-code-agent',
+        extractedQuery: message,
+      };
+      if (generalIdx >= 0) {
+        parsedIntents[generalIdx] = codeIntent;
+      } else {
+        parsedIntents.push(codeIntent);
+      }
+      // Update response if it was generic
+      if (response === "I'm on it." || !response) {
+        response = "I'll get coding on that.";
+      }
     }
 
     // Separate dispatchable intents from general
