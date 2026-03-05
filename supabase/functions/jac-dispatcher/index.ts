@@ -474,8 +474,8 @@ Intent routing rules (follow these STRICTLY):
    ALSO USE FOR: Conversational follow-ups and references to recent chat. If the user references something from RECENT CONVERSATION ("did I tell you about", "what were we talking about", "do you remember", "that thing I mentioned", "tell me more about that", "what about X") — handle as general. You have the conversation history and brain context to answer directly. Do NOT dispatch to search for conversational questions.
 
 6. "code" → jac-code-agent: User wants to write, fix, modify, refactor, or deploy code in a registered project.
-   TRIGGERS: the word "code" anywhere in the message, "fix", "add feature", "update code", "refactor", "implement", "PR", "pull request", "build", "deploy", project names like "jac-agent-os", "pixel-perfect" or "exact-match", code-related requests.
-   IMPORTANT: If the user says "code" or "coding" in any context related to work, route to code agent.
+   TRIGGERS: "code this", "code me", "fix code", "write code", "add feature", "update code", "refactor", "implement", "PR", "pull request", "deploy function", code-related action requests.
+   IMPORTANT: The user MUST be requesting an ACTION on code (write, fix, add, update, refactor, build). Just mentioning a project name or saying "jac agent os" is NOT a code request — that's general conversation about the project. Only route to code when there's a clear coding task.
 
 7. "schedule" → jac-watch-scheduler: User wants to set up a RECURRING automated task.
    TRIGGERS: "watch", "monitor", "check every", "daily search", "recurring", "every morning", "schedule a search", "keep an eye on".
@@ -536,8 +536,10 @@ Be concise. Be confident. Don't ask questions — just act.`;
       }];
     }
 
-    // Keyword override: if user says "code"/"coding" and Claude missed it, force code intent
-    const codeKeywordMatch = /\b(code|coding)\b/i.test(message);
+    // Keyword override: if user explicitly asks to code something and Claude missed it, force code intent
+    // Requires "code" + action context (not just mentioning the word "code" in passing)
+    const codeKeywordMatch = /\b(code\s+(this|that|it|me|a|the)|fix\s+(the\s+)?code|write\s+code|coding)\b/i.test(message)
+      || (/\bcode\b/i.test(message) && /\b(add|fix|update|refactor|implement|build|create|write|change|modify|deploy)\b/i.test(message));
     if (codeKeywordMatch && !parsedIntents.some(i => i.intent === 'code')) {
       console.log('[jac-dispatcher] Keyword override: "code" detected, forcing code intent');
       // Replace the first general intent, or add one

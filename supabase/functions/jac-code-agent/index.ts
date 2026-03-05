@@ -426,7 +426,10 @@ Instructions:
     await prStep({ prNumber: pr.number, prUrl: pr.url });
 
     // ─── Step 8a: self-review loop ───
+    // Time budget: Deno edge functions timeout at ~150s. Reserve 30s for merge + save + notify.
     const MAX_REVIEW_ITERATIONS = 3;
+    const REVIEW_TIME_BUDGET_MS = 120_000; // 2 min max for review loop
+    const reviewLoopStart = Date.now();
     let iterationCount = 0;
     let latestCommitSha = commitSha;
 
@@ -451,6 +454,14 @@ Instructions:
     ];
 
     for (let i = 0; i < MAX_REVIEW_ITERATIONS; i++) {
+      // Time budget check — bail if we're running low
+      const elapsed = Date.now() - reviewLoopStart;
+      if (elapsed > REVIEW_TIME_BUDGET_MS) {
+        console.log(`[code-agent] Review loop time budget exceeded (${Math.round(elapsed / 1000)}s) — skipping to merge`);
+        await log.info('review_budget_exceeded', { elapsedMs: elapsed, iteration: i });
+        break;
+      }
+
       const reviewStep = await log.step('self_review', { iteration: i + 1, prNumber: pr.number });
 
       try {
