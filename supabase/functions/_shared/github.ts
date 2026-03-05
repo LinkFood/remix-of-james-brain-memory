@@ -92,8 +92,8 @@ export async function getFileContent(
 
   const data = await res.json();
 
-  if (data.size > 50 * 1024) {
-    throw new Error(`File too large: ${path} (${data.size} bytes, max 50KB)`);
+  if (data.size > 100 * 1024) {
+    throw new Error(`File too large: ${path} (${data.size} bytes, max 100KB)`);
   }
 
   const content = atob(data.content.replace(/\n/g, ''));
@@ -167,8 +167,8 @@ export async function commitFiles(
     throw new Error('No files to commit');
   }
 
-  if (files.length > 10) {
-    throw new Error(`Too many files (${files.length}). Max 10 per session.`);
+  if (files.length > 15) {
+    throw new Error(`Too many files (${files.length}). Max 15 per session.`);
   }
 
   validateRepoComponent(owner, 'owner');
@@ -370,6 +370,69 @@ export async function revertCommit(
   if (!updateRes.ok) throw new Error(`Failed to update ref for revert: ${updateRes.status}`);
 
   return newCommitData.sha;
+}
+
+/**
+ * Get the diff of a pull request (for self-review)
+ * Returns raw diff text, truncated to 30KB to protect context window
+ */
+export async function getPullRequestDiff(
+  owner: string,
+  repo: string,
+  prNumber: number
+): Promise<string> {
+  validateRepoComponent(owner, 'owner');
+  validateRepoComponent(repo, 'repo');
+  const token = Deno.env.get('GITHUB_PAT');
+  if (!token) throw new Error('GITHUB_PAT not configured');
+
+  const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls/${prNumber}`;
+  const res = await fetch(url, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github.v3.diff',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to get PR diff #${prNumber} (${res.status}): ${text.slice(0, 200)}`);
+  }
+
+  const diff = await res.text();
+  // Truncate to 30KB to protect context window
+  return diff.length > 30000 ? diff.slice(0, 30000) + '\n... [diff truncated at 30KB]' : diff;
+}
+
+/**
+ * Get check runs for a commit ref (CI status)
+ */
+export async function getCheckRuns(
+  owner: string,
+  repo: string,
+  ref: string
+): Promise<{ total_count: number; check_runs: Array<{ id: number; name: string; status: string; conclusion: string | null }> }> {
+  validateRepoComponent(owner, 'owner');
+  validateRepoComponent(repo, 'repo');
+  const url = `${GITHUB_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(ref)}/check-runs`;
+  const res = await fetch(url, { headers: getHeaders() });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Failed to get check runs (${res.status}): ${text.slice(0, 200)}`);
+  }
+
+  const data = await res.json();
+  return {
+    total_count: data.total_count || 0,
+    check_runs: (data.check_runs || []).map((cr: { id: number; name: string; status: string; conclusion: string | null }) => ({
+      id: cr.id,
+      name: cr.name,
+      status: cr.status,
+      conclusion: cr.conclusion,
+    })),
+  };
 }
 
 /**

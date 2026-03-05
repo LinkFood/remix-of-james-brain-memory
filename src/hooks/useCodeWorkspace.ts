@@ -136,6 +136,17 @@ export function useCodeWorkspace(userId: string) {
                     content: `❌ Failed: ${(detail?.error as string) || log.step}`,
                     timestamp: log.created_at,
                   });
+                } else if (log.step === 'self_review' || log.step === 'write_correction') {
+                  const detail = log.detail as Record<string, unknown>;
+                  const label = log.step === 'self_review'
+                    ? `self review (iteration ${detail?.iteration || '?'})${detail?.approved ? ' — approved' : ` — ${detail?.issues || 0} issues`}`
+                    : `writing correction (iteration ${detail?.iteration || '?'})`;
+                  msgs.push({
+                    id: `step-${log.id}`,
+                    role: 'system',
+                    content: label,
+                    timestamp: log.created_at,
+                  });
                 }
               }
               setChatMessages(msgs);
@@ -305,11 +316,16 @@ export function useCodeWorkspace(userId: string) {
                 content: `❌ Failed: ${(detail?.error as string) || newLog.step}`,
                 timestamp: newLog.created_at,
               }]);
-            } else if (['plan', 'write_code', 'read_file', 'open_pr', 'create_branch'].includes(newLog.step)) {
+            } else if (['plan', 'write_code', 'read_file', 'open_pr', 'create_branch', 'self_review', 'write_correction', 'auto_merge'].includes(newLog.step)) {
+              const stepLabel = newLog.step === 'self_review'
+                ? `self review (iteration ${(newLog.detail as Record<string, unknown>)?.iteration || '?'})...`
+                : newLog.step === 'write_correction'
+                ? `writing correction (iteration ${(newLog.detail as Record<string, unknown>)?.iteration || '?'})...`
+                : `${newLog.step.replace(/_/g, ' ')}...`;
               setChatMessages(prev => [...prev, {
                 id: `step-${newLog.id}`,
                 role: 'system',
-                content: `${newLog.step.replace(/_/g, ' ')}...`,
+                content: stepLabel,
                 timestamp: newLog.created_at,
               }]);
             }

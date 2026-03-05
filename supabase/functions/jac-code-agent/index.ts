@@ -22,7 +22,7 @@ import { callClaude, CLAUDE_MODELS, parseTextContent, parseToolUse, calculateCos
 import type { ModelTier } from '../_shared/anthropic.ts';
 import { notifySlack } from '../_shared/slack.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
-import { getRepoTree, getFileContent, createBranch, commitFiles, createPR, mergePR, isSecretFile } from '../_shared/github.ts';
+import { getRepoTree, getFileContent, createBranch, commitFiles, createPR, mergePR, getPullRequestDiff, getCheckRuns, revertCommit, isSecretFile } from '../_shared/github.ts';
 import type { FileChange } from '../_shared/github.ts';
 
 serve(async (req) => {
@@ -60,6 +60,7 @@ serve(async (req) => {
     slackChannel = body.slack_channel as string | undefined;
     slackThinkingTs = body.slack_thinking_ts as string | undefined;
     const brainContext = (body.brainContext as string) || '';
+    const conversationContext = (body.conversation_context as string) || '';
     const modelTier = (body.modelTier as ModelTier) || 'sonnet';
     const codeModel = resolveModel(modelTier);
 
@@ -185,7 +186,7 @@ serve(async (req) => {
             filesToRead: {
               type: 'array',
               items: { type: 'string' },
-              description: 'File paths to read for context (max 10)',
+              description: 'File paths to read for context (max 15)',
             },
             plan: {
               type: 'string',
@@ -212,12 +213,12 @@ ${techStack.length > 0 ? `TECH STACK: ${techStack.join(', ')}` : ''}
 ${projectDescription ? `DESCRIPTION: ${projectDescription}` : ''}
 ${claudeMd ? `\n=== PROJECT CONVENTIONS (CLAUDE.md) ===\nFollow these project-specific rules and patterns:\n${claudeMd}\n` : ''}
 USER REQUEST: ${query}
-${brainContext ? `\n=== USER'S BRAIN CONTEXT ===\nThese are related notes, decisions, and past work from the user's brain:\n${brainContext}\n` : ''}${pastSessionsBlock}
+${brainContext ? `\n=== USER'S BRAIN CONTEXT ===\nThese are related notes, decisions, and past work from the user's brain:\n${brainContext}\n` : ''}${conversationContext ? `\n=== RECENT CONVERSATION ===\nRecent messages for context on what the user has been discussing:\n${conversationContext.slice(0, 4000)}\n` : ''}${pastSessionsBlock}
 FILE TREE (${fileTree.length} files):
 ${fileTree.join('\n')}
 
 Instructions:
-- Select up to 10 files you need to read for context
+- Select up to 15 files you need to read for context
 - Write a clear step-by-step plan of what to change
 - Generate a short branch slug (lowercase, hyphens, no spaces) like "fix-auth-bug" or "add-dark-mode"
 - Be specific about which files to create/modify and what changes to make
@@ -240,7 +241,7 @@ Instructions:
     }
 
     const rawFilesToRead = planResult.input.filesToRead;
-    const filesToRead = (Array.isArray(rawFilesToRead) ? rawFilesToRead : rawFilesToRead ? [rawFilesToRead] : []).slice(0, 10) as string[];
+    const filesToRead = (Array.isArray(rawFilesToRead) ? rawFilesToRead : rawFilesToRead ? [rawFilesToRead] : []).slice(0, 15) as string[];
     const plan = (planResult.input.plan as string) || '';
     const branchSlug = (planResult.input.branchSlug as string) || 'code-change';
 
@@ -304,7 +305,7 @@ Instructions:
                 },
                 required: ['path', 'content'],
               },
-              description: 'Files to create or modify (max 10)',
+              description: 'Files to create or modify (max 15)',
             },
             commitMessage: {
               type: 'string',
@@ -332,7 +333,7 @@ Instructions:
 
 PROJECT: ${projectName || repoFull}
 REPO: ${repoFull}
-${claudeMd ? `\n=== PROJECT CONVENTIONS (CLAUDE.md) ===\nFollow these project-specific rules and patterns:\n${claudeMd}\n` : ''}
+${claudeMd ? `\n=== PROJECT CONVENTIONS (CLAUDE.md) ===\nFollow these project-specific rules and patterns:\n${claudeMd}\n` : ''}${conversationContext ? `\n=== RECENT CONVERSATION ===\n${conversationContext.slice(0, 4000)}\n` : ''}
 USER REQUEST: ${query}
 
 PLAN:
@@ -357,7 +358,7 @@ Instructions:
       messages: [{ role: 'user', content: codePrompt }],
       tools: codeTools,
       tool_choice: { type: 'tool', name: 'submit_code' },
-      max_tokens: 8192,
+      max_tokens: 16384,
       temperature: 0.2,
     });
 
@@ -378,7 +379,7 @@ Instructions:
       throw new Error('Claude returned zero files to commit');
     }
 
-    const totalCost = calculateCost(codeModel, planResponse.usage) +
+    let totalCost = calculateCost(codeModel, planResponse.usage) +
       calculateCost(codeModel, codeResponse.usage);
 
     // Record combined token usage for both plan + code calls
@@ -424,9 +425,156 @@ Instructions:
     const pr = await createPR(owner, repo, branchName, defaultBranch, prTitle, prBody);
     await prStep({ prNumber: pr.number, prUrl: pr.url });
 
+    // ─── Step 8a: self-review loop ───
+    const MAX_REVIEW_ITERATIONS = 3;
+    let iterationCount = 0;
+    let latestCommitSha = commitSha;
+
+    const reviewTools = [
+      {
+        name: 'submit_review',
+        description: 'Submit the code review result',
+        input_schema: {
+          type: 'object',
+          properties: {
+            approved: { type: 'boolean', description: 'Whether the code is approved' },
+            issues: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'List of issues found (empty if approved)',
+            },
+            suggestion: { type: 'string', description: 'Suggested fix if not approved' },
+          },
+          required: ['approved', 'issues', 'suggestion'],
+        },
+      },
+    ];
+
+    for (let i = 0; i < MAX_REVIEW_ITERATIONS; i++) {
+      const reviewStep = await log.step('self_review', { iteration: i + 1, prNumber: pr.number });
+
+      try {
+        // Get the PR diff
+        const diff = await getPullRequestDiff(owner, repo, pr.number);
+
+        const reviewPrompt = `You are a senior code reviewer. Review this PR diff against the original plan.
+
+PLAN:
+${plan}
+
+USER REQUEST: ${query}
+
+PR DIFF:
+${diff}
+
+Instructions:
+- Check for bugs, logic errors, missing edge cases, security issues
+- Check that the implementation matches the plan
+- Check for typos, wrong variable names, missing imports
+- If everything looks correct, approve it
+- If there are issues, list them clearly and suggest a fix
+- Use the submit_review tool`;
+
+        const reviewResponse = await callClaude({
+          model: codeModel,
+          system: 'You are a precise code reviewer. Use the submit_review tool.',
+          messages: [{ role: 'user', content: reviewPrompt }],
+          tools: reviewTools,
+          tool_choice: { type: 'tool', name: 'submit_review' },
+          max_tokens: 4096,
+          temperature: 0.2,
+        });
+
+        const reviewResult = parseToolUse(reviewResponse);
+        const approved = reviewResult?.input?.approved ?? true;
+        const rawIssues = reviewResult?.input?.issues;
+        const issues = Array.isArray(rawIssues) ? rawIssues : rawIssues ? [rawIssues] : [];
+        const suggestion = (reviewResult?.input?.suggestion as string) || '';
+
+        // Track cost
+        totalCost += calculateCost(codeModel, reviewResponse.usage);
+
+        if (approved || issues.length === 0) {
+          await reviewStep({ approved: true, iteration: i + 1 });
+          break;
+        }
+
+        await reviewStep({ approved: false, issues: issues.length, iteration: i + 1 });
+
+        // ─── Write correction ───
+        if (i < MAX_REVIEW_ITERATIONS - 1) {
+          const correctionStep = await log.step('write_correction', { iteration: i + 1 });
+
+          const correctionPrompt = `You are an autonomous coding agent. Fix the issues found in your code review.
+
+ORIGINAL PLAN:
+${plan}
+
+USER REQUEST: ${query}
+
+ISSUES FOUND:
+${issues.map((iss: string, idx: number) => `${idx + 1}. ${iss}`).join('\n')}
+
+SUGGESTED FIX:
+${suggestion}
+
+CURRENT FILE CONTENTS:
+${fileContents.map(f => `--- ${f.path} ---\n${f.content}`).join('\n\n')}
+
+CURRENT DIFF:
+${diff}
+
+Instructions:
+- Fix ONLY the issues listed above — do not refactor unrelated code
+- Write complete file contents for each file you need to fix
+- Use the submit_code tool`;
+
+          const correctionResponse = await callClaude({
+            model: codeModel,
+            system: 'You are a precise coding agent. Fix the review issues. Use the submit_code tool.',
+            messages: [{ role: 'user', content: correctionPrompt }],
+            tools: codeTools,
+            tool_choice: { type: 'tool', name: 'submit_code' },
+            max_tokens: 16384,
+            temperature: 0.2,
+          });
+
+          const correctionResult = parseToolUse(correctionResponse);
+          totalCost += calculateCost(codeModel, correctionResponse.usage);
+
+          if (correctionResult?.input?.files) {
+            const rawCorrFiles = correctionResult.input.files;
+            const correctionFiles = (Array.isArray(rawCorrFiles) ? rawCorrFiles : [rawCorrFiles]) as Array<{ path: string; content: string }>;
+            const corrChanges: FileChange[] = correctionFiles.map(f => ({ path: f.path, content: f.content }));
+
+            // Commit correction to same branch
+            const corrMessage = (correctionResult.input.commitMessage as string) || `Fix review issues (iteration ${i + 2})`;
+            latestCommitSha = await commitFiles(owner, repo, branchName, corrChanges, corrMessage);
+            iterationCount = i + 1;
+
+            // Update fileContents for next review iteration
+            for (const cf of correctionFiles) {
+              const existing = fileContents.findIndex(f => f.path === cf.path);
+              if (existing >= 0) fileContents[existing] = cf;
+              else fileContents.push(cf);
+            }
+
+            await correctionStep({ filesFixed: correctionFiles.length, commitSha: latestCommitSha });
+          } else {
+            await correctionStep.fail('No correction files returned');
+            break;
+          }
+        }
+      } catch (reviewErr) {
+        await reviewStep.fail(reviewErr instanceof Error ? reviewErr.message : 'Review failed');
+        console.warn('[code-agent] Self-review error (continuing to merge):', reviewErr);
+        break;
+      }
+    }
+
     // ─── Step 8b: auto-merge PR ───
     let mergeSha: string | undefined;
-    const mergeStep = await log.step('auto_merge', { prNumber: pr.number });
+    const mergeStep = await log.step('auto_merge', { prNumber: pr.number, iterations: iterationCount });
     try {
       const mergeResult = await mergePR(owner, repo, pr.number, 'squash');
       mergeSha = mergeResult.sha;
@@ -501,12 +649,35 @@ Instructions:
         files_written: codeFiles.map(f => f.path),
         files_changed: codeFiles.map(f => f.path),
         file_count: codeFiles.length,
+        merge_sha: mergeSha || null,
+        iteration_count: iterationCount,
         total_cost_usd: totalCost,
         status: 'completed',
       })
       .select('id')
       .single();
     await sessionStep({ sessionId: session?.id });
+
+    // Re-fire poll-ci with session ID now that we have it
+    if (mergeSha && isJacRepo && session?.id) {
+      fetch(`${supabaseUrl}/functions/v1/poll-ci`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${serviceKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId,
+          taskId,
+          owner,
+          repo,
+          ref: mergeSha,
+          defaultBranch,
+          repoFull,
+          sessionId: session.id,
+        }),
+      }).catch(err => console.warn('[code-agent] poll-ci (with sessionId) fire-and-forget failed:', err));
+    }
 
     // ─── Step 9b: record validation ───
     if (session?.id) {
@@ -581,6 +752,7 @@ Instructions:
           mergeSha,
           merged: !!mergeSha,
           deploy: deployResult,
+          iterationCount,
           filesChanged: codeFiles.map(f => f.path),
           fileCount: codeFiles.length,
           plan: plan.slice(0, 2000),

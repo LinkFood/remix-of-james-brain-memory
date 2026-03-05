@@ -96,5 +96,8 @@ verify_jwt = false
 [functions.market-snapshot]
 verify_jwt = false
 
+[functions.poll-ci]
+verify_jwt = false
+
 [functions.generate-brain-report]
 verify_jwt = false

@@ -29,7 +29,6 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 | Issue | Detail |
 |---|---|
 | Self-deploy blocked | `supabase-management.ts` written but needs Management PAT in secrets |
-| File content not viewable in code UI | File tree shows but clicking shows placeholder; server-side read only during coding tasks |
 | `assistant-chat` has duplicate intent detection | Regex-based classify that duplicates/conflicts with dispatcher's Claude-based routing |
 | Realtime subscription for agent_conversations | INSERT events unreliable — workaround: refetch on task completion (debounced) |
 
