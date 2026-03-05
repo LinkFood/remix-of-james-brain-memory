@@ -111,7 +111,17 @@ export async function notifySlack(
 
     // Path 1: Bot token + channel — update thinking message or post new
     const botToken = Deno.env.get('SLACK_BOT_TOKEN');
-    if (payload.slackChannel && botToken) {
+    // If no channel provided (web UI dispatch), look up from user_settings
+    let resolvedChannel = payload.slackChannel;
+    if (!resolvedChannel && botToken) {
+      const { data: settingsData } = await supabase
+        .from('user_settings')
+        .select('settings')
+        .eq('user_id', userId)
+        .single();
+      resolvedChannel = (settingsData?.settings as Record<string, unknown>)?.slack_channel_id as string | undefined;
+    }
+    if (resolvedChannel && botToken) {
       const slackMethod = payload.slackThinkingTs ? 'chat.update' : 'chat.postMessage';
       const res = await fetch(`https://slack.com/api/${slackMethod}`, {
         method: 'POST',
@@ -120,7 +130,7 @@ export async function notifySlack(
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          channel: payload.slackChannel,
+          channel: resolvedChannel,
           text: messageText,
           ...(payload.slackThinkingTs ? { ts: payload.slackThinkingTs } : {}),
         }),
