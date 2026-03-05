@@ -33,9 +33,6 @@ verify_jwt = false
 [functions.smart-save]
 verify_jwt = false
 
-[functions.assistant-chat]
-verify_jwt = false
-
 [functions.search-memory]
 verify_jwt = false
 

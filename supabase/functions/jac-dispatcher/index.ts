@@ -69,7 +69,7 @@ const INTENT_TOOL = {
             },
             agentType: {
               type: 'string',
-              enum: ['jac-research-agent', 'jac-save-agent', 'jac-search-agent', 'jac-code-agent', 'jac-watch-scheduler', 'assistant-chat'],
+              enum: ['jac-research-agent', 'jac-save-agent', 'jac-search-agent', 'jac-code-agent', 'jac-watch-scheduler', 'jac-dispatcher'],
               description: 'Which worker to dispatch for this request',
             },
             extractedQuery: {
@@ -109,7 +109,7 @@ const AGENT_MAP: Record<string, string> = {
   save: 'jac-save-agent',
   search: 'jac-search-agent',
   report: 'jac-research-agent',
-  general: 'assistant-chat',
+  general: 'jac-dispatcher',
   code: 'jac-code-agent',
   schedule: 'jac-watch-scheduler',
 };
@@ -469,8 +469,8 @@ Intent routing rules (follow these STRICTLY):
 
 4. "report" → jac-research-agent: User wants a comprehensive multi-source analysis.
 
-5. "general" → assistant-chat: Casual chat, greetings, meta questions about JAC.
-   ALSO USE FOR: Calendar/schedule queries ("what's on my calendar", "do I have anything today/tomorrow/this week", "upcoming events", "my schedule", "my plans"). The assistant-chat has full calendar access.
+5. "general" → jac-dispatcher (handled inline): Casual chat, greetings, meta questions about JAC.
+   ALSO USE FOR: Calendar/schedule queries ("what's on my calendar", "do I have anything today/tomorrow/this week", "upcoming events", "my schedule", "my plans"). The dispatcher has full calendar access.
    ALSO USE FOR: Conversational follow-ups and references to recent chat. If the user references something from RECENT CONVERSATION ("did I tell you about", "what were we talking about", "do you remember", "that thing I mentioned", "tell me more about that", "what about X") — handle as general. You have the conversation history and brain context to answer directly. Do NOT dispatch to search for conversational questions.
 
 6. "code" → jac-code-agent: User wants to write, fix, modify, refactor, or deploy code in a registered project.
@@ -520,7 +520,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
       parsedIntents = rawIntents.map((i: Record<string, unknown>) => ({
         intent: (i.intent as IntentType) || 'general',
         summary: (i.summary as string) || message.slice(0, 100),
-        agentType: (i.agentType as string) || AGENT_MAP[i.intent as string] || 'assistant-chat',
+        agentType: (i.agentType as string) || AGENT_MAP[i.intent as string] || 'jac-dispatcher',
         extractedQuery: (i.extractedQuery as string) || message,
         frequency: i.frequency as string | undefined,
         watchName: i.watchName as string | undefined,
@@ -531,7 +531,7 @@ Be concise. Be confident. Don't ask questions — just act.`;
       parsedIntents = [{
         intent: (toolResult?.input?.intent as IntentType) || 'general',
         summary: (toolResult?.input?.summary as string) || message.slice(0, 100),
-        agentType: (toolResult?.input?.agentType as string) || 'assistant-chat',
+        agentType: (toolResult?.input?.agentType as string) || 'jac-dispatcher',
         extractedQuery: (toolResult?.input?.extractedQuery as string) || message,
       }];
     }
@@ -1075,7 +1075,7 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${conversationContext}
       childTaskId: childTaskIds[0] ?? null,
       childTaskIds,
       intent: primaryIntent,
-      agentType: dispatchIntents[0]?.agentType ?? 'assistant-chat',
+      agentType: dispatchIntents[0]?.agentType ?? 'jac-dispatcher',
       status: isGeneralOnly ? 'completed' : 'dispatched',
     }), { status: 200, headers: jsonHeaders });
 

@@ -25,7 +25,6 @@ const EDGE_FUNCTIONS = [
   'jac-save-agent', 
   'jac-search-agent',
   'jac-code-agent',
-  'assistant-chat',
   'smart-save',
   'search-memory',
   'brain-insights',
@@ -275,7 +274,7 @@ serve(async (req) => {
     } else if (unhealthyFunctions.length > 0 || staleCronJobs.length > 0) {
       // System is degraded if some functions are down or cron jobs are stale
       const criticalFunctionsDown = unhealthyFunctions.some(f => 
-        ['jac-dispatcher', 'assistant-chat', 'smart-save'].includes(f.name)
+        ['jac-dispatcher', 'smart-save'].includes(f.name)
       );
       systemStatus = criticalFunctionsDown ? 'unhealthy' : 'degraded';
     } else {

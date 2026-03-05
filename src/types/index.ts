@@ -331,19 +331,6 @@ export interface CalendarViewProps {
   onViewEntry: (entry: Entry) => void;
 }
 
-/**
- * Props for AssistantChat component
- */
-export interface AssistantChatProps {
-  userId: string;
-  onEntryCreated?: (entry: Entry) => void;
-  onViewEntry?: (entry: Entry) => void;
-  onFilterByTag?: (tag: string) => void;
-  onScrollToEntry?: (entryId: string) => void;
-  onSelectEntries?: (entryIds: string[]) => void;
-  externalOpen?: boolean;
-  onExternalOpenChange?: (open: boolean) => void;
-}
 
 /**
  * Props for EntrySection component

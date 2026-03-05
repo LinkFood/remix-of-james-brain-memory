@@ -1,7 +1,7 @@
 /**
  * useSearch - Centralized search hook with debouncing
  * 
- * Provides consistent search behavior across GlobalSearch and AssistantChat.
+ * Provides consistent search behavior across GlobalSearch and JacChat.
  * Supports both semantic (vector) and keyword search modes.
  * 
  * @module hooks/useSearch

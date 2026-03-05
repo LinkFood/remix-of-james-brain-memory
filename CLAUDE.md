@@ -29,7 +29,6 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 | Issue | Detail |
 |---|---|
 | Self-deploy blocked | `supabase-management.ts` written but needs Management PAT in secrets |
-| `assistant-chat` has duplicate intent detection | Regex-based classify that duplicates/conflicts with dispatcher's Claude-based routing |
 | Realtime subscription for agent_conversations | INSERT events unreliable — workaround: refetch on task completion (debounced) |
 
 ## Tech Stack
@@ -109,7 +108,7 @@ Rate limits: 50 req/min, 10 concurrent tasks, 200 tasks/day. Loop guard: 10+ tas
 - `calendar-reminder-check`: queries entries where `reminder_sent = false` and reminder is due
 - Sends Slack message with bell emoji, title, date, countdown
 - Sets `reminder_sent = true` after send
-- Schedule context (`_shared/context.ts`): today's events, overdue items, next 7 days — injected into every dispatcher and assistant-chat conversation
+- Schedule context (`_shared/context.ts`): today's events, overdue items, next 7 days — injected into every dispatcher conversation
 - **pg_cron active:** reminders every 5 min, 8 AM + 6 PM Eastern (date-only), stale task cleanup every 30 min, backfill-embeddings every 30 min, brain-insights 10 AM + 8 PM Eastern, expired insights cleanup 2 AM UTC
 - All date calcs use user's timezone from user_settings (default America/New_York)
 
@@ -183,7 +182,6 @@ Before merging any feature: *"Does this data get embedded? If not, it's not done
 | `jac-dashboard-query` | NL queries over entries (Claude Haiku) |
 | `slack-incoming` | Slack webhook -> dispatcher (HMAC-SHA256 verified) |
 | `calendar-reminder-check` | Cron: due entries -> Slack reminders |
-| `assistant-chat` | Streaming chat with brain context (legacy, predates dispatcher) |
 | `smart-save` | Classify + save dump input |
 | `enrich-entry` | AI enrichment for entries (dormant — UI removed) |
 | `generate-embedding` | Voyage AI voyage-3-lite (512-dim), accepts `input_type` (document/query) |
@@ -259,7 +257,6 @@ Priority order. User may push back on some — these are candidates, not commitm
 | 5 | **Entity Graph Visualization** | Click entity in BrainInspector → see all mentions, related entities (co-occurrence), timeline, connected entries ranked by relevance. | Graph data exists (`brain_entities`, `entity_mentions`, `entry_relationships`) but displayed as flat list. | BrainInspector entity detail view, co-occurrence queries, timeline component |
 
 ### Tech Debt to Address
-- `assistant-chat` is legacy dead weight — duplicates dispatcher intent detection. Delete or fold into dispatcher general handler.
 - `Dashboard.tsx` uses `getSession()` without `getUser()` first — violates own gotcha list.
 - Dashboard layout in localStorage only — should persist to `user_settings.dashboard_layout` for cross-device.
 - 40+ edge functions each bundle `_shared/` — missed redeploy = stale auth code. No automated drift detection.

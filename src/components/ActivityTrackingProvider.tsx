@@ -86,7 +86,6 @@ export function ActivityTrackingProvider({ userId, children }: Props) {
         // Map function names to activity categories
         const categoryMap: Record<string, { event: string; category: ActivityCategory }> = {
           'smart-save': { event: 'dump_saved', category: 'content' },
-          'assistant-chat': { event: 'chat_message', category: 'chat' },
           'search-memory': { event: 'brain_search', category: 'search' },
           'jac-web-search': { event: 'web_search', category: 'search' },
           'jac-dispatcher': { event: 'jac_command', category: 'agent' },
