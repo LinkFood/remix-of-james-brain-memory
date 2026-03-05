@@ -199,12 +199,7 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${conversationContext}
       temperature: 0.4,
     });
 
-    const response = parseTextContent(claudeResponse);
-    if (!response) {
-      return new Response(JSON.stringify({ error: 'No response generated' }), {
-        status: 500, headers: jsonHeaders,
-      });
-    }
+    const responseText = parseTextContent(claudeResponse) || "I'm here to help. What do you need?";
 
     // Create a task record for token tracking
     const { data: task } = await supabase
@@ -215,8 +210,8 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${conversationContext}
         status: 'completed',
         intent: message.slice(0, 100),
         agent: 'assistant-chat',
-        input: { message, brainContext: brainContext.slice(0, 1000) },
-        output: { response },
+        input: { message },
+        output: { response: responseText },
         completed_at: new Date().toISOString(),
       })
       .select('id')
@@ -226,7 +221,10 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${conversationContext}
       await recordTokenUsage(supabase, task.id, CLAUDE_MODELS.sonnet, claudeResponse.usage);
     }
 
-    return new Response(JSON.stringify({ response }), {
+    return new Response(JSON.stringify({
+      response: responseText,
+      usage: claudeResponse.usage,
+    }), {
       status: 200,
       headers: jsonHeaders,
     });
@@ -235,6 +233,9 @@ ${brainContext ? `\nBrain context:\n${brainContext}` : ''}${conversationContext}
     console.error('[assistant-chat] Error:', error);
     return new Response(JSON.stringify({
       error: error instanceof Error ? error.message : 'Internal server error',
-    }), { status: 500, headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' } });
+    }), {
+      status: 500,
+      headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+    });
   }
 });
