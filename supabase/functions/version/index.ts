@@ -1,5 +1,6 @@
+// JAC Agent OS — version endpoint
 /**
- * version – System Version Information for JAC Agent OS
+ * version — System Version Information for JAC Agent OS
  *
  * Returns current system version information including git commit hash,
  * deploy timestamp, and system uptime for monitoring and debugging.
