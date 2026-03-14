@@ -4,9 +4,7 @@ Personal AI operating system (single-user). The meta-project: if JAC works, it h
 
 ## Disk Health Check
 
-Before starting any session, run: `df -h /`
-If available space is under 20GB, run: `sudo rm -rf /private/tmp/*`
-Then verify with `df -h /` again before proceeding.
+Run `df -h /` at session start, before big builds (3+ files/agents), every 5+ commits, and before deploys/pushes. If under 20GB: `sudo rm -rf /private/tmp/*`, re-verify, stop if still low.
 
 ## What Works Right Now
 
