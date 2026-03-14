@@ -2,6 +2,12 @@
 
 Personal AI operating system (single-user). The meta-project: if JAC works, it handles everything else — life management, code automation, research, memory, reminders, and eventually self-modification. One interface (web chat or Slack DM) that routes to specialized AI workers.
 
+## Disk Health Check
+
+Before starting any session, run: `df -h /`
+If available space is under 20GB, run: `sudo rm -rf /private/tmp/*`
+Then verify with `df -h /` again before proceeding.
+
 ## What Works Right Now
 
 | Capability | Status | How |
@@ -272,8 +278,48 @@ Priority order. User may push back on some — these are candidates, not commitm
 - Live preview iframe for code tasks
 - Deploy agent Phase 2
 
-**Critical patterns:**
-- All supabase-js imports MUST pin to `@2.84.0` — unpinned `@2` causes version mismatch in Deno isolates
-- Claude Haiku ignores `type: "array"` in tool schemas ~80% of the time — always normalize with `Array.isArray()` guards
-- `retryWithBackoff` must NOT retry on 4xx errors (auth, rate limit, bad request) — only retry on 5xx/network
-- Watch templates (`cron_expression IS NOT NULL`) sit in `running` status permanently — any query that bulk-cancels/fails running tasks MUST exclude them with `AND cron_expression IS NULL` or `.is('cron_expression', null)`
+**JAC-Specific Gotchas:**
+
+NEVER call `getSession()` without `getUser()` first — `getSession()` returns stale cached JWTs. `getUser()` forces server refresh.
+
+NEVER rely on `agent_conversations` Realtime INSERT events — unreliable with service role. Fetch on task completion instead.
+
+NEVER create child tasks (watch runs, sub-tasks) without setting `intent` — column has NOT NULL constraint. Inherit from parent task.
+
+NEVER bulk-cancel/fail running tasks without excluding watch templates — add `AND cron_expression IS NULL` (SQL) or `.is('cron_expression', null)` (PostgREST). Watch templates sit in `running` status permanently. This applies to BOTH the success path (parent-completion) AND the error path (parent-fail on child error) in all worker agents.
+
+NEVER mark a parent task as `completed` without checking `.is('cron_expression', null)` — watch templates are parents too. All 4 agents have parent-completion logic that must skip watches.
+
+NEVER commit to main/master from the code agent — always `jac/{slug}-{hex}` branches.
+
+ALWAYS use `extractUserIdWithServiceRole()` for functions callable both from frontend and internally (classify-content, smart-save, generate-embedding, search-memory, calculate-importance).
+
+## Memory Layer
+
+**How the brain works — don't break this pipeline:**
+
+1. **Input** → `smart-save` classifies (regex fast-path or Haiku)
+2. **Store** → `entries` table: title, content, content_type, tags, event_date, importance_score
+3. **Embed** → Voyage AI voyage-3-lite (512-dim) on rich text: `"title | type | tags | content"`
+4. **Link** → `entry_relationships` created via semantic similarity after embedding
+5. **Backfill** → Cron every 30 min catches un-embedded entries (batch 20)
+6. **Search** → Hybrid: embedding similarity (threshold 0.3) + keyword ilike. `input_type: 'query'` for search, `'document'` for storage
+7. **Context** → `getUserContext()` injects today + overdue + 7-day schedule into every agent system prompt
+8. **Reflect** → `jac-reflect` fires after every task. Haiku summary → `jac_reflections` with embedding
+9. **Distill** → Weekly cron (Sonnet) extracts principles from reflections → `jac_principles`
+10. **Entities** → `extract-entities` (Haiku) pulls people/projects/places/concepts → `brain_entities`
+
+**Don't touch without flagging:** `entries` table schema, embedding dimensions (512), `search_entries_by_embedding` RPC signature, `smart-save` classification logic, `backfill-embeddings` batch size or cron timing.
+
+## Crons (JAC)
+Active jobs: reminders (5m), backfill (30m), heartbeat (30m), insights (2x daily), morning brief (8AM ET), principles (weekly).
+
+## Slack Integration
+```
+Bot token:       SLACK_BOT_TOKEN (Supabase secret)
+Signing secret:  SLACK_SIGNING_SECRET (HMAC-SHA256)
+User channel:    user_settings.settings.slack_channel_id
+Incoming:        slack-incoming edge function (HMAC verified)
+Outgoing:        chat.postMessage or chat.update via bot token
+```
+Best-effort Slack. Always try/catch — never throw from Slack code.
