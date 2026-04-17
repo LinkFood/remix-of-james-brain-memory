@@ -10,6 +10,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Trophy, Target, TrendingUp, TrendingDown, Activity, AlertTriangle } from 'lucide-react';
 import { GhostTradeTape } from '@/components/command/GhostTradeTape';
+import { RecallSearch } from '@/components/command/RecallSearch';
 
 interface Grade {
   subject_type: 'flag' | 'alert' | 'james_view';
@@ -128,6 +129,9 @@ export function Scorecard() {
             Every FLAG / ALERT / james_view gets scored at horizon close. This is the referee — the source of trust.
           </p>
         </header>
+
+        {/* Memory recall search */}
+        <RecallSearch />
 
         {/* Top metric tiles */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

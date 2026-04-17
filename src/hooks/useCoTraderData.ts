@@ -225,7 +225,7 @@ export function useDarkPoolPrints(limit = 30) {
 /**
  * Manual trigger via RPC — for "run now" buttons on the dashboard.
  */
-export async function triggerCoTrader(fn: 'watcher' | 'grader' | 'news_ingester' | 'eod_recap' | 'lessons_curator' | 'flow_ingester' | 'event_calendar_ingester' | 'disagreement_materializer' | 'morning_brief'): Promise<{ ok: boolean; error?: string }> {
+export async function triggerCoTrader(fn: 'watcher' | 'grader' | 'news_ingester' | 'eod_recap' | 'lessons_curator' | 'flow_ingester' | 'event_calendar_ingester' | 'disagreement_materializer' | 'morning_brief' | 'eod_positioning'): Promise<{ ok: boolean; error?: string }> {
   const rpcName = `trigger_ct_${fn}`;
   const { error } = await supabase.rpc(rpcName);
   if (error) return { ok: false, error: error.message };
@@ -542,6 +542,126 @@ export function useLatestMorningBrief() {
         .maybeSingle();
       if (error) throw error;
       return data as MorningBrief | null;
+    },
+  });
+}
+
+// ============================================================================
+// Historical Recall — search Claude's memory (ct_embeddings + source rows)
+// ============================================================================
+export interface RecallHit {
+  type: 'observation' | 'flag' | 'alert' | 'report' | 'news' | 'james_view' | 'thesis' | 'lesson';
+  id: string;
+  timestamp: string | null;
+  instruments: string[];
+  direction: string | null;
+  conviction: number | null;
+  glance: string[] | null;
+  grade?: { verdict: string; actual_return_pct: number | null } | null;
+  distance?: number;
+}
+
+export interface RecallResponse {
+  hits: RecallHit[];
+  mode: 'time' | 'semantic' | 'hybrid';
+  duration_ms: number;
+}
+
+export function useHistoricalRecall(q?: string, instrument?: string) {
+  const query = (q ?? '').trim();
+  const instr = instrument?.trim().toUpperCase() || undefined;
+  return useQuery<RecallResponse | null>({
+    queryKey: ['ct_recall', query, instr],
+    enabled: query.length > 0,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const jwt = sessionData?.session?.access_token;
+      if (!jwt) throw new Error('not signed in');
+
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ct-recall`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${jwt}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query, instrument: instr, kind: 'any' }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body?.error ?? `recall failed (${res.status})`);
+      return body as RecallResponse;
+    },
+  });
+}
+
+// ============================================================================
+// EOD Positioning — Max Pain (per expiry) + IV Rank (daily) for watchlist.
+// ============================================================================
+export interface MaxPainRow {
+  id: string;
+  ticker: string;
+  date: string;
+  expiry: string | null;
+  max_pain_strike: number | null;
+  ingested_at: string;
+}
+
+export interface IvRankRow {
+  id: string;
+  ticker: string;
+  date: string;
+  iv_rank: number | null;
+  iv_30d: number | null;
+  iv_percentile: number | null;
+  ingested_at: string;
+}
+
+/** Latest max-pain rows for a ticker — every expiry on the most recent date. */
+export function useMaxPain(ticker: string) {
+  return useQuery<MaxPainRow[]>({
+    queryKey: ['ct_max_pain', ticker],
+    enabled: !!ticker,
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      if (!ticker) return [];
+      const { data: latest, error: le } = await supabase
+        .from('ct_max_pain_daily')
+        .select('date')
+        .eq('ticker', ticker)
+        .order('date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (le) throw le;
+      if (!latest?.date) return [];
+      const { data, error } = await supabase
+        .from('ct_max_pain_daily')
+        .select('id, ticker, date, expiry, max_pain_strike, ingested_at')
+        .eq('ticker', ticker)
+        .eq('date', latest.date as string)
+        .order('expiry', { ascending: true, nullsFirst: false });
+      if (error) throw error;
+      return (data ?? []) as MaxPainRow[];
+    },
+  });
+}
+
+/** IV rank history for a ticker — most recent N days. */
+export function useIvRank(ticker: string, days = 30) {
+  return useQuery<IvRankRow[]>({
+    queryKey: ['ct_iv_rank', ticker, days],
+    enabled: !!ticker,
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      if (!ticker) return [];
+      const since = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_iv_rank_daily')
+        .select('id, ticker, date, iv_rank, iv_30d, iv_percentile, ingested_at')
+        .eq('ticker', ticker)
+        .gte('date', since)
+        .order('date', { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as IvRankRow[];
     },
   });
 }
