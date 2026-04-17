@@ -13,6 +13,7 @@ import { NetPremiumLine } from '@/components/command/NetPremiumLine';
 import { HiroPanel } from '@/components/command/HiroPanel';
 import { MarketMovers } from '@/components/command/MarketMovers';
 import { EventsPanel } from '@/components/command/EventsPanel';
+import { PositioningPanel } from '@/components/command/PositioningPanel';
 import { GexHeatmap } from '@/components/command/GexHeatmap';
 import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
 import { Button } from '@/components/ui/button';
@@ -82,6 +83,7 @@ export default function CommandStation() {
             <FlowTape />
             <MarketMovers />
             <EventsPanel />
+            <PositioningPanel />
             <DarkPoolTape />
             <RecapPanel />
             <JamesViewForm />
