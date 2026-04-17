@@ -53,6 +53,7 @@ export default function CommandStation() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <VoiceToggle />
             <Button size="sm" variant="outline" onClick={() => qc.invalidateQueries()}>
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
             </Button>
