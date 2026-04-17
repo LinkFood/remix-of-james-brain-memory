@@ -43,20 +43,52 @@ function relTime(iso: string): string {
   return `${Math.floor(m / 60)}h`;
 }
 
+  // Fallback when ct_top_movers is empty (UW top-net-impact endpoint not
+  // populating): derive movers from the last 30min of flow_alerts, aggregating
+  // net premium per ticker. Call-heavy = bullish, put-heavy = bearish.
+  // This keeps the panel live off the flow-ingester data we already have.
 export function MarketMovers() {
   const { data: movers } = useQuery<TopMover[]>({
-    queryKey: ['ct_top_movers'],
+    queryKey: ['ct_top_movers_with_fallback'],
     refetchInterval: 60_000,
     queryFn: async () => {
       const since = new Date(Date.now() - 30 * 60_000).toISOString();
-      const { data } = await supabase
+      const primary = await supabase
         .from('ct_top_movers')
         .select('ticker, side, rank, net_premium, snapshot_at')
         .gte('snapshot_at', since)
         .order('snapshot_at', { ascending: false })
         .order('rank', { ascending: true })
         .limit(30);
-      return (data ?? []) as TopMover[];
+      if (primary.data && primary.data.length > 0) return primary.data as TopMover[];
+
+      // Fallback: aggregate flow_alerts → pseudo-movers
+      const flowResp = await supabase
+        .from('ct_flow_alerts')
+        .select('ticker, side, premium, ingested_at')
+        .gte('ingested_at', since)
+        .gte('premium', 100_000)
+        .order('premium', { ascending: false })
+        .limit(500);
+      const flows = (flowResp.data ?? []) as { ticker: string; side: string; premium: number | null; ingested_at: string }[];
+      const agg = new Map<string, { call: number; put: number; latest: string }>();
+      for (const f of flows) {
+        const prem = f.premium ?? 0;
+        if (!prem) continue;
+        const cur = agg.get(f.ticker) ?? { call: 0, put: 0, latest: f.ingested_at };
+        if (f.side === 'call') cur.call += prem;
+        else if (f.side === 'put') cur.put += prem;
+        if (f.ingested_at > cur.latest) cur.latest = f.ingested_at;
+        agg.set(f.ticker, cur);
+      }
+      const synthetic: TopMover[] = [];
+      const bull = Array.from(agg.entries()).map(([t, v]) => ({ t, net: v.call - v.put, latest: v.latest }))
+        .filter(x => x.net > 0).sort((a, b) => b.net - a.net).slice(0, 10);
+      const bear = Array.from(agg.entries()).map(([t, v]) => ({ t, net: v.put - v.call, latest: v.latest }))
+        .filter(x => x.net > 0).sort((a, b) => b.net - a.net).slice(0, 10);
+      bull.forEach((x, i) => synthetic.push({ ticker: x.t, side: 'bullish', rank: i + 1, net_premium: x.net, snapshot_at: x.latest }));
+      bear.forEach((x, i) => synthetic.push({ ticker: x.t, side: 'bearish', rank: i + 1, net_premium: x.net, snapshot_at: x.latest }));
+      return synthetic;
     },
   });
 
