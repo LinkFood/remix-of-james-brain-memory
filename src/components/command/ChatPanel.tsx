@@ -57,6 +57,9 @@ export function ChatPanel() {
     setInput('');
     setBusy(true);
     try {
+      // getUser() before getSession() forces a server refresh so we don't
+      // send a stale cached JWT to the function (ct-chat rejects silently).
+      await supabase.auth.getUser();
       const { data: sessionData } = await supabase.auth.getSession();
       const jwt = sessionData?.session?.access_token;
       if (!jwt) {

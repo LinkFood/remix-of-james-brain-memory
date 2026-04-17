@@ -16,9 +16,11 @@
  * All aggregation happens in the edge function (ct-gex-radar). This file
  * only renders — memoized on tickers prop.
  */
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Card } from '@/components/ui/card';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { useGexRadar, type GexRadarTicker, type GexRadarStrike } from '@/hooks/useGexRadar';
+import { LinkGexDeep } from './LinkGexDeep';
 
 // -----------------------------------------------------------------------------
 // Color constants — ported verbatim from James's TrendSpider script.
@@ -121,9 +123,10 @@ function velocityBadge(strike: GexRadarStrike): { label: string; color: string }
 
 interface ColumnProps {
   t: GexRadarTicker;
+  onDrillDown?: (ticker: string) => void;
 }
 
-const TickerColumn = memo(function TickerColumn({ t }: ColumnProps) {
+const TickerColumn = memo(function TickerColumn({ t, onDrillDown }: ColumnProps) {
   const { maxAbsNet, flipAfterIdx } = useMemo(() => {
     let m = 0;
     for (const s of t.strikes) m = Math.max(m, Math.abs(s.netGex));
@@ -159,7 +162,21 @@ const TickerColumn = memo(function TickerColumn({ t }: ColumnProps) {
   const regimeLabel = t.regime === 'pos' ? 'GAMMA▲' : t.regime === 'neg' ? 'GAMMA▼' : 'GAMMA·';
 
   return (
-    <div className="flex-1 min-w-0 border border-white/10 rounded-md bg-black/40 overflow-hidden">
+    <div
+      className={`flex-1 min-w-0 border border-white/10 rounded-md bg-black/40 overflow-hidden ${
+        onDrillDown ? 'cursor-pointer hover:border-white/25 transition-colors' : ''
+      }`}
+      onClick={onDrillDown ? () => onDrillDown(t.ticker) : undefined}
+      role={onDrillDown ? 'button' : undefined}
+      tabIndex={onDrillDown ? 0 : undefined}
+      onKeyDown={onDrillDown ? (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onDrillDown(t.ticker);
+        }
+      } : undefined}
+      title={onDrillDown ? `Open LinkGex deep view for ${t.ticker}` : undefined}
+    >
       {/* Header: ticker + spot */}
       <div className="px-3 py-2 border-b border-white/10 flex items-baseline justify-between">
         <div className="text-lg font-bold tracking-wide">{t.ticker}</div>
@@ -298,42 +315,61 @@ export const GexRadar = memo(function GexRadar({
   windowSize = 30,
 }: Props) {
   const { data, isLoading, isError, error } = useGexRadar(tickers, windowSize);
+  const [drillTicker, setDrillTicker] = useState<string | null>(null);
+  const isOpen = drillTicker !== null;
 
   return (
-    <Card className="p-3 bg-black/60 border-white/10">
-      <div className="flex items-baseline justify-between mb-2">
-        <div>
-          <h3 className="text-sm font-semibold tracking-wide">GEX Radar</h3>
-          <p className="text-[10px] text-muted-foreground">
-            Dealer gamma + OI velocity · {tickers.join(' · ')}
-          </p>
+    <>
+      <Card className="p-3 bg-black/60 border-white/10">
+        <div className="flex items-baseline justify-between mb-2">
+          <div>
+            <h3 className="text-sm font-semibold tracking-wide">GEX Radar</h3>
+            <p className="text-[10px] text-muted-foreground">
+              Dealer gamma + OI velocity · {tickers.join(' · ')} · click a ticker for LinkGex deep
+            </p>
+          </div>
+          {data?.generated_at && (
+            <span className="text-[10px] text-muted-foreground tabular-nums">
+              {new Date(data.generated_at).toLocaleTimeString('en-US', { hour12: false })}
+            </span>
+          )}
         </div>
-        {data?.generated_at && (
-          <span className="text-[10px] text-muted-foreground tabular-nums">
-            {new Date(data.generated_at).toLocaleTimeString('en-US', { hour12: false })}
-          </span>
+
+        {isError && (
+          <div className="text-xs text-red-400 px-2 py-3">
+            radar fetch failed: {(error as Error)?.message ?? 'unknown'}
+          </div>
         )}
-      </div>
 
-      {isError && (
-        <div className="text-xs text-red-400 px-2 py-3">
-          radar fetch failed: {(error as Error)?.message ?? 'unknown'}
-        </div>
-      )}
+        {isLoading && !data && (
+          <div className="text-xs text-muted-foreground px-2 py-8 text-center">
+            loading radar…
+          </div>
+        )}
 
-      {isLoading && !data && (
-        <div className="text-xs text-muted-foreground px-2 py-8 text-center">
-          loading radar…
-        </div>
-      )}
+        {data?.tickers && (
+          <div className="flex flex-col md:flex-row gap-2">
+            {data.tickers.map(t => (
+              <TickerColumn
+                key={t.ticker}
+                t={t}
+                onDrillDown={setDrillTicker}
+              />
+            ))}
+          </div>
+        )}
+      </Card>
 
-      {data?.tickers && (
-        <div className="flex flex-col md:flex-row gap-2">
-          {data.tickers.map(t => (
-            <TickerColumn key={t.ticker} t={t} />
-          ))}
-        </div>
-      )}
-    </Card>
+      <Sheet open={isOpen} onOpenChange={(o) => { if (!o) setDrillTicker(null); }}>
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-[860px] bg-black border-white/10 p-0 overflow-y-auto"
+        >
+          {drillTicker && (
+            <LinkGexDeep ticker={drillTicker} enabled={isOpen} />
+          )}
+        </SheetContent>
+      </Sheet>
+    </>
   );
 });

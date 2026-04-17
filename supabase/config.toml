@@ -189,6 +189,9 @@ verify_jwt = false
 [functions.ct-gex-radar]
 verify_jwt = false
 
+[functions.ct-linkgex-deep]
+verify_jwt = false
+
 [functions.ct-replay]
 verify_jwt = false
 

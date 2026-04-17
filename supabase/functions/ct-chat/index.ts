@@ -366,6 +366,31 @@ serve(async (req) => {
       responseText = parseTextContent(res).trim();
       // Log every MCP call Claude made during this turn — user can audit.
       logMcpCalls(supabase, 'chat', res as unknown as { content?: unknown }, { user_id: null }).catch(() => { /* non-blocking */ });
+
+      // Record cost + usage. Chat doesn't use agent_tasks, so write direct
+      // to ct_chat_tokens. Fire-and-forget — never blocks the response.
+      try {
+        const usage = (res as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+        const content = (res as { content?: unknown[] }).content ?? [];
+        const mcpCount = Array.isArray(content)
+          ? content.filter((b) => (b as { type?: string }).type === 'mcp_tool_use').length
+          : 0;
+        const inTok = usage?.input_tokens ?? 0;
+        const outTok = usage?.output_tokens ?? 0;
+        // Sonnet 4: $3/M in, $15/M out.
+        const cost = (inTok / 1_000_000) * 3 + (outTok / 1_000_000) * 15;
+        supabase.from('ct_chat_tokens').insert({
+          user_id: userId,
+          model: 'sonnet',
+          tokens_in: inTok,
+          tokens_out: outTok,
+          cost_usd: Number(cost.toFixed(6)),
+          duration_ms: Date.now() - startedAt,
+          mcp_calls: mcpCount,
+          user_message: message.slice(0, 500),
+          response_chars: responseText.length,
+        }).then(() => { /* fire-and-forget */ });
+      } catch (_e) { /* ignore token logging errors */ }
     } catch (e) {
       const detail = e instanceof ClaudeError ? `Claude ${e.status}` : String(e);
       console.error('[ct-chat] Claude failed:', detail);

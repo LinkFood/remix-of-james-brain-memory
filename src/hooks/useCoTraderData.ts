@@ -128,6 +128,68 @@ export function useLatestHeartbeat() {
   });
 }
 
+/**
+ * Today's session heartbeats (ordered ascending). Used by MarketBanner to:
+ *   - anchor intraday Δ (first price of session vs latest)
+ *   - detect regime flips within session (e.g. gamma regime inverted mid-day)
+ * One query, no UW cost — heartbeats already hold _snapshot per cycle.
+ */
+export function useSessionHeartbeats() {
+  return useQuery<Heartbeat[]>({
+    queryKey: ['ct_session_heartbeats'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      // Anchor to start of "today" in ET-ish terms. Using UTC midnight is fine
+      // for this — the session starts at 13:30 UTC, so anything after 00:00
+      // UTC today will include the session. Pre-open heartbeats are welcome
+      // as anchors.
+      const sinceIso = new Date(new Date().setUTCHours(0, 0, 0, 0)).toISOString();
+      const { data, error } = await supabase
+        .from('ct_heartbeats')
+        .select('id, status_line, watching, current_reads, created_at')
+        .neq('prompt_version', 'mcp-verify')
+        .gte('created_at', sinceIso)
+        .order('created_at', { ascending: true })
+        .limit(200);
+      if (error) throw error;
+      return (data ?? []) as Heartbeat[];
+    },
+  });
+}
+
+/**
+ * Latest ct_attention_stream row with attention_score >= threshold, within window.
+ * Powers the HOT pill — "drop-what-you're-doing" signal distilled to one line.
+ */
+export interface AttentionStreamRow {
+  kind: 'observation' | 'flag' | 'alert' | 'heartbeat';
+  id: string;
+  created_at: string;
+  attention_score: number | null;
+  summary: string | null;
+}
+
+export function useTopAttention(minutesBack = 30, minScore = 60) {
+  return useQuery<AttentionStreamRow | null>({
+    queryKey: ['ct_top_attention', minutesBack, minScore],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - minutesBack * 60_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_attention_stream')
+        .select('kind, id, created_at, attention_score, summary')
+        .gte('created_at', since)
+        .gte('attention_score', minScore)
+        .order('attention_score', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as AttentionStreamRow | null;
+    },
+  });
+}
+
 export function useTheses() {
   return useQuery<Thesis[]>({
     queryKey: ['ct_theses'],

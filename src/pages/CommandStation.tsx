@@ -8,6 +8,7 @@ import { JamesViewForm } from '@/components/command/JamesViewForm';
 // ChatBox replaced by docked ChatPanel (rendered by AuthLayout via sidebar prop)
 import { FlowTape } from '@/components/command/FlowTape';
 import { DarkPoolTape } from '@/components/command/DarkPoolTape';
+import { DarkPoolChart } from '@/components/command/DarkPoolChart';
 import { FlowPerStrike } from '@/components/command/FlowPerStrike';
 import { NetPremiumLine } from '@/components/command/NetPremiumLine';
 import { NetPremiumCumulative } from '@/components/command/NetPremiumCumulative';
@@ -93,6 +94,7 @@ export default function CommandStation() {
             <FlowPerStrike />
             <EventFeed />
             <DarkPoolTape />
+            <DarkPoolChart />
             <NewsFeed />
           </div>
           <div className="lg:col-span-4 space-y-4">
