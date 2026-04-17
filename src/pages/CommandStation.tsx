@@ -82,25 +82,27 @@ export default function CommandStation() {
               <NetPremiumLine />
               <HiroPanel />
             </div>
-            <div className="grid grid-cols-1 gap-4">
-              <FlowPerStrike />
-            </div>
+            <FlowPerStrike />
             <EventFeed />
+            <DarkPoolTape />
+            <NewsFeed />
           </div>
           <div className="lg:col-span-4 space-y-4">
-            {/* Morning Brief pinned to the very top — 90-sec pre-bell read */}
+            {/* Morning Brief pinned to top — 90-sec pre-bell read */}
             <MorningBriefPanel />
-            <McpCallsPanel />
             <FlowTape />
             <MarketMovers />
             <EventsPanel />
             <PositioningPanel />
-            <DarkPoolTape />
             <RecapPanel />
-            <JamesViewForm />
-            <DisagreementPanel />
-            <NewsFeed />
+            <McpCallsPanel />
           </div>
+        </div>
+
+        {/* Bottom tools row — post-a-view + claude's self-critique, side-by-side */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+          <JamesViewForm />
+          <DisagreementPanel />
         </div>
 
         <footer className="pt-4 text-[10px] text-muted-foreground/60 text-center">

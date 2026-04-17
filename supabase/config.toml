@@ -143,3 +143,9 @@ verify_jwt = false
 
 [functions.ct-recall]
 verify_jwt = false
+
+[functions.ct-event-watcher]
+verify_jwt = false
+
+[functions.ct-mcp-verify]
+verify_jwt = false

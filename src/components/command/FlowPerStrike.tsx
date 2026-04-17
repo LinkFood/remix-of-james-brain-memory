@@ -76,8 +76,8 @@ export function FlowPerStrike() {
       </div>
 
       {buckets.length === 0 ? (
-        <div className="p-4 text-center text-xs text-muted-foreground">
-          {alerts?.length ? `no strikes for ${active || 'selected ticker'}` : 'no flow yet'}
+        <div className="min-h-[80px] flex items-center justify-center text-xs text-muted-foreground">
+          {alerts?.length ? `no strikes for ${active || 'selected ticker'}` : 'no flow yet — watching'}
         </div>
       ) : (
         <div className="p-2">

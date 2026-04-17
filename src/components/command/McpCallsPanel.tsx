@@ -158,8 +158,8 @@ export function McpCallsPanel() {
           No MCP calls yet. Ask Claude something in chat that requires live UW data (e.g. "pull NVDA options chain") and it'll show up here.
         </div>
       ) : (
-        <div className="max-h-[60vh] overflow-y-auto divide-y divide-border">
-          {calls.map(c => <McpCallRow key={c.id} call={c} />)}
+        <div className="max-h-[40vh] overflow-y-auto divide-y divide-border">
+          {calls.slice(0, 20).map(c => <McpCallRow key={c.id} call={c} />)}
         </div>
       )}
     </Card>
