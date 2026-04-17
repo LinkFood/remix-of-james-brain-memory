@@ -116,6 +116,7 @@ export function getOptionScreener(params: {
   is_otm?: boolean;
   min_volume?: number;
   min_volume_oi_ratio?: number;
+  min_sweep_volume_ratio?: number;
   vol_greater_oi?: boolean;
   max_dte?: number;
   'issue_types[]'?: string[];
@@ -136,6 +137,45 @@ export function getMarketTide(params: { interval_5m?: boolean } = {}): Promise<u
 /** Per-ticker net premium ticks (intraday sentiment) */
 export function getNetPremiumTicks(ticker: string): Promise<unknown> {
   return uwGet(`/api/stock/${ticker}/net-prem-ticks`);
+}
+
+/** NOPE — Net Options Pricing Effect per minute. Regime classifier. */
+export function getNope(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/nope`);
+}
+
+/** Per-minute dealer delta/vega hedging flow */
+export function getGreekFlow(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/greek-flow`);
+}
+
+/** Max pain across all expiries */
+export function getMaxPain(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/max-pain`);
+}
+
+/** Top bullish/bearish tickers market-wide by net premium */
+export function getTopNetImpact(): Promise<unknown> {
+  return uwGet('/api/market/top-net-impact');
+}
+
+/**
+ * Canonical unusual-sweep screener. Filters hardcoded for retail "flow":
+ * sweep volume ratio ≥0.7, vol > OI, minimum $100K premium.
+ */
+export function getSweepScreener(limit = 50): Promise<unknown> {
+  return getOptionScreener({
+    limit,
+    min_premium: 100_000,
+    min_sweep_volume_ratio: 0.7,
+    vol_greater_oi: true,
+    is_otm: true,
+  });
+}
+
+/** IV rank time series */
+export function getIvRank(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/iv-rank`);
 }
 
 // ============================================================================

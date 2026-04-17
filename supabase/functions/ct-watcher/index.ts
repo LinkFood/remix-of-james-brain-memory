@@ -455,10 +455,11 @@ serve(async (req) => {
     }
     const memory = await buildMemoryBundle(supabase, WATCHLIST, liveStateByInstrument);
 
-    // 3b. Recent flow + dark pool — Claude reasons over real whale activity,
-    // not just aggregates. 10-min window, top by premium / notional.
+    // 3b. Recent flow + dark pool + NOPE + top movers + sweeps. Claude reasons
+    // over real whale activity + regime classifier + watchlist-external signals.
     const flowCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
-    const [flowRecent, dpRecent] = await Promise.all([
+    const topMoversCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const [flowRecent, dpRecent, nopeRecent, topMovers, sweeps] = await Promise.all([
       supabase
         .from('ct_flow_alerts')
         .select('ticker, side, strike, expiry, is_otm, is_ask, size, premium, size_gt_oi, executed_at, ingested_at')
@@ -471,6 +472,25 @@ serve(async (req) => {
         .gte('ingested_at', flowCutoff)
         .order('notional_value', { ascending: false })
         .limit(25),
+      supabase
+        .from('ct_nope_minute')
+        .select('ticker, nope, tick_timestamp')
+        .gte('tick_timestamp', new Date(Date.now() - 15 * 60 * 1000).toISOString())
+        .order('tick_timestamp', { ascending: false })
+        .limit(15),
+      supabase
+        .from('ct_top_movers')
+        .select('ticker, side, rank, net_premium, snapshot_at')
+        .gte('snapshot_at', topMoversCutoff)
+        .order('snapshot_at', { ascending: false })
+        .order('rank', { ascending: true })
+        .limit(20),
+      supabase
+        .from('ct_sweeps')
+        .select('ticker, type, strike, expiry, premium, volume, open_interest, sweep_ratio, snapshot_at')
+        .gte('snapshot_at', topMoversCutoff)
+        .order('premium', { ascending: false })
+        .limit(15),
     ]);
 
     // 4. Assemble Claude user message — condensed, under ~6K tokens
@@ -481,12 +501,20 @@ serve(async (req) => {
       memory,
       recent_flow_alerts: flowRecent.data ?? [],
       recent_dark_pool_prints: dpRecent.data ?? [],
+      nope_recent: nopeRecent.data ?? [],
+      top_movers_30min: topMovers.data ?? [],
+      unusual_sweeps_30min: sweeps.data ?? [],
       proxy_mapping: {
         GLD: 'gold ETF — used as proxy for gold futures (GC) flow and positioning',
         USO: 'oil ETF — used as proxy for oil futures (CL) flow and positioning',
         SPX: 'cash S&P 500 index — used as proxy for ES futures macro regime read',
       },
-      note: 'UW does not cover futures directly; treat the proxies above as their futures equivalents for reasoning. The recent_flow_alerts and recent_dark_pool_prints arrays show the last 10 minutes of unusual activity — cite specific flow/DP prints in your observations when they are material. Decide ONE state for this cycle and emit the JSON per the schema in the system prompt. Return ONLY the JSON.',
+      note: `UW does not cover futures directly; treat the proxies above as their futures equivalents for reasoning.
+recent_flow_alerts + recent_dark_pool_prints: last 10min of unusual activity — cite specific prints when material.
+nope_recent: Net Options Pricing Effect per minute for SPY/QQQ/IWM. NOPE < 0 = dealers short gamma = momentum / trending regime. NOPE > 0 = dealers long gamma = mean-revert / vol-compressed. Use the latest NOPE readings to validate or contradict the regime inference from gamma flip.
+top_movers_30min: market-wide top bullish/bearish tickers by net premium. Surfaces tickers OUTSIDE the 12-ticker watchlist. If a top mover is unusual or sector-contagious, call it out.
+unusual_sweeps_30min: canonical "unusual sweep" screen (OTM, sweep ratio >70%, vol > OI, premium ≥\$100K). Flow traders read this first; elevate any that suggest sector rotation or watchlist contagion.
+Decide ONE state for this cycle and emit the JSON per the schema in the system prompt. Return ONLY the JSON.`,
     });
 
     // 5. Call Claude — Haiku for Day 2 (cost-efficient workhorse)

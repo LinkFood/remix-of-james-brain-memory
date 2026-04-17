@@ -8,6 +8,7 @@ import { FlowTape } from '@/components/command/FlowTape';
 import { DarkPoolTape } from '@/components/command/DarkPoolTape';
 import { FlowPerStrike } from '@/components/command/FlowPerStrike';
 import { NetPremiumLine } from '@/components/command/NetPremiumLine';
+import { MarketMovers } from '@/components/command/MarketMovers';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -67,6 +68,7 @@ export default function CommandStation() {
           </div>
           <div className="lg:col-span-4 space-y-4">
             <FlowTape />
+            <MarketMovers />
             <DarkPoolTape />
             <RecapPanel />
             <NewsFeed />

@@ -13,7 +13,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getFlowAlerts, getDarkPoolRecent, getDarkPool, getNetPremiumTicks, WATCHLIST } from '../_shared/uwClient.ts';
+import { getFlowAlerts, getDarkPoolRecent, getDarkPool, getNetPremiumTicks, getNope, getTopNetImpact, getSweepScreener, WATCHLIST } from '../_shared/uwClient.ts';
 
 function numOrNull(v: unknown): number | null {
   if (v === null || v === undefined) return null;
@@ -106,6 +106,130 @@ async function ingestDarkPool(
   }
 }
 
+async function ingestNope(
+  supabase: SupabaseClient,
+  ticker: string,
+): Promise<{ seen: number; inserted: number }> {
+  try {
+    const raw = await getNope(ticker);
+    const data = (raw && typeof raw === 'object') ? (raw as { data?: unknown }).data : null;
+    if (!Array.isArray(data) || data.length === 0) return { seen: 0, inserted: 0 };
+    const tail = (data as Array<Record<string, unknown>>).slice(-30);
+    const rows = tail.map((r) => ({
+      ticker,
+      tick_timestamp: (r.timestamp as string | undefined) ?? (r.tick_timestamp as string | undefined) ?? new Date().toISOString(),
+      nope: numOrNull(r.nope ?? r.value),
+      underlying_price: numOrNull(r.underlying_price ?? r.price),
+      raw: r,
+    })).filter(r => r.tick_timestamp);
+    const { error, count } = await supabase
+      .from('ct_nope_minute')
+      .upsert(rows, { onConflict: 'ticker,tick_timestamp', ignoreDuplicates: true, count: 'exact' });
+    if (error) {
+      console.warn(`[ct-flow] nope upsert failed (${ticker}):`, error.message);
+      return { seen: rows.length, inserted: 0 };
+    }
+    return { seen: rows.length, inserted: count ?? rows.length };
+  } catch (e) {
+    console.warn(`[ct-flow] nope pull failed (${ticker}):`, e instanceof Error ? e.message : e);
+    return { seen: 0, inserted: 0 };
+  }
+}
+
+async function ingestTopMovers(supabase: SupabaseClient): Promise<{ seen: number; inserted: number }> {
+  try {
+    const raw = await getTopNetImpact();
+    // UW shape: { data: { bullish: [...], bearish: [...] } } — be defensive
+    const root = (raw && typeof raw === 'object') ? (raw as { data?: unknown }).data : null;
+    const snapshotAt = new Date().toISOString();
+    const rows: Array<Record<string, unknown>> = [];
+
+    const bullish = (root as { bullish?: unknown[] } | null)?.bullish;
+    const bearish = (root as { bearish?: unknown[] } | null)?.bearish;
+    const seenTickers = new Set<string>();
+
+    if (Array.isArray(bullish)) {
+      (bullish as Array<Record<string, unknown>>).forEach((r, i) => {
+        const ticker = r.ticker as string | undefined;
+        if (!ticker) return;
+        const key = `b-${ticker}`;
+        if (seenTickers.has(key)) return;
+        seenTickers.add(key);
+        rows.push({
+          snapshot_at: snapshotAt,
+          ticker,
+          side: 'bullish',
+          rank: i + 1,
+          net_premium: numOrNull(r.net_premium ?? r.net_call_premium),
+          raw: r,
+        });
+      });
+    }
+    if (Array.isArray(bearish)) {
+      (bearish as Array<Record<string, unknown>>).forEach((r, i) => {
+        const ticker = r.ticker as string | undefined;
+        if (!ticker) return;
+        const key = `s-${ticker}`;
+        if (seenTickers.has(key)) return;
+        seenTickers.add(key);
+        rows.push({
+          snapshot_at: snapshotAt,
+          ticker,
+          side: 'bearish',
+          rank: i + 1,
+          net_premium: numOrNull(r.net_premium ?? r.net_put_premium),
+          raw: r,
+        });
+      });
+    }
+
+    if (rows.length === 0) return { seen: 0, inserted: 0 };
+    const { error } = await supabase.from('ct_top_movers').insert(rows);
+    if (error) {
+      console.warn('[ct-flow] top-movers insert failed:', error.message);
+      return { seen: rows.length, inserted: 0 };
+    }
+    return { seen: rows.length, inserted: rows.length };
+  } catch (e) {
+    console.warn('[ct-flow] top-net-impact pull failed:', e instanceof Error ? e.message : e);
+    return { seen: 0, inserted: 0 };
+  }
+}
+
+async function ingestSweeps(supabase: SupabaseClient): Promise<{ seen: number; inserted: number }> {
+  try {
+    const raw = await getSweepScreener(60);
+    const data = (raw && typeof raw === 'object') ? (raw as { data?: unknown }).data : null;
+    if (!Array.isArray(data) || data.length === 0) return { seen: 0, inserted: 0 };
+    const snapshotAt = new Date().toISOString();
+    const rows = (data as Array<Record<string, unknown>>).map((r) => ({
+      ticker: (r.ticker_symbol as string | undefined) ?? (r.ticker as string | undefined) ?? 'UNKNOWN',
+      option_symbol: (r.option_symbol as string | undefined) ?? null,
+      strike: numOrNull(r.strike),
+      expiry: (r.expiry as string | undefined) ?? (r.expiration as string | undefined) ?? null,
+      type: (r.type as string | undefined) ?? null,
+      premium: numOrNull(r.premium ?? r.total_premium),
+      volume: numOrNull(r.volume ?? r.total_volume),
+      open_interest: numOrNull(r.open_interest),
+      sweep_ratio: numOrNull(r.sweep_volume_ratio ?? r.sweep_ratio),
+      ask_side_perc: numOrNull(r.ask_side_perc),
+      snapshot_at: snapshotAt,
+      raw: r,
+    })).filter(r => r.option_symbol);
+    const { error, count } = await supabase
+      .from('ct_sweeps')
+      .upsert(rows, { onConflict: 'option_symbol,snapshot_at', ignoreDuplicates: true, count: 'exact' });
+    if (error) {
+      console.warn('[ct-flow] sweeps upsert failed:', error.message);
+      return { seen: rows.length, inserted: 0 };
+    }
+    return { seen: rows.length, inserted: count ?? rows.length };
+  } catch (e) {
+    console.warn('[ct-flow] sweep-screener pull failed:', e instanceof Error ? e.message : e);
+    return { seen: 0, inserted: 0 };
+  }
+}
+
 async function ingestNetPremiumTicks(
   supabase: SupabaseClient,
   ticker: string,
@@ -155,24 +279,35 @@ serve(async (req) => {
     // Market-wide
     const flow = await ingestFlowAlerts(supabase);
     const dpRecent = await ingestDarkPool(supabase, null);
+    const topMovers = await ingestTopMovers(supabase);
+    const sweeps = await ingestSweeps(supabase);
 
-    // Per-ticker dark pool + net premium (every invocation — 24 calls)
-    const perTicker: Record<string, { dp: { seen: number; inserted: number }; npt: { seen: number; inserted: number } }> = {};
+    // Per-ticker dark pool + net premium (every invocation — 24 calls for 12 tickers)
+    // NOPE only for SPY, QQQ, IWM (regime-critical indexes).
+    const perTicker: Record<string, { dp: { seen: number; inserted: number }; npt: { seen: number; inserted: number }; nope?: { seen: number; inserted: number } }> = {};
+    const nopeTickers = new Set(['SPY', 'QQQ', 'IWM']);
     for (const ticker of WATCHLIST) {
       perTicker[ticker] = {
         dp: await ingestDarkPool(supabase, ticker),
         npt: await ingestNetPremiumTicks(supabase, ticker),
       };
+      if (nopeTickers.has(ticker)) {
+        perTicker[ticker].nope = await ingestNope(supabase, ticker);
+      }
     }
 
     const totalDpNew = dpRecent.inserted + Object.values(perTicker).reduce((s, t) => s + t.dp.inserted, 0);
     const totalNptNew = Object.values(perTicker).reduce((s, t) => s + t.npt.inserted, 0);
+    const totalNopeNew = Object.values(perTicker).reduce((s, t) => s + (t.nope?.inserted ?? 0), 0);
 
     return new Response(JSON.stringify({
       success: true,
       flow_alerts: { seen: flow.seen, inserted: flow.inserted },
       dark_pool: { recent_inserted: dpRecent.inserted, per_ticker_inserted: totalDpNew - dpRecent.inserted, total_inserted: totalDpNew },
       net_premium_ticks: { total_inserted: totalNptNew },
+      nope: { total_inserted: totalNopeNew },
+      top_movers: { inserted: topMovers.inserted },
+      sweeps: { seen: sweeps.seen, inserted: sweeps.inserted },
       duration_ms: Date.now() - startedAt,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
