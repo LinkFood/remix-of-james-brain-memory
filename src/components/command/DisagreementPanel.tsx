@@ -33,10 +33,6 @@ function dirColor(dir: string): string {
 export function DisagreementPanel() {
   const { data: rows, isLoading } = useDisagreements(20);
 
-  // Self-hide when empty — an empty "no disagreements yet" panel is noise
-  // pre-9am. Only render once there's something to contest.
-  if (!isLoading && (!rows || rows.length === 0)) return null;
-
   return (
     <Card className="p-4">
       <div className="flex items-center gap-2 mb-3">
@@ -51,7 +47,11 @@ export function DisagreementPanel() {
 
       {isLoading ? (
         <div className="text-sm text-muted-foreground">loading…</div>
-      ) : !rows || rows.length === 0 ? null : (
+      ) : !rows || rows.length === 0 ? (
+        <div className="text-xs text-muted-foreground leading-relaxed">
+          No disagreements yet. When you log a view that differs from Claude&apos;s current read, they show up here — and the grader scores who was right at horizon close.
+        </div>
+      ) : (
         <div className="space-y-2">
           {rows.map(d => {
             const r = resolutionVariant(d.resolution);

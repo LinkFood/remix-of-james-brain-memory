@@ -113,19 +113,51 @@ function parseClaudeJson(raw: string): ClaudeJson | null {
   }
 }
 
+// Roll a UTC timestamp forward to the next regular-session open if it lands
+// in after-hours or a weekend. Regular session ≈ 13:30-20:00 UTC weekdays
+// (9:30a-4p ET during EDT; 14:30-21:00 UTC during EST is close enough for
+// grading purposes — a ~1h slop is fine since horizon_end gates when the
+// grader *starts* looking, not the exact exit print). Crucially this
+// prevents entry==exit grades where a horizon lands in a no-trade window.
+function rollToMarketHours(utcIso: string): string {
+  const d = new Date(utcIso);
+  // Weekend — push to Monday 13:30 UTC
+  while (d.getUTCDay() === 0 || d.getUTCDay() === 6) {
+    d.setUTCDate(d.getUTCDate() + 1);
+    d.setUTCHours(13, 30, 0, 0);
+  }
+  const h = d.getUTCHours();
+  const m = d.getUTCMinutes();
+  const mins = h * 60 + m;
+  if (mins < 13 * 60 + 30) {
+    // Pre-open → bump to today's 13:30 UTC
+    d.setUTCHours(13, 30, 0, 0);
+  } else if (mins >= 20 * 60) {
+    // Post-close → bump to tomorrow's 13:30 UTC (recurse for weekends)
+    d.setUTCDate(d.getUTCDate() + 1);
+    d.setUTCHours(13, 30, 0, 0);
+    return rollToMarketHours(d.toISOString());
+  }
+  return d.toISOString();
+}
+
 function horizonEnd(horizon: string, fromIso: string): string {
   const from = new Date(fromIso);
   switch (horizon) {
     case '1h':        from.setHours(from.getHours() + 1); break;
     case '4h':        from.setHours(from.getHours() + 4); break;
     case 'EOD':
-      // 20:00 UTC (4pm ET during EDT). If already past, next day.
       from.setUTCHours(20, 0, 0, 0);
       if (from.getTime() <= Date.parse(fromIso)) from.setUTCDate(from.getUTCDate() + 1);
       break;
     case 'next-day':  from.setUTCDate(from.getUTCDate() + 1); break;
     case 'weekly':    from.setUTCDate(from.getUTCDate() + 7); break;
     default:          from.setHours(from.getHours() + 4);
+  }
+  // EOD / next-day / weekly already target session opens or known bars.
+  // 1h / 4h and default need rolling in case they land in after-hours.
+  if (horizon === '1h' || horizon === '4h' || !['EOD', 'next-day', 'weekly'].includes(horizon)) {
+    return rollToMarketHours(from.toISOString());
   }
   return from.toISOString();
 }
