@@ -28,13 +28,14 @@ import { getCurrentPrice } from '../_shared/ctGrader.ts';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA', 'GLD', 'USO'] as const;
 
-const SYSTEM_PROMPT = `You manage a $10k paper book. 10:30 AM ET. Morning trades were cancelled due to gap (market opened past your planned stops or targets). You've been watching the tape for 60 minutes post-gap.
+const SYSTEM_PROMPT = `You manage a $10k paper book. Mid-session. Book is empty. Your job: commit 1-2 trades NOW or skip with reason.
 
-Your job: commit 1-2 trades NOW based on the POST-GAP read. Different context than morning:
-  - Gap has settled, flow signals are real-time, regime is confirmed or refuted
-  - Tighter stops (you have less time before close — 5.5 hours to horizon, not full session)
-  - Smaller size (60% of usual — you've already missed the big move)
-  - Max 2 trades, max 25% per trade, max 40% total
+PRIORITY: signal > noise > silence. If the tape has shifted (regime flip, flow acceleration, wall break, invalidated priors), commit. Flat-$0 days are fine when nothing is happening, but NOT when you've been reading clear signals all session and just freezing.
+
+Rules:
+  - Tighter stops (less time before close than a morning trade)
+  - Smaller size than morning (max 25% per trade, 40% total, max 2 trades)
+  - Post-gap/mid-session real-time context — use what's happening NOW, not pre-market thesis
 
 HARD RULES:
 - Instruments: SPY, QQQ, IWM, NVDA, AAPL, MSFT, META, GOOGL, AMZN, TSLA, GLD, USO ONLY
@@ -124,12 +125,10 @@ serve(async (req) => {
     return created.getUTCHours() >= 14 && created.getUTCMinutes() >= 15;
   });
 
+  // Permissive gate: any empty-book mid-session (regardless of cause) gets one
+  // re-entry attempt per session. Being too strict = book stays flat all day.
   if (midSessionReopenExists) {
     return new Response(JSON.stringify({ skipped: true, reason: 'mid_session_reopen_already_ran' }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  }
-  if (morningCancelled === 0) {
-    // No gap-cancel situation — book was always flat for legitimate reason, don't force a trade
-    return new Response(JSON.stringify({ skipped: true, reason: 'no_gap_cancellations_to_recover_from' }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   // Gather context

@@ -27,6 +27,106 @@ interface ChatMessage {
 }
 
 /**
+ * Parse and execute a commit-trade command from chat.
+ * Grammars accepted:
+ *   commit SPY long 15% stop 708 target 712 [thesis: "..."]
+ *   commit SPY 710C 4/18 long 5 @1.25 [stop 0.8 target 2.5] [thesis: "..."]
+ */
+async function handleCommitCommand(
+  supabase: ReturnType<typeof createClient>,
+  args: string,
+): Promise<{ response: string; trade_id: string | null }> {
+  const thesisMatch = args.match(/thesis[:\s]+"([^"]+)"|thesis[:\s]+(.+)$/i);
+  const thesis = thesisMatch ? (thesisMatch[1] ?? thesisMatch[2] ?? '').trim() : '';
+  const bare = thesisMatch ? args.replace(thesisMatch[0], '').trim() : args.trim();
+
+  const tokens = bare.split(/\s+/);
+  if (tokens.length < 3) {
+    return { response: `commit parse error — usage: "commit SPY long 15% stop 708 target 712 thesis: '...'" or "commit SPY 710C 4/18 long 5 @1.25 thesis: '...'"`, trade_id: null };
+  }
+
+  const instrument = tokens[0].toUpperCase();
+  // Detect option: token like 710C or 710P or 710c 4/18
+  const optMatch = tokens[1].match(/^(\d+(?:\.\d+)?)([CPcp])$/);
+  let rpcArgs: Record<string, unknown>;
+
+  if (optMatch) {
+    // Option trade: commit SPY 710C 4/18 long 5 @1.25
+    const strike = parseFloat(optMatch[1]);
+    const contractType = optMatch[2].toLowerCase() === 'c' ? 'call' : 'put';
+    const exp = tokens[2]; // 4/18 or 2026-04-18
+    const year = new Date().getUTCFullYear();
+    let expiry: string;
+    if (exp.includes('-')) expiry = exp;
+    else if (exp.includes('/')) {
+      const [m, d] = exp.split('/');
+      expiry = `${year}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    } else {
+      return { response: 'option expiry must be M/D or YYYY-MM-DD', trade_id: null };
+    }
+    const side = tokens[3]?.toLowerCase() === 'long' || tokens[3]?.toLowerCase() === 'short' ? tokens[3].toLowerCase() : 'long';
+    const contracts = parseInt(tokens[4] ?? '1', 10);
+    const premMatch = args.match(/@\s*(\d+(?:\.\d+)?)/);
+    const entryPremium = premMatch ? parseFloat(premMatch[1]) : null;
+    if (!entryPremium) return { response: 'option trade needs entry premium: @1.25', trade_id: null };
+    const stopMatch = args.match(/stop\s+(\d+(?:\.\d+)?)/i);
+    const targetMatch = args.match(/target\s+(\d+(?:\.\d+)?)/i);
+    rpcArgs = {
+      p_instrument: instrument,
+      p_side: side,
+      p_size_pct: 0,
+      p_contract_type: contractType,
+      p_strike: strike,
+      p_expiry: expiry,
+      p_contracts: contracts,
+      p_entry_premium: entryPremium,
+      p_entry_price: null,
+      p_stop_price: stopMatch ? parseFloat(stopMatch[1]) : null,
+      p_target_price: targetMatch ? parseFloat(targetMatch[1]) : null,
+      p_thesis: thesis || `manual commit: ${instrument} ${strike}${optMatch[2].toUpperCase()} ${expiry}`,
+      p_horizon: 'intraday',
+      p_conviction: 3,
+    };
+  } else {
+    // Underlying trade: commit SPY long 15% stop 708 target 712
+    const side = tokens[1]?.toLowerCase();
+    if (side !== 'long' && side !== 'short') {
+      return { response: `second token must be 'long' or 'short'`, trade_id: null };
+    }
+    const sizeMatch = args.match(/(\d+(?:\.\d+)?)\s*%/);
+    const sizePct = sizeMatch ? parseFloat(sizeMatch[1]) : 10;
+    const stopMatch = args.match(/stop\s+(\d+(?:\.\d+)?)/i);
+    const targetMatch = args.match(/target\s+(\d+(?:\.\d+)?)/i);
+    rpcArgs = {
+      p_instrument: instrument,
+      p_side: side,
+      p_size_pct: sizePct,
+      p_contract_type: 'underlying',
+      p_strike: null,
+      p_expiry: null,
+      p_contracts: null,
+      p_entry_premium: null,
+      p_entry_price: null, // book-manager will fill at current price on next tick
+      p_stop_price: stopMatch ? parseFloat(stopMatch[1]) : null,
+      p_target_price: targetMatch ? parseFloat(targetMatch[1]) : null,
+      p_thesis: thesis || `manual ${side} ${instrument} ${sizePct}%`,
+      p_horizon: 'intraday',
+      p_conviction: 3,
+    };
+  }
+
+  const { data, error } = await supabase.rpc('commit_manual_trade', rpcArgs);
+  if (error) {
+    return { response: `commit failed: ${error.message}`, trade_id: null };
+  }
+  const tradeId = (data as unknown) as string;
+  const summary = optMatch
+    ? `✓ committed ${instrument} ${rpcArgs.p_strike}${(rpcArgs.p_contract_type as string).toUpperCase()} ${rpcArgs.p_expiry} ${rpcArgs.p_side} ${rpcArgs.p_contracts} @${rpcArgs.p_entry_premium}`
+    : `✓ committed ${instrument} ${rpcArgs.p_side} ${rpcArgs.p_size_pct}% stop=${rpcArgs.p_stop_price ?? '—'} target=${rpcArgs.p_target_price ?? '—'}`;
+  return { response: `${summary}\ntrade_id: ${tradeId}\nbook-manager will manage on next :15 tick`, trade_id: tradeId };
+}
+
+/**
  * Semantic recall over ct_embeddings for the user's current message.
  * Returns up to 5 hits older than 30 min so we don't echo back the current cycle.
  * Best-effort — returns [] on any failure (never throws).
@@ -210,6 +310,19 @@ serve(async (req) => {
     if (!message) {
       return new Response(JSON.stringify({ error: 'message required' }), {
         status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Commit-trade slash command. Two grammars:
+    //   commit SPY long 15% stop 708 target 712 [thesis: text]
+    //   commit SPY 710C 4/18 long 5 @1.25 [stop 0.8 target 2.5] [thesis: text]
+    const commitMatch = message.match(/^\s*\/?commit\s+(.*)$/i);
+    if (commitMatch) {
+      const args = commitMatch[1];
+      const out = await handleCommitCommand(supabase, args);
+      return new Response(JSON.stringify({ response: out.response, trade_id: out.trade_id, commit: true, duration_ms: 0 }), {
+        status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
