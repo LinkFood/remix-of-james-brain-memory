@@ -9,19 +9,30 @@
  * and we don't crash the watcher cycle over a missing field.
  */
 
+export interface Wall {
+  strike: number;
+  gex: number;
+  distance_pct: number;                // signed % from ATM (neg = below, pos = above)
+}
+
+export type GammaRegime = 'positive' | 'negative' | 'unknown';
+
 export interface CondensedInstrumentState {
   ticker: string;
   price: number | null;
-  call_wall: number | null;           // near-ATM strike with largest call_gamma_oi
-  put_wall: number | null;             // near-ATM strike with largest absolute put_gamma_oi
-  gamma_flip: number | null;           // strike where cumulative gamma crosses zero
+  call_wall: number | null;            // CW1 — top call wall (backwards compatible)
+  put_wall: number | null;             // PW1 — top put wall (backwards compatible)
+  gamma_flip: number | null;
+  regime: GammaRegime;                 // positive = price above flip (mean-revert)
+  call_walls: Wall[];                  // CW1, CW2, CW3 ranked by |call_gex|
+  put_walls: Wall[];                   // PW1, PW2, PW3 ranked by |put_gex|
   total_call_gamma_oi: number | null;
   total_put_gamma_oi: number | null;
-  net_gamma_oi: number | null;         // call + put (put typically negative)
+  net_gamma_oi: number | null;
   put_call_volume_ratio: number | null;
   day_put_call_ratio: number | null;
   raw_strike_count: number;
-  near_atm_strike_count: number;       // how many strikes in the filter window
+  near_atm_strike_count: number;
   /** ATM-centered strike bars for UI mini-chart. ±8 strikes each side of ATM. */
   near_atm_strikes: Array<{ strike: number; call_gex: number; put_gex: number; net: number }>;
 }
@@ -29,17 +40,7 @@ export interface CondensedInstrumentState {
 export interface CondensedState {
   timestamp_utc: string;
   per_ticker: Record<string, CondensedInstrumentState>;
-  spx_macro: {
-    price: number | null;
-    call_wall: number | null;
-    put_wall: number | null;
-    gamma_flip: number | null;
-    total_call_gamma_oi: number | null;
-    total_put_gamma_oi: number | null;
-    net_gamma_oi: number | null;
-    raw_strike_count: number;
-    near_atm_strike_count: number;
-  };
+  spx_macro: CondensedInstrumentState;
   market_tide: {
     net_call_premium: number | null;
     net_put_premium: number | null;
@@ -86,6 +87,9 @@ function condenseInstrumentState(
     call_wall: null as number | null,
     put_wall: null as number | null,
     gamma_flip: null as number | null,
+    regime: 'unknown' as GammaRegime,
+    call_walls: [] as Wall[],
+    put_walls: [] as Wall[],
     total_call_gamma_oi: null as number | null,
     total_put_gamma_oi: null as number | null,
     net_gamma_oi: null as number | null,
@@ -138,21 +142,32 @@ function condenseInstrumentState(
   const high = price * (1 + ATM_PCT_WINDOW);
   const inWindow = rows.filter(r => r.strike >= low && r.strike <= high);
 
-  let callWallStrike: number | null = null;
-  let putWallStrike: number | null = null;
+  // Rank walls within the ATM window. Top 3 call walls by |call_gex|, top 3
+  // put walls by |put_gex|. CW1 / PW1 fall back to single-wall fields for
+  // backwards compatibility.
+  const pool = inWindow.length > 0 ? inWindow : rows;
+  const callRanked = [...pool]
+    .filter(r => r.call !== 0)
+    .sort((a, b) => b.call - a.call)
+    .slice(0, 3);
+  const putRanked = [...pool]
+    .filter(r => r.put !== 0)
+    .sort((a, b) => a.put - b.put)          // puts negative; most negative first
+    .slice(0, 3);
 
-  if (inWindow.length > 0) {
-    let maxCallGamma = -Infinity;
-    let minPutGamma = Infinity;
-    for (const r of inWindow) {
-      if (r.call > maxCallGamma) { maxCallGamma = r.call; callWallStrike = r.strike; }
-      if (r.put < minPutGamma) { minPutGamma = r.put; putWallStrike = r.strike; }
-    }
-  } else {
-    // Fallback: use the closest strike to price (should be rare with greek-exposure coverage)
-    const sorted = [...rows].sort((a, b) => Math.abs(a.strike - price!) - Math.abs(b.strike - price!));
-    if (sorted[0]) { callWallStrike = sorted[0].strike; putWallStrike = sorted[0].strike; }
-  }
+  const call_walls: Wall[] = callRanked.map(r => ({
+    strike: r.strike,
+    gex: r.call,
+    distance_pct: ((r.strike - price!) / price!) * 100,
+  }));
+  const put_walls: Wall[] = putRanked.map(r => ({
+    strike: r.strike,
+    gex: r.put,
+    distance_pct: ((r.strike - price!) / price!) * 100,
+  }));
+
+  const callWallStrike = call_walls[0]?.strike ?? null;
+  const putWallStrike = put_walls[0]?.strike ?? null;
 
   // Gamma flip: cumulative net gamma crossing zero. Scan strikes ascending,
   // collect ALL crossovers, pick the one closest to ATM. Deep-ITM and deep-OTM
@@ -212,12 +227,21 @@ function condenseInstrumentState(
     net: r.call + r.put,
   }));
 
+  // Regime — price above gamma flip = positive gamma (dealer long vol
+  // = mean-revert). Below = negative (dealer short vol = momentum).
+  const regime: GammaRegime = flipStrike === null
+    ? 'unknown'
+    : price > flipStrike ? 'positive' : 'negative';
+
   return {
     ticker,
     price,
     call_wall: callWallStrike,
     put_wall: putWallStrike,
     gamma_flip: flipStrike,
+    regime,
+    call_walls,
+    put_walls,
     total_call_gamma_oi: totalCall,
     total_put_gamma_oi: totalPut,
     net_gamma_oi: totalCall + totalPut,
@@ -279,22 +303,16 @@ export function condenseWatcherState(input: {
     per_ticker[t] = { ...gex, ...vol };
   }
 
-  const spxCondensed = condenseInstrumentState('SPX', input.spx_spot_gex, input.spx_greek_exposure);
+  const spxCondensed: CondensedInstrumentState = {
+    ...condenseInstrumentState('SPX', input.spx_spot_gex, input.spx_greek_exposure),
+    put_call_volume_ratio: null,
+    day_put_call_ratio: null,
+  };
 
   return {
     timestamp_utc: timestampUtc,
     per_ticker,
-    spx_macro: {
-      price: spxCondensed.price,
-      call_wall: spxCondensed.call_wall,
-      put_wall: spxCondensed.put_wall,
-      gamma_flip: spxCondensed.gamma_flip,
-      total_call_gamma_oi: spxCondensed.total_call_gamma_oi,
-      total_put_gamma_oi: spxCondensed.total_put_gamma_oi,
-      net_gamma_oi: spxCondensed.net_gamma_oi,
-      raw_strike_count: spxCondensed.raw_strike_count,
-      near_atm_strike_count: spxCondensed.near_atm_strike_count,
-    },
+    spx_macro: spxCondensed,
     market_tide: condenseMarketTide(input.market_tide),
     errors: input.errors,
   };
