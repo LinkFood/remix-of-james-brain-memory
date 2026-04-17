@@ -204,13 +204,16 @@ async function writeObservation(
   supabase: SupabaseClient,
   userId: string | null,
   condensed: CondensedState,
-  claude: ClaudeJson
+  claude: ClaudeJson,
+  memoryRecallOverride?: string,
 ): Promise<string | null> {
   const instruments = toArray(claude.instruments).filter(Boolean) as string[];
   if (instruments.length === 0) {
     console.warn('[ct-watcher] OBSERVATION missing instruments');
     return null;
   }
+
+  const memoryRecallSummary = memoryRecallOverride ?? asString(claude.memory_recall);
 
   const { data, error } = await supabase.from('ct_observations').insert({
     user_id: userId,
@@ -225,7 +228,7 @@ async function writeObservation(
     prior_read: asString(claude.prior_read),
     update_note: asString(claude.update_note),
     watching: asString(claude.memory_recall || claude.watching as string),
-    memory_recall_used: { summary: asString(claude.memory_recall) },
+    memory_recall_used: { summary: memoryRecallSummary },
     self_assessment: claude.self_assessment ?? null,
     prompt_version: CT_PROMPT_VERSION,
   }).select('id').maybeSingle();
@@ -264,16 +267,21 @@ async function writeFlag(
   supabase: SupabaseClient,
   userId: string | null,
   condensed: CondensedState,
-  claude: ClaudeJson
+  claude: ClaudeJson,
+  opts?: { convictionOverride?: number; memoryRecallOverride?: string },
 ): Promise<string | null> {
   const instruments = toArray(claude.instruments).filter(Boolean) as string[];
   if (instruments.length === 0) {
     console.warn('[ct-watcher] FLAG missing instruments');
     return null;
   }
-  const conviction = Math.max(1, Math.min(4, Number(claude.conviction) || 2));
+  const baseConviction = Math.max(1, Math.min(4, Number(claude.conviction) || 2));
+  const conviction = opts?.convictionOverride != null
+    ? Math.max(1, Math.min(4, opts.convictionOverride))
+    : baseConviction;
   const horizon = claude.horizon ?? '4h';
   const nowIso = new Date().toISOString();
+  const memoryRecallSummary = opts?.memoryRecallOverride ?? asString(claude.memory_recall);
 
   const { data, error } = await supabase.from('ct_flags').insert({
     user_id: userId,
@@ -290,7 +298,7 @@ async function writeFlag(
     watching: asString(claude.watching as string),
     full_reasoning: asString(claude.observation),
     glance: toArray(claude.glance).filter(s => typeof s === 'string'),
-    memory_recall_used: { summary: asString(claude.memory_recall) },
+    memory_recall_used: { summary: memoryRecallSummary },
     self_assessment: claude.self_assessment ?? null,
     trade_setup: claude.trade_setup ?? null,
     prompt_version: CT_PROMPT_VERSION,
@@ -329,25 +337,100 @@ async function writeFlag(
   return id;
 }
 
+interface WriteAlertResult {
+  alertId: string | null;
+  demotedTo: 'observation' | 'flag' | null;
+  demotedEventId: string | null;
+}
+
 async function writeAlert(
   supabase: SupabaseClient,
   userId: string | null,
   condensed: CondensedState,
   claude: ClaudeJson
-): Promise<string | null> {
+): Promise<WriteAlertResult> {
   const instruments = toArray(claude.instruments).filter(Boolean) as string[];
   if (instruments.length === 0) {
     console.warn('[ct-watcher] ALERT missing instruments');
-    return null;
+    return { alertId: null, demotedTo: null, demotedEventId: null };
   }
   const horizon = claude.horizon ?? '4h';
   const nowIso = new Date().toISOString();
   const trigger = claude.alert_trigger ?? 'other';
+  const direction = claude.direction ?? 'neutral';
+
+  // ========================================================================
+  // COOLDOWN CHECKS — run BOTH before insert. First match wins and demotes.
+  // ========================================================================
+
+  // Check 1: Thesis-invalidation suppression (60 min). Higher priority —
+  // check this first because invalidations at conv=5 are the loudest symptom.
+  if (trigger === 'thesis_invalidation') {
+    const sixtyMinAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const { data: recentInvalidations, error: invErr } = await supabase
+      .from('ct_alerts')
+      .select('id, created_at, instruments')
+      .gte('created_at', sixtyMinAgo)
+      .eq('alert_trigger', 'thesis_invalidation')
+      .overlaps('instruments', instruments)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (invErr) {
+      console.warn('[ct-watcher] invalidation cooldown query failed:', invErr.message);
+    } else if (recentInvalidations && recentInvalidations.length > 0) {
+      const recentId = recentInvalidations[0].id as string;
+      console.log(`[ct-watcher] INVALIDATION COOLDOWN triggered — prior invalidation ${recentId.slice(0, 8)} within 60min, downgrading ALERT→FLAG conv=3`);
+      const origGlance = toArray(claude.glance).filter(s => typeof s === 'string') as string[];
+      const prefixedClaude: ClaudeJson = {
+        ...claude,
+        glance: ['[INVALIDATION COOLDOWN — downgraded from ALERT]', ...origGlance],
+      };
+      const cooldownNote = `[cooldown: thesis_invalidation suppressed within 60min — see alert ${recentId}] ${asString(claude.memory_recall)}`.trim();
+      const flagId = await writeFlag(supabase, userId, condensed, prefixedClaude, {
+        convictionOverride: 3,
+        memoryRecallOverride: cooldownNote,
+      });
+      return { alertId: null, demotedTo: 'flag', demotedEventId: flagId };
+    }
+  }
+
+  // Check 2: Same-direction cooldown (30 min). Only applies to bullish/bearish.
+  if (direction === 'bullish' || direction === 'bearish') {
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const { data: recentSameDir, error: sdErr } = await supabase
+      .from('ct_alerts')
+      .select('id, created_at, instruments, direction')
+      .gte('created_at', thirtyMinAgo)
+      .eq('direction', direction)
+      .overlaps('instruments', instruments)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (sdErr) {
+      console.warn('[ct-watcher] same-direction cooldown query failed:', sdErr.message);
+    } else if (recentSameDir && recentSameDir.length > 0) {
+      const recentId = recentSameDir[0].id as string;
+      console.log(`[ct-watcher] SAME-DIRECTION COOLDOWN triggered — prior ${direction} alert ${recentId.slice(0, 8)} within 30min, downgrading ALERT→OBSERVATION`);
+      const origGlance = toArray(claude.glance).filter(s => typeof s === 'string') as string[];
+      const prefixedClaude: ClaudeJson = {
+        ...claude,
+        glance: ['[COOLDOWN — suppressed conv=5 repeat]', ...origGlance],
+      };
+      const cooldownNote = `[cooldown: same-direction suppressed within 30min — see alert ${recentId}] ${asString(claude.memory_recall)}`.trim();
+      const obsId = await writeObservation(supabase, userId, condensed, prefixedClaude, cooldownNote);
+      return { alertId: null, demotedTo: 'observation', demotedEventId: obsId };
+    }
+  }
+
+  // ========================================================================
+  // No cooldown — proceed with normal ALERT insert.
+  // ========================================================================
 
   const { data, error } = await supabase.from('ct_alerts').insert({
     user_id: userId,
     instruments,
-    direction: claude.direction ?? 'neutral',
+    direction,
     conviction: 5,
     horizon,
     horizon_end: horizonEnd(horizon, nowIso),
@@ -368,7 +451,7 @@ async function writeAlert(
 
   if (error) {
     console.error('[ct-watcher] alert insert failed:', error.message);
-    return null;
+    return { alertId: null, demotedTo: null, demotedEventId: null };
   }
   const id = data?.id ?? null;
 
@@ -397,7 +480,7 @@ async function writeAlert(
       },
     });
   }
-  return id;
+  return { alertId: id, demotedTo: null, demotedEventId: null };
 }
 
 async function applyThesisUpdates(
@@ -839,15 +922,28 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
             null,
           );
           break;
-        case 'ALERT':
-          eventId = await writeAlert(supabase, userId, condensed, parsed);
+        case 'ALERT': {
+          const alertResult = await writeAlert(supabase, userId, condensed, parsed);
+          let hbStatus: string;
+          if (alertResult.alertId) {
+            eventId = alertResult.alertId;
+            hbStatus = `ALERT written: ${eventId.slice(0, 8)} ${parsed.alert_trigger} ${parsed.direction}`;
+          } else if (alertResult.demotedTo) {
+            // Demotion happened — reflect the true event type for Slack + thesis logic
+            eventId = alertResult.demotedEventId;
+            eventType = alertResult.demotedTo === 'flag' ? 'FLAG' : 'OBSERVATION';
+            hbStatus = `ALERT demoted to ${alertResult.demotedTo.toUpperCase()}: ${alertResult.demotedEventId?.slice(0, 8) ?? 'err'} (cooldown) ${parsed.alert_trigger} ${parsed.direction}`;
+          } else {
+            hbStatus = `ALERT write failed: ${parsed.alert_trigger} ${parsed.direction}`;
+          }
           heartbeatId = await writeHeartbeat(
             supabase,
             condensed,
-            { state: 'HEARTBEAT', status_line: `ALERT written: ${eventId?.slice(0, 8) ?? 'err'} ${parsed.alert_trigger} ${parsed.direction}`, watching: condensedWatching(condensed) } as ClaudeJson,
+            { state: 'HEARTBEAT', status_line: hbStatus, watching: condensedWatching(condensed) } as ClaudeJson,
             null,
           );
           break;
+        }
         default:
           heartbeatId = await writeHeartbeat(supabase, condensed, { state: 'HEARTBEAT', watching: condensedWatching(condensed) } as ClaudeJson, `unknown state: ${parsed.state}`);
       }
@@ -875,21 +971,23 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
       const instruments = toArray(parsed.instruments).filter(Boolean) as string[];
       const isInvalidation = glanceArr[0]?.toUpperCase().startsWith('THESIS INVALIDATED') ?? false;
 
-      if (parsed.state === 'FLAG' && (parsed.conviction ?? 0) >= 2) {
+      // Gate on eventType (post-demotion truth) rather than parsed.state so a
+      // cooldown-demoted ALERT doesn't fire a full-volume ALERT Slack push.
+      if (eventType === 'FLAG' && (parsed.conviction ?? 0) >= 2) {
         await ctSlackPush(supabase, userId, {
           state: 'FLAG', instruments, glance: glanceArr,
           conviction: parsed.conviction, horizon: parsed.horizon,
           direction: parsed.direction, alert_trigger: parsed.alert_trigger,
           convergence_count: convergence.count, event_id: eventId ?? undefined,
         });
-      } else if (parsed.state === 'ALERT') {
+      } else if (eventType === 'ALERT') {
         await ctSlackPush(supabase, userId, {
           state: 'ALERT', instruments, glance: glanceArr,
           conviction: 5, horizon: parsed.horizon, alert_trigger: parsed.alert_trigger,
           direction: parsed.direction,
           convergence_count: convergence.count, event_id: eventId ?? undefined,
         });
-      } else if (parsed.state === 'OBSERVATION' && isInvalidation) {
+      } else if (eventType === 'OBSERVATION' && isInvalidation) {
         await ctSlackPush(supabase, userId, {
           state: 'FLAG', instruments, glance: glanceArr,
           conviction: 2, horizon: parsed.horizon ?? '4h',

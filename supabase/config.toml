@@ -114,6 +114,9 @@ verify_jwt = false
 [functions.ct-eod-recap]
 verify_jwt = false
 
+[functions.ct-midday-recap]
+verify_jwt = false
+
 [functions.ct-lessons-curator]
 verify_jwt = false
 
@@ -172,4 +175,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ct-slack-digest]
+verify_jwt = false
+
+[functions.ct-alert-book-commit]
 verify_jwt = false
