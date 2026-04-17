@@ -165,6 +165,25 @@ export function ClaudesRead() {
   const thesis = extractThesis(latest);
   const kill = extractKill(latest);
 
+  // Compact trade-setup play line — only if Claude committed to a setup
+  const setup = latest.trade_setup ?? null;
+  let playLine: string | null = null;
+  if (setup) {
+    const strat = (setup.strategy ?? '').toString().replace(/_/g, ' ');
+    const inst = setup.instrument ?? '';
+    const strike = setup.strike != null ? ` ${setup.strike}` : '';
+    const dte = setup.dte != null
+      ? setup.dte === 0 ? '0DTE' : `${setup.dte}DTE`
+      : (setup.expiry ?? '');
+    const sizeR = setup.size_r != null ? `${setup.size_r}R` : null;
+    const entry = setup.entry_level != null ? `entry ${setup.entry_level}` : null;
+    const stop = setup.stop_level != null ? `stop ${setup.stop_level}` : null;
+    const target = setup.target_level != null ? `target ${setup.target_level}` : null;
+    const head = [strat, `${inst}${strike}`, dte].filter(s => s && s.toString().trim()).join(' · ');
+    const tail = [sizeR, entry, stop, target].filter(Boolean).join(' / ');
+    playLine = [head, tail].filter(s => s && s.length > 0).join(' · ');
+  }
+
   return (
     <Card className={`border-2 ${pal.border} overflow-hidden`}>
       <div className={`${pal.glow} px-4 py-3`}>
@@ -212,6 +231,14 @@ export function ClaudesRead() {
           <span className="uppercase tracking-wider text-[10px] font-semibold text-foreground/70 mr-1.5">Kill:</span>
           {kill}
         </p>
+
+        {/* LINE 4 — play line (only if Claude committed to a setup) */}
+        {playLine && (
+          <p className={`text-sm font-mono leading-snug mt-1 ${pal.accent}`}>
+            <span className="uppercase tracking-wider text-[10px] font-semibold text-foreground/70 mr-1.5 font-sans">Play:</span>
+            {playLine}
+          </p>
+        )}
 
         {/* Expand toggle */}
         {(latest.full_reasoning || (latest.glance && latest.glance.length > 0)) && (
