@@ -12,6 +12,8 @@ import { Trophy, Target, TrendingUp, TrendingDown, Activity, AlertTriangle, Brai
 import { GhostTradeTape } from '@/components/command/GhostTradeTape';
 import { SelfCorrectionsPanel } from '@/components/command/SelfCorrectionsPanel';
 import { PreBellGauntletPanel } from '@/components/command/PreBellGauntletPanel';
+import { BookPanel } from '@/components/command/BookPanel';
+import { EquityCurvePanel } from '@/components/command/EquityCurvePanel';
 import { RecallSearch } from '@/components/command/RecallSearch';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 
@@ -282,6 +284,10 @@ export function Scorecard() {
         {/* Ghost Trade Tape — paper P&L of Claude's flagged calls. Hidden until
             there's at least one graded trade; zero-state would be pure noise. */}
         <GatedGhostTradeTape />
+
+        {/* Claude's book — the direct edge measurement: does he make money? */}
+        <BookPanel />
+        <EquityCurvePanel />
 
         {/* Pre-bell gauntlet — today's three committed calls, clean calibration. */}
         <PreBellGauntletPanel />

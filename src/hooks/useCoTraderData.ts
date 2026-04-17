@@ -844,6 +844,113 @@ export function useSelfRegrade(
   });
 }
 
+/** Claude's paper book — today's session. */
+export interface CtBookRow {
+  id: string;
+  session_date: string;
+  starting_balance: number;
+  ending_balance: number | null;
+  realized_pnl: number;
+  unrealized_pnl: number;
+  realized_pnl_pct: number;
+  high_water_mark: number | null;
+  trades_count: number;
+  wins: number;
+  losses: number;
+  max_drawdown_pct: number;
+  daily_recap: string | null;
+  goal_hit: boolean | null;
+}
+
+export interface CtTradeRow {
+  id: string;
+  session_date: string;
+  instrument: string;
+  side: 'long' | 'short';
+  size_pct: number;
+  size_usd: number;
+  entry_price: number;
+  stop_price: number | null;
+  target_price: number | null;
+  thesis: string;
+  conviction: number | null;
+  status: 'planned' | 'open' | 'closed' | 'cancelled';
+  opened_at: string | null;
+  close_price: number | null;
+  closed_at: string | null;
+  close_reason: string | null;
+  realized_pnl_pct: number | null;
+  realized_pnl_usd: number | null;
+}
+
+export function useTodayBook() {
+  return useQuery<CtBookRow | null>({
+    queryKey: ['ct_book_today'],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_book')
+        .select('*')
+        .eq('session_date', today)
+        .maybeSingle();
+      if (error) throw error;
+      return data as CtBookRow | null;
+    },
+  });
+}
+
+export function useTodayTrades() {
+  return useQuery<CtTradeRow[]>({
+    queryKey: ['ct_trades_today'],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_trades')
+        .select('*')
+        .eq('session_date', today)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as CtTradeRow[];
+    },
+  });
+}
+
+export function useBookHistory(days = 30) {
+  return useQuery<CtBookRow[]>({
+    queryKey: ['ct_book_history', days],
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - days * 86400_000).toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_book')
+        .select('*')
+        .gte('session_date', since)
+        .order('session_date', { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as CtBookRow[];
+    },
+  });
+}
+
+export function useLatestBookRecap() {
+  return useQuery<{ session_date: string; recap: string; what_worked: string | null; what_didnt: string | null; tomorrow_posture: string | null; pnl_pct: number | null } | null>({
+    queryKey: ['ct_daily_recap_latest'],
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_daily_recaps')
+        .select('session_date, recap, what_worked, what_didnt, tomorrow_posture, pnl_pct')
+        .order('session_date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
 /** Today's pre-bell gauntlet predictions. Committed at 9:25 ET, graded through close. */
 export interface PreBellPrediction {
   id: string;
