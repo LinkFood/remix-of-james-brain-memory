@@ -101,3 +101,6 @@ verify_jwt = false
 
 [functions.ct-watcher]
 verify_jwt = false
+
+[functions.ct-grader]
+verify_jwt = false
