@@ -8,16 +8,16 @@
 
 | Day | Status | Notes |
 |-----|--------|-------|
-| 1 — Schema + UW MCP + watcher stub | ✅ DONE (2026-04-16) | All 13 ct_* tables live, UW endpoints verified against SKILL.md, ct-watcher deployed + scheduled every 30min weekdays 13:00-20:59 UTC. 12/12 spot_gex + options_vol pulling cleanly. Manual trigger: `POST /rest/v1/rpc/trigger_ct_watcher` |
-| 2 — Watcher brain (memory + Claude + state logic) | 🚧 IN PROGRESS | Memory recall, Claude call, state decision (heartbeat/observation/flag/alert), write to appropriate table, embed, Slack push ≥3 |
-| 3 — Grader + thesis history + disagreement log | ⏳ QUEUED | Graded outcomes, thesis evolution audit, james+claude conflict materialization |
-| 4 — News + lessons + EOD recap | ⏳ QUEUED | News ingester, ADD/SUPERSEDE/SKIP lessons, Doc's-style EOD recap |
-| 5 — Command station UI (banner + ticker grid + feed) | ⏸ NEEDS JAMES REVIEW | Visual direction needs sign-off before build |
-| 6 — Chat integration + historical recall + SPX GEX chart | ⏳ QUEUED | Depends on Day 5 |
-| 7 — Scorecard + recap views | ⏳ QUEUED | |
-| 8 — System prompt iteration + polish | ⏳ QUEUED | After 1 day of live running |
+| 1 — Schema + UW client + watcher stub | ✅ DONE 2026-04-16 | All 13 ct_* tables + IVFFlat index + UW endpoints from SKILL.md. Cron every 30min weekdays 13:00-20:59 UTC. |
+| 2 — Watcher brain (memory + Claude + state logic) | ✅ DONE 2026-04-16 | Memory recall, Claude Haiku decisions, 4-state writes, embeddings via Voyage. First obs verified neutral+numbers-first. Second obs referenced first via memory recall = compound loop working. |
+| 3 — Grader | ✅ DONE 2026-04-16 | Verdict rubric (flat <0.3%, vol ≥0.5%, partial credit on flat). Every 15min. |
+| 4 — News + EOD + Lessons | ✅ DONE 2026-04-16 | News: every 20min weekdays 11-22 UTC with 10 headlines/ticker. EOD: 21:30 UTC weekdays with Doc's-style recap. Lessons: Sundays 23:00 UTC with ADD/SUPERSEDE/SKIP. |
+| 5 — Command Station frontend | ✅ DONE 2026-04-16 | `/` = CommandStation. MarketBanner (SPX GEX + tide), TickerGrid (12 cards), EventFeed (realtime obs/flags/alerts), NewsFeed, RecapPanel, "Run watcher now" button. Realtime via Supabase subs. |
+| 6 — Chat MCP + historical recall endpoint | ⏳ NOT STARTED | After James has a day with it. |
+| 7 — Scorecard page + disagreement log UI | ⏳ NOT STARTED | Needs graded corpus first. |
+| 8 — System prompt iteration | ⏳ AFTER LIVE RUN | Review ~50 outputs, tune voice, bump to v1.1 if needed. |
 
-**Autonomous checkpoint plan:** Days 2-4 proceed without review (backend). Day 5 stops for James to approve visual direction before building. Days 6-7 proceed from there.
+**Days 1-5 shipped in one session 2026-04-16.** Next cron fires Friday 13:00 UTC (9am ET) — site will paint first real market-hours state then.
 
 ---
 
