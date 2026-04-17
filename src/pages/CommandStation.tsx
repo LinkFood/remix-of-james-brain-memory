@@ -3,6 +3,8 @@ import { TickerGrid } from '@/components/command/TickerGrid';
 import { EventFeed } from '@/components/command/EventFeed';
 import { NewsFeed } from '@/components/command/NewsFeed';
 import { RecapPanel } from '@/components/command/RecapPanel';
+import { DisagreementPanel } from '@/components/command/DisagreementPanel';
+import { JamesViewForm } from '@/components/command/JamesViewForm';
 import { ChatBox } from '@/components/command/ChatBox';
 import { FlowTape } from '@/components/command/FlowTape';
 import { DarkPoolTape } from '@/components/command/DarkPoolTape';
@@ -12,6 +14,7 @@ import { HiroPanel } from '@/components/command/HiroPanel';
 import { MarketMovers } from '@/components/command/MarketMovers';
 import { EventsPanel } from '@/components/command/EventsPanel';
 import { GexHeatmap } from '@/components/command/GexHeatmap';
+import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -75,11 +78,14 @@ export default function CommandStation() {
             <EventFeed />
           </div>
           <div className="lg:col-span-4 space-y-4">
+            <MorningBriefPanel />
             <FlowTape />
             <MarketMovers />
             <EventsPanel />
             <DarkPoolTape />
             <RecapPanel />
+            <JamesViewForm />
+            <DisagreementPanel />
             <NewsFeed />
           </div>
         </div>

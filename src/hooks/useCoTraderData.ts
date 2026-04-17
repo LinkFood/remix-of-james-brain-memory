@@ -225,7 +225,7 @@ export function useDarkPoolPrints(limit = 30) {
 /**
  * Manual trigger via RPC — for "run now" buttons on the dashboard.
  */
-export async function triggerCoTrader(fn: 'watcher' | 'grader' | 'news_ingester' | 'eod_recap' | 'lessons_curator' | 'flow_ingester' | 'event_calendar_ingester' | 'disagreement_materializer'): Promise<{ ok: boolean; error?: string }> {
+export async function triggerCoTrader(fn: 'watcher' | 'grader' | 'news_ingester' | 'eod_recap' | 'lessons_curator' | 'flow_ingester' | 'event_calendar_ingester' | 'disagreement_materializer' | 'morning_brief'): Promise<{ ok: boolean; error?: string }> {
   const rpcName = `trigger_ct_${fn}`;
   const { error } = await supabase.rpc(rpcName);
   if (error) return { ok: false, error: error.message };
@@ -430,6 +430,35 @@ export function useGreekFlow(ticker: 'SPY' | 'QQQ' | 'IWM', hours = 4) {
         .limit(5000);
       if (error) throw error;
       return (data ?? []) as GreekFlowRow[];
+    },
+  });
+}
+
+// ============================================================================
+// Morning Brief — spoken pre-market brief (Claude script + ElevenLabs audio)
+// ============================================================================
+export interface MorningBrief {
+  id: string;
+  for_date: string;
+  script: string;
+  audio_url: string | null;
+  duration_seconds: number | null;
+  created_at: string;
+}
+
+export function useLatestMorningBrief() {
+  return useQuery<MorningBrief | null>({
+    queryKey: ['ct_latest_morning_brief'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_morning_briefs')
+        .select('id, for_date, script, audio_url, duration_seconds, created_at')
+        .order('for_date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data as MorningBrief | null;
     },
   });
 }
