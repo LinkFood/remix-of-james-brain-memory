@@ -455,18 +455,38 @@ serve(async (req) => {
     }
     const memory = await buildMemoryBundle(supabase, WATCHLIST, liveStateByInstrument);
 
+    // 3b. Recent flow + dark pool — Claude reasons over real whale activity,
+    // not just aggregates. 10-min window, top by premium / notional.
+    const flowCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const [flowRecent, dpRecent] = await Promise.all([
+      supabase
+        .from('ct_flow_alerts')
+        .select('ticker, side, strike, expiry, is_otm, is_ask, size, premium, size_gt_oi, executed_at, ingested_at')
+        .gte('ingested_at', flowCutoff)
+        .order('premium', { ascending: false })
+        .limit(25),
+      supabase
+        .from('ct_dark_pool_prints')
+        .select('ticker, size, price, notional_value, executed_at, ingested_at')
+        .gte('ingested_at', flowCutoff)
+        .order('notional_value', { ascending: false })
+        .limit(25),
+    ]);
+
     // 4. Assemble Claude user message — condensed, under ~6K tokens
     const userMessage = JSON.stringify({
       timestamp_utc: clock.iso,
       timestamp_et: clock.datetime,
       market_state: condensed,
       memory,
+      recent_flow_alerts: flowRecent.data ?? [],
+      recent_dark_pool_prints: dpRecent.data ?? [],
       proxy_mapping: {
         GLD: 'gold ETF — used as proxy for gold futures (GC) flow and positioning',
         USO: 'oil ETF — used as proxy for oil futures (CL) flow and positioning',
         SPX: 'cash S&P 500 index — used as proxy for ES futures macro regime read',
       },
-      note: 'UW does not cover futures directly; treat the proxies above as their futures equivalents for reasoning. Decide ONE state for this cycle and emit the JSON per the schema in the system prompt. Return ONLY the JSON.',
+      note: 'UW does not cover futures directly; treat the proxies above as their futures equivalents for reasoning. The recent_flow_alerts and recent_dark_pool_prints arrays show the last 10 minutes of unusual activity — cite specific flow/DP prints in your observations when they are material. Decide ONE state for this cycle and emit the JSON per the schema in the system prompt. Return ONLY the JSON.',
     });
 
     // 5. Call Claude — Haiku for Day 2 (cost-efficient workhorse)
