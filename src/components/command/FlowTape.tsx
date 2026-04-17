@@ -112,8 +112,18 @@ function volume(alert: FlowAlert): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+const WATCHLIST_TICKERS = new Set([
+  'SPY', 'QQQ', 'IWM',
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
+  'GLD', 'USO',
+  'SPX', 'SPXW',                        // index + weekly variant land here too
+]);
+
+type ScopeTab = 'watchlist' | 'market' | 'all';
+
 export function FlowTape() {
-  const { data: alerts, isLoading } = useFlowAlerts(100);
+  const { data: alerts, isLoading } = useFlowAlerts(150);
+  const [scope, setScope] = useState<ScopeTab>('watchlist');
   const [minPremium, setMinPremium] = useState(0);
   const [sideFilter, setSideFilter] = useState<SideFilter>('all');
   const [dteFilter, setDteFilter] = useState<DteFilter>('all');
@@ -121,8 +131,19 @@ export function FlowTape() {
   const [whaleOnly, setWhaleOnly] = useState(false);
   const [tickerFilter, setTickerFilter] = useState('');
 
+  const counts = useMemo(() => {
+    const all = alerts?.length ?? 0;
+    const watch = (alerts ?? []).filter(a => WATCHLIST_TICKERS.has(a.ticker)).length;
+    return { all, watch, market: all - watch };
+  }, [alerts]);
+
   const filtered = useMemo(() => {
     return (alerts ?? []).filter(a => {
+      // Scope tab
+      const inWatch = WATCHLIST_TICKERS.has(a.ticker);
+      if (scope === 'watchlist' && !inWatch) return false;
+      if (scope === 'market' && inWatch) return false;
+
       if ((a.premium ?? 0) < minPremium) return false;
       if (sideFilter === 'calls' && !isCall(a.side)) return false;
       if (sideFilter === 'puts' && isCall(a.side)) return false;
@@ -135,7 +156,7 @@ export function FlowTape() {
       }
       return true;
     });
-  }, [alerts, minPremium, sideFilter, dteFilter, sweepOnly, whaleOnly, tickerFilter]);
+  }, [alerts, scope, minPremium, sideFilter, dteFilter, sweepOnly, whaleOnly, tickerFilter]);
 
   return (
     <Card className="flex flex-col">
@@ -144,6 +165,13 @@ export function FlowTape() {
           <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Flow Tape</span>
           <span className="text-[10px] text-muted-foreground">{filtered.length}/{alerts?.length ?? 0}</span>
         </div>
+      </div>
+
+      {/* Scope tabs — watchlist first, market second, all for hunting */}
+      <div className="px-3 py-1.5 border-b border-border bg-muted/20 flex items-center gap-1 text-[10px]">
+        <ScopeBtn label="Watchlist" n={counts.watch} active={scope === 'watchlist'} onClick={() => setScope('watchlist')} tint="bg-primary" />
+        <ScopeBtn label="Market" n={counts.market} active={scope === 'market'} onClick={() => setScope('market')} tint="bg-orange-500" />
+        <ScopeBtn label="All" n={counts.all} active={scope === 'all'} onClick={() => setScope('all')} tint="bg-foreground" />
       </div>
 
       {/* Filter stack */}
@@ -216,6 +244,20 @@ export function FlowTape() {
         </div>
       )}
     </Card>
+  );
+}
+
+function ScopeBtn({ label, n, active, onClick, tint }: { label: string; n: number; active: boolean; onClick: () => void; tint: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-2 py-1 rounded transition-colors flex items-center gap-1.5 ${
+        active ? `${tint} text-background font-semibold` : 'text-muted-foreground hover:bg-muted/50'
+      }`}
+    >
+      <span>{label}</span>
+      <span className={`text-[9px] ${active ? 'text-background/80' : 'text-muted-foreground/70'}`}>{n}</span>
+    </button>
   );
 }
 
