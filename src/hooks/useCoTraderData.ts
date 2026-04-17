@@ -446,6 +446,89 @@ export interface MorningBrief {
   created_at: string;
 }
 
+// ============================================================================
+// Ghost Trade Tape — Claude's graded calls as a paper P&L book.
+// ============================================================================
+export interface GhostPnlRow {
+  source_type: 'flag' | 'alert';
+  subject_id: string;
+  instrument: string;
+  direction: 'bullish' | 'bearish' | 'neutral' | 'volatility';
+  conviction: number;
+  horizon: string;
+  opened_at: string;
+  closed_at: string;
+  actual_return_pct: number;
+  signed_return_pct: number;
+  verdict: 'right' | 'wrong' | 'ambiguous' | 'partial';
+}
+
+export interface GhostPnlAggregates {
+  trades: number;
+  cumulative_pct: number;
+  win_rate: number;
+  avg_win: number;
+  avg_loss: number;
+  sharpe_proxy: number;
+}
+
+export interface GhostPnlPoint {
+  closed_at: string;
+  cumulative_pct: number;
+  signed_return_pct: number;
+  instrument: string;
+}
+
+export function useGhostPnl(days = 30) {
+  return useQuery<{ rows: GhostPnlRow[]; series: GhostPnlPoint[]; aggregates: GhostPnlAggregates }>({
+    queryKey: ['ct_ghost_pnl', days],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - days * 24 * 3600_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_ghost_pnl')
+        .select('source_type, subject_id, instrument, direction, conviction, horizon, opened_at, closed_at, actual_return_pct, signed_return_pct, verdict')
+        .gte('closed_at', since)
+        .order('closed_at', { ascending: true })
+        .limit(2000);
+      if (error) throw error;
+      const rows = (data ?? []) as GhostPnlRow[];
+
+      // Cumulative series (simple sum of signed returns — 1 unit per trade).
+      let cum = 0;
+      const series: GhostPnlPoint[] = rows.map((r) => {
+        cum += r.signed_return_pct || 0;
+        return {
+          closed_at: r.closed_at,
+          cumulative_pct: cum,
+          signed_return_pct: r.signed_return_pct || 0,
+          instrument: r.instrument,
+        };
+      });
+
+      // Aggregates
+      const trades = rows.length;
+      const returns = rows.map((r) => r.signed_return_pct || 0);
+      const wins = returns.filter((r) => r > 0);
+      const losses = returns.filter((r) => r < 0);
+      const win_rate = trades > 0 ? wins.length / trades : 0;
+      const avg_win = wins.length > 0 ? wins.reduce((s, r) => s + r, 0) / wins.length : 0;
+      const avg_loss = losses.length > 0 ? losses.reduce((s, r) => s + r, 0) / losses.length : 0;
+      const cumulative_pct = cum;
+      const mean = trades > 0 ? returns.reduce((s, r) => s + r, 0) / trades : 0;
+      const variance = trades > 0 ? returns.reduce((s, r) => s + (r - mean) ** 2, 0) / trades : 0;
+      const stddev = Math.sqrt(variance);
+      const sharpe_proxy = stddev > 0 ? (mean / stddev) * Math.sqrt(trades) : 0;
+
+      return {
+        rows,
+        series,
+        aggregates: { trades, cumulative_pct, win_rate, avg_win, avg_loss, sharpe_proxy },
+      };
+    },
+  });
+}
+
 export function useLatestMorningBrief() {
   return useQuery<MorningBrief | null>({
     queryKey: ['ct_latest_morning_brief'],
