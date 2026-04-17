@@ -88,7 +88,7 @@ export function ChatPanel() {
   }
 
   return (
-    <aside className="w-[420px] shrink-0 border-r border-border bg-card flex flex-col h-full">
+    <aside className="w-[420px] shrink-0 border-r border-border bg-card flex flex-col h-full pb-11">
       {/* Header pinned */}
       <div className="flex items-center justify-between p-3 border-b border-border bg-muted/30 shrink-0">
         <div className="flex items-center gap-2">
