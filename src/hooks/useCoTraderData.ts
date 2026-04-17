@@ -844,6 +844,38 @@ export function useSelfRegrade(
   });
 }
 
+/** Today's pre-bell gauntlet predictions. Committed at 9:25 ET, graded through close. */
+export interface PreBellPrediction {
+  id: string;
+  session_date: string;
+  prediction_slot: 'spy_10am' | 'unusual_flow' | 'lagging_sector';
+  prediction: Record<string, unknown>;
+  rationale: string;
+  confidence: number;
+  committed_at: string;
+  graded_at: string | null;
+  verdict: 'right' | 'wrong' | 'partial' | 'ambiguous' | null;
+  actual_outcome: Record<string, unknown> | null;
+  calibration_delta: number | null;
+}
+
+export function useTodayGauntlet() {
+  return useQuery<PreBellPrediction[]>({
+    queryKey: ['ct_pre_bell_today'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_pre_bell_predictions')
+        .select('*')
+        .eq('session_date', today)
+        .order('prediction_slot');
+      if (error) throw error;
+      return (data ?? []) as PreBellPrediction[];
+    },
+  });
+}
+
 /** Recent self-corrections — surfaces Claude's hindsight on Scorecard. */
 export function useRecentSelfCorrections(limit = 5) {
   return useQuery<CtSelfRegrade[]>({

@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Trophy, Target, TrendingUp, TrendingDown, Activity, AlertTriangle, Brain } from 'lucide-react';
 import { GhostTradeTape } from '@/components/command/GhostTradeTape';
 import { SelfCorrectionsPanel } from '@/components/command/SelfCorrectionsPanel';
+import { PreBellGauntletPanel } from '@/components/command/PreBellGauntletPanel';
 import { RecallSearch } from '@/components/command/RecallSearch';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 
@@ -281,6 +282,9 @@ export function Scorecard() {
         {/* Ghost Trade Tape — paper P&L of Claude's flagged calls. Hidden until
             there's at least one graded trade; zero-state would be pure noise. */}
         <GatedGhostTradeTape />
+
+        {/* Pre-bell gauntlet — today's three committed calls, clean calibration. */}
+        <PreBellGauntletPanel />
 
         {/* Claude's self-corrections — hindsight paired with original read.
             The feedback loop the watcher now reads on every tick. */}

@@ -26,7 +26,7 @@ import { pullWatcherState, WATCHLIST } from '../_shared/uwClient.ts';
 import { now as clockNow } from '../_shared/clock.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { CT_SYSTEM_PROMPT_V1, CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
-import { buildMemoryBundle, getRecentSelfCorrections } from '../_shared/memoryRecall.ts';
+import { buildMemoryBundle, getRecentSelfCorrections, getActiveBiases } from '../_shared/memoryRecall.ts';
 import { embedCtItem, buildCtRichText } from '../_shared/ctEmbed.ts';
 import { condenseWatcherState, type CondensedState } from '../_shared/ctStateCondense.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
@@ -554,9 +554,10 @@ serve(async (req) => {
         options_volume: rawState.options_volume[t],
       };
     }
-    const [memory, selfCorrections] = await Promise.all([
+    const [memory, selfCorrections, activeBiases] = await Promise.all([
       buildMemoryBundle(supabase, WATCHLIST, liveStateByInstrument),
       getRecentSelfCorrections(supabase, 5),
+      getActiveBiases(supabase, 3),
     ]);
 
     // 3b. Recent flow + dark pool + NOPE + top movers + sweeps + net-prem ticks
@@ -712,6 +713,7 @@ serve(async (req) => {
       market_state: condensed,
       memory,
       self_corrections_72h: selfCorrections,
+      known_biases: activeBiases,
       recent_flow_alerts: flowRecent.data ?? [],
       recent_dark_pool_prints: dpRecent.data ?? [],
       nope_recent: nopeRecent.data ?? [],
@@ -728,6 +730,7 @@ serve(async (req) => {
       },
       note: `UW does not cover futures directly; treat the proxies above as their futures equivalents for reasoning.
 self_corrections_72h: your OWN hindsight from the self-grader on recent calls. "what_i_got_wrong" = the specific error pattern. "how_id_rewrite" = the corrected read. BEFORE emitting FLAG/ALERT, check if you're about to repeat a pattern flagged here. Cite the correction if relevant (e.g. "regraded myself 2h ago — called 'imminent' too hot; this time holding OBSERVATION until acceleration confirms"). This is your memory of your own mistakes — use it or repeat them.
+known_biases: structural patterns extracted by the weekly bias-booth. Identity-level blindspots (not tactical rules). If any bias here applies to the current setup, explicitly counter-weight: if bias says "overweights put flow in low-VIX tape," and today is low-VIX + put-flow-heavy, demote any bearish FLAG to OBSERVATION unless flow is >2σ above your usual threshold.
 recent_flow_alerts: WATCHLIST-only, premium ≥\$250K, last 10min — cite specific prints when material.
 recent_dark_pool_prints: top-10 by notional, last 10min. Prints >\$50M = institutional positioning.
 nope_recent: Net Options Pricing Effect per minute for SPY/QQQ/IWM. NOPE < 0 = dealers short gamma = momentum / trending regime. NOPE > 0 = dealers long gamma = mean-revert / vol-compressed. Use latest readings to validate or contradict the regime inference from gamma flip.

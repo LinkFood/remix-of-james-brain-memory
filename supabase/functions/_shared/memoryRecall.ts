@@ -230,6 +230,37 @@ export async function getRecentSelfCorrections(
 }
 
 /**
+ * Structural biases the weekly bias-booth extracted. Injected globally so
+ * Claude sees its own identity-level patterns before every call — not
+ * per-instrument tactical rules (those are ct_lessons), but "what am I
+ * systematically wrong about across the book."
+ */
+export interface ActiveBias {
+  id: string;
+  pattern: string;
+  instruments: string[] | null;
+  severity: number;
+}
+
+export async function getActiveBiases(
+  supabase: SupabaseClient,
+  limit = 3
+): Promise<ActiveBias[]> {
+  const { data, error } = await supabase
+    .from('ct_biases')
+    .select('id, pattern, instruments, severity')
+    .eq('active', true)
+    .order('severity', { ascending: false })
+    .order('last_confirmed', { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.warn('[memoryRecall] active biases fetch failed:', error.message);
+    return [];
+  }
+  return (data as ActiveBias[]) ?? [];
+}
+
+/**
  * Relevant lessons for this instrument — embedding-nearest if we have
  * any active lessons, else skip. Early days returns [].
  */

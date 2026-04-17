@@ -155,3 +155,6 @@ verify_jwt = false
 
 [functions.ct-pre-bell-grader]
 verify_jwt = false
+
+[functions.ct-bias-booth]
+verify_jwt = false
