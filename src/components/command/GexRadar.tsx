@@ -44,6 +44,13 @@ const CELL_TXT_NEG = ['#f5c986', '#f7d29b', '#f9dcb2', '#fbe4c7', '#fdecd8', '#f
 interface Props {
   tickers?: string[];
   windowSize?: number;
+  /**
+   * Optional: parent-owned drill-down opener. If provided, clicks are
+   * forwarded up and the internal Sheet is NOT rendered — the parent owns
+   * the LinkGexDeep sheet (so the AlwaysOnFlagStrip can share it).
+   * If omitted, GexRadar keeps its own internal sheet (original behavior).
+   */
+  onDrillDown?: (ticker: string) => void;
 }
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'IWM'];
@@ -313,10 +320,17 @@ const TickerColumn = memo(function TickerColumn({ t, onDrillDown }: ColumnProps)
 export const GexRadar = memo(function GexRadar({
   tickers = DEFAULT_TICKERS,
   windowSize = 30,
+  onDrillDown: parentDrillDown,
 }: Props) {
   const { data, isLoading, isError, error } = useGexRadar(tickers, windowSize);
-  const [drillTicker, setDrillTicker] = useState<string | null>(null);
-  const isOpen = drillTicker !== null;
+  const [internalDrill, setInternalDrill] = useState<string | null>(null);
+
+  // If a parent supplies onDrillDown, defer to it (parent owns the sheet so
+  // it can be shared with AlwaysOnFlagStrip). Otherwise fall back to the
+  // internal Sheet so standalone usage still works.
+  const usingParentSheet = !!parentDrillDown;
+  const handleDrill = parentDrillDown ?? setInternalDrill;
+  const isOpen = internalDrill !== null;
 
   return (
     <>
@@ -353,23 +367,25 @@ export const GexRadar = memo(function GexRadar({
               <TickerColumn
                 key={t.ticker}
                 t={t}
-                onDrillDown={setDrillTicker}
+                onDrillDown={handleDrill}
               />
             ))}
           </div>
         )}
       </Card>
 
-      <Sheet open={isOpen} onOpenChange={(o) => { if (!o) setDrillTicker(null); }}>
-        <SheetContent
-          side="right"
-          className="w-full sm:max-w-[860px] bg-black border-white/10 p-0 overflow-y-auto"
-        >
-          {drillTicker && (
-            <LinkGexDeep ticker={drillTicker} enabled={isOpen} />
-          )}
-        </SheetContent>
-      </Sheet>
+      {!usingParentSheet && (
+        <Sheet open={isOpen} onOpenChange={(o) => { if (!o) setInternalDrill(null); }}>
+          <SheetContent
+            side="right"
+            className="w-full sm:max-w-[860px] bg-black border-white/10 p-0 overflow-y-auto"
+          >
+            {internalDrill && (
+              <LinkGexDeep ticker={internalDrill} enabled={isOpen} />
+            )}
+          </SheetContent>
+        </Sheet>
+      )}
     </>
   );
 });

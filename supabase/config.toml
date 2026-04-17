@@ -197,3 +197,6 @@ verify_jwt = false
 
 [functions.ct-attention-backfill]
 verify_jwt = false
+
+[functions.ct-curiosity]
+verify_jwt = false

@@ -25,6 +25,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getOptionContracts, getSpotGexByStrike } from '../_shared/uwClient.ts';
+import { computeTickerScores, type UWContract, type TickerScores } from '../_shared/attentionScore.ts';
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'IWM'];
 const DEFAULT_WINDOW = 30;   // strikes around spot
@@ -70,6 +71,25 @@ interface StrikeRow {
   show_velocity: boolean;
 }
 
+interface ComboVerdict {
+  combo: TickerScores['combo'];
+  comboLabel: string;
+  comboColor: string;
+  $flow: number;
+  hedge: number;
+  now: number;
+  cVel: number;
+  pVel: number;
+}
+
+interface ScoreBreakdown {
+  flow: number;
+  hedge: number;
+  now: number;
+  calls: number;
+  puts: number;
+}
+
 interface TickerPayload {
   ticker: string;
   spot: number | null;
@@ -81,6 +101,8 @@ interface TickerPayload {
   putWall: number | null;
   deltaOpen: number;
   regime: 'pos' | 'neg' | null;
+  verdicts: ComboVerdict | null;
+  scores: ScoreBreakdown | null;
   errors: string[];
 }
 
@@ -329,6 +351,51 @@ async function buildTickerPayload(ticker: string, windowSize: number): Promise<T
   const netSum = strikes.reduce((acc, s) => acc + s.netGex, 0);
   const regime: 'pos' | 'neg' | null = strikes.length === 0 ? null : (netSum >= 0 ? 'pos' : 'neg');
 
+  // ---- Combo verdict (always-on flag pattern) ----
+  // Reuse the shared LinkGex V3 scorer — same signal the ct-linkgex-deep
+  // function computes, so Radar + Deep stay consistent. This is purely
+  // post-fetch arithmetic on data we already have (contracts + gexMap) —
+  // NO additional UW calls.
+  let verdicts: ComboVerdict | null = null;
+  let scores: ScoreBreakdown | null = null;
+  if (spot !== null && contracts.length > 0) {
+    try {
+      // Build gammaByStrike from the already-fetched spot-exposures payload.
+      const gammaByStrike: Record<number, number> = {};
+      for (const [k, v] of gexMap.entries()) gammaByStrike[k] = v.netGex;
+
+      // Normalize UW contract shape → UWContract expected by the scorer.
+      const uwContracts: UWContract[] = contracts
+        .filter(c => !!c.option_symbol)
+        .map(c => {
+          const anyC = c as Record<string, unknown>;
+          const lastPrice = num(anyC.last_price ?? anyC.last ?? anyC.mark ?? 0);
+          return {
+            option_symbol: String(c.option_symbol),
+            open_interest: num(c.open_interest),
+            prev_oi: num(c.prev_oi ?? c.prev_open_interest),
+            last_price: lastPrice,
+            volume: num(c.volume),
+          };
+        });
+
+      const ts = computeTickerScores(uwContracts, spot, gammaByStrike);
+      scores = { flow: ts.$flow, hedge: ts.hedge, now: ts.now, calls: ts.calls, puts: ts.puts };
+      verdicts = {
+        combo: ts.combo,
+        comboLabel: ts.comboLabel,
+        comboColor: ts.comboColor,
+        $flow: ts.$flow,
+        hedge: ts.hedge,
+        now: ts.now,
+        cVel: ts.totals.avgCVel,
+        pVel: ts.totals.avgPVel,
+      };
+    } catch (e) {
+      errors.push(`combo: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
   return {
     ticker,
     spot,
@@ -340,6 +407,8 @@ async function buildTickerPayload(ticker: string, windowSize: number): Promise<T
     putWall,
     deltaOpen,
     regime,
+    verdicts,
+    scores,
     errors,
   };
 }

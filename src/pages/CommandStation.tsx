@@ -1,6 +1,7 @@
 import { MarketBanner } from '@/components/command/MarketBanner';
 import { TickerGrid } from '@/components/command/TickerGrid';
 import { EventFeed } from '@/components/command/EventFeed';
+import { CuriosityFeed } from '@/components/command/CuriosityFeed';
 import { NewsFeed } from '@/components/command/NewsFeed';
 import { RecapPanel } from '@/components/command/RecapPanel';
 import { DisagreementPanel } from '@/components/command/DisagreementPanel';
@@ -18,6 +19,9 @@ import { EventsPanel } from '@/components/command/EventsPanel';
 import { PositioningPanel } from '@/components/command/PositioningPanel';
 import { GexHeatmap } from '@/components/command/GexHeatmap';
 import { GexRadar } from '@/components/command/GexRadar';
+import { AlwaysOnFlagStrip } from '@/components/command/AlwaysOnFlagStrip';
+import { LinkGexDeep } from '@/components/command/LinkGexDeep';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
 import { ClaudesRead } from '@/components/command/ClaudesRead';
 import { TradeCards } from '@/components/command/TradeCards';
@@ -34,6 +38,9 @@ import { toast } from 'sonner';
 export default function CommandStation() {
   const qc = useQueryClient();
   const [firing, setFiring] = useState(false);
+  // Shared drill-down sheet — AlwaysOnFlagStrip and GexRadar both trigger it.
+  const [deepTicker, setDeepTicker] = useState<string | null>(null);
+  const deepOpen = deepTicker !== null;
 
   async function fireWatcher() {
     setFiring(true);
@@ -76,9 +83,16 @@ export default function CommandStation() {
 
         <TradeCards />
 
+        {/* Always-on flag strip: structural signals (URGENT / A+ / SQUEEZE /
+            BATTLEGROUND) regardless of filter state. Eyes-first row. */}
+        <AlwaysOnFlagStrip
+          tickers={['SPY', 'QQQ', 'IWM']}
+          onOpenDeep={setDeepTicker}
+        />
+
         <MarketBanner />
 
-        <GexRadar tickers={['SPY', 'QQQ', 'IWM']} />
+        <GexRadar tickers={['SPY', 'QQQ', 'IWM']} onDrillDown={setDeepTicker} />
 
         <GexHeatmap />
 
@@ -93,6 +107,7 @@ export default function CommandStation() {
             </div>
             <FlowPerStrike />
             <EventFeed />
+            <CuriosityFeed />
             <DarkPoolTape />
             <DarkPoolChart />
             <NewsFeed />
@@ -116,9 +131,20 @@ export default function CommandStation() {
         </div>
 
         <footer className="pt-4 text-[10px] text-muted-foreground/60 text-center">
-          Watcher: 30min · Grader: 15min · News: 20min · EOD: 21:30 UTC weekdays · Lessons: Sunday 23:00 UTC
+          Watcher: 30min · Curiosity: 30min (offset :07/:37) · Grader: 15min · News: 20min · EOD: 21:30 UTC weekdays · Lessons: Sunday 23:00 UTC
         </footer>
       </div>
+
+      {/* Shared LinkGexDeep drill-down Sheet — driven by AlwaysOnFlagStrip
+          pill clicks AND GexRadar column clicks. Single surface. */}
+      <Sheet open={deepOpen} onOpenChange={(o) => { if (!o) setDeepTicker(null); }}>
+        <SheetContent
+          side="right"
+          className="w-full sm:max-w-[860px] bg-black border-white/10 p-0 overflow-y-auto"
+        >
+          {deepTicker && <LinkGexDeep ticker={deepTicker} enabled={deepOpen} />}
+        </SheetContent>
+      </Sheet>
       {/* ChatPanel docked by AuthLayout sidebar prop */}
     </div>
   );

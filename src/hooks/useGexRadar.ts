@@ -23,6 +23,35 @@ export interface GexRadarStrike {
   show_velocity: boolean;
 }
 
+export type GexComboVerdict =
+  | 'URGENT'
+  | 'A+ BULLISH'
+  | 'A+ BEARISH'
+  | 'SQUEEZE SETUP'
+  | 'BATTLEGROUND'
+  | 'LEAN BULLISH'
+  | 'LEAN BEARISH'
+  | 'NEUTRAL';
+
+export interface GexRadarVerdicts {
+  combo: GexComboVerdict;
+  comboLabel: string;
+  comboColor: string;
+  $flow: number;
+  hedge: number;
+  now: number;
+  cVel: number;
+  pVel: number;
+}
+
+export interface GexRadarScores {
+  flow: number;
+  hedge: number;
+  now: number;
+  calls: number;
+  puts: number;
+}
+
 export interface GexRadarTicker {
   ticker: string;
   spot: number | null;
@@ -34,6 +63,8 @@ export interface GexRadarTicker {
   putWall: number | null;
   deltaOpen: number;
   regime: 'pos' | 'neg' | null;
+  verdicts: GexRadarVerdicts | null;
+  scores: GexRadarScores | null;
   errors: string[];
 }
 
