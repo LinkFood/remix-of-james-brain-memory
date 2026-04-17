@@ -84,6 +84,7 @@ export default function CommandStation() {
             <EventFeed />
           </div>
           <div className="lg:col-span-4 space-y-4">
+            {/* Morning Brief pinned to the very top — 90-sec pre-bell read */}
             <MorningBriefPanel />
             <FlowTape />
             <MarketMovers />

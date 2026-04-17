@@ -235,13 +235,30 @@ export function useDarkPoolPrints(limit = 30) {
     queryKey: ['ct_dark_pool_prints', limit],
     refetchInterval: 30_000,
     queryFn: async () => {
+      // Filter to >=$500K at query level to kill the USO flood of tiny prints,
+      // pull a wider window, then distribute across tickers (top 3 per ticker)
+      // before trimming to `limit`. Keeps any single ticker from dominating.
       const { data, error } = await supabase
         .from('ct_dark_pool_prints')
         .select('id, ticker, size, price, notional_value, executed_at, ingested_at')
+        .gte('notional_value', 500_000)
         .order('ingested_at', { ascending: false })
-        .limit(limit);
+        .limit(Math.max(limit * 4, 120));
       if (error) throw error;
-      return (data ?? []) as DarkPoolPrint[];
+      const rows = (data ?? []) as DarkPoolPrint[];
+
+      // Cap each ticker at 3 of its most-recent prints so no single ticker floods.
+      const perTickerCap = 3;
+      const counts = new Map<string, number>();
+      const distributed: DarkPoolPrint[] = [];
+      for (const r of rows) {
+        const c = counts.get(r.ticker) ?? 0;
+        if (c >= perTickerCap) continue;
+        counts.set(r.ticker, c + 1);
+        distributed.push(r);
+        if (distributed.length >= limit) break;
+      }
+      return distributed;
     },
   });
 }
@@ -391,6 +408,61 @@ export function useEventsForTicker(ticker: string | null | undefined) {
         .limit(50);
       if (error) throw error;
       return (data ?? []) as CtEventRow[];
+    },
+  });
+}
+
+export interface NetPremiumTick {
+  ticker: string;
+  tick_timestamp: string;
+  net_call_premium: number | null;
+  net_put_premium: number | null;
+  net_call_volume: number | null;
+  net_put_volume: number | null;
+  underlying_price: number | null;
+}
+
+/**
+ * True intraday net-premium ticks from UW (written every ~3min by ct-flow-ingester).
+ * Ordered ascending so callers can chart cumulative flow straight from the data.
+ */
+export function useNetPremiumTicks(ticker: string, hours = 4) {
+  return useQuery<NetPremiumTick[]>({
+    queryKey: ['ct_net_premium_ticks', ticker, hours],
+    enabled: !!ticker,
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      if (!ticker) return [];
+      const since = new Date(Date.now() - hours * 3600_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_net_premium_ticks')
+        .select('ticker, tick_timestamp, net_call_premium, net_put_premium, net_call_volume, net_put_volume, underlying_price')
+        .eq('ticker', ticker)
+        .gte('tick_timestamp', since)
+        .order('tick_timestamp', { ascending: true })
+        .limit(2000);
+      if (error) throw error;
+      return (data ?? []) as NetPremiumTick[];
+    },
+  });
+}
+
+/** Distinct tickers currently streaming in ct_net_premium_ticks (last 24h). */
+export function useNetPremiumTickers() {
+  return useQuery<string[]>({
+    queryKey: ['ct_net_premium_tickers'],
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_net_premium_ticks')
+        .select('ticker')
+        .gte('tick_timestamp', since)
+        .limit(5000);
+      if (error) throw error;
+      const seen = new Set<string>();
+      for (const r of (data ?? []) as Array<{ ticker: string }>) seen.add(r.ticker);
+      return Array.from(seen).sort();
     },
   });
 }

@@ -75,6 +75,21 @@ export function TopNav({ userId }: TopNavProps) {
 
   const [lastHeartbeat, setLastHeartbeat] = useState<string | null>(null);
   const [healthAlerts, setHealthAlerts] = useState<{ id: string; title: string; body: string }[]>([]);
+  const [gradeCount, setGradeCount] = useState<number | null>(null);
+
+  // ct_grades count — used to gate the Scorecard nav item. Zero = pending.
+  useEffect(() => {
+    let cancelled = false;
+    const fetchCount = async () => {
+      const { count } = await supabase
+        .from('ct_grades')
+        .select('subject_id', { count: 'estimated', head: true });
+      if (!cancelled) setGradeCount(count ?? 0);
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 5 * 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
 
   // Check for last heartbeat insight
   useEffect(() => {
@@ -130,6 +145,10 @@ export function TopNav({ userId }: TopNavProps) {
       <div className="flex items-center gap-0.5">
         {NAV_ITEMS.map((item) => {
           const isActive = location.pathname === item.path;
+          const isScorecard = item.path === '/scorecard';
+          // Scorecard: if we've loaded the count and it's zero, dim the link and
+          // append "(pending first grade)". On first render (count=null) show normally.
+          const noGrades = isScorecard && gradeCount === 0;
           return (
             <button
               key={item.path}
@@ -137,11 +156,19 @@ export function TopNav({ userId }: TopNavProps) {
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                 isActive
                   ? 'bg-primary/10 text-primary'
+                  : noGrades
+                  ? 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/30'
                   : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
               }`}
+              title={noGrades ? 'Scorecard — pending first grade' : undefined}
             >
               {item.icon}
               <span className="hidden lg:inline">{item.label}</span>
+              {noGrades && (
+                <span className="hidden xl:inline text-[9px] uppercase tracking-wider opacity-70">
+                  (pending)
+                </span>
+              )}
             </button>
           );
         })}

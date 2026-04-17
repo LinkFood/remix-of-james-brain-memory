@@ -1,8 +1,8 @@
 import { useRecentEvents, useSelfRegrade, type CtEvent, type CtSelfAssessment } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { useState } from 'react';
-import { ChevronDown, ChevronUp, AlertTriangle, Flag, Eye, Target, Brain } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { ChevronDown, ChevronUp, AlertTriangle, Flag, Eye, Target, Brain, Layers } from 'lucide-react';
 
 function relativeTime(iso: string): string {
   const d = Date.now() - Date.parse(iso);
@@ -186,13 +186,105 @@ function EventRow({ event }: { event: CtEvent }) {
   );
 }
 
+/**
+ * Normalize the first glance bullet for dedup comparison:
+ * lowercase, collapse whitespace, take first 60 chars.
+ */
+function normGlance(e: CtEvent): string {
+  const g = e.glance?.[0] ?? e.full_reasoning ?? '';
+  return g.toLowerCase().replace(/\s+/g, ' ').trim().slice(0, 60);
+}
+
+interface EventGroup {
+  lead: CtEvent;          // newest event in the group (shown as the card)
+  members: CtEvent[];     // all events in the group, newest first
+}
+
+/**
+ * Collapse consecutive events where (instruments, direction, conviction)
+ * match AND the normalized first-60-char glance matches. Events is assumed
+ * newest-first (that's how useRecentEvents returns it).
+ */
+function groupConsecutive(events: CtEvent[]): EventGroup[] {
+  const out: EventGroup[] = [];
+  for (const e of events) {
+    const prev = out[out.length - 1];
+    if (prev) {
+      const a = prev.lead;
+      const sameInstr = (a.instruments ?? []).join(',') === (e.instruments ?? []).join(',');
+      const sameDir = (a.direction ?? null) === (e.direction ?? null);
+      const sameConv = (a.conviction ?? null) === (e.conviction ?? null);
+      const sameGlance = normGlance(a) === normGlance(e) && normGlance(a).length > 0;
+      if (sameInstr && sameDir && sameConv && sameGlance) {
+        prev.members.push(e);
+        continue;
+      }
+    }
+    out.push({ lead: e, members: [e] });
+  }
+  return out;
+}
+
+/** Short human span between earliest and latest member (e.g. "2h"). */
+function spanLabel(members: CtEvent[]): string {
+  if (members.length < 2) return '';
+  const newest = Date.parse(members[0].created_at);
+  const oldest = Date.parse(members[members.length - 1].created_at);
+  const mins = Math.max(0, Math.round((newest - oldest) / 60_000));
+  if (mins < 60) return `${mins}m`;
+  const hrs = mins / 60;
+  if (hrs < 24) return `${hrs.toFixed(hrs < 10 ? 1 : 0)}h`;
+  return `${Math.round(hrs / 24)}d`;
+}
+
+function GroupedEventRow({ group }: { group: EventGroup }) {
+  const [showRestatements, setShowRestatements] = useState(false);
+  const n = group.members.length;
+  if (n === 1) return <EventRow event={group.lead} />;
+
+  return (
+    <div>
+      <div className="px-3 pt-2 pb-0.5 flex items-center gap-2 text-[10px] bg-amber-500/5 border-l-2 border-l-amber-500/60">
+        <Layers className="w-3 h-3 text-amber-400" />
+        <span className="uppercase tracking-wider text-amber-400 font-semibold">
+          {n} restatements over {spanLabel(group.members)} · no material change
+        </span>
+        <button
+          onClick={() => setShowRestatements(v => !v)}
+          className="ml-auto text-muted-foreground hover:text-foreground"
+        >
+          {showRestatements ? 'hide timestamps' : 'show timestamps'}
+        </button>
+      </div>
+      {showRestatements && (
+        <div className="px-3 py-1 bg-amber-500/5 border-l-2 border-l-amber-500/60 text-[10px] text-muted-foreground space-y-0.5">
+          {group.members.map(m => (
+            <div key={`${m._type}:${m.id}`} className="font-mono flex items-center gap-2">
+              <span>{new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+              <span className="uppercase text-[9px]">{m._type}</span>
+              <span className="truncate">{m.glance?.[0] ?? m.full_reasoning?.slice(0, 60) ?? ''}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      <EventRow event={group.lead} />
+    </div>
+  );
+}
+
 export function EventFeed() {
   const { data: events, isLoading } = useRecentEvents(25);
+  const groups = useMemo(() => groupConsecutive(events ?? []), [events]);
 
   return (
     <Card className="divide-y divide-border">
-      <div className="px-3 py-2 border-b border-border bg-muted/30 sticky top-0 z-10">
+      <div className="px-3 py-2 border-b border-border bg-muted/30 sticky top-0 z-10 flex items-center gap-2">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground">Intraday Feed</h3>
+        {events && groups.length > 0 && events.length > groups.length && (
+          <span className="text-[10px] text-muted-foreground">
+            {events.length} events → {groups.length} threads
+          </span>
+        )}
       </div>
       {isLoading ? (
         <div className="p-6 text-center text-sm text-muted-foreground">loading…</div>
@@ -201,9 +293,9 @@ export function EventFeed() {
           no events yet — observations/flags/alerts land here as Claude watches
         </div>
       ) : (
-        <div className="max-h-[60vh] overflow-y-auto">
-          {events.map((e) => (
-            <EventRow key={`${e._type}:${e.id}`} event={e} />
+        <div className="max-h-[60vh] overflow-y-auto divide-y divide-border">
+          {groups.map((g) => (
+            <GroupedEventRow key={`${g.lead._type}:${g.lead.id}`} group={g} />
           ))}
         </div>
       )}

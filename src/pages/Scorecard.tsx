@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { Trophy, Target, TrendingUp, TrendingDown, Activity, AlertTriangle, Brain } from 'lucide-react';
 import { GhostTradeTape } from '@/components/command/GhostTradeTape';
 import { RecallSearch } from '@/components/command/RecallSearch';
+import { useGhostPnl } from '@/hooks/useCoTraderData';
 
 interface Grade {
   subject_type: 'flag' | 'alert' | 'james_view';
@@ -276,8 +277,9 @@ export function Scorecard() {
           </div>
         </Card>
 
-        {/* Ghost Trade Tape — paper P&L of Claude's flagged calls */}
-        <GhostTradeTape days={30} />
+        {/* Ghost Trade Tape — paper P&L of Claude's flagged calls. Hidden until
+            there's at least one graded trade; zero-state would be pure noise. */}
+        <GatedGhostTradeTape />
 
         {/* Breakdown tables */}
         {grades && grades.length > 0 ? (
@@ -382,6 +384,16 @@ function GradeRow({ grade }: { grade: Grade }) {
       </span>
     </div>
   );
+}
+
+/**
+ * GhostTradeTape is a huge panel and pre-9am there may be 0 graded trades.
+ * Only render once we know there's data; otherwise hide entirely.
+ */
+function GatedGhostTradeTape() {
+  const { data } = useGhostPnl(30);
+  if (!data || data.rows.length === 0) return null;
+  return <GhostTradeTape days={30} />;
 }
 
 export default Scorecard;

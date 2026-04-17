@@ -33,6 +33,10 @@ function dirColor(dir: string): string {
 export function DisagreementPanel() {
   const { data: rows, isLoading } = useDisagreements(20);
 
+  // Self-hide when empty — an empty "no disagreements yet" panel is noise
+  // pre-9am. Only render once there's something to contest.
+  if (!isLoading && (!rows || rows.length === 0)) return null;
+
   return (
     <Card className="p-4">
       <div className="flex items-center gap-2 mb-3">
@@ -47,9 +51,7 @@ export function DisagreementPanel() {
 
       {isLoading ? (
         <div className="text-sm text-muted-foreground">loading…</div>
-      ) : !rows || rows.length === 0 ? (
-        <div className="text-sm text-muted-foreground">no disagreements yet — materializer runs every 10 min during market hours</div>
-      ) : (
+      ) : !rows || rows.length === 0 ? null : (
         <div className="space-y-2">
           {rows.map(d => {
             const r = resolutionVariant(d.resolution);

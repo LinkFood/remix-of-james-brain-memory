@@ -1,8 +1,11 @@
-import { useMemo } from 'react';
-import { useLatestHeartbeat, useTheses } from '@/hooks/useCoTraderData';
+import { useMemo, useState } from 'react';
+import { useLatestHeartbeat, useTheses, useRecentEvents } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { GexMiniChart } from './GexMiniChart';
+
+const INDEX_FALLBACK = new Set(['SPY', 'QQQ', 'IWM']);
 
 interface Wall {
   strike: number;
@@ -102,8 +105,10 @@ function WallsRow({ label, walls, price, kind }: { label: string; walls: Wall[];
 export function TickerGrid() {
   const { data: heartbeat } = useLatestHeartbeat();
   const { data: theses } = useTheses();
+  const { data: events } = useRecentEvents(10);
+  const [showAll, setShowAll] = useState(false);
 
-  const tickers = useMemo(() => {
+  const allTickers = useMemo(() => {
     const snap = (heartbeat?.current_reads as Record<string, unknown> | undefined)?._snapshot as Record<string, unknown> | undefined;
     const perTicker = (snap?.per_ticker ?? {}) as Record<string, CondensedTicker>;
     const thesesMap = new Map<string, ReturnType<typeof Object>>();
@@ -119,7 +124,33 @@ export function TickerGrid() {
       .map(([ticker, state]) => ({ ticker, state, thesis: thesesMap.get(ticker) as { direction?: string; conviction?: number; up_case?: string; down_case?: string; watching?: string | null } | undefined }));
   }, [heartbeat, theses]);
 
-  if (tickers.length === 0) {
+  /**
+   * Relevance filter: show only tickers that are (a) mentioned in any active
+   * observation/flag/alert OR (b) currently in negative gamma regime (momentum
+   * / dealer-hedging cascade risk). If the filter yields zero, fall back to
+   * indexes. "Show all 12" toggle reveals the full grid.
+   */
+  const mentioned = useMemo(() => {
+    const s = new Set<string>();
+    for (const e of events ?? []) {
+      for (const i of e.instruments ?? []) s.add(i.toUpperCase());
+    }
+    return s;
+  }, [events]);
+
+  const tickers = useMemo(() => {
+    if (showAll) return allTickers;
+    const filtered = allTickers.filter(({ ticker, state }) =>
+      mentioned.has(ticker) || state.regime === 'negative'
+    );
+    if (filtered.length === 0) {
+      const indexOnly = allTickers.filter(({ ticker }) => INDEX_FALLBACK.has(ticker));
+      return indexOnly.length > 0 ? indexOnly : allTickers;
+    }
+    return filtered;
+  }, [allTickers, mentioned, showAll]);
+
+  if (allTickers.length === 0) {
     return (
       <Card className="p-6 text-center text-muted-foreground text-sm">
         No ticker state yet. Watcher cron fires next at weekday 13:00 UTC.
@@ -127,8 +158,28 @@ export function TickerGrid() {
     );
   }
 
+  const hidden = allTickers.length - tickers.length;
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+        <span>
+          {showAll
+            ? `Showing all ${allTickers.length} watched`
+            : `Showing ${tickers.length} of ${allTickers.length} — mentioned in reads or short-gamma`}
+        </span>
+        {(hidden > 0 || showAll) && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="ml-auto h-6 px-2 text-[10px] uppercase tracking-wider"
+            onClick={() => setShowAll(v => !v)}
+          >
+            {showAll ? 'trim to relevant' : `show all ${allTickers.length}`}
+          </Button>
+        )}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
       {tickers.map(({ ticker, state, thesis }) => {
         const label = LABELS[ticker];
         const price = state.price;
@@ -186,6 +237,7 @@ export function TickerGrid() {
           </Card>
         );
       })}
+      </div>
     </div>
   );
 }

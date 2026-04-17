@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { postJamesView, type PostJamesViewInput } from '@/hooks/useCoTraderData';
+import { postJamesView, useRecentEvents, type PostJamesViewInput } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -17,12 +17,19 @@ const HORIZONS:   Horizon[]   = ['1h', '4h', 'EOD', 'next-day', 'weekly'];
 
 export function JamesViewForm() {
   const qc = useQueryClient();
+  const { data: events } = useRecentEvents(10);
   const [instrument, setInstrument] = useState('');
   const [direction, setDirection]   = useState<Direction>('bullish');
   const [horizon, setHorizon]       = useState<Horizon>('EOD');
   const [conviction, setConviction] = useState<number>(3);
   const [rationale, setRationale]   = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Self-hide when there are no flags/alerts to disagree with. The form's
+  // whole point is to contest a Claude call — if there's nothing to contest,
+  // hide it rather than present empty posting UI.
+  const hasContestable = (events ?? []).some(e => e._type === 'flag' || e._type === 'alert');
+  if (!hasContestable) return null;
 
   async function submit() {
     if (!instrument.trim()) {
