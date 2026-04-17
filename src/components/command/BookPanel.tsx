@@ -94,8 +94,12 @@ export function BookPanel() {
 
   const openTrades = (trades ?? []).filter(t => t.status === 'open' || t.status === 'planned');
   const closedTrades = (trades ?? []).filter(t => t.status === 'closed');
+  const cancelledTrades = (trades ?? []).filter(t => t.status === 'cancelled');
   const goalMet = book?.goal_hit === true;
   const sessionOver = book?.ending_balance != null;
+  // ET hour for copy-switch around 9:26 AM ET
+  const etHour = parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', hour12: false }).format(new Date()), 10);
+  const pastCommitWindow = etHour >= 10;
 
   return (
     <Card className="divide-y divide-border">
@@ -166,6 +170,19 @@ export function BookPanel() {
             </div>
           )}
 
+          {/* Cancelled trades (gap-past-stop / gap-past-target / manual) */}
+          {cancelledTrades.length > 0 && (
+            <div>
+              <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground bg-muted/10 flex items-center gap-1">
+                <Target className="w-3 h-3" />
+                Cancelled today ({cancelledTrades.length}) — no fill
+              </div>
+              <div className="divide-y divide-border">
+                {cancelledTrades.map(t => <TradeRow key={t.id} trade={t} />)}
+              </div>
+            </div>
+          )}
+
           {/* Recap if exists */}
           {recap && recap.session_date === book.session_date && (
             <div className="p-3 space-y-1.5 bg-muted/10">
@@ -183,10 +200,11 @@ export function BookPanel() {
             </div>
           )}
 
-          {openTrades.length === 0 && closedTrades.length === 0 && (
+          {openTrades.length === 0 && closedTrades.length === 0 && cancelledTrades.length === 0 && (
             <div className="p-4 text-xs text-muted-foreground leading-relaxed">
-              Book is flat. Claude will commit today's trades at 9:26 AM ET.
-              Gauntlet fires 1min prior — predictions inform the commit.
+              {pastCommitWindow
+                ? 'Book is flat. No trades committed today. Claude can still commit via the chat command (/commit).'
+                : "Book is flat. Claude will commit today's trades at 9:26 AM ET. Gauntlet fires 1min prior — predictions inform the commit."}
             </div>
           )}
         </>
