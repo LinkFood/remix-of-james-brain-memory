@@ -160,10 +160,71 @@ export function useLatestRecap() {
   });
 }
 
+export interface FlowAlert {
+  id: string;
+  ticker: string;
+  option_symbol: string | null;
+  strike: number | null;
+  expiry: string | null;
+  side: string | null;
+  is_ask: boolean | null;
+  is_otm: boolean | null;
+  size: number | null;
+  premium: number | null;
+  price: number | null;
+  underlying_price: number | null;
+  executed_at: string | null;
+  alert_type: string | null;
+  size_gt_oi: boolean | null;
+  ingested_at: string;
+}
+
+export interface DarkPoolPrint {
+  id: string;
+  ticker: string;
+  size: number;
+  price: number;
+  notional_value: number;
+  executed_at: string | null;
+  ingested_at: string;
+}
+
+export function useFlowAlerts(limit = 50) {
+  return useQuery<FlowAlert[]>({
+    queryKey: ['ct_flow_alerts', limit],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_flow_alerts')
+        .select('id, ticker, option_symbol, strike, expiry, side, is_ask, is_otm, size, premium, price, underlying_price, executed_at, alert_type, size_gt_oi, ingested_at')
+        .order('ingested_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as FlowAlert[];
+    },
+  });
+}
+
+export function useDarkPoolPrints(limit = 30) {
+  return useQuery<DarkPoolPrint[]>({
+    queryKey: ['ct_dark_pool_prints', limit],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_dark_pool_prints')
+        .select('id, ticker, size, price, notional_value, executed_at, ingested_at')
+        .order('ingested_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as DarkPoolPrint[];
+    },
+  });
+}
+
 /**
  * Manual trigger via RPC — for "run now" buttons on the dashboard.
  */
-export async function triggerCoTrader(fn: 'watcher' | 'grader' | 'news_ingester' | 'eod_recap' | 'lessons_curator'): Promise<{ ok: boolean; error?: string }> {
+export async function triggerCoTrader(fn: 'watcher' | 'grader' | 'news_ingester' | 'eod_recap' | 'lessons_curator' | 'flow_ingester'): Promise<{ ok: boolean; error?: string }> {
   const rpcName = `trigger_ct_${fn}`;
   const { error } = await supabase.rpc(rpcName);
   if (error) return { ok: false, error: error.message };

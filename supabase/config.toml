@@ -116,3 +116,6 @@ verify_jwt = false
 
 [functions.ct-chat]
 verify_jwt = false
+
+[functions.ct-flow-ingester]
+verify_jwt = false

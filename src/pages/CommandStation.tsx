@@ -4,6 +4,8 @@ import { EventFeed } from '@/components/command/EventFeed';
 import { NewsFeed } from '@/components/command/NewsFeed';
 import { RecapPanel } from '@/components/command/RecapPanel';
 import { ChatBox } from '@/components/command/ChatBox';
+import { FlowTape } from '@/components/command/FlowTape';
+import { DarkPoolTape } from '@/components/command/DarkPoolTape';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -52,12 +54,14 @@ export default function CommandStation() {
 
         <MarketBanner />
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-2 space-y-4">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div className="lg:col-span-8 space-y-4">
             <TickerGrid />
             <EventFeed />
           </div>
-          <div className="space-y-4">
+          <div className="lg:col-span-4 space-y-4">
+            <FlowTape />
+            <DarkPoolTape />
             <RecapPanel />
             <NewsFeed />
           </div>
