@@ -568,7 +568,7 @@ export function useGexTimeseries(ticker: string, hours = 4) {
         p_hours: hours,
         p_snapshots: 30,
         p_atm_only: true,
-      });
+      }).range(0, 24999); // PostgREST defaults to 1000-row cap; bump it
       if (error) throw error;
       return (data ?? []) as GexTimeseriesRow[];
     },
