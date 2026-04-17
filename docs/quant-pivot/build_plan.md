@@ -1,8 +1,23 @@
-# Co-Trader Build Plan — 7-8 days
+# Co-Trader Build Plan — Master
 
 **Target:** linkjac.cloud pivot from paused personal OS → Claude co-trader command station.
 **Thesis doc:** see `project_jac_pivot_co_trader_thesis_2026_04_16.md` in memory.
 **Sibling docs:** `system_prompt_v1.md`, `schema.md`, `memory_recall.md`.
+
+## Live Status
+
+| Day | Status | Notes |
+|-----|--------|-------|
+| 1 — Schema + UW MCP + watcher stub | ✅ DONE (2026-04-16) | All 13 ct_* tables live, UW endpoints verified against SKILL.md, ct-watcher deployed + scheduled every 30min weekdays 13:00-20:59 UTC. 12/12 spot_gex + options_vol pulling cleanly. Manual trigger: `POST /rest/v1/rpc/trigger_ct_watcher` |
+| 2 — Watcher brain (memory + Claude + state logic) | 🚧 IN PROGRESS | Memory recall, Claude call, state decision (heartbeat/observation/flag/alert), write to appropriate table, embed, Slack push ≥3 |
+| 3 — Grader + thesis history + disagreement log | ⏳ QUEUED | Graded outcomes, thesis evolution audit, james+claude conflict materialization |
+| 4 — News + lessons + EOD recap | ⏳ QUEUED | News ingester, ADD/SUPERSEDE/SKIP lessons, Doc's-style EOD recap |
+| 5 — Command station UI (banner + ticker grid + feed) | ⏸ NEEDS JAMES REVIEW | Visual direction needs sign-off before build |
+| 6 — Chat integration + historical recall + SPX GEX chart | ⏳ QUEUED | Depends on Day 5 |
+| 7 — Scorecard + recap views | ⏳ QUEUED | |
+| 8 — System prompt iteration + polish | ⏳ QUEUED | After 1 day of live running |
+
+**Autonomous checkpoint plan:** Days 2-4 proceed without review (backend). Day 5 stops for James to approve visual direction before building. Days 6-7 proceed from there.
 
 ---
 
