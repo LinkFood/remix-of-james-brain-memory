@@ -26,6 +26,7 @@ import CronJobs from "./pages/CronJobs";
 import Reports from "./pages/Reports";
 import Landing from "./pages/Landing";
 import CommandStation from "./pages/CommandStation";
+import Scorecard from "./pages/Scorecard";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -55,6 +56,7 @@ const TrackedRoutes = () => {
 
       {/* Primary authenticated route — co-trader command station */}
       <Route path="/" element={<AuthLayout><CommandStation /></AuthLayout>} />
+      <Route path="/scorecard" element={<AuthLayout><Scorecard /></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><Dashboard /></AuthLayout>} />

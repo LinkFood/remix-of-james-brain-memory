@@ -11,7 +11,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import {
   LayoutDashboard, Code2, CalendarDays, Search, Activity, Users, Brain, Timer,
   Clock, Zap, DollarSign, OctagonX, Settings, Heart, FileBarChart, MessageSquare,
-  AlertTriangle, X, LineChart,
+  AlertTriangle, X, LineChart, Trophy,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
@@ -36,6 +36,7 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { path: '/', label: 'Co-Trader', icon: <LineChart className="w-4 h-4" /> },
+  { path: '/scorecard', label: 'Scorecard', icon: <Trophy className="w-4 h-4" /> },
   { path: '/jac', label: 'JAC', icon: <MessageSquare className="w-4 h-4" /> },
   { path: '/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
   { path: '/code', label: 'Code', icon: <Code2 className="w-4 h-4" /> },
