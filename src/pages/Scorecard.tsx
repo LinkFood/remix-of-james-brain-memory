@@ -9,6 +9,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Trophy, Target, TrendingUp, TrendingDown, Activity, AlertTriangle } from 'lucide-react';
+import { GhostTradeTape } from '@/components/command/GhostTradeTape';
 
 interface Grade {
   subject_type: 'flag' | 'alert' | 'james_view';
@@ -172,6 +173,9 @@ export function Scorecard() {
             </div>
           </Card>
         </div>
+
+        {/* Ghost Trade Tape — paper P&L of Claude's flagged calls */}
+        <GhostTradeTape days={30} />
 
         {/* Breakdown tables */}
         {grades && grades.length > 0 ? (
