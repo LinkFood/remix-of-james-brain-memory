@@ -482,6 +482,45 @@ export function useRegimeInversions(limit = 5, windowMinutes = 60) {
   });
 }
 
+export interface IvShift {
+  id: string;
+  created_at: string;
+  session_date: string;
+  ticker: string;
+  prev_rank: number | null;
+  new_rank: number | null;
+  delta: number;
+  direction: 'up' | 'down';
+  attention_score: number;
+  ref_day: string;
+}
+
+/**
+ * Recent day-over-day IV rank shifts — always-on flag pattern emitted by
+ * ct-iv-shift-watch off ct_iv_rank_daily. Daily cadence (21:05 UTC weekdays).
+ * Pulls the last `hoursBack` hours (default 48h — covers "today + yesterday"
+ * so a shift stays visible on the strip across the next trading day),
+ * newest-first, capped at `limit` (default 5).
+ */
+export function useIvShifts(limit = 5, hoursBack = 48) {
+  return useQuery<IvShift[]>({
+    queryKey: ['ct_iv_shifts', limit, hoursBack],
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      const cutoff = new Date(Date.now() - hoursBack * 3600_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_iv_shifts')
+        .select('id, created_at, session_date, ticker, prev_rank, new_rank, delta, direction, attention_score, ref_day')
+        .gte('created_at', cutoff)
+        .order('attention_score', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as IvShift[];
+    },
+  });
+}
+
 export function useFlowAlerts(limit = 50) {
   return useQuery<FlowAlert[]>({
     queryKey: ['ct_flow_alerts', limit],

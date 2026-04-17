@@ -24,7 +24,7 @@ import {
   type GexComboVerdict,
   type GexRadarTicker,
 } from '@/hooks/useGexRadar';
-import { useRegimeInversions, type RegimeInversion } from '@/hooks/useCoTraderData';
+import { useRegimeInversions, useIvShifts, type RegimeInversion, type IvShift } from '@/hooks/useCoTraderData';
 
 // James's TS palette — spec'd exactly.
 const COLOR_URGENT = '#FF5252';
@@ -33,6 +33,8 @@ const COLOR_A_PLUS_BEARISH = '#FF5252';
 const COLOR_SQUEEZE = '#d08030';
 const COLOR_BATTLEGROUND = '#e8d840';
 const COLOR_GAMMA_FLIP = '#FFD600';  // classic warning yellow — regime inversion
+const COLOR_IV_UP      = '#00BCD4';  // cyan — vol rank rising day-over-day
+const COLOR_IV_DOWN    = '#8B5CF6';  // purple — vol rank falling day-over-day
 
 /** Pick James's exact TS palette for the combo; null = not a structural signal. */
 function paletteFor(combo: GexComboVerdict): { bg: string; fg: string; label: string } | null {
@@ -180,6 +182,58 @@ const RegimeFlipPill = memo(function RegimeFlipPill({ flip, onOpen }: RegimePill
   );
 });
 
+interface IvShiftPillProps {
+  shift: IvShift;
+  onOpen: (ticker: string) => void;
+}
+
+/**
+ * IV SHIFT pill — day-over-day IV rank move (vol regime shift, daily cadence).
+ * Written by ct-iv-shift-watch at 21:05 UTC weekdays off ct_iv_rank_daily.
+ * Cyan = rank rising, purple = rank falling. Click opens LinkGex Deep Sheet.
+ */
+const IvShiftPill = memo(function IvShiftPill({ shift, onOpen }: IvShiftPillProps) {
+  const isUp = shift.direction === 'up';
+  const bg = isUp ? COLOR_IV_UP : COLOR_IV_DOWN;
+  const deltaSign = shift.delta >= 0 ? '+' : '';
+  const deltaStr = `${deltaSign}${shift.delta.toFixed(0)}`;
+  const prevStr = shift.prev_rank !== null ? shift.prev_rank.toFixed(0) : '—';
+  const newStr  = shift.new_rank  !== null ? shift.new_rank.toFixed(0)  : '—';
+  const label = `${shift.ticker} IV ${deltaStr} (${prevStr}→${newStr})`;
+  const vibe = isUp
+    ? 'IV rank rising — options richer, vol regime expanding'
+    : 'IV rank falling — options cheaper, vol regime compressing';
+
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => onOpen(shift.ticker)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold tabular-nums tracking-wide hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all shadow-sm"
+            style={{ background: bg, color: '#000' }}
+            aria-label={`${label} — open deep view`}
+          >
+            <span>{label}</span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="bg-black/95 border-white/10 text-white px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wider text-white/60 mb-1">
+            IV rank shift · day-over-day
+          </div>
+          <div className="text-[11px] mb-1">{vibe}</div>
+          <div className="text-[10px] text-white/60 flex gap-3 tabular-nums">
+            <span>ref {shift.ref_day}</span>
+            <span>att {shift.attention_score}</span>
+          </div>
+          <div className="text-[9px] text-white/40 mt-1">click for LinkGex deep</div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+});
+
 interface Props {
   tickers?: string[];
   /** Parent-owned drill-down opener; the strip and GexRadar share the same sheet. */
@@ -196,6 +250,10 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
   // Regime flips in the last 60 min — always-on structural inversions.
   // Queried independently of GexRadar so they show even on partial UW failure.
   const { data: flips = [] } = useRegimeInversions(5, 60);
+  // Day-over-day IV rank shifts — daily-cadence vol regime moves written
+  // by ct-iv-shift-watch right after ct-eod-positioning lands at 21:00 UTC.
+  // 48h window keeps yesterday's shift visible through the next session.
+  const { data: ivShifts = [] } = useIvShifts(5, 48);
 
   if (isLoading && !data) {
     return (
@@ -216,10 +274,11 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
 
   const hasStructural = structural.length > 0;
   const hasFlips = flips.length > 0;
+  const hasIvShifts = ivShifts.length > 0;
 
-  // If every ticker came back LEAN/NEUTRAL AND there are no regime flips:
-  // show the muted pill.
-  if (!hasStructural && !hasFlips) {
+  // If every ticker came back LEAN/NEUTRAL AND there are no regime flips
+  // AND no IV shifts: show the muted pill.
+  if (!hasStructural && !hasFlips && !hasIvShifts) {
     return (
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-black/40 border border-white/5">
         <span className="text-[10px] uppercase tracking-wider text-white/40">Flags</span>
@@ -239,6 +298,9 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
         ))}
         {flips.map(f => (
           <RegimeFlipPill key={f.id} flip={f} onOpen={onOpenDeep} />
+        ))}
+        {ivShifts.map(s => (
+          <IvShiftPill key={s.id} shift={s} onOpen={onOpenDeep} />
         ))}
       </div>
     </div>
