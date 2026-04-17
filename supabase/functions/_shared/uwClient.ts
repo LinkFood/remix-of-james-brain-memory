@@ -44,6 +44,52 @@ export class UwError extends Error {
 }
 
 /**
+ * Record a single UW response's rate-limit headers to ct_uw_usage.
+ * Fire-and-forget — never blocks the UW call or throws.
+ */
+let _uwUsageBuffer: Array<{ endpoint: string; daily_count: number | null; daily_limit: number | null; status: number; ms: number }> = [];
+let _uwUsageFlushPending = false;
+
+function recordUwUsage(path: string, res: Response, ms: number): void {
+  const dc = Number(res.headers.get('x-uw-daily-req-count') ?? '');
+  const dl = Number(res.headers.get('x-uw-token-req-limit') ?? '');
+  _uwUsageBuffer.push({
+    endpoint: path,
+    daily_count: Number.isFinite(dc) ? dc : null,
+    daily_limit: Number.isFinite(dl) ? dl : null,
+    status: res.status,
+    ms,
+  });
+  if (!_uwUsageFlushPending) {
+    _uwUsageFlushPending = true;
+    // Flush 500ms after first call — batches a burst into one insert.
+    setTimeout(flushUwUsage, 500);
+  }
+}
+
+async function flushUwUsage(): Promise<void> {
+  const rows = _uwUsageBuffer;
+  _uwUsageBuffer = [];
+  _uwUsageFlushPending = false;
+  if (rows.length === 0) return;
+  try {
+    const url = Deno.env.get('SUPABASE_URL');
+    const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!url || !key) return;
+    await fetch(`${url}/rest/v1/ct_uw_usage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(rows),
+    });
+  } catch { /* swallow */ }
+}
+
+/**
  * GET with retry on 5xx only.
  */
 async function uwGet<T = unknown>(
@@ -63,7 +109,10 @@ async function uwGet<T = unknown>(
   }
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const startMs = Date.now();
     const res = await fetch(url.toString(), { method: 'GET', headers: headers() });
+    // Fire-and-forget usage snapshot. Don't block the request on this.
+    try { recordUwUsage(path, res, Date.now() - startMs); } catch { /* ignore */ }
 
     if (res.ok) {
       return (await res.json()) as T;

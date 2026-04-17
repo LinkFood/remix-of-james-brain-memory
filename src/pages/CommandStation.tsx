@@ -22,6 +22,7 @@ import { ClaudesRead } from '@/components/command/ClaudesRead';
 import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
 import { McpCallsPanel } from '@/components/command/McpCallsPanel';
+import { UwUsageBadge } from '@/components/command/UwUsageBadge';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -59,6 +60,7 @@ export default function CommandStation() {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <UwUsageBadge />
             <VoiceToggle />
             <Button size="sm" variant="outline" onClick={() => qc.invalidateQueries()}>
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
