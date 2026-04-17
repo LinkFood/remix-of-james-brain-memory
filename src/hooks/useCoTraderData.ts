@@ -1,0 +1,171 @@
+/**
+ * Co-trader data hooks — queries ct_* tables with realtime subscriptions.
+ * All RLS-authenticated. Single user, so we don't filter by user_id.
+ */
+import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+
+export interface Heartbeat {
+  id: string;
+  status_line: string;
+  watching: string[];
+  current_reads: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface Thesis {
+  id: string;
+  instrument: string;
+  direction: string;
+  conviction: number;
+  up_case: string;
+  down_case: string;
+  watching: string | null;
+  rationale: string | null;
+  updated_at: string;
+}
+
+export interface CtEvent {
+  id: string;
+  _type: 'observation' | 'flag' | 'alert';
+  instruments: string[];
+  direction: string | null;
+  conviction: number | null;
+  horizon: string | null;
+  glance: string[] | null;
+  full_reasoning: string | null;
+  alert_trigger: string | null;
+  created_at: string;
+}
+
+export interface NewsItem {
+  id: string;
+  instrument: string;
+  news_headline: string;
+  news_source: string | null;
+  news_url: string | null;
+  claude_take: string;
+  impact: string;
+  significance: number;
+  created_at: string;
+}
+
+export interface Report {
+  id: string;
+  report_type: string;
+  period_start: string;
+  period_end: string;
+  summary: string;
+  decomposition: unknown;
+  rabbit_hole: string;
+  scorecard: unknown;
+  self_assessment: string;
+  created_at: string;
+}
+
+export function useLatestHeartbeat() {
+  return useQuery<Heartbeat | null>({
+    queryKey: ['ct_latest_heartbeat'],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_heartbeats')
+        .select('id, status_line, watching, current_reads, created_at')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data as Heartbeat | null;
+    },
+  });
+}
+
+export function useTheses() {
+  return useQuery<Thesis[]>({
+    queryKey: ['ct_theses'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_theses')
+        .select('id, instrument, direction, conviction, up_case, down_case, watching, rationale, updated_at');
+      if (error) throw error;
+      return (data ?? []) as Thesis[];
+    },
+  });
+}
+
+export function useRecentEvents(limit = 20) {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    const chan = supabase
+      .channel('ct_events')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ct_observations' }, () => qc.invalidateQueries({ queryKey: ['ct_events'] }))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ct_flags' }, () => qc.invalidateQueries({ queryKey: ['ct_events'] }))
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'ct_alerts' }, () => qc.invalidateQueries({ queryKey: ['ct_events'] }))
+      .subscribe();
+    return () => { supabase.removeChannel(chan); };
+  }, [qc]);
+
+  return useQuery<CtEvent[]>({
+    queryKey: ['ct_events', limit],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const [obs, flags, alerts] = await Promise.all([
+        supabase.from('ct_observations').select('id, instruments, direction, glance, observation, created_at').order('created_at', { ascending: false }).limit(limit),
+        supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, glance, full_reasoning, created_at').order('created_at', { ascending: false }).limit(limit),
+        supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, alert_trigger, glance, full_reasoning, created_at').order('created_at', { ascending: false }).limit(limit),
+      ]);
+      const items: CtEvent[] = [];
+      for (const r of (obs.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'observation', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: null, horizon: null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.observation as string) ?? null, alert_trigger: null, created_at: r.created_at as string });
+      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, created_at: r.created_at as string });
+      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, created_at: r.created_at as string });
+      items.sort((a, b) => b.created_at.localeCompare(a.created_at));
+      return items.slice(0, limit);
+    },
+  });
+}
+
+export function useRecentNews(limit = 20) {
+  return useQuery<NewsItem[]>({
+    queryKey: ['ct_news', limit],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_news_analyses')
+        .select('id, instrument, news_headline, news_source, news_url, claude_take, impact, significance, created_at')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as NewsItem[];
+    },
+  });
+}
+
+export function useLatestRecap() {
+  return useQuery<Report | null>({
+    queryKey: ['ct_latest_recap'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_reports')
+        .select('id, report_type, period_start, period_end, summary, decomposition, rabbit_hole, scorecard, self_assessment, created_at')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data as Report | null;
+    },
+  });
+}
+
+/**
+ * Manual trigger via RPC — for "run now" buttons on the dashboard.
+ */
+export async function triggerCoTrader(fn: 'watcher' | 'grader' | 'news_ingester' | 'eod_recap' | 'lessons_curator'): Promise<{ ok: boolean; error?: string }> {
+  const rpcName = `trigger_ct_${fn}`;
+  const { error } = await supabase.rpc(rpcName);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
