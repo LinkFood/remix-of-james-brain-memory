@@ -33,7 +33,8 @@ function last24hrIso(): string {
 async function gatherContext(supabase: SupabaseClient) {
   const since = last24hrIso();
 
-  const [heartbeat, flow, darkPool, news, theses, flags, grades] = await Promise.all([
+  const since72h = new Date(Date.now() - 72 * 3600_000).toISOString();
+  const [heartbeat, flow, darkPool, news, theses, flags, grades, biases, selfCorrections] = await Promise.all([
     supabase.from('ct_heartbeats').select('status_line, watching, current_reads, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabase.from('ct_flow_alerts').select('ticker, option_symbol, strike, expiry, side, is_otm, size, premium, price, underlying_price, executed_at, alert_type').gte('ingested_at', since).order('premium', { ascending: false, nullsFirst: false }).limit(20),
     supabase.from('ct_dark_pool_prints').select('ticker, size, price, notional_value, executed_at').gte('ingested_at', since).order('notional_value', { ascending: false }).limit(10),
@@ -41,6 +42,8 @@ async function gatherContext(supabase: SupabaseClient) {
     supabase.from('ct_theses').select('instrument, direction, conviction, up_case, down_case, watching, rationale, updated_at'),
     supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, glance, grade_id, created_at').gte('created_at', since).order('created_at', { ascending: false }).limit(20),
     supabase.from('ct_grades').select('subject_type, subject_id, instrument, claimed_direction, verdict, actual_return_pct, graded_at').gte('graded_at', since).order('graded_at', { ascending: false }).limit(20),
+    supabase.from('ct_biases').select('pattern, instruments, severity').eq('active', true).order('severity', { ascending: false }).limit(3),
+    supabase.from('ct_self_regrades').select('subject_type, what_i_got_wrong, how_id_rewrite, regraded_at').gte('regraded_at', since72h).order('regraded_at', { ascending: false }).limit(3),
   ]);
 
   return {
@@ -51,6 +54,8 @@ async function gatherContext(supabase: SupabaseClient) {
     open_theses: theses.data ?? [],
     recent_flags_24hr: flags.data ?? [],
     recent_grades_24hr: grades.data ?? [],
+    known_biases: biases.data ?? [],
+    recent_self_corrections: selfCorrections.data ?? [],
   };
 }
 
