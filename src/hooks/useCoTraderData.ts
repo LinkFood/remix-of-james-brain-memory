@@ -118,6 +118,7 @@ export function useLatestHeartbeat() {
       const { data, error } = await supabase
         .from('ct_heartbeats')
         .select('id, status_line, watching, current_reads, created_at')
+        .neq('prompt_version', 'mcp-verify')
         .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();

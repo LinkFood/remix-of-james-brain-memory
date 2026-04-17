@@ -71,9 +71,12 @@ serve(async (req) => {
     for (const user of users) {
       const userId = user.id as string;
 
-      // Shared: todayStart for both health check and rate limit
-      const todayStart = new Date();
-      todayStart.setUTCHours(0, 0, 0, 0);
+      // Shared: todayStart for both health check and rate limit.
+      // MUST be ET (user's timezone), not UTC — otherwise the 5-hour window
+      // after midnight UTC / before midnight ET falsely reports today's
+      // reports as missing (they fired on yesterday-UTC / today-ET).
+      const etNowSnapshot = now();
+      const todayStart = new Date(`${etNowSnapshot.date}T00:00:00-04:00`);
 
       // === SYSTEMS HEALTH CHECK (deterministic, no AI) ===
       // Bypasses the 3/day heartbeat rate limit — system_health is separate type
@@ -89,9 +92,9 @@ serve(async (req) => {
           .gte('created_at', fourHoursAgo);
 
         if ((recentHealthCount ?? 0) === 0) {
-          const etNow = now(); // Eastern Time
-          const etHour = parseInt(etNow.time.split(':')[0], 10);
-          const dayOfWeek = new Date().getDay(); // 0=Sun, 6=Sat
+          const etHour = parseInt(etNowSnapshot.time.split(':')[0], 10);
+          // Day-of-week must also be in ET, not server UTC.
+          const dayOfWeek = new Date(`${etNowSnapshot.date}T12:00:00-04:00`).getUTCDay();
           const isWeekday = dayOfWeek >= 1 && dayOfWeek <= 5;
 
           const issues: string[] = [];
