@@ -34,6 +34,26 @@ export interface CtSelfAssessment {
   what_could_go_wrong?: string;
 }
 
+export interface TradeSetup {
+  instrument?: string;
+  strategy?: 'long_call' | 'long_put' | 'short_call' | 'short_put' | 'spread' | 'iron_condor' | 'other' | string;
+  strike?: number;
+  expiry?: string;
+  dte?: number;
+  type?: 'call' | 'put' | string;
+  entry_condition?: string;
+  entry_level?: number | null;
+  stop_condition?: string;
+  stop_level?: number | null;
+  target_level?: number | null;
+  target_rationale?: string;
+  size_r?: number;
+  max_pain_anchor?: number | null;
+  rationale?: string;
+  caveats?: string | null;
+  [k: string]: unknown;
+}
+
 export interface CtEvent {
   id: string;
   _type: 'observation' | 'flag' | 'alert';
@@ -41,10 +61,12 @@ export interface CtEvent {
   direction: string | null;
   conviction: number | null;
   horizon: string | null;
+  horizon_end?: string | null;
   glance: string[] | null;
   full_reasoning: string | null;
   alert_trigger: string | null;
   self_assessment: CtSelfAssessment | null;
+  trade_setup?: TradeSetup | null;
   created_at: string;
 }
 
@@ -138,14 +160,67 @@ export function useRecentEvents(limit = 20) {
     queryFn: async () => {
       const [obs, flags, alerts] = await Promise.all([
         supabase.from('ct_observations').select('id, instruments, direction, glance, observation, self_assessment, created_at').order('created_at', { ascending: false }).limit(limit),
-        supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, glance, full_reasoning, self_assessment, created_at').order('created_at', { ascending: false }).limit(limit),
-        supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, alert_trigger, glance, full_reasoning, self_assessment, created_at').order('created_at', { ascending: false }).limit(limit),
+        supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, horizon_end, glance, full_reasoning, self_assessment, trade_setup, created_at').order('created_at', { ascending: false }).limit(limit),
+        supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, horizon_end, alert_trigger, glance, full_reasoning, self_assessment, trade_setup, created_at').order('created_at', { ascending: false }).limit(limit),
       ]);
       const items: CtEvent[] = [];
-      for (const r of (obs.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'observation', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: null, horizon: null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.observation as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, created_at: r.created_at as string });
-      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, created_at: r.created_at as string });
-      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, created_at: r.created_at as string });
+      for (const r of (obs.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'observation', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: null, horizon: null, horizon_end: null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.observation as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: null, created_at: r.created_at as string });
+      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, created_at: r.created_at as string });
+      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, created_at: r.created_at as string });
       items.sort((a, b) => b.created_at.localeCompare(a.created_at));
+      return items.slice(0, limit);
+    },
+  });
+}
+
+/**
+ * Active trade setups — flags/alerts inside their horizon window, ungraded,
+ * with a concrete trade_setup payload. Sorted by conviction desc, then recency.
+ */
+export function useActiveTradeSetups(limit = 5) {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    const chan = supabase
+      .channel('ct_active_setups')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ct_flags' }, () => qc.invalidateQueries({ queryKey: ['ct_active_trade_setups'] }))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'ct_alerts' }, () => qc.invalidateQueries({ queryKey: ['ct_active_trade_setups'] }))
+      .subscribe();
+    return () => { supabase.removeChannel(chan); };
+  }, [qc]);
+
+  return useQuery<CtEvent[]>({
+    queryKey: ['ct_active_trade_setups', limit],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const nowIso = new Date().toISOString();
+      const [flags, alerts] = await Promise.all([
+        supabase
+          .from('ct_flags')
+          .select('id, instruments, direction, conviction, horizon, horizon_end, glance, full_reasoning, self_assessment, trade_setup, created_at')
+          .is('grade_id', null)
+          .not('trade_setup', 'is', null)
+          .gt('horizon_end', nowIso)
+          .order('conviction', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(limit * 2),
+        supabase
+          .from('ct_alerts')
+          .select('id, instruments, direction, conviction, horizon, horizon_end, alert_trigger, glance, full_reasoning, self_assessment, trade_setup, created_at')
+          .is('grade_id', null)
+          .not('trade_setup', 'is', null)
+          .gt('horizon_end', nowIso)
+          .order('created_at', { ascending: false })
+          .limit(limit * 2),
+      ]);
+      const items: CtEvent[] = [];
+      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, created_at: r.created_at as string });
+      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, created_at: r.created_at as string });
+      items.sort((a, b) => {
+        const cb = (b.conviction ?? 0) - (a.conviction ?? 0);
+        if (cb !== 0) return cb;
+        return b.created_at.localeCompare(a.created_at);
+      });
       return items.slice(0, limit);
     },
   });

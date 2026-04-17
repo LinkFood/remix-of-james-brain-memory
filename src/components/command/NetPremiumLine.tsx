@@ -1,9 +1,13 @@
 /**
- * NetPremiumLine — intraday running net call-put premium per ticker.
- * Cumulative line through the session, instant sentiment read at a glance.
+ * NetPremiumLine — intraday cumulative net call-put premium per ticker.
+ *
+ * Reads the true UW tick stream from ct_net_premium_ticks (populated every ~3min
+ * by ct-flow-ingester). Cumulative delta = sum of (net_call_premium - net_put_premium)
+ * across the session — the real intraday sentiment signal, not a derived guess
+ * cumsummed from flow_alerts.
  */
 import { useMemo, useState } from 'react';
-import { useFlowAlerts } from '@/hooks/useCoTraderData';
+import { useNetPremiumTicks, useNetPremiumTickers } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Line, LineChart, ResponsiveContainer, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
 
@@ -15,35 +19,28 @@ function fmtMoney(n: number): string {
 }
 
 export function NetPremiumLine() {
-  const { data: alerts } = useFlowAlerts(200);
-  const tickers = useMemo(() => {
-    if (!alerts) return [] as string[];
-    const counts = new Map<string, number>();
-    for (const a of alerts) counts.set(a.ticker, (counts.get(a.ticker) ?? 0) + 1);
-    return Array.from(counts.entries()).sort(([, a], [, b]) => b - a).map(([t]) => t).slice(0, 10);
-  }, [alerts]);
-
+  const { data: tickers = [] } = useNetPremiumTickers();
   const [ticker, setTicker] = useState<string>('');
   const active = ticker || tickers[0] || '';
+  const { data: ticks } = useNetPremiumTicks(active, 4);
 
   const series = useMemo(() => {
-    if (!alerts || !active) return [] as Array<{ t: number; cum: number; label: string }>;
-    const sorted = alerts
-      .filter(a => a.ticker === active && a.premium != null)
-      .sort((a, b) => a.ingested_at.localeCompare(b.ingested_at));
+    if (!ticks || ticks.length === 0) return [] as Array<{ t: number; cum: number; label: string }>;
     let cum = 0;
-    return sorted.map(a => {
-      const prem = a.premium ?? 0;
-      const signed = (a.side ?? '').toLowerCase().startsWith('c') ? prem : -prem;
-      cum += signed;
-      const t = Date.parse(a.ingested_at);
+    return ticks.map(row => {
+      const call = Number(row.net_call_premium ?? 0);
+      const put = Number(row.net_put_premium ?? 0);
+      // Each tick is a snapshot of UW-side net premium; we sum deltas across the
+      // session so the line shows cumulative directional conviction.
+      cum += (call - put);
+      const t = Date.parse(row.tick_timestamp);
       return {
         t,
         cum,
         label: new Date(t).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
       };
     });
-  }, [alerts, active]);
+  }, [ticks]);
 
   const latest = series[series.length - 1]?.cum ?? 0;
   const bullish = latest > 0;
@@ -52,9 +49,9 @@ export function NetPremiumLine() {
     <Card>
       <div className="px-3 py-2 border-b border-border bg-muted/30 flex items-center gap-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Net Premium</span>
-        <span className="text-[10px] text-muted-foreground">cumulative call − put</span>
-        <div className="flex items-center gap-0.5 ml-auto">
-          {tickers.slice(0, 5).map(t => (
+        <span className="text-[10px] text-muted-foreground">UW tick stream · call − put</span>
+        <div className="flex items-center gap-0.5 ml-auto flex-wrap justify-end">
+          {tickers.slice(0, 12).map(t => (
             <button
               key={t}
               onClick={() => setTicker(t)}
@@ -70,7 +67,7 @@ export function NetPremiumLine() {
 
       {series.length < 2 ? (
         <div className="p-4 text-center text-xs text-muted-foreground">
-          need at least 2 prints to draw — loading…
+          {active ? `waiting on ticks for ${active}…` : 'no net-premium ticks ingested yet'}
         </div>
       ) : (
         <div className="p-2">

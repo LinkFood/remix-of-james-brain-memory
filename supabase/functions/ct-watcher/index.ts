@@ -63,6 +63,8 @@ interface ClaudeJson {
     kill_conditions?: string;
     what_could_go_wrong?: string;
   };
+  // concrete trade setup (required on FLAG conv≥3 and ALERT; trust-pass to DB)
+  trade_setup?: Record<string, unknown>;
   // optional thesis updates
   thesis_updates?: Array<{
     instrument: string;
@@ -258,6 +260,7 @@ async function writeFlag(
     glance: toArray(claude.glance).filter(s => typeof s === 'string'),
     memory_recall_used: { summary: asString(claude.memory_recall) },
     self_assessment: claude.self_assessment ?? null,
+    trade_setup: claude.trade_setup ?? null,
     prompt_version: CT_PROMPT_VERSION,
   }).select('id').maybeSingle();
 
@@ -326,6 +329,7 @@ async function writeAlert(
     glance: toArray(claude.glance).filter(s => typeof s === 'string'),
     memory_recall_used: { summary: asString(claude.memory_recall) },
     self_assessment: claude.self_assessment ?? null,
+    trade_setup: claude.trade_setup ?? null,
     alert_trigger: trigger,
     prompt_version: CT_PROMPT_VERSION,
   }).select('id').maybeSingle();
@@ -520,43 +524,151 @@ serve(async (req) => {
     }
     const memory = await buildMemoryBundle(supabase, WATCHLIST, liveStateByInstrument);
 
-    // 3b. Recent flow + dark pool + NOPE + top movers + sweeps. Claude reasons
-    // over real whale activity + regime classifier + watchlist-external signals.
+    // 3b. Recent flow + dark pool + NOPE + top movers + sweeps + net-prem ticks
+    // + max pain + greek flow + iv rank. Claude reasons over real whale activity,
+    // regime classifier, dealer hedging flow, pin-risk, vol regime, and watchlist
+    // contagion — all in one shot.
     const flowCutoff = new Date(Date.now() - 10 * 60 * 1000).toISOString();
     const topMoversCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-    const [flowRecent, dpRecent, nopeRecent, topMovers, sweeps] = await Promise.all([
+    // Net-prem stream writes every ~3 min during market hours only — allow a
+    // 90-min lookback so after-hours cycles still see the last intraday reading.
+    const netPremCutoff = new Date(Date.now() - 90 * 60 * 1000).toISOString();
+    // Greek-flow only writes during market hours — 60-min lookback for same reason.
+    const greekFlowCutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const ivRankSince = new Date(Date.now() - 2 * 86400_000).toISOString().slice(0, 10);
+    const [
+      flowRecent,
+      dpRecent,
+      nopeRecent,
+      topMovers,
+      sweeps,
+      netPremRecent,
+      maxPainRecent,
+      greekFlowRecent,
+      ivRankRecent,
+    ] = await Promise.all([
+      // Watchlist-only, high-premium flow — dropped from 25 wide to 25 filtered
       supabase
         .from('ct_flow_alerts')
         .select('ticker, side, strike, expiry, is_otm, is_ask, size, premium, size_gt_oi, executed_at, ingested_at')
         .gte('ingested_at', flowCutoff)
+        .gte('premium', 250_000)
+        .in('ticker', WATCHLIST as unknown as string[])
         .order('premium', { ascending: false })
         .limit(25),
+      // Dark pool: 25 -> 10 (biggest)
       supabase
         .from('ct_dark_pool_prints')
         .select('ticker, size, price, notional_value, executed_at, ingested_at')
         .gte('ingested_at', flowCutoff)
         .order('notional_value', { ascending: false })
-        .limit(25),
+        .limit(10),
       supabase
         .from('ct_nope_minute')
         .select('ticker, nope, tick_timestamp')
         .gte('tick_timestamp', new Date(Date.now() - 15 * 60 * 1000).toISOString())
         .order('tick_timestamp', { ascending: false })
         .limit(15),
+      // Top movers: 20 -> 10
       supabase
         .from('ct_top_movers')
         .select('ticker, side, rank, net_premium, snapshot_at')
         .gte('snapshot_at', topMoversCutoff)
         .order('snapshot_at', { ascending: false })
         .order('rank', { ascending: true })
-        .limit(20),
+        .limit(10),
       supabase
         .from('ct_sweeps')
         .select('ticker, type, strike, expiry, premium, volume, open_interest, sweep_ratio, snapshot_at')
         .gte('snapshot_at', topMoversCutoff)
         .order('premium', { ascending: false })
         .limit(15),
+      // Net-premium ticks, last 35min — enough to compute a 30min-ago anchor
+      supabase
+        .from('ct_net_premium_ticks')
+        .select('ticker, tick_timestamp, net_call_premium, net_put_premium, net_call_volume, net_put_volume')
+        .gte('tick_timestamp', netPremCutoff)
+        .order('tick_timestamp', { ascending: false }),
+      // Max pain — today, all expiries for watchlist
+      supabase
+        .from('ct_max_pain_daily')
+        .select('ticker, expiry, max_pain_strike')
+        .gte('date', todayStr)
+        .order('expiry', { ascending: true }),
+      // Greek flow — last 10 min for SPY/QQQ/IWM
+      supabase
+        .from('ct_greek_flow_minute')
+        .select('ticker, tick_timestamp, total_delta_flow, total_vega_flow, underlying_price')
+        .in('ticker', ['SPY', 'QQQ', 'IWM'])
+        .gte('tick_timestamp', greekFlowCutoff)
+        .order('tick_timestamp', { ascending: false }),
+      // IV rank — last 2 days, pick latest per ticker downstream
+      supabase
+        .from('ct_iv_rank_daily')
+        .select('ticker, iv_rank, iv_30d, date')
+        .gte('date', ivRankSince)
+        .order('date', { ascending: false }),
     ]);
+
+    // --- Reduce raw payloads to per-ticker summaries ---
+
+    // a) net_prem_per_ticker_30min — latest row per ticker + 30min delta anchor
+    type NPRow = { ticker: string; tick_timestamp: string; net_call_premium: number | null; net_put_premium: number | null; net_call_volume: number | null; net_put_volume: number | null };
+    const npRows = (netPremRecent.data ?? []) as NPRow[];
+    const latestByTicker = new Map<string, NPRow>();
+    const anchorByTicker = new Map<string, NPRow>();
+    const thirtyMinAgo = Date.now() - 30 * 60 * 1000;
+    for (const r of npRows) {
+      if (!latestByTicker.has(r.ticker)) latestByTicker.set(r.ticker, r);
+      // First row at or before 30min ago becomes the anchor (rows are desc)
+      const ts = Date.parse(r.tick_timestamp);
+      if (ts <= thirtyMinAgo && !anchorByTicker.has(r.ticker)) {
+        anchorByTicker.set(r.ticker, r);
+      }
+    }
+    const netPremPerTicker30min = Array.from(latestByTicker.entries()).map(([ticker, latest]) => {
+      const anchor = anchorByTicker.get(ticker);
+      return {
+        ticker,
+        net_call_premium: latest.net_call_premium,
+        net_put_premium: latest.net_put_premium,
+        delta_call_30min: anchor != null ? Number(latest.net_call_premium ?? 0) - Number(anchor.net_call_premium ?? 0) : null,
+        delta_put_30min: anchor != null ? Number(latest.net_put_premium ?? 0) - Number(anchor.net_put_premium ?? 0) : null,
+      };
+    });
+
+    // b) max_pain_per_ticker — nearest expiry per ticker
+    type MPRow = { ticker: string; expiry: string | null; max_pain_strike: number | null };
+    const maxPainPerTicker: Record<string, { strike: number | null; expiry: string | null }> = {};
+    for (const r of (maxPainRecent.data ?? []) as MPRow[]) {
+      if (!maxPainPerTicker[r.ticker]) {
+        maxPainPerTicker[r.ticker] = { strike: r.max_pain_strike, expiry: r.expiry };
+      }
+    }
+
+    // c) greek_flow_latest — latest row per SPY/QQQ/IWM
+    type GFRow = { ticker: string; tick_timestamp: string; total_delta_flow: number | null; total_vega_flow: number | null; underlying_price: number | null };
+    const gfRows = (greekFlowRecent.data ?? []) as GFRow[];
+    const latestGreek = new Map<string, GFRow>();
+    for (const r of gfRows) if (!latestGreek.has(r.ticker)) latestGreek.set(r.ticker, r);
+    const greekFlowLatest = Array.from(latestGreek.values()).map(r => ({
+      ticker: r.ticker,
+      dir_delta_flow: r.total_delta_flow,
+      dir_vega_flow: r.total_vega_flow,
+      underlying_price: r.underlying_price,
+      ts: r.tick_timestamp,
+    }));
+
+    // d) iv_rank_per_ticker — latest row per ticker
+    type IVRow = { ticker: string; iv_rank: number | null; iv_30d: number | null; date: string };
+    const ivRows = (ivRankRecent.data ?? []) as IVRow[];
+    const ivLatest = new Map<string, IVRow>();
+    for (const r of ivRows) if (!ivLatest.has(r.ticker)) ivLatest.set(r.ticker, r);
+    const ivRankPerTicker: Record<string, { rank: number | null; iv_30d: number | null }> = {};
+    for (const [ticker, r] of ivLatest.entries()) {
+      ivRankPerTicker[ticker] = { rank: r.iv_rank, iv_30d: r.iv_30d };
+    }
 
     // 4. Assemble Claude user message — condensed, under ~6K tokens
     const userMessage = JSON.stringify({
@@ -569,16 +681,25 @@ serve(async (req) => {
       nope_recent: nopeRecent.data ?? [],
       top_movers_30min: topMovers.data ?? [],
       unusual_sweeps_30min: sweeps.data ?? [],
+      net_prem_per_ticker_30min: netPremPerTicker30min,
+      max_pain_per_ticker: maxPainPerTicker,
+      greek_flow_latest: greekFlowLatest,
+      iv_rank_per_ticker: ivRankPerTicker,
       proxy_mapping: {
         GLD: 'gold ETF — used as proxy for gold futures (GC) flow and positioning',
         USO: 'oil ETF — used as proxy for oil futures (CL) flow and positioning',
         SPX: 'cash S&P 500 index — used as proxy for ES futures macro regime read',
       },
       note: `UW does not cover futures directly; treat the proxies above as their futures equivalents for reasoning.
-recent_flow_alerts + recent_dark_pool_prints: last 10min of unusual activity — cite specific prints when material.
-nope_recent: Net Options Pricing Effect per minute for SPY/QQQ/IWM. NOPE < 0 = dealers short gamma = momentum / trending regime. NOPE > 0 = dealers long gamma = mean-revert / vol-compressed. Use the latest NOPE readings to validate or contradict the regime inference from gamma flip.
-top_movers_30min: market-wide top bullish/bearish tickers by net premium. Surfaces tickers OUTSIDE the 12-ticker watchlist. If a top mover is unusual or sector-contagious, call it out.
-unusual_sweeps_30min: canonical "unusual sweep" screen (OTM, sweep ratio >70%, vol > OI, premium ≥\$100K). Flow traders read this first; elevate any that suggest sector rotation or watchlist contagion.
+recent_flow_alerts: WATCHLIST-only, premium ≥\$250K, last 10min — cite specific prints when material.
+recent_dark_pool_prints: top-10 by notional, last 10min. Prints >\$50M = institutional positioning.
+nope_recent: Net Options Pricing Effect per minute for SPY/QQQ/IWM. NOPE < 0 = dealers short gamma = momentum / trending regime. NOPE > 0 = dealers long gamma = mean-revert / vol-compressed. Use latest readings to validate or contradict the regime inference from gamma flip.
+top_movers_30min: top-10 bull+bear by net premium across the market. Surfaces tickers OUTSIDE the 12-ticker watchlist.
+unusual_sweeps_30min: canonical "unusual sweep" screen (OTM, sweep ratio >70%, vol > OI, premium ≥\$100K).
+net_prem_per_ticker_30min: TRUE UW tick-stream net call/put premium per ticker + 30min delta. Cleaner than cumsumming flow_alerts — this IS the UW-side intraday sentiment signal. If delta_call rising + delta_put falling, bullish bias accumulating. Cite the delta magnitudes when flagging.
+max_pain_per_ticker: nearest-expiry max-pain strike per ticker. At 0DTE/1DTE, max-pain has pin gravity — if spot within 1% of max-pain approaching expiry, flag "pin risk."
+greek_flow_latest: signed dealer hedging flow for SPY/QQQ/IWM. A sharp sign flip (dir_delta_flow crossing zero) often LEADS price by minutes. Call it out when it diverges from price.
+iv_rank_per_ticker: rank 80+ = premium-selling regime favored, 20- = premium-buying favored. Influences which strategies are "cheap" and whether vol-expansion is likely vs already priced.
 Decide ONE state for this cycle and emit the JSON per the schema in the system prompt. Return ONLY the JSON.`,
     });
 
