@@ -33,9 +33,11 @@ interface AuthLayoutProps {
   children: React.ReactNode;
   /** When true, suppress the JacSidebar (for routes that bring their own chat). */
   hideSidebar?: boolean;
+  /** Custom sidebar to render in place of JacSidebar (e.g. Co-Trader ChatPanel). */
+  sidebar?: React.ReactNode;
 }
 
-export function AuthLayout({ children, hideSidebar = false }: AuthLayoutProps) {
+export function AuthLayout({ children, hideSidebar = false, sidebar }: AuthLayoutProps) {
   const navigate = useNavigate();
   const [userId, setUserId] = useState<string>('');
   const [authLoading, setAuthLoading] = useState(true);
@@ -84,14 +86,16 @@ export function AuthLayout({ children, hideSidebar = false }: AuthLayoutProps) {
 
         {/* Main area: sidebar + page content */}
         <div className="flex-1 flex overflow-hidden">
-          {/* JacSidebar — hidden on routes that bring their own chat (e.g. CommandStation) */}
-          {!hideSidebar && (
+          {/* Custom sidebar takes priority (e.g. Co-Trader ChatPanel); else JacSidebar unless hidden */}
+          {sidebar ? (
+            sidebar
+          ) : !hideSidebar ? (
             <JacSidebar
               isCollapsed={isCollapsed}
               onToggleCollapsed={toggleCollapsed}
               isMobile={isMobile}
             />
-          )}
+          ) : null}
 
           {/* Page content */}
           <main className="flex-1 overflow-auto">

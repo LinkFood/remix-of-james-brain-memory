@@ -5,7 +5,7 @@ import { NewsFeed } from '@/components/command/NewsFeed';
 import { RecapPanel } from '@/components/command/RecapPanel';
 import { DisagreementPanel } from '@/components/command/DisagreementPanel';
 import { JamesViewForm } from '@/components/command/JamesViewForm';
-import { ChatBox } from '@/components/command/ChatBox';
+// ChatBox replaced by docked ChatPanel (rendered by AuthLayout via sidebar prop)
 import { FlowTape } from '@/components/command/FlowTape';
 import { DarkPoolTape } from '@/components/command/DarkPoolTape';
 import { FlowPerStrike } from '@/components/command/FlowPerStrike';
@@ -101,7 +101,7 @@ export default function CommandStation() {
           Watcher: 30min · Grader: 15min · News: 20min · EOD: 21:30 UTC weekdays · Lessons: Sunday 23:00 UTC
         </footer>
       </div>
-      <ChatBox />
+      {/* ChatPanel docked by AuthLayout sidebar prop */}
     </div>
   );
 }

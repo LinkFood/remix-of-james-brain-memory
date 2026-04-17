@@ -27,6 +27,7 @@ import Reports from "./pages/Reports";
 import Landing from "./pages/Landing";
 import CommandStation from "./pages/CommandStation";
 import Scorecard from "./pages/Scorecard";
+import { ChatPanel } from "./components/command/ChatPanel";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -54,9 +55,9 @@ const TrackedRoutes = () => {
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
 
-      {/* Primary authenticated route — co-trader command station (own ChatBox, no JacSidebar) */}
-      <Route path="/" element={<AuthLayout hideSidebar><CommandStation /></AuthLayout>} />
-      <Route path="/scorecard" element={<AuthLayout hideSidebar><Scorecard /></AuthLayout>} />
+      {/* Primary authenticated route — co-trader with docked ChatPanel in sidebar slot */}
+      <Route path="/" element={<AuthLayout sidebar={<ChatPanel />}><CommandStation /></AuthLayout>} />
+      <Route path="/scorecard" element={<AuthLayout sidebar={<ChatPanel />}><Scorecard /></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><Dashboard /></AuthLayout>} />
