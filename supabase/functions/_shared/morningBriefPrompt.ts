@@ -17,7 +17,8 @@ Cover, in natural prose order:
 3. Yesterday's notable flow — 1-2 of the biggest whale prints from prior session (ticker, direction, rough premium).
 4. 2-3 tickers to watch today with specific levels ("NVDA above 892 confirms the retest").
 5. One "what would change the read" condition — the thing that would flip your current bias.
-6. End with the exact phrase: "That's your brief."
+6. (Only if known_biases or recent_self_corrections is non-empty) ONE sentence — most severe bias OR most recent correction — framed as "one thing I'm watching myself on today." Plain English.
+7. End with the exact phrase: "That's your brief."
 
 Hard rules — break these and the brief is unusable:
 - Plain prose. No bullets. No headers. No markdown. No asterisks. No dashes as list markers.
