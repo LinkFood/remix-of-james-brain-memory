@@ -720,9 +720,9 @@ serve(async (req) => {
       if (avgNope > 0.5) { bullish++; signals.push(`NOPE positive ${avgNope.toFixed(2)}`); }
       else if (avgNope < -0.5) { bearish++; signals.push(`NOPE negative ${avgNope.toFixed(2)}`); }
       // Signal 2: Net premium flow direction last 30min (watchlist aggregate)
-      const netPremPerTicker30min = Object.values(netPremPerTicker) as Array<{ delta_call_prem_30min?: number; delta_put_prem_30min?: number }>;
-      const callDelta = netPremPerTicker30min.reduce((a, r) => a + (r.delta_call_prem_30min ?? 0), 0);
-      const putDelta = netPremPerTicker30min.reduce((a, r) => a + (r.delta_put_prem_30min ?? 0), 0);
+      const npArr = netPremPerTicker30min as Array<{ delta_call_prem_30min?: number; delta_put_prem_30min?: number }>;
+      const callDelta = npArr.reduce((a, r) => a + (r.delta_call_prem_30min ?? 0), 0);
+      const putDelta = npArr.reduce((a, r) => a + (r.delta_put_prem_30min ?? 0), 0);
       if (callDelta > 5_000_000 && callDelta > putDelta * 2) { bullish++; signals.push(`call flow +$${(callDelta/1e6).toFixed(1)}M last 30min`); }
       else if (putDelta > 5_000_000 && putDelta > callDelta * 2) { bearish++; signals.push(`put flow +$${(putDelta/1e6).toFixed(1)}M last 30min`); }
       // Signal 3: Dark pool dominance (large prints same direction)
