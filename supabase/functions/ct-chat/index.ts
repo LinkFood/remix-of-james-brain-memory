@@ -232,12 +232,22 @@ serve(async (req) => {
 
     let responseText = '';
     try {
+      const uwKey = Deno.env.get('UW_API_KEY');
       const res = await callClaude({
         model: CLAUDE_MODELS.sonnet,   // better conversational reasoning than Haiku
         system: CT_CHAT_SYSTEM,
         messages,
         max_tokens: 1500,
         temperature: 0.4,
+        // Live UW MCP — Claude can query any of UW's endpoints on demand during
+        // the turn. Pairs our cached state with full-surface UW access.
+        mcp_servers: uwKey ? [{
+          type: 'url',
+          url: 'https://api.unusualwhales.com/api/mcp',
+          name: 'unusual-whales',
+          authorization_token: uwKey,
+        }] : undefined,
+        beta: uwKey ? ['mcp-client-2025-04-04'] : undefined,
       });
       responseText = parseTextContent(res).trim();
     } catch (e) {

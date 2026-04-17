@@ -28,6 +28,15 @@ export const CLAUDE_RATES = {
   [CLAUDE_MODELS.haiku]: { input: 0.80, output: 4.0 },
 } as const;
 
+export interface ClaudeMcpServer {
+  type: 'url';
+  url: string;
+  name: string;
+  authorization_token?: string;
+  /** Optional allowlist of tool names on the MCP server. Omit = all tools. */
+  tool_configuration?: { enabled?: boolean; allowed_tools?: string[] };
+}
+
 export interface ClaudeOptions {
   model?: string;
   system?: string;
@@ -37,6 +46,10 @@ export interface ClaudeOptions {
   max_tokens?: number;
   temperature?: number;
   stream?: boolean;
+  /** Remote MCP servers Claude can query during the turn. Requires beta header. */
+  mcp_servers?: ClaudeMcpServer[];
+  /** Extra anthropic-beta feature flags (e.g. 'mcp-client-2025-04-04'). */
+  beta?: string[];
 }
 
 export interface ClaudeUsage {
@@ -54,14 +67,18 @@ export interface ClaudeResponse {
   usage: ClaudeUsage;
 }
 
-export function getAnthropicHeaders(): Record<string, string> {
+export function getAnthropicHeaders(beta?: string[]): Record<string, string> {
   const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not configured');
-  return {
+  const headers: Record<string, string> = {
     'x-api-key': apiKey,
     'anthropic-version': ANTHROPIC_VERSION,
     'Content-Type': 'application/json',
   };
+  if (beta && beta.length > 0) {
+    headers['anthropic-beta'] = beta.join(',');
+  }
+  return headers;
 }
 
 /**
@@ -76,6 +93,8 @@ export async function callClaude(options: ClaudeOptions): Promise<ClaudeResponse
     tool_choice,
     max_tokens = 4096,
     temperature = 0.3,
+    mcp_servers,
+    beta,
   } = options;
 
   const body: Record<string, unknown> = {
@@ -88,6 +107,7 @@ export async function callClaude(options: ClaudeOptions): Promise<ClaudeResponse
   if (system) body.system = system;
   if (tools) body.tools = tools;
   if (tool_choice) body.tool_choice = tool_choice;
+  if (mcp_servers && mcp_servers.length > 0) body.mcp_servers = mcp_servers;
 
   const MAX_RETRIES = 3;
   const BASE_DELAY_MS = 1000;
@@ -95,7 +115,7 @@ export async function callClaude(options: ClaudeOptions): Promise<ClaudeResponse
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     const response = await fetch(ANTHROPIC_API_URL, {
       method: 'POST',
-      headers: getAnthropicHeaders(),
+      headers: getAnthropicHeaders(beta),
       body: JSON.stringify(body),
     });
 
