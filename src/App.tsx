@@ -29,6 +29,7 @@ import CommandStation from "./pages/CommandStation";
 import Scorecard from "./pages/Scorecard";
 import Replay from "./pages/Replay";
 import Book from "./pages/Book";
+import SessionTimeline from "./pages/SessionTimeline";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -61,6 +62,7 @@ const TrackedRoutes = () => {
       <Route path="/" element={<AuthLayout sidebar={<ChatPanel />}><CommandStation /></AuthLayout>} />
       <Route path="/scorecard" element={<AuthLayout sidebar={<ChatPanel />}><Scorecard /></AuthLayout>} />
       <Route path="/book" element={<AuthLayout sidebar={<ChatPanel />}><Book /></AuthLayout>} />
+      <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><SessionTimeline /></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><Dashboard /></AuthLayout>} />

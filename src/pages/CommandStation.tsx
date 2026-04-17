@@ -27,6 +27,7 @@ import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
 import { BookEquityCurve } from '@/components/command/BookEquityCurve';
 import { ClaudesRead } from '@/components/command/ClaudesRead';
+import { ColdOpen } from '@/components/command/ColdOpen';
 import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
 import { McpCallsPanel } from '@/components/command/McpCallsPanel';
@@ -35,8 +36,9 @@ import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { RefreshCw, Zap } from 'lucide-react';
+import { RefreshCw, Zap, Clock } from 'lucide-react';
 import { toast } from 'sonner';
+import { Link } from 'react-router-dom';
 
 export default function CommandStation() {
   const qc = useQueryClient();
@@ -73,6 +75,9 @@ export default function CommandStation() {
           <div className="flex items-center gap-2">
             <UwUsageBadge />
             <VoiceToggle />
+            <Button asChild size="sm" variant="outline">
+              <Link to="/session"><Clock className="w-3.5 h-3.5 mr-1" /> Session →</Link>
+            </Button>
             <Button size="sm" variant="outline" onClick={() => qc.invalidateQueries()}>
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
             </Button>
@@ -82,9 +87,15 @@ export default function CommandStation() {
           </div>
         </header>
 
+        {/* Cold Open — "what matters right now?" digest. Literal first block.
+            Scrolls to or opens the right panel for each bullet. */}
+        <ColdOpen onOpenDeep={setDeepTicker} />
+
         <ClaudesRead />
 
-        <TradeCards />
+        <div id="co-trade-cards">
+          <TradeCards />
+        </div>
 
         {/* Always-on flag strip: structural signals (URGENT / A+ / SQUEEZE /
             BATTLEGROUND) regardless of filter state. Eyes-first row. */}
@@ -96,14 +107,20 @@ export default function CommandStation() {
         {/* Sibling strip for sweep-cluster event bursts. Hidden when the
             15-min window is empty. Click pill → focuses FlowTape via
             ct:flowtape:filter window event. */}
-        <SweepClusterStrip />
+        <div id="co-sweep-strip">
+          <SweepClusterStrip />
+        </div>
 
         {/* Dark-pool cluster strip — parallel pattern for block-print bursts.
             3+ prints >= $1M on same ticker in a 10-min window. Click pill →
             focuses DarkPoolTape via ct:darkpool:filter window event. */}
-        <DpClusterStrip />
+        <div id="co-dp-strip">
+          <DpClusterStrip />
+        </div>
 
-        <MarketBanner />
+        <div id="co-market-banner">
+          <MarketBanner />
+        </div>
 
         <GexRadar tickers={['SPY', 'QQQ', 'IWM']} onDrillDown={setDeepTicker} />
 
@@ -119,7 +136,9 @@ export default function CommandStation() {
               <HiroPanel />
             </div>
             <FlowPerStrike />
-            <EventFeed />
+            <div id="co-event-feed">
+              <EventFeed />
+            </div>
             <CuriosityFeed />
             <DarkPoolTape />
             <DarkPoolChart />
