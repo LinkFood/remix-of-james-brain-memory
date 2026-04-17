@@ -16,6 +16,8 @@ import { EventsPanel } from '@/components/command/EventsPanel';
 import { PositioningPanel } from '@/components/command/PositioningPanel';
 import { GexHeatmap } from '@/components/command/GexHeatmap';
 import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
+import { ClaudesRead } from '@/components/command/ClaudesRead';
+import { VoiceToggle } from '@/components/command/VoiceToggle';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -62,6 +64,8 @@ export default function CommandStation() {
             </Button>
           </div>
         </header>
+
+        <ClaudesRead />
 
         <MarketBanner />
 
