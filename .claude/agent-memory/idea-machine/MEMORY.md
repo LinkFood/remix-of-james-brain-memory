@@ -56,6 +56,26 @@
 ## Ideas Dismissed
 - Velocity Heatmap, Ghost Mode (user dropped them)
 
+## Co-Trader Pivot (Apr 2026)
+- JAC Agent OS paused; repo now hosts Co-Trader at linkjac.cloud
+- [Co-Trader state snapshot](project_cotrader_state_2026_04_17.md) — what's already built, don't re-pitch
+- [Co-Trader idea themes](feedback_cotrader_idea_themes.md) — self-awareness, commitment devices, ghost P&L, analogy memory
+
+## Ideas Pitched (2026-04-17, Co-Trader pre-market session)
+- Pre-Bell Gauntlet (locked 9:25 predictions graded at 10/11/close)
+- Ghost Positions (auto paper book shadowing every Trade Card)
+- "Why Am I Different Today?" Panel (embedding-analogy to past setups)
+- Conviction Decay Curve (15min restated conviction vs price path)
+- Slack Whisper Mode (tap-to-log ALERT replies feed ct_disagreements)
+- Calendar Hook (AFK-aware alert escalation via JAC calendar)
+- Bias Confession Booth (weekly structural-wrongness injected as SYSTEM context)
+- Counterfactual Replay (post-miss Claude re-read with hindsight)
+- Cross-Source "Who Else Sees This?" (Tavily/UW social corroboration filter)
+- Voice Trading Journal as Brain Object (ElevenLabs dictation, embedded)
+- Red Team Agent (adversarial Claude in Trade Cards)
+- DCD Environmental Crossover (pipe market as domain into DCD narrator)
+- "What Would You Ask For?" Loop (ct_wishlist of missing data)
+
 ## Session: Rounding Off (2026-03-04)
 - User wants to "round everything else off" before adding new codebases
 - Key gaps found in code review:

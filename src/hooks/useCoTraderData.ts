@@ -844,6 +844,23 @@ export function useSelfRegrade(
   });
 }
 
+/** Recent self-corrections — surfaces Claude's hindsight on Scorecard. */
+export function useRecentSelfCorrections(limit = 5) {
+  return useQuery<CtSelfRegrade[]>({
+    queryKey: ['ct_self_regrades_recent', limit],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_self_regrades')
+        .select('id, subject_type, subject_id, original_confidence, original_reasoning_quality, retrospective_confidence, retrospective_reasoning_quality, what_i_got_right, what_i_got_wrong, how_id_rewrite, grader_verdict, regraded_at')
+        .order('regraded_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as CtSelfRegrade[];
+    },
+  });
+}
+
 /** IV rank history for a ticker — most recent N days. */
 export function useIvRank(ticker: string, days = 30) {
   return useQuery<IvRankRow[]>({

@@ -196,6 +196,40 @@ async function getSimilarPastSetups(
 }
 
 /**
+ * Recent self-corrections — hindsight analysis the self-grader already wrote.
+ * Pulling the most recent across the book (not per-instrument) so Claude sees
+ * its most recent "what I got wrong / how I'd rewrite" on every tick.
+ * This is the chess-engine feedback loop: self-grader writes hindsight,
+ * watcher reads it next cycle.
+ */
+export interface SelfCorrection {
+  subject_type: string;
+  subject_id: string;
+  what_i_got_wrong: string | null;
+  how_id_rewrite: string | null;
+  grader_verdict: string | null;
+  regraded_at: string;
+}
+
+export async function getRecentSelfCorrections(
+  supabase: SupabaseClient,
+  limit = 5
+): Promise<SelfCorrection[]> {
+  const cutoff = new Date(Date.now() - 72 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('ct_self_regrades')
+    .select('subject_type, subject_id, what_i_got_wrong, how_id_rewrite, grader_verdict, regraded_at')
+    .gte('regraded_at', cutoff)
+    .order('regraded_at', { ascending: false })
+    .limit(limit);
+  if (error) {
+    console.warn('[memoryRecall] self-corrections fetch failed:', error.message);
+    return [];
+  }
+  return (data as SelfCorrection[]) ?? [];
+}
+
+/**
  * Relevant lessons for this instrument — embedding-nearest if we have
  * any active lessons, else skip. Early days returns [].
  */
