@@ -25,12 +25,17 @@ interface ChatMessage {
 }
 
 async function buildContext(supabase: ReturnType<typeof createClient>) {
-  const [heartbeat, theses, obs, flags, alerts] = await Promise.all([
+  const flowCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+
+  const [heartbeat, theses, obs, flags, alerts, flow, dp, news] = await Promise.all([
     supabase.from('ct_heartbeats').select('status_line, current_reads, watching, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabase.from('ct_theses').select('instrument, direction, conviction, up_case, down_case, watching, rationale, updated_at'),
     supabase.from('ct_observations').select('id, instruments, direction, glance, created_at').order('created_at', { ascending: false }).limit(6),
     supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, glance, created_at').order('created_at', { ascending: false }).limit(6),
     supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, alert_trigger, glance, created_at').order('created_at', { ascending: false }).limit(3),
+    supabase.from('ct_flow_alerts').select('ticker, side, strike, expiry, is_otm, is_ask, size, premium, size_gt_oi, executed_at').gte('ingested_at', flowCutoff).order('premium', { ascending: false }).limit(25),
+    supabase.from('ct_dark_pool_prints').select('ticker, size, price, notional_value, executed_at').gte('ingested_at', flowCutoff).order('notional_value', { ascending: false }).limit(25),
+    supabase.from('ct_news_analyses').select('instrument, news_headline, impact, significance, claude_take, created_at').gte('significance', 3).order('created_at', { ascending: false }).limit(10),
   ]);
 
   // Condense heartbeat current_reads — only send the _snapshot (condensed state),
@@ -46,6 +51,9 @@ async function buildContext(supabase: ReturnType<typeof createClient>) {
     recent_observations: obs.data ?? [],
     recent_flags: flags.data ?? [],
     recent_alerts: alerts.data ?? [],
+    recent_flow_alerts_30min: flow.data ?? [],
+    recent_dark_pool_prints_30min: dp.data ?? [],
+    recent_significant_news: news.data ?? [],
   };
 }
 
