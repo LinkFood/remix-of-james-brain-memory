@@ -153,6 +153,9 @@ verify_jwt = false
 [functions.ct-mcp-verify]
 verify_jwt = false
 
+[functions.ct-uw-probe]
+verify_jwt = false
+
 [functions.ct-pre-bell-gauntlet]
 verify_jwt = false
 
@@ -178,4 +181,16 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ct-alert-book-commit]
+verify_jwt = false
+
+[functions.ct-net-prem-cumulative]
+verify_jwt = false
+
+[functions.ct-gex-radar]
+verify_jwt = false
+
+[functions.ct-replay]
+verify_jwt = false
+
+[functions.ct-attention-backfill]
 verify_jwt = false

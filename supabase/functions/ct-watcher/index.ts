@@ -30,6 +30,7 @@ import { buildMemoryBundle, getRecentSelfCorrections, getActiveBiases } from '..
 import { embedCtItem, buildCtRichText } from '../_shared/ctEmbed.ts';
 import { condenseWatcherState, type CondensedState } from '../_shared/ctStateCondense.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
+import { deriveWriteTimeAttention } from '../_shared/attentionScore.ts';
 
 type CtState = 'HEARTBEAT' | 'OBSERVATION' | 'FLAG' | 'ALERT';
 type Direction = 'bullish' | 'bearish' | 'neutral' | 'volatility';
@@ -191,6 +192,7 @@ async function writeHeartbeat(
     watching: watching.length > 0 ? watching : condensedWatching(condensed),
     current_reads: { ...current_reads, _snapshot: condensed },
     prompt_version: CT_PROMPT_VERSION,
+    attention_score: deriveWriteTimeAttention({ state: 'HEARTBEAT' }),
   }).select('id').maybeSingle();
 
   if (error) {
@@ -206,6 +208,7 @@ async function writeObservation(
   condensed: CondensedState,
   claude: ClaudeJson,
   memoryRecallOverride?: string,
+  convergenceCount?: number,
 ): Promise<string | null> {
   const instruments = toArray(claude.instruments).filter(Boolean) as string[];
   if (instruments.length === 0) {
@@ -214,12 +217,14 @@ async function writeObservation(
   }
 
   const memoryRecallSummary = memoryRecallOverride ?? asString(claude.memory_recall);
+  const glanceArr = toArray(claude.glance).filter(s => typeof s === 'string') as string[];
+  const isInvalidation = glanceArr[0]?.toUpperCase().startsWith('THESIS INVALIDAT') ?? false;
 
   const { data, error } = await supabase.from('ct_observations').insert({
     user_id: userId,
     instruments,
     observation: asString(claude.observation) || '(empty)',
-    glance: toArray(claude.glance).filter(s => typeof s === 'string'),
+    glance: glanceArr,
     up_case: asString(claude.up_case),
     up_case_odds: claude.up_case_odds ?? null,
     down_case: asString(claude.down_case),
@@ -231,6 +236,11 @@ async function writeObservation(
     memory_recall_used: { summary: memoryRecallSummary },
     self_assessment: claude.self_assessment ?? null,
     prompt_version: CT_PROMPT_VERSION,
+    attention_score: deriveWriteTimeAttention({
+      state: 'OBSERVATION',
+      convergenceCount,
+      isInvalidation,
+    }),
   }).select('id').maybeSingle();
 
   if (error) {
@@ -268,7 +278,7 @@ async function writeFlag(
   userId: string | null,
   condensed: CondensedState,
   claude: ClaudeJson,
-  opts?: { convictionOverride?: number; memoryRecallOverride?: string },
+  opts?: { convictionOverride?: number; memoryRecallOverride?: string; convergenceCount?: number },
 ): Promise<string | null> {
   const instruments = toArray(claude.instruments).filter(Boolean) as string[];
   if (instruments.length === 0) {
@@ -302,6 +312,12 @@ async function writeFlag(
     self_assessment: claude.self_assessment ?? null,
     trade_setup: claude.trade_setup ?? null,
     prompt_version: CT_PROMPT_VERSION,
+    attention_score: deriveWriteTimeAttention({
+      state: 'FLAG',
+      conviction,
+      convergenceCount: opts?.convergenceCount,
+      hasTradeSetup: !!claude.trade_setup,
+    }),
   }).select('id').maybeSingle();
 
   if (error) {
@@ -347,7 +363,8 @@ async function writeAlert(
   supabase: SupabaseClient,
   userId: string | null,
   condensed: CondensedState,
-  claude: ClaudeJson
+  claude: ClaudeJson,
+  convergenceCount?: number,
 ): Promise<WriteAlertResult> {
   const instruments = toArray(claude.instruments).filter(Boolean) as string[];
   if (instruments.length === 0) {
@@ -390,6 +407,7 @@ async function writeAlert(
       const flagId = await writeFlag(supabase, userId, condensed, prefixedClaude, {
         convictionOverride: 3,
         memoryRecallOverride: cooldownNote,
+        convergenceCount,
       });
       return { alertId: null, demotedTo: 'flag', demotedEventId: flagId };
     }
@@ -418,7 +436,7 @@ async function writeAlert(
         glance: ['[COOLDOWN — suppressed conv=5 repeat]', ...origGlance],
       };
       const cooldownNote = `[cooldown: same-direction suppressed within 30min — see alert ${recentId}] ${asString(claude.memory_recall)}`.trim();
-      const obsId = await writeObservation(supabase, userId, condensed, prefixedClaude, cooldownNote);
+      const obsId = await writeObservation(supabase, userId, condensed, prefixedClaude, cooldownNote, convergenceCount);
       return { alertId: null, demotedTo: 'observation', demotedEventId: obsId };
     }
   }
@@ -447,6 +465,12 @@ async function writeAlert(
     trade_setup: claude.trade_setup ?? null,
     alert_trigger: trigger,
     prompt_version: CT_PROMPT_VERSION,
+    attention_score: deriveWriteTimeAttention({
+      state: 'ALERT',
+      alertTrigger: trigger,
+      convergenceCount,
+      hasTradeSetup: !!claude.trade_setup,
+    }),
   }).select('id').maybeSingle();
 
   if (error) {
@@ -904,7 +928,7 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
           heartbeatId = await writeHeartbeat(supabase, condensed, parsed, null);
           break;
         case 'OBSERVATION':
-          eventId = await writeObservation(supabase, userId, condensed, parsed);
+          eventId = await writeObservation(supabase, userId, condensed, parsed, undefined, convergence.count);
           // Also write a heartbeat to keep the pulse row
           heartbeatId = await writeHeartbeat(
             supabase,
@@ -914,7 +938,7 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
           );
           break;
         case 'FLAG':
-          eventId = await writeFlag(supabase, userId, condensed, parsed);
+          eventId = await writeFlag(supabase, userId, condensed, parsed, { convergenceCount: convergence.count });
           heartbeatId = await writeHeartbeat(
             supabase,
             condensed,
@@ -923,7 +947,7 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
           );
           break;
         case 'ALERT': {
-          const alertResult = await writeAlert(supabase, userId, condensed, parsed);
+          const alertResult = await writeAlert(supabase, userId, condensed, parsed, convergence.count);
           let hbStatus: string;
           if (alertResult.alertId) {
             eventId = alertResult.alertId;

@@ -10,11 +10,13 @@ import { FlowTape } from '@/components/command/FlowTape';
 import { DarkPoolTape } from '@/components/command/DarkPoolTape';
 import { FlowPerStrike } from '@/components/command/FlowPerStrike';
 import { NetPremiumLine } from '@/components/command/NetPremiumLine';
+import { NetPremiumCumulative } from '@/components/command/NetPremiumCumulative';
 import { HiroPanel } from '@/components/command/HiroPanel';
 import { MarketMovers } from '@/components/command/MarketMovers';
 import { EventsPanel } from '@/components/command/EventsPanel';
 import { PositioningPanel } from '@/components/command/PositioningPanel';
 import { GexHeatmap } from '@/components/command/GexHeatmap';
+import { GexRadar } from '@/components/command/GexRadar';
 import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
 import { ClaudesRead } from '@/components/command/ClaudesRead';
 import { TradeCards } from '@/components/command/TradeCards';
@@ -73,7 +75,11 @@ export default function CommandStation() {
 
         <MarketBanner />
 
+        <GexRadar tickers={['SPY', 'QQQ', 'IWM']} />
+
         <GexHeatmap />
+
+        <NetPremiumCumulative />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           <div className="lg:col-span-8 space-y-4">

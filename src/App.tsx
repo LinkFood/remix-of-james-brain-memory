@@ -27,6 +27,7 @@ import Reports from "./pages/Reports";
 import Landing from "./pages/Landing";
 import CommandStation from "./pages/CommandStation";
 import Scorecard from "./pages/Scorecard";
+import Replay from "./pages/Replay";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -71,6 +72,7 @@ const TrackedRoutes = () => {
       <Route path="/brain" element={<AuthLayout><BrainInspector /></AuthLayout>} />
       <Route path="/crons" element={<AuthLayout><CronJobs /></AuthLayout>} />
       <Route path="/reports" element={<AuthLayout><Reports /></AuthLayout>} />
+      <Route path="/replay" element={<AuthLayout><Replay /></AuthLayout>} />
 
       <Route path="*" element={<NotFound />} />
     </Routes>
