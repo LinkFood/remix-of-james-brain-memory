@@ -24,6 +24,7 @@ import {
   type GexComboVerdict,
   type GexRadarTicker,
 } from '@/hooks/useGexRadar';
+import { useRegimeInversions, type RegimeInversion } from '@/hooks/useCoTraderData';
 
 // James's TS palette — spec'd exactly.
 const COLOR_URGENT = '#FF5252';
@@ -31,6 +32,7 @@ const COLOR_A_PLUS_BULLISH = '#00E676';
 const COLOR_A_PLUS_BEARISH = '#FF5252';
 const COLOR_SQUEEZE = '#d08030';
 const COLOR_BATTLEGROUND = '#e8d840';
+const COLOR_GAMMA_FLIP = '#FFD600';  // classic warning yellow — regime inversion
 
 /** Pick James's exact TS palette for the combo; null = not a structural signal. */
 function paletteFor(combo: GexComboVerdict): { bg: string; fg: string; label: string } | null {
@@ -127,6 +129,57 @@ const FlagPill = memo(function FlagPill({ t, onOpen }: PillProps) {
   );
 });
 
+interface RegimePillProps {
+  flip: RegimeInversion;
+  onOpen: (ticker: string) => void;
+}
+
+/**
+ * γ-FLIP pill — session-scale structural regime inversion (dealers long→short
+ * gamma or vice versa). Click opens LinkGexDeep; SPX routes to SPY because
+ * LinkGex covers ETFs, not the cash index.
+ */
+const RegimeFlipPill = memo(function RegimeFlipPill({ flip, onOpen }: RegimePillProps) {
+  const dir = `${flip.prev_regime.toUpperCase().slice(0, 3)}→${flip.new_regime.toUpperCase().slice(0, 3)}`;
+  const lvl = flip.flip_level !== null ? `@${flip.flip_level.toFixed(0)}` : '';
+  const label = `${flip.ticker} γ-FLIP ${dir}${lvl ? ' ' + lvl : ''}`;
+  const deepTicker = flip.ticker === 'SPX' ? 'SPY' : flip.ticker;
+  const vibe = flip.new_regime === 'negative'
+    ? 'dealers now short gamma — expect amplified moves / trending'
+    : 'dealers now long gamma — expect damped vol / pinning';
+
+  return (
+    <TooltipProvider delayDuration={150}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            onClick={() => onOpen(deepTicker)}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold tabular-nums tracking-wide hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all shadow-sm"
+            style={{ background: COLOR_GAMMA_FLIP, color: '#000' }}
+            aria-label={`${label} — open deep view`}
+          >
+            <span>{label}</span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="bg-black/95 border-white/10 text-white px-3 py-2">
+          <div className="text-[10px] uppercase tracking-wider text-white/60 mb-1">
+            regime inversion
+          </div>
+          <div className="text-[11px] mb-1">{vibe}</div>
+          <div className="text-[10px] text-white/60 flex gap-3 tabular-nums">
+            {flip.spot_at_flip !== null && <span>spot {flip.spot_at_flip.toFixed(2)}</span>}
+            {flip.flip_level !== null && <span>flip {flip.flip_level.toFixed(0)}</span>}
+          </div>
+          <div className="text-[9px] text-white/40 mt-1">
+            click for LinkGex deep{flip.ticker === 'SPX' ? ' (SPY proxy)' : ''}
+          </div>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+});
+
 interface Props {
   tickers?: string[];
   /** Parent-owned drill-down opener; the strip and GexRadar share the same sheet. */
@@ -140,6 +193,9 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
   onOpenDeep,
 }: Props) {
   const { data, isLoading } = useGexRadar(tickers);
+  // Regime flips in the last 60 min — always-on structural inversions.
+  // Queried independently of GexRadar so they show even on partial UW failure.
+  const { data: flips = [] } = useRegimeInversions(5, 60);
 
   if (isLoading && !data) {
     return (
@@ -158,8 +214,12 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
     return p !== null;
   });
 
-  // If every ticker came back LEAN/NEUTRAL (or no data): show the muted pill.
-  if (structural.length === 0) {
+  const hasStructural = structural.length > 0;
+  const hasFlips = flips.length > 0;
+
+  // If every ticker came back LEAN/NEUTRAL AND there are no regime flips:
+  // show the muted pill.
+  if (!hasStructural && !hasFlips) {
     return (
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-black/40 border border-white/5">
         <span className="text-[10px] uppercase tracking-wider text-white/40">Flags</span>
@@ -176,6 +236,9 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
       <div className="flex items-center gap-2 flex-nowrap">
         {structural.map(t => (
           <FlagPill key={t.ticker} t={t} onOpen={onOpenDeep} />
+        ))}
+        {flips.map(f => (
+          <RegimeFlipPill key={f.id} flip={f} onOpen={onOpenDeep} />
         ))}
       </div>
     </div>

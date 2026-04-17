@@ -385,6 +385,56 @@ export interface SweepCluster {
   created_at: string;
 }
 
+export interface RegimeInversion {
+  id: string;
+  created_at: string;
+  session_date: string;
+  ticker: string;
+  prev_regime: 'positive' | 'negative';
+  new_regime: 'positive' | 'negative';
+  prev_net_gamma: number | null;
+  new_net_gamma: number | null;
+  flip_level: number | null;
+  spot_at_flip: number | null;
+  attention_score: number;
+}
+
+export interface DpCluster {
+  id: string;
+  ticker: string;
+  window_start: string;
+  window_end: string;
+  print_count: number;
+  total_notional: number;
+  largest_single_notional: number;
+  attention_score: number;
+  created_at: string;
+  session_date: string;
+}
+
+/**
+ * Recent dark-pool clusters — always-on flag pattern emitted by ct-dp-cluster.
+ * Sibling of useSweepClusters. Pulls the last `windowMinutes` minutes
+ * (default 15) sorted newest-first, capped at `limit` (default 5).
+ */
+export function useDpClusters(limit = 5, windowMinutes = 15) {
+  return useQuery<DpCluster[]>({
+    queryKey: ['ct_dp_clusters', limit, windowMinutes],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const cutoff = new Date(Date.now() - windowMinutes * 60_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_dp_clusters')
+        .select('id, ticker, window_start, window_end, print_count, total_notional, largest_single_notional, attention_score, created_at, session_date')
+        .gte('created_at', cutoff)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as DpCluster[];
+    },
+  });
+}
+
 /**
  * Recent sweep clusters — always-on flag pattern emitted by ct-sweep-cluster.
  * Pulls the last `windowMinutes` minutes (default 15) sorted newest-first,
@@ -404,6 +454,30 @@ export function useSweepClusters(limit = 5, windowMinutes = 15) {
         .limit(limit);
       if (error) throw error;
       return (data ?? []) as SweepCluster[];
+    },
+  });
+}
+
+/**
+ * Recent gamma regime inversions — dealer regime flip (positive<->negative),
+ * written by ct-regime-watch off ct_heartbeats. Structural session-scale
+ * event, always attention 80. Pulls the last `windowMinutes` minutes
+ * (default 60), newest-first, capped at `limit` (default 5).
+ */
+export function useRegimeInversions(limit = 5, windowMinutes = 60) {
+  return useQuery<RegimeInversion[]>({
+    queryKey: ['ct_regime_inversions', limit, windowMinutes],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const cutoff = new Date(Date.now() - windowMinutes * 60_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_regime_inversions')
+        .select('id, created_at, session_date, ticker, prev_regime, new_regime, prev_net_gamma, new_net_gamma, flip_level, spot_at_flip, attention_score')
+        .gte('created_at', cutoff)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as RegimeInversion[];
     },
   });
 }

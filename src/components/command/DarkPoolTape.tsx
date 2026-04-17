@@ -1,7 +1,14 @@
 /**
  * DarkPoolTape — off-exchange block prints. Institutional activity.
  * Sorted by notional, highlighted when >$50M.
+ *
+ * External filter adapter: DpClusterStrip pill clicks fire a window
+ * `ct:darkpool:filter` CustomEvent with { ticker } to focus this tape on
+ * a specific ticker. Mirrors FlowTape's ct:flowtape:filter pattern.
+ * Click the pill again (or the clear-x) to drop the filter.
  */
+import { useEffect, useMemo, useState } from 'react';
+import { X } from 'lucide-react';
 import { useDarkPoolPrints, type DarkPoolPrint } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 
@@ -32,6 +39,27 @@ function fmtSize(n: number): string {
 
 export function DarkPoolTape() {
   const { data: prints, isLoading } = useDarkPoolPrints(40);
+  const [tickerFilter, setTickerFilter] = useState('');
+
+  // External filter adapter — DpClusterStrip dispatches a window CustomEvent
+  // to focus this tape on a specific ticker without prop-drilling through
+  // CommandStation. Toggling the same ticker clears the filter.
+  useEffect(() => {
+    function onFilter(e: Event) {
+      const detail = (e as CustomEvent<{ ticker?: string }>).detail;
+      const t = (detail?.ticker ?? '').toUpperCase();
+      if (!t) return;
+      setTickerFilter(prev => (prev === t ? '' : t));
+    }
+    window.addEventListener('ct:darkpool:filter', onFilter as EventListener);
+    return () => window.removeEventListener('ct:darkpool:filter', onFilter as EventListener);
+  }, []);
+
+  const filtered = useMemo(() => {
+    if (!prints) return prints;
+    if (!tickerFilter) return prints;
+    return prints.filter(p => p.ticker === tickerFilter);
+  }, [prints, tickerFilter]);
 
   return (
     <Card className="divide-y divide-border">
@@ -39,21 +67,32 @@ export function DarkPoolTape() {
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Dark Pool</span>
           <span className="text-[10px] text-muted-foreground">off-exchange blocks</span>
+          {tickerFilter && (
+            <button
+              type="button"
+              onClick={() => setTickerFilter('')}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-primary/20 text-primary text-[10px] font-semibold hover:bg-primary/30 transition-colors"
+              aria-label="clear ticker filter"
+            >
+              {tickerFilter}
+              <X className="w-3 h-3" />
+            </button>
+          )}
         </div>
-        {prints && (
-          <span className="text-[10px] text-muted-foreground">{prints.length} recent</span>
+        {filtered && (
+          <span className="text-[10px] text-muted-foreground">{filtered.length} recent</span>
         )}
       </div>
 
       {isLoading ? (
         <div className="p-4 text-center text-xs text-muted-foreground">loading…</div>
-      ) : !prints || prints.length === 0 ? (
+      ) : !filtered || filtered.length === 0 ? (
         <div className="p-4 text-center text-xs text-muted-foreground">
-          no dark pool prints yet
+          {tickerFilter ? `no recent ${tickerFilter} prints` : 'no dark pool prints yet'}
         </div>
       ) : (
         <div className="max-h-[50vh] overflow-y-auto font-mono text-[11px]">
-          {prints.map((p) => (
+          {filtered.map((p) => (
             <DPRow key={p.id} print={p} />
           ))}
         </div>

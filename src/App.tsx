@@ -28,6 +28,7 @@ import Landing from "./pages/Landing";
 import CommandStation from "./pages/CommandStation";
 import Scorecard from "./pages/Scorecard";
 import Replay from "./pages/Replay";
+import Book from "./pages/Book";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -59,6 +60,7 @@ const TrackedRoutes = () => {
       {/* Primary authenticated route — co-trader with docked ChatPanel in sidebar slot */}
       <Route path="/" element={<AuthLayout sidebar={<ChatPanel />}><CommandStation /></AuthLayout>} />
       <Route path="/scorecard" element={<AuthLayout sidebar={<ChatPanel />}><Scorecard /></AuthLayout>} />
+      <Route path="/book" element={<AuthLayout sidebar={<ChatPanel />}><Book /></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><Dashboard /></AuthLayout>} />

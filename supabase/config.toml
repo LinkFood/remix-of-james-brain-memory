@@ -203,3 +203,9 @@ verify_jwt = false
 
 [functions.ct-sweep-cluster]
 verify_jwt = false
+
+[functions.ct-dp-cluster]
+verify_jwt = false
+
+[functions.ct-regime-watch]
+verify_jwt = false

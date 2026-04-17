@@ -21,9 +21,11 @@ import { GexHeatmap } from '@/components/command/GexHeatmap';
 import { GexRadar } from '@/components/command/GexRadar';
 import { AlwaysOnFlagStrip } from '@/components/command/AlwaysOnFlagStrip';
 import { SweepClusterStrip } from '@/components/command/SweepClusterStrip';
+import { DpClusterStrip } from '@/components/command/DpClusterStrip';
 import { LinkGexDeep } from '@/components/command/LinkGexDeep';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
+import { BookEquityCurve } from '@/components/command/BookEquityCurve';
 import { ClaudesRead } from '@/components/command/ClaudesRead';
 import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
@@ -96,6 +98,11 @@ export default function CommandStation() {
             ct:flowtape:filter window event. */}
         <SweepClusterStrip />
 
+        {/* Dark-pool cluster strip — parallel pattern for block-print bursts.
+            3+ prints >= $1M on same ticker in a 10-min window. Click pill →
+            focuses DarkPoolTape via ct:darkpool:filter window event. */}
+        <DpClusterStrip />
+
         <MarketBanner />
 
         <GexRadar tickers={['SPY', 'QQQ', 'IWM']} onDrillDown={setDeepTicker} />
@@ -121,6 +128,9 @@ export default function CommandStation() {
           <div className="lg:col-span-4 space-y-4">
             {/* Morning Brief pinned to top — 90-sec pre-bell read */}
             <MorningBriefPanel />
+            {/* Book equity — Claude's $10k paper book, live. Equity curve +
+                HWM band + drawdown shading. "view full book" → /book. */}
+            <BookEquityCurve />
             <FlowTape />
             <MarketMovers />
             <EventsPanel />
