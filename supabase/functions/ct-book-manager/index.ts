@@ -123,6 +123,41 @@ serve(async (req) => {
   for (const t of (planned ?? []) as OpenTrade[]) {
     const fill = await getCurrentPrice(t.instrument);
     if (fill == null) continue;
+    // Gap check: if the 9:30 fill has already blown past the planned stop
+    // or overshot the planned target, cancel the trade honestly rather than
+    // pretending we entered at fill (which would zero-out the overnight
+    // move and mask whether Claude's thesis was right). "You couldn't have
+    // been in the trade before the gap — you missed it."
+    const gapPastTarget = t.target_price != null && (
+      (t.side === 'long' && fill >= t.target_price) ||
+      (t.side === 'short' && fill <= t.target_price)
+    );
+    const gapPastStop = t.stop_price != null && (
+      (t.side === 'long' && fill <= t.stop_price) ||
+      (t.side === 'short' && fill >= t.stop_price)
+    );
+    if (gapPastTarget || gapPastStop) {
+      const reason = gapPastTarget ? 'gap_past_target' : 'gap_past_stop';
+      // Compute the overnight move from planned entry to fill so we can
+      // LOG the size of the missed move (for post-mortem), but don't
+      // credit it to P&L since we wouldn't have been filled there.
+      const plannedEntry = t.entry_price;
+      const overnightPct = ((fill - plannedEntry) / plannedEntry) * 100 * (t.side === 'short' ? -1 : 1);
+      await supabase.from('ct_trades').update({
+        status: 'cancelled',
+        close_price: fill,
+        closed_at: new Date().toISOString(),
+        close_reason: reason,
+        realized_pnl_pct: 0,
+      }).eq('id', t.id);
+      await supabase.from('ct_trade_actions').insert({
+        trade_id: t.id,
+        action: 'cancel',
+        price: fill,
+        rationale: `${reason}: planned entry ${plannedEntry}, fill ${fill}, overnight move ${overnightPct.toFixed(2)}% (not captured — couldn't have entered before gap)`,
+      });
+      continue;
+    }
     await supabase.from('ct_trades').update({
       status: 'open',
       entry_price: fill,     // reset to actual fill
