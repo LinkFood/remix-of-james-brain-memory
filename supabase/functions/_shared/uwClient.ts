@@ -1,17 +1,21 @@
 /**
  * Unusual Whales API client
  *
- * REST wrapper for the 13-ticker co-trader watchlist. Respects the
- * "never retry 4xx" gotcha from CLAUDE.md — only 5xx + network errors
- * get retried with exponential backoff. Rate limiting is respected
- * via `UW_RATE_LIMIT_PER_MINUTE` (default 120, matches UW API tier).
+ * Thin wrapper over the UW REST API. Strictly follows the endpoint whitelist
+ * from https://unusualwhales.com/skill.md to avoid hallucinated paths.
  *
- * All endpoints return JSON unless noted.
- * Base URL: https://api.unusualwhales.com
+ * Mandatory headers (per SKILL.md):
+ *   Authorization: Bearer <UW_API_KEY>
+ *   UW-CLIENT-API-ID: 100001
+ *
+ * Retry policy: never retry 4xx (per CLAUDE.md gotcha). 5xx + network errors
+ * retried with exponential backoff.
+ *
+ * Rate limit: 120 req/min on API Basic. Bulk helpers respect that.
  */
 
 const UW_BASE_URL = 'https://api.unusualwhales.com';
-const DEFAULT_RATE_LIMIT = 120; // req/min on API Basic
+const UW_CLIENT_API_ID = '100001';
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 500;
 
@@ -24,6 +28,7 @@ function getApiKey(): string {
 function headers(): Record<string, string> {
   return {
     'Authorization': `Bearer ${getApiKey()}`,
+    'UW-CLIENT-API-ID': UW_CLIENT_API_ID,
     'Accept': 'application/json',
     'User-Agent': 'co-trader/1.0 (linkjac.cloud)',
   };
@@ -39,16 +44,21 @@ export class UwError extends Error {
 }
 
 /**
- * Core fetch with retry (5xx only) and query-param handling.
+ * GET with retry on 5xx only.
  */
 async function uwGet<T = unknown>(
   path: string,
-  params?: Record<string, string | number | undefined>
+  params?: Record<string, string | number | boolean | Array<string | number> | undefined>
 ): Promise<T> {
   const url = new URL(UW_BASE_URL + path);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+      if (v === undefined || v === null) continue;
+      if (Array.isArray(v)) {
+        for (const item of v) url.searchParams.append(k, String(item));
+      } else {
+        url.searchParams.set(k, String(v));
+      }
     }
   }
 
@@ -61,16 +71,16 @@ async function uwGet<T = unknown>(
 
     const errorText = await res.text().catch(() => '');
 
-    // 4xx — never retry (auth, bad request, not found, etc.)
+    // 4xx — never retry
     if (res.status < 500) {
       console.error(`[uwClient] ${path} → ${res.status}: ${errorText.slice(0, 300)}`);
-      throw new UwError(`UW ${res.status} on ${path}`, res.status);
+      throw new UwError(`UW ${res.status} on ${path}: ${errorText.slice(0, 120)}`, res.status);
     }
 
     // 5xx — retry with exponential backoff
     if (attempt < MAX_RETRIES) {
       const delay = BASE_DELAY_MS * Math.pow(2, attempt);
-      console.warn(`[uwClient] ${path} → ${res.status}, retrying in ${delay}ms (attempt ${attempt + 1}/${MAX_RETRIES})`);
+      console.warn(`[uwClient] ${path} → ${res.status}, retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`);
       await new Promise(r => setTimeout(r, delay));
       continue;
     }
@@ -82,140 +92,241 @@ async function uwGet<T = unknown>(
 }
 
 // ============================================================================
-// Public endpoints — thin wrappers around the UW OpenAPI surface
+// Flow & Market-wide
 // ============================================================================
 
-/** Aggregate Greek exposure (delta, gamma, vega, charm) for a ticker */
-export function getGreekExposure(ticker: string): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/greek-exposure`);
+/** Unusual options flow alerts (market-wide, filter by ticker via param) */
+export function getFlowAlerts(params: {
+  ticker_symbol?: string;
+  limit?: number;
+  is_call?: boolean;
+  is_put?: boolean;
+  is_otm?: boolean;
+  min_premium?: number;
+  size_greater_oi?: boolean;
+} = {}): Promise<unknown> {
+  return uwGet('/api/option-trades/flow-alerts', params);
 }
 
-/** Greek exposure broken down by strike — gives call walls, put walls, gamma flip */
-export function getGreekExposureByStrike(ticker: string, expiry?: string): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/greek-exposure/strike`, expiry ? { expiry } : undefined);
+/** Options screener / hottest chains */
+export function getOptionScreener(params: {
+  limit?: number;
+  min_premium?: number;
+  type?: 'Calls' | 'Puts';
+  is_otm?: boolean;
+  min_volume?: number;
+  min_volume_oi_ratio?: number;
+  vol_greater_oi?: boolean;
+  max_dte?: number;
+  'issue_types[]'?: string[];
+} = {}): Promise<unknown> {
+  return uwGet('/api/screener/option-contracts', params);
 }
 
-/** Greek exposure broken down by expiry */
-export function getGreekExposureByExpiry(ticker: string): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/greek-exposure/expiry`);
+/** Recent flow for a specific ticker */
+export function getRecentFlowForTicker(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/flow-recent`);
 }
 
-/** Dealer GEX — total gamma exposure */
-export function getGex(ticker: string): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/gex`);
+/** Market Tide — net call/put premium, sentiment */
+export function getMarketTide(params: { interval_5m?: boolean } = {}): Promise<unknown> {
+  return uwGet('/api/market/market-tide', params);
 }
 
-/** GEX by expiry */
-export function getGexByExpiry(ticker: string): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/gex/expiry`);
+/** Per-ticker net premium ticks (intraday sentiment) */
+export function getNetPremiumTicks(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/net-prem-ticks`);
 }
 
-/** Unusual options flow for a ticker (recent trades above threshold) */
-export function getFlowAlerts(ticker: string, limit = 50): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/flow-alerts`, { limit });
+// ============================================================================
+// Dark Pool
+// ============================================================================
+
+/** Dark pool prints per ticker */
+export function getDarkPool(ticker: string): Promise<unknown> {
+  return uwGet(`/api/darkpool/${ticker}`);
 }
 
-/** Options chain for a ticker */
-export function getOptionsChain(ticker: string): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/option-chain`);
+/** Recent market-wide dark pool prints */
+export function getDarkPoolRecent(): Promise<unknown> {
+  return uwGet('/api/darkpool/recent');
 }
 
-/** Dark pool prints for a ticker */
-export function getDarkPool(ticker: string, limit = 100): Promise<unknown> {
-  return uwGet(`/api/darkpool/${ticker}`, { limit });
+// ============================================================================
+// Options, Greeks, GEX
+// ============================================================================
+
+/** Option contracts list and details */
+export function getOptionContracts(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/option-contracts`);
 }
 
-/** Stock quote / current price data */
-export function getQuote(ticker: string): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/quote`);
+/** Greeks per strike + expiry */
+export function getGreeks(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/greeks`);
 }
 
-/** Intraday OHLCV candles */
-export function getCandles(
-  ticker: string,
-  timeframe: '1min' | '5min' | '15min' | '30min' | '1hour' | '1day' = '5min',
-  limit = 100
-): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/ohlc/${timeframe}`, { limit });
+/** "Static" GEX by strike — OI-weighted gamma exposure */
+export function getStaticGexByStrike(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/greek-exposure/strike`);
 }
 
-/** News headlines filtered by ticker */
-export function getNews(ticker?: string, limit = 25): Promise<unknown> {
-  return ticker
-    ? uwGet(`/api/news/headlines`, { ticker, limit })
-    : uwGet(`/api/news/headlines`, { limit });
+/**
+ * Spot GEX by strike — THE key endpoint for live dealer positioning.
+ * Returns call wall, put wall, gamma flip, zero gamma via the strike-level
+ * gamma distribution. Used by memory recall + command station SPX banner.
+ */
+export function getSpotGexByStrike(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/spot-exposures/strike`);
 }
 
-/** Technical indicators (UW provides 14: SMA, EMA, RSI, MACD, BBANDS, etc.) */
+/** Interpolated IV + percentiles */
+export function getInterpolatedIV(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/interpolated-iv`);
+}
+
+/** Options volume + put/call ratio */
+export function getOptionsVolume(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/options-volume`);
+}
+
+// ============================================================================
+// News, Insider, Congress
+// ============================================================================
+
+/** News headlines (optionally filtered by ticker) */
+export function getNewsHeadlines(params: { limit?: number; ticker?: string } = {}): Promise<unknown> {
+  return uwGet('/api/news/headlines', params);
+}
+
+/** Insider transactions */
+export function getInsiderTransactions(): Promise<unknown> {
+  return uwGet('/api/insider/transactions');
+}
+
+/** Politician / congress trades */
+export function getCongressTrades(): Promise<unknown> {
+  return uwGet('/api/congress/recent-trades');
+}
+
+// ============================================================================
+// Financials
+// ============================================================================
+
+export function getFinancials(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/financials`);
+}
+
+export function getIncomeStatements(ticker: string, report_type?: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/income-statements`, report_type ? { report_type } : undefined);
+}
+
+export function getBalanceSheets(ticker: string, report_type?: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/balance-sheets`, report_type ? { report_type } : undefined);
+}
+
+export function getCashFlows(ticker: string, report_type?: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/cash-flows`, report_type ? { report_type } : undefined);
+}
+
+export function getEarnings(ticker: string, report_type?: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/earnings`, report_type ? { report_type } : undefined);
+}
+
+// ============================================================================
+// Technical Indicators
+// ============================================================================
+
+/**
+ * Technical indicator series.
+ * Functions: SMA, EMA, RSI, MACD, BBANDS, STOCH, ADX, ATR, OBV, VWAP, CCI,
+ * WILLR, AROON, MFI (14 supported).
+ */
 export function getTechnicalIndicator(
   ticker: string,
-  indicator: string,
-  params?: Record<string, string | number>
+  fn: string,
+  params: { interval?: string; time_period?: number; series_type?: string } = {}
 ): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/technical/${indicator}`, params);
-}
-
-/** Market tide — net put/call buying pressure intraday */
-export function getMarketTide(): Promise<unknown> {
-  return uwGet('/api/market/tide');
-}
-
-/** SPX-level GEX snapshot for macro banner */
-export function getSpxGex(): Promise<unknown> {
-  return getGex('SPX');
-}
-
-export function getSpxGreekByStrike(expiry?: string): Promise<unknown> {
-  return getGreekExposureByStrike('SPX', expiry);
+  return uwGet(`/api/stock/${ticker}/technical-indicator/${fn}`, params);
 }
 
 // ============================================================================
-// Bulk helpers
+// Watchlist bulk helper
 // ============================================================================
 
-/** The 13-instrument watchlist */
+/**
+ * The 12-instrument per-ticker watchlist.
+ *
+ * ES futures not included — UW doesn't cover futures. Macro S&P read is
+ * handled separately via SPX for the market banner. GLD/USO serve as gold/oil
+ * proxies.
+ */
 export const WATCHLIST = [
-  'SPY', 'QQQ', 'IWM',                                          // indexes
-  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',      // mag 7
-  'GLD', 'USO', 'ES',                                            // macro (GLD=gold, USO=oil, ES=S&P futures)
+  // Indexes
+  'SPY', 'QQQ', 'IWM',
+  // Mag 7
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
+  // Macro proxies
+  'GLD', 'USO',
 ] as const;
+
+/** SPX used for the macro GEX banner. NOT in per-ticker loop. */
+export const MARKET_BANNER_SYMBOL = 'SPX';
 
 export type WatchlistTicker = typeof WATCHLIST[number];
 
 /**
- * Pull a full watcher-cycle state bundle for all instruments.
- * Sequential calls (respects rate limit). Logs per-ticker errors but continues.
+ * Pull a full watcher-cycle state bundle.
+ *
+ * Per ticker: spot GEX by strike + options volume (P/C ratio, volume)
+ * Market-wide: SPX spot GEX, market tide
+ *
+ * Logs per-ticker errors but continues. Returns whatever it got.
  */
 export async function pullWatcherState(tickers: readonly string[] = WATCHLIST): Promise<{
-  quotes: Record<string, unknown>;
-  gex: Record<string, unknown>;
-  spxMacroGex: unknown | null;
+  spot_gex: Record<string, unknown>;
+  options_volume: Record<string, unknown>;
+  spx_spot_gex: unknown | null;
+  market_tide: unknown | null;
   errors: Array<{ ticker: string; endpoint: string; error: string }>;
 }> {
-  const quotes: Record<string, unknown> = {};
-  const gex: Record<string, unknown> = {};
+  const spot_gex: Record<string, unknown> = {};
+  const options_volume: Record<string, unknown> = {};
   const errors: Array<{ ticker: string; endpoint: string; error: string }> = [];
 
-  // Macro-level SPX GEX (runs once regardless of watchlist)
-  let spxMacroGex: unknown | null = null;
+  // Macro: SPX spot GEX (banner)
+  let spx_spot_gex: unknown | null = null;
   try {
-    spxMacroGex = await getSpxGex();
+    spx_spot_gex = await getSpotGexByStrike(MARKET_BANNER_SYMBOL);
   } catch (e) {
-    errors.push({ ticker: 'SPX', endpoint: 'gex', error: e instanceof Error ? e.message : String(e) });
+    errors.push({
+      ticker: MARKET_BANNER_SYMBOL,
+      endpoint: 'spot-exposures/strike',
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 
+  // Macro: market tide
+  let market_tide: unknown | null = null;
+  try {
+    market_tide = await getMarketTide();
+  } catch (e) {
+    errors.push({ ticker: 'MARKET', endpoint: 'market-tide', error: e instanceof Error ? e.message : String(e) });
+  }
+
+  // Per-ticker loop (sequential — respects rate limit, 2 calls × 12 tickers = 24/min, well under 120)
   for (const ticker of tickers) {
     try {
-      quotes[ticker] = await getQuote(ticker);
+      spot_gex[ticker] = await getSpotGexByStrike(ticker);
     } catch (e) {
-      errors.push({ ticker, endpoint: 'quote', error: e instanceof Error ? e.message : String(e) });
+      errors.push({ ticker, endpoint: 'spot-exposures/strike', error: e instanceof Error ? e.message : String(e) });
     }
     try {
-      gex[ticker] = await getGex(ticker);
+      options_volume[ticker] = await getOptionsVolume(ticker);
     } catch (e) {
-      errors.push({ ticker, endpoint: 'gex', error: e instanceof Error ? e.message : String(e) });
+      errors.push({ ticker, endpoint: 'options-volume', error: e instanceof Error ? e.message : String(e) });
     }
   }
 
-  return { quotes, gex, spxMacroGex, errors };
+  return { spot_gex, options_volume, spx_spot_gex, market_tide, errors };
 }

@@ -41,36 +41,39 @@ serve(async (req) => {
   try {
     console.log(`[ct-watcher] tick @ ${clock.datetime} (${clock.tz})`);
 
-    // Pull current state for all 13 instruments
+    // Pull current state for all 12 instruments + SPX macro + market tide
     const state = await pullWatcherState();
 
-    const okCount = Object.keys(state.quotes).length;
-    const gexCount = Object.keys(state.gex).length;
+    const gexCount = Object.keys(state.spot_gex).length;
+    const volCount = Object.keys(state.options_volume).length;
     const errCount = state.errors.length;
 
-    console.log(`[ct-watcher] UW pull: quotes=${okCount}/${WATCHLIST.length} gex=${gexCount}/${WATCHLIST.length} errors=${errCount}`);
+    console.log(`[ct-watcher] UW pull: spot_gex=${gexCount}/${WATCHLIST.length} options_vol=${volCount}/${WATCHLIST.length} spx=${state.spx_spot_gex ? 'ok' : 'fail'} tide=${state.market_tide ? 'ok' : 'fail'} errors=${errCount}`);
 
     if (errCount > 0) {
       console.warn(`[ct-watcher] errors: ${JSON.stringify(state.errors.slice(0, 5))}`);
     }
 
     // Day 1: write a heartbeat row with the raw state as proof of life.
-    // Day 2 replaces this with the full state-based decision logic.
-    const currentReads: Record<string, { quote: unknown; gex: unknown }> = {};
+    // Day 2 replaces this with memory recall + Claude decision logic.
+    const currentReads: Record<string, { spot_gex: unknown; options_volume: unknown }> = {};
     for (const t of WATCHLIST) {
       currentReads[t] = {
-        quote: state.quotes[t] ?? null,
-        gex: state.gex[t] ?? null,
+        spot_gex: state.spot_gex[t] ?? null,
+        options_volume: state.options_volume[t] ?? null,
       };
     }
 
     const { error: hbError } = await supabase.from('ct_heartbeats').insert({
-      status_line: `Day 1 stub — pulled ${okCount}/${WATCHLIST.length} quotes, ${gexCount}/${WATCHLIST.length} gex in ${Date.now() - startedAt}ms`,
+      status_line: `Day 1 stub — spot_gex ${gexCount}/${WATCHLIST.length}, options_vol ${volCount}/${WATCHLIST.length}, spx ${state.spx_spot_gex ? 'ok' : 'fail'}, tide ${state.market_tide ? 'ok' : 'fail'} — ${Date.now() - startedAt}ms`,
       watching: [...WATCHLIST],
       current_reads: {
         ...currentReads,
+        _macro: {
+          spx_spot_gex: state.spx_spot_gex ?? null,
+          market_tide: state.market_tide ?? null,
+        },
         _meta: {
-          spx_macro_gex: state.spxMacroGex ?? null,
           errors: state.errors,
           pulled_at: clock.iso,
         },
