@@ -9,6 +9,7 @@ import { DarkPoolTape } from '@/components/command/DarkPoolTape';
 import { FlowPerStrike } from '@/components/command/FlowPerStrike';
 import { NetPremiumLine } from '@/components/command/NetPremiumLine';
 import { MarketMovers } from '@/components/command/MarketMovers';
+import { GexHeatmap } from '@/components/command/GexHeatmap';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -56,6 +57,8 @@ export default function CommandStation() {
         </header>
 
         <MarketBanner />
+
+        <GexHeatmap />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           <div className="lg:col-span-8 space-y-4">

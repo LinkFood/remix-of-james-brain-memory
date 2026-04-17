@@ -445,6 +445,60 @@ serve(async (req) => {
     const rawState = await pullWatcherState();
     const condensed = condenseWatcherState(rawState, clock.iso);
 
+    // 2b. Write full-strike gamma landscape to ct_gex_timeseries for heatmap
+    // history. Uses greek-exposure raw data (wider strike range than spot).
+    try {
+      const gexRows: Array<Record<string, unknown>> = [];
+      const writeGex = (ticker: string, rawSpot: unknown, rawGreek: unknown) => {
+        const price = (rawSpot && typeof rawSpot === 'object')
+          ? (() => {
+              const data = (rawSpot as { data?: unknown }).data;
+              if (Array.isArray(data) && data.length > 0) {
+                const p = (data[0] as Record<string, unknown>).price;
+                return typeof p === 'number' ? p : parseFloat(String(p));
+              }
+              return null;
+            })()
+          : null;
+        const greekData = (rawGreek && typeof rawGreek === 'object') ? (rawGreek as { data?: unknown }).data : null;
+        if (!Array.isArray(greekData)) return;
+        const low = price ? price * 0.9 : null;
+        const high = price ? price * 1.1 : null;
+        for (const r of greekData as Array<Record<string, unknown>>) {
+          const strike = parseFloat(String(r.strike));
+          const callGex = parseFloat(String(r.call_gex ?? 0));
+          const putGex = parseFloat(String(r.put_gex ?? 0));
+          if (!Number.isFinite(strike)) continue;
+          const isAtm = low !== null && high !== null ? strike >= low && strike <= high : false;
+          gexRows.push({
+            ticker,
+            snapshot_at: clock.iso,
+            strike,
+            call_gex: Number.isFinite(callGex) ? callGex : null,
+            put_gex: Number.isFinite(putGex) ? putGex : null,
+            net_gex: (Number.isFinite(callGex) ? callGex : 0) + (Number.isFinite(putGex) ? putGex : 0),
+            underlying_price: price ?? null,
+            is_atm_band: isAtm,
+          });
+        }
+      };
+      for (const t of WATCHLIST) writeGex(t, rawState.spot_gex[t], rawState.greek_exposure[t]);
+      writeGex('SPX', rawState.spx_spot_gex, rawState.spx_greek_exposure);
+      if (gexRows.length > 0) {
+        // Batch in chunks of 500 to keep payloads reasonable
+        for (let i = 0; i < gexRows.length; i += 500) {
+          const chunk = gexRows.slice(i, i + 500);
+          const { error: gexErr } = await supabase
+            .from('ct_gex_timeseries')
+            .upsert(chunk, { onConflict: 'ticker,snapshot_at,strike', ignoreDuplicates: true });
+          if (gexErr) console.warn('[ct-watcher] gex_timeseries chunk failed:', gexErr.message);
+        }
+        console.log(`[ct-watcher] gex_timeseries wrote ${gexRows.length} rows`);
+      }
+    } catch (e) {
+      console.warn('[ct-watcher] gex_timeseries write threw:', e instanceof Error ? e.message : e);
+    }
+
     // 3. Build memory bundle (thesis + recent + similar + lessons per instrument)
     const liveStateByInstrument: Record<string, Record<string, unknown>> = {};
     for (const t of WATCHLIST) {

@@ -231,3 +231,34 @@ export async function triggerCoTrader(fn: 'watcher' | 'grader' | 'news_ingester'
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
+
+export interface GexTimeseriesRow {
+  ticker: string;
+  snapshot_at: string;
+  strike: number;
+  call_gex: number | null;
+  put_gex: number | null;
+  net_gex: number | null;
+  underlying_price: number | null;
+  is_atm_band: boolean | null;
+}
+
+export function useGexTimeseries(ticker: string, hours = 4) {
+  return useQuery<GexTimeseriesRow[]>({
+    queryKey: ['ct_gex_timeseries', ticker, hours],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - hours * 3600_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_gex_timeseries')
+        .select('ticker, snapshot_at, strike, call_gex, put_gex, net_gex, underlying_price, is_atm_band')
+        .eq('ticker', ticker)
+        .gte('snapshot_at', since)
+        .order('snapshot_at', { ascending: true })
+        .order('strike', { ascending: true })
+        .limit(10000);
+      if (error) throw error;
+      return (data ?? []) as GexTimeseriesRow[];
+    },
+  });
+}
