@@ -825,24 +825,30 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
       );
     }
 
-    // 9. Slack push for FLAG conv ≥ 3 or ALERT
+    // 9. Slack push — any FLAG (conv≥2), any ALERT, OR OBSERVATION whose
+    // glance[0] is a THESIS INVALIDATION (actionable "old trade dead" signal
+    // even without a new directional commit). The invalidation case is the
+    // highest-value silent signal today — James wants to know when his
+    // position is fighting the tape.
     if (userId && parsed) {
-      if (parsed.state === 'FLAG' && (parsed.conviction ?? 0) >= 3) {
+      const glanceArr = toArray(parsed.glance).filter((s): s is string => typeof s === 'string');
+      const instruments = toArray(parsed.instruments).filter(Boolean) as string[];
+      const isInvalidation = glanceArr[0]?.toUpperCase().startsWith('THESIS INVALIDATED') ?? false;
+
+      if (parsed.state === 'FLAG' && (parsed.conviction ?? 0) >= 2) {
         await ctSlackPush(supabase, userId, {
-          state: 'FLAG',
-          instruments: toArray(parsed.instruments).filter(Boolean) as string[],
-          glance: toArray(parsed.glance).filter(s => typeof s === 'string'),
-          conviction: parsed.conviction,
-          horizon: parsed.horizon,
+          state: 'FLAG', instruments, glance: glanceArr,
+          conviction: parsed.conviction, horizon: parsed.horizon,
         });
       } else if (parsed.state === 'ALERT') {
         await ctSlackPush(supabase, userId, {
-          state: 'ALERT',
-          instruments: toArray(parsed.instruments).filter(Boolean) as string[],
-          glance: toArray(parsed.glance).filter(s => typeof s === 'string'),
-          conviction: 5,
-          horizon: parsed.horizon,
-          alert_trigger: parsed.alert_trigger,
+          state: 'ALERT', instruments, glance: glanceArr,
+          conviction: 5, horizon: parsed.horizon, alert_trigger: parsed.alert_trigger,
+        });
+      } else if (parsed.state === 'OBSERVATION' && isInvalidation) {
+        await ctSlackPush(supabase, userId, {
+          state: 'FLAG', instruments, glance: glanceArr,
+          conviction: 2, horizon: parsed.horizon ?? '4h',
         });
       }
     }

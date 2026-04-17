@@ -2,10 +2,11 @@
  * BookPanel — Claude's $10k paper book, live. Today's positions,
  * unrealized P&L, realized P&L, win rate. The direct edge measurement.
  */
-import { useTodayBook, useTodayTrades, useLatestBookRecap, type CtTradeRow } from '@/hooks/useCoTraderData';
+import { useState } from 'react';
+import { useTodayBook, useTodayTrades, useLatestBookRecap, useTradeActions, type CtTradeRow } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Wallet, TrendingUp, TrendingDown, Target, CircleDot } from 'lucide-react';
+import { Wallet, TrendingUp, TrendingDown, Target, CircleDot, ChevronDown, ChevronRight } from 'lucide-react';
 
 function fmtUsd(n: number | null | undefined): string {
   if (n == null) return '—';
@@ -24,16 +25,23 @@ function fmtBalance(n: number | null | undefined): string {
 }
 
 function TradeRow({ trade }: { trade: CtTradeRow }) {
+  const [expanded, setExpanded] = useState(false);
+  const { data: actions } = useTradeActions(expanded ? trade.id : null);
   const pct = trade.realized_pnl_pct;
   const usd = trade.realized_pnl_usd;
   const isOpen = trade.status === 'open' || trade.status === 'planned';
   const sideIcon = trade.side === 'long' ? TrendingUp : TrendingDown;
   const SideIcon = sideIcon;
   const pnlColor = (pct ?? 0) > 0 ? 'text-emerald-400' : (pct ?? 0) < 0 ? 'text-red-400' : 'text-muted-foreground';
+  const Chevron = expanded ? ChevronDown : ChevronRight;
 
   return (
     <div className="p-2.5 border-l-2 border-l-border hover:bg-muted/20">
-      <div className="flex items-center gap-2 text-[10.5px] flex-wrap">
+      <div
+        className="flex items-center gap-2 text-[10.5px] flex-wrap cursor-pointer"
+        onClick={() => setExpanded(e => !e)}
+      >
+        <Chevron className="w-3 h-3 text-muted-foreground shrink-0" />
         <SideIcon className={`w-3 h-3 ${trade.side === 'long' ? 'text-emerald-400' : 'text-red-400'}`} />
         <span className="font-mono font-semibold text-foreground">{trade.instrument}</span>
         <span className="text-muted-foreground">{trade.side} {trade.size_pct}%</span>
@@ -56,6 +64,23 @@ function TradeRow({ trade }: { trade: CtTradeRow }) {
       {trade.thesis && (
         <div className="mt-1 text-[10.5px] text-foreground/80 leading-snug">
           {trade.thesis}
+        </div>
+      )}
+      {expanded && (
+        <div className="mt-2 space-y-1 bg-muted/20 rounded p-2">
+          <div className="text-[9px] uppercase tracking-wide text-muted-foreground">Action log</div>
+          {(actions ?? []).length === 0 ? (
+            <div className="text-[10px] text-muted-foreground">no actions yet</div>
+          ) : (
+            (actions ?? []).map(a => (
+              <div key={a.id} className="text-[10px] font-mono flex gap-2">
+                <span className="text-muted-foreground shrink-0">{a.created_at.slice(11, 19)}</span>
+                <Badge variant="outline" className="text-[9px] px-1 py-0 shrink-0">{a.action}</Badge>
+                {a.price != null && <span className="text-muted-foreground shrink-0">@{a.price.toFixed(2)}</span>}
+                <span className="text-foreground/80">{a.rationale ?? ''}</span>
+              </div>
+            ))
+          )}
         </div>
       )}
     </div>

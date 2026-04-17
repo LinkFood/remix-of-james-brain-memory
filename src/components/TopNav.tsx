@@ -18,6 +18,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { useClock } from '@/hooks/useClock';
 import { useKillSwitch } from '@/hooks/useKillSwitch';
 import { useTokenCounter } from '@/hooks/useTokenCounter';
+import { BookSparkline } from '@/components/BookSparkline';
 import { useTickerData } from '@/hooks/useTickerData';
 
 const AGENT_LABELS: Record<string, string> = {
@@ -176,6 +177,9 @@ export function TopNav({ userId }: TopNavProps) {
 
       {/* Right — System vitals */}
       <div className="ml-auto flex items-center gap-2">
+        {/* Claude's book — sparkline of today's closed-trade P&L */}
+        <BookSparkline />
+
         {/* Token counter */}
         <Popover>
           <PopoverTrigger asChild>

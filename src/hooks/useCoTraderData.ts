@@ -936,6 +936,35 @@ export function useBookHistory(days = 30) {
   });
 }
 
+/** Per-trade action log — hold / cut / scale / flip decisions by book-manager. */
+export interface CtTradeAction {
+  id: string;
+  trade_id: string;
+  action: string;
+  price: number | null;
+  delta_size_pct: number | null;
+  rationale: string | null;
+  created_at: string;
+}
+
+export function useTradeActions(tradeId: string | null) {
+  return useQuery<CtTradeAction[]>({
+    queryKey: ['ct_trade_actions', tradeId],
+    enabled: !!tradeId,
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      if (!tradeId) return [];
+      const { data, error } = await supabase
+        .from('ct_trade_actions')
+        .select('*')
+        .eq('trade_id', tradeId)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as CtTradeAction[];
+    },
+  });
+}
+
 export function useLatestBookRecap() {
   return useQuery<{ session_date: string; recap: string; what_worked: string | null; what_didnt: string | null; tomorrow_posture: string | null; pnl_pct: number | null } | null>({
     queryKey: ['ct_daily_recap_latest'],
