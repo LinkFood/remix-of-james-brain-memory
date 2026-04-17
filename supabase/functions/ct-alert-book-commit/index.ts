@@ -27,6 +27,7 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
+import { classifyThesis } from '../_shared/thesisClassifier.ts';
 
 const WATCHLIST = new Set([
   'SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT',
@@ -230,6 +231,7 @@ serve(async (req) => {
         stop_price:     setup.stop_level ?? null,
         target_price:   setup.target_level ?? null,
         thesis,
+        thesis_theme:   classifyThesis(thesis),
         horizon:        'intraday',
         conviction:     5,
         status:         'open',

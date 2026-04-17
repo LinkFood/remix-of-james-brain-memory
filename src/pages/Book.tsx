@@ -15,6 +15,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, Wallet, Target, ListOrdered } from 'lucide-react';
 import { BookEquityCurve } from '@/components/command/BookEquityCurve';
+import { PnLByTheme } from '@/components/command/PnLByTheme';
 import type { CtBookRow, CtTradeRow } from '@/hooks/useCoTraderData';
 
 const GREEN = '#00C853';
@@ -281,6 +282,9 @@ export default function Book() {
         {/* Full-width equity curve — same component as CommandStation but gets
             the whole page width here. */}
         <BookEquityCurve />
+
+        {/* P&L split by thesis theme — where is the book making/losing money? */}
+        <PnLByTheme />
 
         {/* Sessions + Trades */}
         <SessionsTable />

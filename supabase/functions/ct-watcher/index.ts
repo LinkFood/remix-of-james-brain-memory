@@ -31,6 +31,20 @@ import { embedCtItem, buildCtRichText } from '../_shared/ctEmbed.ts';
 import { condenseWatcherState, type CondensedState } from '../_shared/ctStateCondense.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
 import { deriveWriteTimeAttention } from '../_shared/attentionScore.ts';
+import { logMcpCalls } from '../_shared/mcpLog.ts';
+
+// Watcher MCP budget — ONE drill-down call per tick. The scheduled snapshot
+// covers the 12-ticker watchlist; MCP is only for chasing specific outliers
+// (a sweep citing a strike outside the near-ATM window, a news headline
+// naming a non-watchlist ticker). See systemPromptV1.ts "UW MCP access (restricted)".
+const WATCHER_MCP_BUDGET = 1;
+
+// Count mcp_tool_use blocks in a Claude response — same pattern as ct-curiosity.
+function countMcpCalls(res: unknown): number {
+  const blocks = (res as { content?: unknown[] }).content ?? [];
+  if (!Array.isArray(blocks)) return 0;
+  return blocks.filter((b) => (b as { type?: string }).type === 'mcp_tool_use').length;
+}
 
 type CtState = 'HEARTBEAT' | 'OBSERVATION' | 'FLAG' | 'ALERT';
 type Direction = 'bullish' | 'bearish' | 'neutral' | 'volatility';
@@ -956,9 +970,15 @@ iv_rank_per_ticker: rank 80+ = premium-selling regime favored, 20- = premium-buy
 Decide ONE state for this cycle and emit the JSON per the schema in the system prompt. Return ONLY the JSON.`,
     });
 
-    // 5. Call Claude — Haiku for Day 2 (cost-efficient workhorse)
+    // 5. Call Claude — Haiku for Day 2 (cost-efficient workhorse). UW MCP
+    // attached for mid-turn drill-downs when the scheduled snapshot is
+    // insufficient (e.g. sweep cites a strike outside the near-ATM window,
+    // news headline names a non-watchlist ticker). Budget: WATCHER_MCP_BUDGET
+    // per tick — soft-enforced via prompt + post-hoc audit.
     let claudeText = '';
     let claudeError: string | null = null;
+    let mcpCalls = 0;
+    const uwKey = Deno.env.get('UW_API_KEY');
     try {
       const response = await callClaude({
         model: CLAUDE_MODELS.haiku,
@@ -966,8 +986,25 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
         messages: [{ role: 'user', content: userMessage }],
         max_tokens: 3000,
         temperature: 0.2,
+        mcp_servers: uwKey ? [{
+          type: 'url',
+          url: 'https://api.unusualwhales.com/api/mcp',
+          name: 'unusual-whales',
+          authorization_token: uwKey,
+        }] : undefined,
+        beta: uwKey ? ['mcp-client-2025-04-04'] : undefined,
       });
       claudeText = parseTextContent(response);
+
+      // Count + audit MCP calls — always log, warn if over budget.
+      mcpCalls = countMcpCalls(response);
+      if (mcpCalls > 0) {
+        logMcpCalls(supabase, 'watcher', response as unknown as { content?: unknown }, { user_id: userId })
+          .catch((e) => console.warn('[ct-watcher] mcpLog failed:', e));
+      }
+      if (mcpCalls > WATCHER_MCP_BUDGET) {
+        console.warn(`[ct-watcher] BUDGET EXCEEDED: claimed ${mcpCalls} MCP calls (max ${WATCHER_MCP_BUDGET})`);
+      }
     } catch (e) {
       claudeError = e instanceof ClaudeError ? `Claude ${e.status}: ${e.message}` : String(e);
       console.error('[ct-watcher] Claude call failed:', claudeError);
@@ -1100,6 +1137,8 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
       uw_errors: rawState.errors.length,
       duration_ms: durationMs,
       prompt_version: CT_PROMPT_VERSION,
+      mcp_calls: mcpCalls,
+      mcp_budget_breach: mcpCalls > WATCHER_MCP_BUDGET,
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

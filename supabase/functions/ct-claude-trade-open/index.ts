@@ -23,6 +23,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
+import { classifyThesis } from '../_shared/thesisClassifier.ts';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA', 'GLD', 'USO'] as const;
 
@@ -242,6 +243,7 @@ serve(async (req) => {
     .map(t => {
       const entry = entryPrices[t.instrument]!;
       const sizeUsd = startingBalance! * (t.size_pct / 100);
+      const thesisText = t.entry_reasoning ?? '';
       return {
         session_date: sessionDate,
         instrument: t.instrument,
@@ -251,7 +253,8 @@ serve(async (req) => {
         entry_price: entry,
         stop_price: t.stop_price ?? null,
         target_price: t.target_price ?? null,
-        thesis: t.entry_reasoning ?? '',
+        thesis: thesisText,
+        thesis_theme: classifyThesis(thesisText),
         horizon: t.horizon ?? 'intraday',
         conviction: Math.min(5, Math.max(1, Math.round(t.conviction ?? 3))),
         status: 'planned',

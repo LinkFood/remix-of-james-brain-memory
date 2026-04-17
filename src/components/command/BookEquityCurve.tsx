@@ -25,6 +25,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { useBookEquityCurve } from '@/hooks/useBookEquityCurve';
+import { usePnlByTheme, formatBestWorstLine } from '@/components/command/PnLByTheme';
 
 const GREEN = '#00C853';
 const RED = '#FF1744';
@@ -73,6 +74,8 @@ function Stat({
 
 export function BookEquityCurve() {
   const { data, isLoading } = useBookEquityCurve();
+  const { data: themeRows } = usePnlByTheme('all');
+  const bestWorstLine = formatBestWorstLine(themeRows);
 
   const points = data?.points ?? [];
   const stats = data?.stats;
@@ -114,22 +117,29 @@ export function BookEquityCurve() {
   return (
     <Card className="divide-y divide-border">
       {/* Header — title + view-full link */}
-      <div className="px-4 py-2.5 border-b border-border bg-muted/20 flex items-center gap-2">
-        {above ? (
-          <TrendingUp className="w-4 h-4" style={{ color: GREEN }} />
-        ) : (
-          <TrendingDown className="w-4 h-4" style={{ color: RED }} />
+      <div className="px-4 py-2.5 border-b border-border bg-muted/20 flex flex-col gap-0.5">
+        <div className="flex items-center gap-2">
+          {above ? (
+            <TrendingUp className="w-4 h-4" style={{ color: GREEN }} />
+          ) : (
+            <TrendingDown className="w-4 h-4" style={{ color: RED }} />
+          )}
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground">
+            Book Equity
+          </h3>
+          <span className="text-[10px] text-muted-foreground">$10k paper · all sessions</span>
+          <Link
+            to="/book"
+            className="ml-auto text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+          >
+            full book <ArrowRight className="w-3 h-3" />
+          </Link>
+        </div>
+        {bestWorstLine && (
+          <div className="text-[10px] text-muted-foreground font-mono pl-6 truncate">
+            {bestWorstLine}
+          </div>
         )}
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground">
-          Book Equity
-        </h3>
-        <span className="text-[10px] text-muted-foreground">$10k paper · all sessions</span>
-        <Link
-          to="/book"
-          className="ml-auto text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
-        >
-          full book <ArrowRight className="w-3 h-3" />
-        </Link>
       </div>
 
       {/* Stats strip */}

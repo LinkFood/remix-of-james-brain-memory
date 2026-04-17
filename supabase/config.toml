@@ -183,6 +183,9 @@ verify_jwt = false
 [functions.ct-alert-book-commit]
 verify_jwt = false
 
+[functions.ct-classify-themes]
+verify_jwt = false
+
 [functions.ct-net-prem-cumulative]
 verify_jwt = false
 
