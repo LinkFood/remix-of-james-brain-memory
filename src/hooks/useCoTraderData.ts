@@ -225,11 +225,150 @@ export function useDarkPoolPrints(limit = 30) {
 /**
  * Manual trigger via RPC — for "run now" buttons on the dashboard.
  */
-export async function triggerCoTrader(fn: 'watcher' | 'grader' | 'news_ingester' | 'eod_recap' | 'lessons_curator' | 'flow_ingester'): Promise<{ ok: boolean; error?: string }> {
+export async function triggerCoTrader(fn: 'watcher' | 'grader' | 'news_ingester' | 'eod_recap' | 'lessons_curator' | 'flow_ingester' | 'event_calendar_ingester' | 'disagreement_materializer'): Promise<{ ok: boolean; error?: string }> {
   const rpcName = `trigger_ct_${fn}`;
   const { error } = await supabase.rpc(rpcName);
   if (error) return { ok: false, error: error.message };
   return { ok: true };
+}
+
+// ============================================================================
+// Disagreements — James vs Claude collisions on the same instrument/horizon
+// ============================================================================
+export interface Disagreement {
+  id: string;
+  instrument: string;
+  horizon: string;
+  horizon_end: string;
+  james_view_id: string;
+  claude_flag_id: string;
+  james_direction: string;
+  claude_direction: string;
+  resolution: 'pending' | 'claude_right' | 'james_right' | 'both_wrong' | 'both_right' | 'ambiguous';
+  resolution_detail: string | null;
+  resolved_at: string | null;
+  created_at: string;
+}
+
+export function useDisagreements(limit = 20) {
+  return useQuery<Disagreement[]>({
+    queryKey: ['ct_disagreements', limit],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_disagreements')
+        .select('id, instrument, horizon, horizon_end, james_view_id, claude_flag_id, james_direction, claude_direction, resolution, resolution_detail, resolved_at, created_at')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as Disagreement[];
+    },
+  });
+}
+
+// ============================================================================
+// Post a james_view directly from the browser
+// ============================================================================
+export interface PostJamesViewInput {
+  instrument: string;
+  direction: 'bullish' | 'bearish' | 'neutral' | 'volatility';
+  conviction: number;
+  horizon: '1h' | '4h' | 'EOD' | 'next-day' | 'weekly';
+  rationale?: string;
+}
+
+function computeHorizonEnd(horizon: string, from = new Date()): Date {
+  const d = new Date(from);
+  switch (horizon) {
+    case '1h':       d.setHours(d.getHours() + 1); return d;
+    case '4h':       d.setHours(d.getHours() + 4); return d;
+    case 'EOD':      d.setHours(21, 0, 0, 0); if (d <= from) d.setDate(d.getDate() + 1); return d;
+    case 'next-day': d.setDate(d.getDate() + 1); d.setHours(21, 0, 0, 0); return d;
+    case 'weekly':   d.setDate(d.getDate() + 7); return d;
+    default:         d.setHours(d.getHours() + 4); return d;
+  }
+}
+
+export async function postJamesView(input: PostJamesViewInput): Promise<{ ok: boolean; error?: string; id?: string }> {
+  const { data: auth, error: authErr } = await supabase.auth.getUser();
+  if (authErr || !auth?.user) return { ok: false, error: 'not signed in' };
+
+  const horizon_end = computeHorizonEnd(input.horizon).toISOString();
+
+  const { data, error } = await supabase
+    .from('ct_james_views')
+    .insert({
+      user_id: auth.user.id,
+      instrument: input.instrument.toUpperCase(),
+      direction: input.direction,
+      conviction: input.conviction,
+      horizon: input.horizon,
+      horizon_end,
+      rationale: input.rationale?.trim() || null,
+      source: 'web',
+    })
+    .select('id')
+    .single();
+
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, id: data?.id as string };
+}
+
+export interface CtEventRow {
+  id: string;
+  event_type: 'earnings' | 'fda' | 'econ';
+  ticker: string | null;
+  event_date: string;
+  event_time: string | null;
+  title: string | null;
+  importance: number | null;
+  fetched_at: string;
+}
+
+/** Next 24hr of events across all three types. */
+export function useEventsToday() {
+  return useQuery<CtEventRow[]>({
+    queryKey: ['ct_events_today'],
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+      const tomorrow = new Date(now.getTime() + 24 * 3600_000).toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_events')
+        .select('id, event_type, ticker, event_date, event_time, title, importance, fetched_at')
+        .gte('event_date', todayStr)
+        .lte('event_date', tomorrow)
+        .order('event_date', { ascending: true })
+        .order('event_time', { ascending: true, nullsFirst: false })
+        .limit(200);
+      if (error) throw error;
+      return (data ?? []) as CtEventRow[];
+    },
+  });
+}
+
+/** Upcoming events for a specific ticker (next 90 days). */
+export function useEventsForTicker(ticker: string | null | undefined) {
+  return useQuery<CtEventRow[]>({
+    queryKey: ['ct_events_ticker', ticker],
+    enabled: !!ticker,
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      if (!ticker) return [];
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_events')
+        .select('id, event_type, ticker, event_date, event_time, title, importance, fetched_at')
+        .eq('ticker', ticker)
+        .gte('event_date', today)
+        .order('event_date', { ascending: true })
+        .order('event_time', { ascending: true, nullsFirst: false })
+        .limit(50);
+      if (error) throw error;
+      return (data ?? []) as CtEventRow[];
+    },
+  });
 }
 
 export interface GexTimeseriesRow {
@@ -259,6 +398,38 @@ export function useGexTimeseries(ticker: string, hours = 4) {
         .limit(10000);
       if (error) throw error;
       return (data ?? []) as GexTimeseriesRow[];
+    },
+  });
+}
+
+export interface GreekFlowRow {
+  ticker: string;
+  tick_timestamp: string;
+  net_call_delta: number | null;
+  net_put_delta: number | null;
+  net_call_vega: number | null;
+  net_put_vega: number | null;
+  total_delta_flow: number | null;
+  total_vega_flow: number | null;
+  underlying_price: number | null;
+}
+
+/** Per-minute greek flow for an index ticker (SPY/QQQ/IWM). Last N hours. */
+export function useGreekFlow(ticker: 'SPY' | 'QQQ' | 'IWM', hours = 4) {
+  return useQuery<GreekFlowRow[]>({
+    queryKey: ['ct_greek_flow', ticker, hours],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - hours * 3600_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_greek_flow_minute')
+        .select('ticker, tick_timestamp, net_call_delta, net_put_delta, net_call_vega, net_put_vega, total_delta_flow, total_vega_flow, underlying_price')
+        .eq('ticker', ticker)
+        .gte('tick_timestamp', since)
+        .order('tick_timestamp', { ascending: true })
+        .limit(5000);
+      if (error) throw error;
+      return (data ?? []) as GreekFlowRow[];
     },
   });
 }

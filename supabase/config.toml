@@ -119,3 +119,15 @@ verify_jwt = false
 
 [functions.ct-flow-ingester]
 verify_jwt = false
+
+[functions.ct-event-calendar-ingester]
+verify_jwt = false
+
+[functions.ct-slack-slash]
+verify_jwt = false
+
+[functions.ct-disagreement-materializer]
+verify_jwt = false
+
+[functions.ct-morning-brief]
+verify_jwt = false

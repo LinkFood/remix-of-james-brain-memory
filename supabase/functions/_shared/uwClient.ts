@@ -231,6 +231,30 @@ export function getOptionsVolume(ticker: string): Promise<unknown> {
 }
 
 // ============================================================================
+// Event Calendars
+// ============================================================================
+
+/** Post-market earnings announcements */
+export function getEarningsAfterhours(): Promise<unknown> {
+  return uwGet('/api/earnings/afterhours');
+}
+
+/** Pre-market earnings announcements */
+export function getEarningsPremarket(): Promise<unknown> {
+  return uwGet('/api/earnings/premarket');
+}
+
+/** FDA calendar — drug approvals, PDUFA dates, etc. */
+export function getFdaCalendar(): Promise<unknown> {
+  return uwGet('/api/market/fda-calendar');
+}
+
+/** Economic calendar — CPI, FOMC, jobs, etc. */
+export function getEconomicCalendar(): Promise<unknown> {
+  return uwGet('/api/market/economic-calendar');
+}
+
+// ============================================================================
 // News, Insider, Congress
 // ============================================================================
 

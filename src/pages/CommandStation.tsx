@@ -8,7 +8,9 @@ import { FlowTape } from '@/components/command/FlowTape';
 import { DarkPoolTape } from '@/components/command/DarkPoolTape';
 import { FlowPerStrike } from '@/components/command/FlowPerStrike';
 import { NetPremiumLine } from '@/components/command/NetPremiumLine';
+import { HiroPanel } from '@/components/command/HiroPanel';
 import { MarketMovers } from '@/components/command/MarketMovers';
+import { EventsPanel } from '@/components/command/EventsPanel';
 import { GexHeatmap } from '@/components/command/GexHeatmap';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
@@ -65,6 +67,9 @@ export default function CommandStation() {
             <TickerGrid />
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               <NetPremiumLine />
+              <HiroPanel />
+            </div>
+            <div className="grid grid-cols-1 gap-4">
               <FlowPerStrike />
             </div>
             <EventFeed />
@@ -72,6 +77,7 @@ export default function CommandStation() {
           <div className="lg:col-span-4 space-y-4">
             <FlowTape />
             <MarketMovers />
+            <EventsPanel />
             <DarkPoolTape />
             <RecapPanel />
             <NewsFeed />
