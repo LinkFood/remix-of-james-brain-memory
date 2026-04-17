@@ -560,14 +560,35 @@ export function useGexTimeseries(ticker: string, hours = 4) {
     refetchInterval: 60_000,
     queryFn: async () => {
       const since = new Date(Date.now() - hours * 3600_000).toISOString();
+      // Each snapshot has ~40-700 strikes; an indexed-heavy ticker like SPX
+      // can exceed 10K rows in a single snapshot. Previously we ordered ASC
+      // and took the first 10K, which on SPX meant the heatmap was stuck on
+      // old data.
+      //
+      // Strategy: pull the LATEST 30 distinct snapshot_at timestamps first,
+      // then fetch all strikes for those snapshots. Limits the working set
+      // to recent data without truncating any single snapshot.
+      const { data: snapRows, error: snapErr } = await supabase
+        .from('ct_gex_timeseries')
+        .select('snapshot_at')
+        .eq('ticker', ticker)
+        .gte('snapshot_at', since)
+        .order('snapshot_at', { ascending: false })
+        .limit(5000); // enough rows to find distinct snapshots even on SPX
+      if (snapErr) throw snapErr;
+      const distinctSnaps = Array.from(new Set((snapRows ?? []).map(r => r.snapshot_at as string)))
+        .slice(0, 30);
+      if (distinctSnaps.length === 0) return [];
+      const oldestTarget = distinctSnaps[distinctSnaps.length - 1];
+
       const { data, error } = await supabase
         .from('ct_gex_timeseries')
         .select('ticker, snapshot_at, strike, call_gex, put_gex, net_gex, underlying_price, is_atm_band')
         .eq('ticker', ticker)
-        .gte('snapshot_at', since)
+        .gte('snapshot_at', oldestTarget)
         .order('snapshot_at', { ascending: true })
         .order('strike', { ascending: true })
-        .limit(10000);
+        .limit(25000);
       if (error) throw error;
       return (data ?? []) as GexTimeseriesRow[];
     },
