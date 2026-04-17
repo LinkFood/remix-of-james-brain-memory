@@ -706,6 +706,45 @@ serve(async (req) => {
       ivRankPerTicker[ticker] = { rank: r.iv_rank, iv_30d: r.iv_30d };
     }
 
+    // 3c. CONVERGENCE DETECTOR — count independent signals pointing same
+    // direction in the last 15min. ≥3 converging signals forces ALERT even
+    // if Claude's conviction is low. Bypasses gun-shyness on clear setups.
+    const convergence = (() => {
+      let bullish = 0, bearish = 0;
+      const signals: string[] = [];
+      // Signal 1: NOPE direction across SPY/QQQ/IWM (latest tick)
+      const nopeRows = (nopeRecent.data ?? []) as Array<{ ticker: string; nope: number | null }>;
+      const latestNope = new Map<string, number>();
+      for (const r of nopeRows) if (!latestNope.has(r.ticker) && r.nope != null) latestNope.set(r.ticker, r.nope);
+      const avgNope = Array.from(latestNope.values()).reduce((a, b) => a + b, 0) / (latestNope.size || 1);
+      if (avgNope > 0.5) { bullish++; signals.push(`NOPE positive ${avgNope.toFixed(2)}`); }
+      else if (avgNope < -0.5) { bearish++; signals.push(`NOPE negative ${avgNope.toFixed(2)}`); }
+      // Signal 2: Net premium flow direction last 30min (watchlist aggregate)
+      const netPremPerTicker30min = Object.values(netPremPerTicker) as Array<{ delta_call_prem_30min?: number; delta_put_prem_30min?: number }>;
+      const callDelta = netPremPerTicker30min.reduce((a, r) => a + (r.delta_call_prem_30min ?? 0), 0);
+      const putDelta = netPremPerTicker30min.reduce((a, r) => a + (r.delta_put_prem_30min ?? 0), 0);
+      if (callDelta > 5_000_000 && callDelta > putDelta * 2) { bullish++; signals.push(`call flow +$${(callDelta/1e6).toFixed(1)}M last 30min`); }
+      else if (putDelta > 5_000_000 && putDelta > callDelta * 2) { bearish++; signals.push(`put flow +$${(putDelta/1e6).toFixed(1)}M last 30min`); }
+      // Signal 3: Dark pool dominance (large prints same direction)
+      const dpRows = (dpRecent.data ?? []) as Array<{ ticker: string; notional_value?: number }>;
+      const dpTotalNotional = dpRows.reduce((a, r) => a + (r.notional_value ?? 0), 0);
+      if (dpTotalNotional > 200_000_000) { bullish++; signals.push(`DP accumulation $${(dpTotalNotional/1e6).toFixed(0)}M last 10min`); }
+      // Signal 4: Greek flow (dir_delta_flow cumulative)
+      const totalDeltaFlow = greekFlowLatest.reduce((a, r) => a + (r.dir_delta_flow ?? 0), 0);
+      if (totalDeltaFlow > 5000) { bullish++; signals.push(`delta flow +${totalDeltaFlow.toFixed(0)}`); }
+      else if (totalDeltaFlow < -5000) { bearish++; signals.push(`delta flow ${totalDeltaFlow.toFixed(0)}`); }
+      // Signal 5: Big whale print on watchlist
+      const bigWhales = (flowRecent.data ?? []).filter((r: Record<string, unknown>) => (r.premium as number | undefined ?? 0) >= 1_000_000);
+      const whaleCalls = bigWhales.filter((r: Record<string, unknown>) => r.side === 'call').length;
+      const whalePuts = bigWhales.filter((r: Record<string, unknown>) => r.side === 'put').length;
+      if (whaleCalls >= 3 && whaleCalls > whalePuts * 2) { bullish++; signals.push(`${whaleCalls} whale calls >$1M`); }
+      else if (whalePuts >= 3 && whalePuts > whaleCalls * 2) { bearish++; signals.push(`${whalePuts} whale puts >$1M`); }
+
+      const direction = bullish > bearish ? 'bullish' : bearish > bullish ? 'bearish' : 'neutral';
+      const count = Math.max(bullish, bearish);
+      return { count, direction, signals, bullish, bearish };
+    })();
+
     // 4. Assemble Claude user message — condensed, under ~6K tokens
     const userMessage = JSON.stringify({
       timestamp_utc: clock.iso,
@@ -714,6 +753,7 @@ serve(async (req) => {
       memory,
       self_corrections_72h: selfCorrections,
       known_biases: activeBiases,
+      convergence,
       recent_flow_alerts: flowRecent.data ?? [],
       recent_dark_pool_prints: dpRecent.data ?? [],
       nope_recent: nopeRecent.data ?? [],
