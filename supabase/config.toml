@@ -149,3 +149,9 @@ verify_jwt = false
 
 [functions.ct-mcp-verify]
 verify_jwt = false
+
+[functions.ct-pre-bell-gauntlet]
+verify_jwt = false
+
+[functions.ct-pre-bell-grader]
+verify_jwt = false
