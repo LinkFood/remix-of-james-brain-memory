@@ -879,16 +879,23 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
         await ctSlackPush(supabase, userId, {
           state: 'FLAG', instruments, glance: glanceArr,
           conviction: parsed.conviction, horizon: parsed.horizon,
+          direction: parsed.direction, alert_trigger: parsed.alert_trigger,
+          convergence_count: convergence.count, event_id: eventId ?? undefined,
         });
       } else if (parsed.state === 'ALERT') {
         await ctSlackPush(supabase, userId, {
           state: 'ALERT', instruments, glance: glanceArr,
           conviction: 5, horizon: parsed.horizon, alert_trigger: parsed.alert_trigger,
+          direction: parsed.direction,
+          convergence_count: convergence.count, event_id: eventId ?? undefined,
         });
       } else if (parsed.state === 'OBSERVATION' && isInvalidation) {
         await ctSlackPush(supabase, userId, {
           state: 'FLAG', instruments, glance: glanceArr,
           conviction: 2, horizon: parsed.horizon ?? '4h',
+          direction: parsed.direction,
+          alert_trigger: 'thesis_invalidation',
+          event_id: eventId ?? undefined,
         });
       }
     }

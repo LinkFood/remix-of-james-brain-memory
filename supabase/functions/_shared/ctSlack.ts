@@ -15,6 +15,91 @@ export interface CtSlackPayload {
   conviction?: number;
   horizon?: string;
   alert_trigger?: string;
+  direction?: string;
+  convergence_count?: number;
+  event_id?: string;
+}
+
+/**
+ * Dedupe check: should we push this to Slack, or has a materially-
+ * equivalent push gone out recently?
+ *
+ * RULES:
+ *   - Never dedupe thesis_invalidation (direction-change signal is always news)
+ *   - Dedupe window: 30min
+ *   - Skip if same (direction, alert_trigger) pushed within window UNLESS:
+ *       * Direction FLIPPED since last push (bull→bear or vice versa)
+ *       * Convergence count UPGRADED (e.g. 3→4 or 3→5)
+ *       * No push in last 30min (always push the fresh one)
+ */
+export async function shouldPushToSlack(
+  supabase: SupabaseClient,
+  payload: CtSlackPayload & { source: string },
+): Promise<{ push: boolean; reason: string }> {
+  // Invalidations always push — they represent a material state change
+  if (payload.alert_trigger === 'thesis_invalidation') {
+    return { push: true, reason: 'invalidation_always' };
+  }
+
+  const cutoff = new Date(Date.now() - 30 * 60_000).toISOString();
+
+  const { data: recent } = await supabase
+    .from('ct_slack_log')
+    .select('direction, alert_trigger, convergence_cnt, created_at, pushed')
+    .eq('pushed', true)
+    .gte('created_at', cutoff)
+    .order('created_at', { ascending: false })
+    .limit(10);
+
+  if (!recent || recent.length === 0) {
+    return { push: true, reason: 'no_recent_push' };
+  }
+
+  // Look for a push with same direction + trigger in window
+  const sameSignal = recent.find(r =>
+    r.direction === payload.direction &&
+    r.alert_trigger === payload.alert_trigger
+  );
+
+  if (!sameSignal) {
+    // Different direction or trigger = new signal = push
+    return { push: true, reason: 'new_signal_type' };
+  }
+
+  // Convergence upgrade: prior count was 3, this is 4+ → push
+  const priorCount = (sameSignal.convergence_cnt as number | null) ?? 0;
+  const thisCount = payload.convergence_count ?? 0;
+  if (thisCount > priorCount && thisCount >= 4) {
+    return { push: true, reason: `convergence_upgrade_${priorCount}_to_${thisCount}` };
+  }
+
+  return { push: false, reason: `dedupe_same_signal_${sameSignal.direction}_${sameSignal.alert_trigger}` };
+}
+
+async function logSlackAttempt(
+  supabase: SupabaseClient,
+  source: string,
+  payload: CtSlackPayload,
+  pushed: boolean,
+  skipReason: string | null,
+): Promise<void> {
+  try {
+    await supabase.from('ct_slack_log').insert({
+      source,
+      state: payload.state,
+      instruments: payload.instruments,
+      direction: payload.direction ?? null,
+      alert_trigger: payload.alert_trigger ?? null,
+      conviction: payload.conviction ?? null,
+      convergence_cnt: payload.convergence_count ?? null,
+      event_id: payload.event_id ?? null,
+      summary: (payload.glance[0] ?? '').slice(0, 300),
+      pushed,
+      skip_reason: skipReason,
+    });
+  } catch {
+    // non-blocking
+  }
 }
 
 function pickEmoji(state: CtSlackPayload['state']): string {
@@ -32,6 +117,17 @@ export async function ctSlackPush(
   userId: string,
   payload: CtSlackPayload
 ): Promise<void> {
+  // Dedupe — skip Slack push if same signal fired recently with no
+  // material escalation. Still log the attempt for audit.
+  const source = payload.state === 'ALERT' ? 'alert'
+    : payload.state === 'FLAG' ? 'flag'
+    : payload.state === 'RECAP' ? 'recap' : 'flag';
+  const { push, reason } = await shouldPushToSlack(supabase, { ...payload, source });
+  if (!push) {
+    await logSlackAttempt(supabase, source, payload, false, reason);
+    return;
+  }
+
   try {
     const botToken = Deno.env.get('SLACK_BOT_TOKEN');
     if (!botToken) return;
@@ -64,7 +160,44 @@ export async function ctSlackPush(
     }
     const json = await res.json().catch(() => ({}));
     if (!json.ok) console.warn('[ctSlack] slack ok:false —', json.error);
+    await logSlackAttempt(supabase, source, payload, true, null);
   } catch (e) {
     console.warn('[ctSlack] exception (non-blocking):', e instanceof Error ? e.message : e);
+    await logSlackAttempt(supabase, source, payload, false, `exception:${e instanceof Error ? e.message.slice(0, 60) : 'unknown'}`);
+  }
+}
+
+/**
+ * Direct Slack push with no dedupe — for scheduled digests that MUST go
+ * through regardless. Still logs to ct_slack_log.
+ */
+export async function ctSlackPushDirect(
+  supabase: SupabaseClient,
+  userId: string,
+  text: string,
+  source: string,
+): Promise<void> {
+  try {
+    const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+    if (!botToken) return;
+    const { data: settings } = await supabase
+      .from('user_settings').select('settings').eq('user_id', userId).maybeSingle();
+    const channelId = (settings?.settings as Record<string, unknown> | null)?.slack_channel_id as string | undefined;
+    if (!channelId) return;
+
+    const res = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: channelId, text, mrkdwn: true }),
+    });
+    const json = await res.ok ? await res.json().catch(() => ({})) : {};
+    await supabase.from('ct_slack_log').insert({
+      source,
+      summary: text.slice(0, 300),
+      pushed: res.ok && (json.ok !== false),
+      skip_reason: res.ok ? null : `http_${res.status}`,
+    });
+  } catch (e) {
+    console.warn('[ctSlack] digest push failed:', e instanceof Error ? e.message : e);
   }
 }

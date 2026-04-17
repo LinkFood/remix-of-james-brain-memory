@@ -170,3 +170,6 @@ verify_jwt = false
 
 [functions.ct-claude-trade-reopen]
 verify_jwt = false
+
+[functions.ct-slack-digest]
+verify_jwt = false
