@@ -3,6 +3,8 @@
 -- which gets truncated when returned as setof.
 SET search_path = public, extensions;
 
+DROP FUNCTION IF EXISTS public.ct_gex_heatmap(text, int, int, boolean);
+
 CREATE OR REPLACE FUNCTION public.ct_gex_heatmap(
   p_ticker    text,
   p_hours     int DEFAULT 6,
