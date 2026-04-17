@@ -105,6 +105,9 @@ verify_jwt = false
 [functions.ct-grader]
 verify_jwt = false
 
+[functions.ct-self-grader]
+verify_jwt = false
+
 [functions.ct-news-ingester]
 verify_jwt = false
 

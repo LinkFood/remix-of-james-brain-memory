@@ -8,7 +8,7 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Trophy, Target, TrendingUp, TrendingDown, Activity, AlertTriangle } from 'lucide-react';
+import { Trophy, Target, TrendingUp, TrendingDown, Activity, AlertTriangle, Brain } from 'lucide-react';
 import { GhostTradeTape } from '@/components/command/GhostTradeTape';
 import { RecallSearch } from '@/components/command/RecallSearch';
 
@@ -85,6 +85,61 @@ export function Scorecard() {
     queryFn: async () => {
       const { count } = await supabase.from('ct_flags').select('id', { count: 'exact', head: true });
       return count ?? 0;
+    },
+  });
+
+  /**
+   * Self-confidence calibration:
+   * Of graded flags/alerts, bucket by the ORIGINAL self-assessed confidence
+   * (1-5) and compute % with verdict='right'. Calibrated = higher confidence
+   * → higher accuracy. Miscalibrated = inversion or flat line.
+   */
+  const { data: calibration } = useQuery<{
+    buckets: Array<{ confidence: number; total: number; right: number; accuracy: number }>;
+    sample: number;
+  }>({
+    queryKey: ['ct_self_confidence_calibration'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      // Pull graded flags with self_assessment, and graded alerts too.
+      const [graded, flagSa, alertSa] = await Promise.all([
+        supabase.from('ct_grades')
+          .select('subject_type, subject_id, verdict')
+          .in('subject_type', ['flag', 'alert'])
+          .limit(2000),
+        supabase.from('ct_flags').select('id, self_assessment').not('self_assessment', 'is', null).limit(2000),
+        supabase.from('ct_alerts').select('id, self_assessment').not('self_assessment', 'is', null).limit(2000),
+      ]);
+      const flagMap = new Map<string, number>();
+      for (const r of (flagSa.data ?? []) as Array<Record<string, unknown>>) {
+        const sa = r.self_assessment as { confidence?: number } | null;
+        if (sa?.confidence != null) flagMap.set(r.id as string, Math.max(1, Math.min(5, Math.round(Number(sa.confidence)))));
+      }
+      const alertMap = new Map<string, number>();
+      for (const r of (alertSa.data ?? []) as Array<Record<string, unknown>>) {
+        const sa = r.self_assessment as { confidence?: number } | null;
+        if (sa?.confidence != null) alertMap.set(r.id as string, Math.max(1, Math.min(5, Math.round(Number(sa.confidence)))));
+      }
+      const buckets = new Map<number, { total: number; right: number }>();
+      for (let c = 1; c <= 5; c++) buckets.set(c, { total: 0, right: 0 });
+      let sample = 0;
+      for (const g of (graded.data ?? []) as Array<Record<string, unknown>>) {
+        const id = g.subject_id as string;
+        const type = g.subject_type as string;
+        const conf = type === 'flag' ? flagMap.get(id) : type === 'alert' ? alertMap.get(id) : undefined;
+        if (conf == null) continue;
+        const b = buckets.get(conf)!;
+        b.total += 1;
+        if (g.verdict === 'right') b.right += 1;
+        sample += 1;
+      }
+      const out = Array.from(buckets.entries()).map(([confidence, v]) => ({
+        confidence,
+        total: v.total,
+        right: v.right,
+        accuracy: v.total > 0 ? v.right / v.total : 0,
+      }));
+      return { buckets: out, sample };
     },
   });
 
@@ -177,6 +232,49 @@ export function Scorecard() {
             </div>
           </Card>
         </div>
+
+        {/* Self-confidence calibration — does high self-rated confidence correlate with being right? */}
+        <Card className="p-4">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
+            <Brain className="w-3 h-3" /> Self-Confidence Calibration
+            <span className="normal-case tracking-normal text-muted-foreground/70">
+              — graded accuracy by Claude's stated confidence (1-5)
+            </span>
+            <span className="ml-auto normal-case tracking-normal">
+              n={calibration?.sample ?? 0}
+            </span>
+          </div>
+          {!calibration || calibration.sample === 0 ? (
+            <div className="text-xs text-muted-foreground">
+              no self-assessed graded calls yet — self_assessment lands on flags/alerts written after v21, grades land at horizon close
+            </div>
+          ) : (
+            <div className="grid grid-cols-5 gap-2">
+              {calibration.buckets.map((b) => {
+                const pct = b.total > 0 ? fmtPct(b.accuracy) : '—';
+                const color = b.total === 0
+                  ? 'text-muted-foreground'
+                  : b.accuracy >= 0.6 ? 'text-green-400'
+                  : b.accuracy >= 0.4 ? 'text-amber-400'
+                  : 'text-red-400';
+                return (
+                  <div key={b.confidence} className="text-center bg-muted/20 rounded p-2">
+                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                      conf {b.confidence}
+                    </div>
+                    <div className={`text-xl font-bold ${color}`}>{pct}</div>
+                    <div className="text-[10px] text-muted-foreground">
+                      {b.right}/{b.total}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="mt-2 text-[10px] text-muted-foreground">
+            calibrated reasoning = accuracy rises with stated confidence. flat or inverted line = miscalibrated.
+          </div>
+        </Card>
 
         {/* Ghost Trade Tape — paper P&L of Claude's flagged calls */}
         <GhostTradeTape days={30} />

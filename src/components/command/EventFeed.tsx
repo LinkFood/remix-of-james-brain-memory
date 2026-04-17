@@ -1,8 +1,8 @@
-import { useRecentEvents, type CtEvent } from '@/hooks/useCoTraderData';
+import { useRecentEvents, useSelfRegrade, type CtEvent, type CtSelfAssessment } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useState } from 'react';
-import { ChevronDown, ChevronUp, AlertTriangle, Flag, Eye } from 'lucide-react';
+import { ChevronDown, ChevronUp, AlertTriangle, Flag, Eye, Target, Brain } from 'lucide-react';
 
 function relativeTime(iso: string): string {
   const d = Date.now() - Date.parse(iso);
@@ -41,6 +41,94 @@ function directionBadge(d: string | null) {
   return <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${colors[d] ?? 'bg-muted'}`}>{d.toUpperCase()}</Badge>;
 }
 
+/** Inline 1-5 dot rating. Filled = score, empty = remainder. */
+function DotRating({ value, label, color }: { value: number | null | undefined; label: string; color: string }) {
+  if (value == null) return null;
+  const n = Math.max(0, Math.min(5, Math.round(value)));
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground" title={`${label}: ${n}/5`}>
+      <span className="uppercase tracking-wider text-[9px]">{label}</span>
+      <span className="flex gap-0.5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <span
+            key={i}
+            className={`w-1.5 h-1.5 rounded-full ${i < n ? color : 'bg-muted'}`}
+          />
+        ))}
+      </span>
+    </span>
+  );
+}
+
+function SelfAssessmentLine({ sa }: { sa: CtSelfAssessment }) {
+  return (
+    <div className="mt-1 flex items-center gap-3 flex-wrap">
+      <DotRating value={sa.confidence} label="conf" color="bg-sky-400" />
+      <DotRating value={sa.reasoning_quality} label="reas" color="bg-violet-400" />
+      {sa.key_evidence && (
+        <span className="text-[10px] text-foreground/70 italic truncate max-w-[60%]">
+          ev: {sa.key_evidence}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function SelfAssessmentDetail({ sa }: { sa: CtSelfAssessment }) {
+  return (
+    <div className="space-y-1 text-xs">
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Target className="w-3 h-3" /> Live self-rating
+      </div>
+      {sa.key_evidence && (
+        <div><span className="text-muted-foreground">key evidence:</span> {sa.key_evidence}</div>
+      )}
+      {sa.kill_conditions && (
+        <div><span className="text-muted-foreground">kill conditions:</span> {sa.kill_conditions}</div>
+      )}
+      {sa.what_could_go_wrong && (
+        <div><span className="text-muted-foreground">what could go wrong:</span> {sa.what_could_go_wrong}</div>
+      )}
+    </div>
+  );
+}
+
+function RetrospectiveBlock({ event }: { event: CtEvent }) {
+  const { data: regrade } = useSelfRegrade(event._type, event.id);
+  if (!regrade) {
+    return (
+      <div className="mt-2 text-[10px] text-muted-foreground italic">
+        retrospective regrade not written yet — runs 2-24hr after creation
+      </div>
+    );
+  }
+  return (
+    <div className="mt-2 pt-2 border-t border-border space-y-1.5 text-xs">
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground">
+        <Brain className="w-3 h-3" /> Retrospective (regraded {relativeTime(regrade.regraded_at)})
+      </div>
+      <div className="flex items-center gap-3 flex-wrap">
+        <DotRating value={regrade.retrospective_confidence} label="retro conf" color="bg-sky-400" />
+        <DotRating value={regrade.retrospective_reasoning_quality} label="retro reas" color="bg-violet-400" />
+        {regrade.grader_verdict && (
+          <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+            grader: {regrade.grader_verdict}
+          </Badge>
+        )}
+      </div>
+      {regrade.what_i_got_right && (
+        <div><span className="text-green-400 text-[10px] uppercase">got right:</span> {regrade.what_i_got_right}</div>
+      )}
+      {regrade.what_i_got_wrong && (
+        <div><span className="text-red-400 text-[10px] uppercase">got wrong:</span> {regrade.what_i_got_wrong}</div>
+      )}
+      {regrade.how_id_rewrite && (
+        <div><span className="text-muted-foreground text-[10px] uppercase">how i'd rewrite:</span> {regrade.how_id_rewrite}</div>
+      )}
+    </div>
+  );
+}
+
 function EventRow({ event }: { event: CtEvent }) {
   const [expanded, setExpanded] = useState(false);
   return (
@@ -72,18 +160,22 @@ function EventRow({ event }: { event: CtEvent }) {
             </ul>
           )}
 
-          {event.full_reasoning && (
+          {event.self_assessment && <SelfAssessmentLine sa={event.self_assessment} />}
+
+          {(event.full_reasoning || event.self_assessment) && (
             <div className="mt-1">
               <button
                 onClick={() => setExpanded(!expanded)}
                 className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-0.5"
               >
                 {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-                {expanded ? 'hide' : 'show'} full reasoning
+                {expanded ? 'hide' : 'show'} reasoning + regrade
               </button>
               {expanded && (
-                <div className="mt-1 text-xs text-foreground/80 whitespace-pre-wrap leading-relaxed bg-muted/20 p-2 rounded">
-                  {event.full_reasoning}
+                <div className="mt-1 text-xs text-foreground/80 whitespace-pre-wrap leading-relaxed bg-muted/20 p-2 rounded space-y-2">
+                  {event.full_reasoning && <div>{event.full_reasoning}</div>}
+                  {event.self_assessment && <SelfAssessmentDetail sa={event.self_assessment} />}
+                  <RetrospectiveBlock event={event} />
                 </div>
               )}
             </div>

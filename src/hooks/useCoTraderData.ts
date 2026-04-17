@@ -26,6 +26,14 @@ export interface Thesis {
   updated_at: string;
 }
 
+export interface CtSelfAssessment {
+  confidence?: number;
+  reasoning_quality?: number;
+  key_evidence?: string;
+  kill_conditions?: string;
+  what_could_go_wrong?: string;
+}
+
 export interface CtEvent {
   id: string;
   _type: 'observation' | 'flag' | 'alert';
@@ -36,7 +44,23 @@ export interface CtEvent {
   glance: string[] | null;
   full_reasoning: string | null;
   alert_trigger: string | null;
+  self_assessment: CtSelfAssessment | null;
   created_at: string;
+}
+
+export interface CtSelfRegrade {
+  id: string;
+  subject_type: 'observation' | 'flag' | 'alert';
+  subject_id: string;
+  original_confidence: number | null;
+  original_reasoning_quality: number | null;
+  retrospective_confidence: number | null;
+  retrospective_reasoning_quality: number | null;
+  what_i_got_right: string | null;
+  what_i_got_wrong: string | null;
+  how_id_rewrite: string | null;
+  grader_verdict: string | null;
+  regraded_at: string;
 }
 
 export interface NewsItem {
@@ -113,14 +137,14 @@ export function useRecentEvents(limit = 20) {
     refetchInterval: 30_000,
     queryFn: async () => {
       const [obs, flags, alerts] = await Promise.all([
-        supabase.from('ct_observations').select('id, instruments, direction, glance, observation, created_at').order('created_at', { ascending: false }).limit(limit),
-        supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, glance, full_reasoning, created_at').order('created_at', { ascending: false }).limit(limit),
-        supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, alert_trigger, glance, full_reasoning, created_at').order('created_at', { ascending: false }).limit(limit),
+        supabase.from('ct_observations').select('id, instruments, direction, glance, observation, self_assessment, created_at').order('created_at', { ascending: false }).limit(limit),
+        supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, glance, full_reasoning, self_assessment, created_at').order('created_at', { ascending: false }).limit(limit),
+        supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, alert_trigger, glance, full_reasoning, self_assessment, created_at').order('created_at', { ascending: false }).limit(limit),
       ]);
       const items: CtEvent[] = [];
-      for (const r of (obs.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'observation', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: null, horizon: null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.observation as string) ?? null, alert_trigger: null, created_at: r.created_at as string });
-      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, created_at: r.created_at as string });
-      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, created_at: r.created_at as string });
+      for (const r of (obs.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'observation', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: null, horizon: null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.observation as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, created_at: r.created_at as string });
+      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, created_at: r.created_at as string });
+      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, created_at: r.created_at as string });
       items.sort((a, b) => b.created_at.localeCompare(a.created_at));
       return items.slice(0, limit);
     },
@@ -641,6 +665,33 @@ export function useMaxPain(ticker: string) {
         .order('expiry', { ascending: true, nullsFirst: false });
       if (error) throw error;
       return (data ?? []) as MaxPainRow[];
+    },
+  });
+}
+
+/**
+ * Retrospective self-regrade for a specific observation/flag/alert.
+ * Returns null until the self-grader cron runs 2-24hr after creation.
+ */
+export function useSelfRegrade(
+  subjectType: 'observation' | 'flag' | 'alert' | null | undefined,
+  subjectId: string | null | undefined
+) {
+  return useQuery<CtSelfRegrade | null>({
+    queryKey: ['ct_self_regrade', subjectType, subjectId],
+    enabled: !!subjectType && !!subjectId,
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      if (!subjectType || !subjectId) return null;
+      const { data, error } = await supabase
+        .from('ct_self_regrades')
+        .select('id, subject_type, subject_id, original_confidence, original_reasoning_quality, retrospective_confidence, retrospective_reasoning_quality, what_i_got_right, what_i_got_wrong, how_id_rewrite, grader_verdict, regraded_at')
+        .eq('subject_type', subjectType)
+        .eq('subject_id', subjectId)
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data as CtSelfRegrade | null;
     },
   });
 }

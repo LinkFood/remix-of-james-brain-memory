@@ -55,6 +55,14 @@ interface ClaudeJson {
   conviction?: number;
   horizon?: '1h' | '4h' | 'EOD' | 'next-day' | 'weekly';
   alert_trigger?: 'regime_shift' | 'thesis_invalidation' | 'news' | 'vol_event' | 'other';
+  // inline self-assessment (required by prompt on obs/flag/alert; trust-pass to DB)
+  self_assessment?: {
+    confidence?: number;
+    reasoning_quality?: number;
+    key_evidence?: string;
+    kill_conditions?: string;
+    what_could_go_wrong?: string;
+  };
   // optional thesis updates
   thesis_updates?: Array<{
     instrument: string;
@@ -184,6 +192,7 @@ async function writeObservation(
     update_note: asString(claude.update_note),
     watching: asString(claude.memory_recall || claude.watching as string),
     memory_recall_used: { summary: asString(claude.memory_recall) },
+    self_assessment: claude.self_assessment ?? null,
     prompt_version: CT_PROMPT_VERSION,
   }).select('id').maybeSingle();
 
@@ -248,6 +257,7 @@ async function writeFlag(
     full_reasoning: asString(claude.observation),
     glance: toArray(claude.glance).filter(s => typeof s === 'string'),
     memory_recall_used: { summary: asString(claude.memory_recall) },
+    self_assessment: claude.self_assessment ?? null,
     prompt_version: CT_PROMPT_VERSION,
   }).select('id').maybeSingle();
 
@@ -315,6 +325,7 @@ async function writeAlert(
     full_reasoning: asString(claude.observation),
     glance: toArray(claude.glance).filter(s => typeof s === 'string'),
     memory_recall_used: { summary: asString(claude.memory_recall) },
+    self_assessment: claude.self_assessment ?? null,
     alert_trigger: trigger,
     prompt_version: CT_PROMPT_VERSION,
   }).select('id').maybeSingle();
