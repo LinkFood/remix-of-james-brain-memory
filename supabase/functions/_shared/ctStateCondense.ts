@@ -22,6 +22,8 @@ export interface CondensedInstrumentState {
   day_put_call_ratio: number | null;
   raw_strike_count: number;
   near_atm_strike_count: number;       // how many strikes in the filter window
+  /** ATM-centered strike bars for UI mini-chart. ±8 strikes each side of ATM. */
+  near_atm_strikes: Array<{ strike: number; call_gex: number; put_gex: number; net: number }>;
 }
 
 export interface CondensedState {
@@ -89,6 +91,7 @@ function condenseInstrumentState(
     net_gamma_oi: null as number | null,
     raw_strike_count: 0,
     near_atm_strike_count: 0,
+    near_atm_strikes: [] as Array<{ strike: number; call_gex: number; put_gex: number; net: number }>,
   };
 
   // Extract price + spot totals from spot-exposures
@@ -188,6 +191,27 @@ function condenseInstrumentState(
     }
   }
 
+  // Select ±8 strikes around ATM for the mini-chart
+  const miniStrikes = (() => {
+    if (inWindow.length === 0) {
+      // Fall back to closest 16 strikes overall
+      return [...rows]
+        .sort((a, b) => Math.abs(a.strike - price) - Math.abs(b.strike - price))
+        .slice(0, 16)
+        .sort((a, b) => a.strike - b.strike);
+    }
+    // Take the 8 closest below and 8 closest above price from the window
+    const below = inWindow.filter(r => r.strike <= price).sort((a, b) => b.strike - a.strike).slice(0, 8);
+    const above = inWindow.filter(r => r.strike > price).sort((a, b) => a.strike - b.strike).slice(0, 8);
+    return [...below, ...above].sort((a, b) => a.strike - b.strike);
+  })();
+  const near_atm_strikes = miniStrikes.map(r => ({
+    strike: r.strike,
+    call_gex: r.call,
+    put_gex: r.put,
+    net: r.call + r.put,
+  }));
+
   return {
     ticker,
     price,
@@ -199,6 +223,7 @@ function condenseInstrumentState(
     net_gamma_oi: totalCall + totalPut,
     raw_strike_count: rows.length,
     near_atm_strike_count: inWindow.length,
+    near_atm_strikes,
   };
 }
 

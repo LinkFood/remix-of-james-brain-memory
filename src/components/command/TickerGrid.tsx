@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useLatestHeartbeat, useTheses } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { GexMiniChart } from './GexMiniChart';
 
 interface CondensedTicker {
   ticker: string;
@@ -15,6 +16,7 @@ interface CondensedTicker {
   put_call_volume_ratio: number | null;
   day_put_call_ratio: number | null;
   near_atm_strike_count: number;
+  near_atm_strikes?: Array<{ strike: number; call_gex: number; put_gex: number; net: number }>;
 }
 
 const LABELS: Record<string, { group: string; note?: string }> = {
@@ -97,7 +99,7 @@ export function TickerGrid() {
               <span className="text-base font-semibold text-foreground">${fmtPrice(price)}</span>
             </div>
 
-            <div className="grid grid-cols-4 gap-2 text-[11px] mb-2">
+            <div className="grid grid-cols-4 gap-2 text-[11px] mb-1">
               <div>
                 <div className="text-muted-foreground">Call W</div>
                 <div className="text-foreground font-medium">${fmtPrice(state.call_wall)}</div>
@@ -117,6 +119,8 @@ export function TickerGrid() {
                 </div>
               </div>
             </div>
+
+            <GexMiniChart strikes={state.near_atm_strikes ?? []} price={price} />
 
             {thesis ? (
               <div className="space-y-1 pt-2 border-t border-border">

@@ -107,9 +107,9 @@ export function MarketBanner() {
               </div>
             </div>
             <div>
-              <div className="text-muted-foreground">Watching</div>
+              <div className="text-muted-foreground">Watchlist</div>
               <div className="text-foreground/70 text-xs font-medium">
-                {heartbeat.watching?.length ?? 0} tickers
+                {Object.keys((snap?.per_ticker as Record<string, unknown>) ?? {}).length || (heartbeat.watching?.length ?? 0)} tickers
               </div>
             </div>
           </div>

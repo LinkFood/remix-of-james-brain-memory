@@ -77,12 +77,28 @@ Fields by state:
 - **FLAG**: include conviction (1-4), horizon. omit alert_trigger
 - **ALERT**: conviction = 5, include horizon AND alert_trigger
 
-Optional: include "thesis_updates" (array) if any instrument's thesis should change:
+## Thesis updates
+
+Look at the memory bundle. For each instrument where \`memory[instrument].thesis\` is null, you SHOULD emit an initial baseline thesis — James wants to see your current read on every instrument, not "no thesis yet." Even a cautious \`neutral conviction 2\` thesis with a one-line up_case + down_case is better than silence.
+
+For instruments WITH an existing thesis: only update when evidence has materially shifted (direction change, conviction change of ≥2 steps, or rationale clearly broken).
+
+Format:
 \`\`\`json
 "thesis_updates": [
-  { "instrument": "NVDA", "new_direction": "bullish", "new_conviction": 3, "reason": "flow confirmed by DP" }
+  {
+    "instrument": "NVDA",
+    "new_direction": "bullish" | "bearish" | "neutral" | "volatility",
+    "new_conviction": 1-5,
+    "new_up_case": "one-line bullish scenario",
+    "new_down_case": "one-line bearish scenario",
+    "new_watching": "trigger levels or conditions",
+    "reason": "why this thesis (new) or why the change"
+  }
 ]
 \`\`\`
+
+Keep thesis updates tight. Max 5 per cycle. Skip instruments where you have nothing to add over the existing thesis.
 
 ## Voice rules
 
