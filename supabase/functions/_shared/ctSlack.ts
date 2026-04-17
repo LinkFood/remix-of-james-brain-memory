@@ -36,9 +36,25 @@ export async function shouldPushToSlack(
   supabase: SupabaseClient,
   payload: CtSlackPayload & { source: string },
 ): Promise<{ push: boolean; reason: string }> {
-  // Invalidations always push — they represent a material state change
+  // Invalidations push ONCE per direction-flip event — not every tick.
+  // A true invalidation represents a state change; re-firing it 2min later
+  // is just re-describing the same change. Dedupe window: 15min.
   if (payload.alert_trigger === 'thesis_invalidation') {
-    return { push: true, reason: 'invalidation_always' };
+    const invCutoff = new Date(Date.now() - 15 * 60_000).toISOString();
+    const { data: recentInv } = await supabase
+      .from('ct_slack_log')
+      .select('direction, created_at')
+      .eq('pushed', true)
+      .eq('alert_trigger', 'thesis_invalidation')
+      .gte('created_at', invCutoff)
+      .order('created_at', { ascending: false })
+      .limit(3);
+    // Skip if we already invalidated in same direction within 15min
+    const sameDirRecent = (recentInv ?? []).find(r => r.direction === payload.direction);
+    if (sameDirRecent) {
+      return { push: false, reason: `invalidation_same_direction_${payload.direction}_recent` };
+    }
+    return { push: true, reason: 'invalidation_new_direction' };
   }
 
   const cutoff = new Date(Date.now() - 30 * 60_000).toISOString();
