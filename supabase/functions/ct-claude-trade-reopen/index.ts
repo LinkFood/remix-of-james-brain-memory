@@ -181,6 +181,13 @@ serve(async (req) => {
 
   const trades = (parsed.trades ?? []).slice(0, 2);
   if (trades.length === 0) {
+    // Log skip to ct_heartbeats so we can diagnose via REST
+    await supabase.from('ct_heartbeats').insert({
+      status_line: `[reopen-skip] ${parsed.skip_reason ?? 'no trades returned'} — posture: ${parsed.posture ?? 'n/a'}`,
+      watching: ['reopen-debug'],
+      current_reads: { _reopen: { skip_reason: parsed.skip_reason, posture: parsed.posture, raw_claude: claudeText.slice(0, 500) } },
+      prompt_version: 'reopen-debug',
+    });
     return new Response(JSON.stringify({ ok: true, committed: 0, skip_reason: parsed.skip_reason ?? 'no setups', posture: parsed.posture }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
