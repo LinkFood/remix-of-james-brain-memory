@@ -217,12 +217,30 @@ export function useActiveTradeSetups(limit = 5) {
       const items: CtEvent[] = [];
       for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, created_at: r.created_at as string });
       for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, created_at: r.created_at as string });
-      items.sort((a, b) => {
+      items.sort((a, b) => b.created_at.localeCompare(a.created_at));
+      // DEDUPE: show only setups that match the latest alert's direction
+      // per (instrument set). When Claude flips bullish→bearish on SPY
+      // with a new ALERT, prior bullish setups are structurally invalidated
+      // and shouldn't compete for attention.
+      const latestDirByKey = new Map<string, string>();
+      for (const it of items) {
+        const key = (it.instruments ?? []).slice().sort().join(',');
+        if (!latestDirByKey.has(key) && it.direction) latestDirByKey.set(key, it.direction);
+      }
+      const filtered = items.filter(it => {
+        const key = (it.instruments ?? []).slice().sort().join(',');
+        const latestDir = latestDirByKey.get(key);
+        // Keep if this setup's direction matches the latest direction for that instrument set
+        // OR if it's on a different instrument set
+        return !latestDir || it.direction === latestDir;
+      });
+      // Now sort the filtered set by conviction desc, recency desc
+      filtered.sort((a, b) => {
         const cb = (b.conviction ?? 0) - (a.conviction ?? 0);
         if (cb !== 0) return cb;
         return b.created_at.localeCompare(a.created_at);
       });
-      return items.slice(0, limit);
+      return filtered.slice(0, limit);
     },
   });
 }
