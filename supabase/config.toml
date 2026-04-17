@@ -104,3 +104,12 @@ verify_jwt = false
 
 [functions.ct-grader]
 verify_jwt = false
+
+[functions.ct-news-ingester]
+verify_jwt = false
+
+[functions.ct-eod-recap]
+verify_jwt = false
+
+[functions.ct-lessons-curator]
+verify_jwt = false
