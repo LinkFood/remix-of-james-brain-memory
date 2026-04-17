@@ -13,7 +13,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getFlowAlerts, getDarkPoolRecent, getDarkPool, getNetPremiumTicks, getNope, getTopNetImpact, getSweepScreener, WATCHLIST } from '../_shared/uwClient.ts';
+import { getFlowAlerts, getDarkPoolRecent, getDarkPool, getNetPremiumTicks, getNope, getGreekFlow, getTopNetImpact, getSweepScreener, WATCHLIST } from '../_shared/uwClient.ts';
 
 function numOrNull(v: unknown): number | null {
   if (v === null || v === undefined) return null;
@@ -132,6 +132,81 @@ async function ingestNope(
     return { seen: rows.length, inserted: count ?? rows.length };
   } catch (e) {
     console.warn(`[ct-flow] nope pull failed (${ticker}):`, e instanceof Error ? e.message : e);
+    return { seen: 0, inserted: 0 };
+  }
+}
+
+async function ingestGreekFlow(
+  supabase: SupabaseClient,
+  ticker: string,
+): Promise<{ seen: number; inserted: number }> {
+  try {
+    const raw = await getGreekFlow(ticker);
+    // UW returns { data: [...] } most commonly; be defensive about top-level shape
+    const root = (raw && typeof raw === 'object') ? (raw as Record<string, unknown>) : null;
+    let data: unknown = root?.data ?? root?.chains ?? raw;
+    if (!Array.isArray(data)) {
+      // Sometimes shapes like { data: { chains: [...] } }
+      const nested = (data as Record<string, unknown> | null)?.chains
+        ?? (data as Record<string, unknown> | null)?.flow;
+      if (Array.isArray(nested)) data = nested;
+    }
+    if (!Array.isArray(data) || data.length === 0) return { seen: 0, inserted: 0 };
+
+    const tail = (data as Array<Record<string, unknown>>).slice(-60);
+
+    const rows = tail.map((r) => {
+      // UW greek-flow shape (observed 2026-04-16):
+      //   { ticker, timestamp, volume, transactions,
+      //     dir_delta_flow, dir_vega_flow,           ← SIGNED net direction (HIRO integrand)
+      //     total_delta_flow, total_vega_flow,       ← UNSIGNED total volume
+      //     otm_dir_delta_flow, otm_dir_vega_flow, otm_total_delta_flow, otm_total_vega_flow }
+      //
+      // dir_delta_flow is the signed net dealer hedging direction per minute — this is
+      // what we cumsum for HIRO. If UW ever adds a call/put split, we pick it up too.
+      const nCallD = numOrNull(r.net_call_delta ?? r.call_delta ?? r.dealer_call_delta);
+      const nPutD = numOrNull(r.net_put_delta ?? r.put_delta ?? r.dealer_put_delta);
+      const nCallV = numOrNull(r.net_call_vega ?? r.call_vega ?? r.dealer_call_vega);
+      const nPutV = numOrNull(r.net_put_vega ?? r.put_vega ?? r.dealer_put_vega);
+
+      // Prefer the signed directional flow. Fall back to derived call-put if UW
+      // changes shape later. total_delta_flow in UW is unsigned volume — ignore.
+      let totalDelta = numOrNull(r.dir_delta_flow ?? r.directional_delta_flow);
+      if (totalDelta === null && (nCallD !== null || nPutD !== null)) {
+        totalDelta = (nCallD ?? 0) - (nPutD ?? 0);
+      }
+      let totalVega = numOrNull(r.dir_vega_flow ?? r.directional_vega_flow);
+      if (totalVega === null && (nCallV !== null || nPutV !== null)) {
+        totalVega = (nCallV ?? 0) - (nPutV ?? 0);
+      }
+
+      return {
+        ticker,
+        tick_timestamp: (r.timestamp as string | undefined)
+          ?? (r.tick_timestamp as string | undefined)
+          ?? (r.time as string | undefined)
+          ?? new Date().toISOString(),
+        net_call_delta: nCallD,
+        net_put_delta: nPutD,
+        net_call_vega: nCallV,
+        net_put_vega: nPutV,
+        total_delta_flow: totalDelta,
+        total_vega_flow: totalVega,
+        underlying_price: numOrNull(r.underlying_price ?? r.price),
+        raw: r,
+      };
+    }).filter(r => r.tick_timestamp);
+
+    const { error, count } = await supabase
+      .from('ct_greek_flow_minute')
+      .upsert(rows, { onConflict: 'ticker,tick_timestamp', ignoreDuplicates: true, count: 'exact' });
+    if (error) {
+      console.warn(`[ct-flow] greek-flow upsert failed (${ticker}):`, error.message);
+      return { seen: rows.length, inserted: 0 };
+    }
+    return { seen: rows.length, inserted: count ?? rows.length };
+  } catch (e) {
+    console.warn(`[ct-flow] greek-flow pull failed (${ticker}):`, e instanceof Error ? e.message : e);
     return { seen: 0, inserted: 0 };
   }
 }
@@ -283,22 +358,24 @@ serve(async (req) => {
     const sweeps = await ingestSweeps(supabase);
 
     // Per-ticker dark pool + net premium (every invocation — 24 calls for 12 tickers)
-    // NOPE only for SPY, QQQ, IWM (regime-critical indexes).
-    const perTicker: Record<string, { dp: { seen: number; inserted: number }; npt: { seen: number; inserted: number }; nope?: { seen: number; inserted: number } }> = {};
-    const nopeTickers = new Set(['SPY', 'QQQ', 'IWM']);
+    // NOPE + greek-flow only for SPY, QQQ, IWM (regime-critical indexes).
+    const perTicker: Record<string, { dp: { seen: number; inserted: number }; npt: { seen: number; inserted: number }; nope?: { seen: number; inserted: number }; greek?: { seen: number; inserted: number } }> = {};
+    const indexTickers = new Set(['SPY', 'QQQ', 'IWM']);
     for (const ticker of WATCHLIST) {
       perTicker[ticker] = {
         dp: await ingestDarkPool(supabase, ticker),
         npt: await ingestNetPremiumTicks(supabase, ticker),
       };
-      if (nopeTickers.has(ticker)) {
+      if (indexTickers.has(ticker)) {
         perTicker[ticker].nope = await ingestNope(supabase, ticker);
+        perTicker[ticker].greek = await ingestGreekFlow(supabase, ticker);
       }
     }
 
     const totalDpNew = dpRecent.inserted + Object.values(perTicker).reduce((s, t) => s + t.dp.inserted, 0);
     const totalNptNew = Object.values(perTicker).reduce((s, t) => s + t.npt.inserted, 0);
     const totalNopeNew = Object.values(perTicker).reduce((s, t) => s + (t.nope?.inserted ?? 0), 0);
+    const totalGreekNew = Object.values(perTicker).reduce((s, t) => s + (t.greek?.inserted ?? 0), 0);
 
     return new Response(JSON.stringify({
       success: true,
@@ -306,6 +383,7 @@ serve(async (req) => {
       dark_pool: { recent_inserted: dpRecent.inserted, per_ticker_inserted: totalDpNew - dpRecent.inserted, total_inserted: totalDpNew },
       net_premium_ticks: { total_inserted: totalNptNew },
       nope: { total_inserted: totalNopeNew },
+      greek_flow: { total_inserted: totalGreekNew },
       top_movers: { inserted: topMovers.inserted },
       sweeps: { seen: sweeps.seen, inserted: sweeps.inserted },
       duration_ms: Date.now() - startedAt,
