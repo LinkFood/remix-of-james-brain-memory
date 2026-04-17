@@ -3,6 +3,7 @@ import { TickerGrid } from '@/components/command/TickerGrid';
 import { EventFeed } from '@/components/command/EventFeed';
 import { NewsFeed } from '@/components/command/NewsFeed';
 import { RecapPanel } from '@/components/command/RecapPanel';
+import { ChatBox } from '@/components/command/ChatBox';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -66,6 +67,7 @@ export default function CommandStation() {
           Watcher: 30min · Grader: 15min · News: 20min · EOD: 21:30 UTC weekdays · Lessons: Sunday 23:00 UTC
         </footer>
       </div>
+      <ChatBox />
     </div>
   );
 }
