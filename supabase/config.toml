@@ -98,3 +98,6 @@ verify_jwt = false
 
 [functions.generate-brain-report]
 verify_jwt = false
+
+[functions.ct-watcher]
+verify_jwt = false
