@@ -33,7 +33,7 @@ function last24hrIso(): string {
 async function gatherContext(supabase: SupabaseClient) {
   const since = last24hrIso();
 
-  const [heartbeat, flow, darkPool, news, theses, flags, grades, gex] = await Promise.all([
+  const [heartbeat, flow, darkPool, news, theses, flags, grades] = await Promise.all([
     supabase.from('ct_heartbeats').select('status_line, watching, current_reads, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabase.from('ct_flow_alerts').select('ticker, option_symbol, strike, expiry, side, is_otm, size, premium, price, underlying_price, executed_at, alert_type').gte('ingested_at', since).order('premium', { ascending: false, nullsFirst: false }).limit(20),
     supabase.from('ct_dark_pool_prints').select('ticker, size, price, notional_value, executed_at').gte('ingested_at', since).order('notional_value', { ascending: false }).limit(10),
@@ -41,7 +41,6 @@ async function gatherContext(supabase: SupabaseClient) {
     supabase.from('ct_theses').select('instrument, direction, conviction, up_case, down_case, watching, rationale, updated_at'),
     supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, glance, grade_id, created_at').gte('created_at', since).order('created_at', { ascending: false }).limit(20),
     supabase.from('ct_grades').select('subject_type, subject_id, instrument, claimed_direction, verdict, actual_return_pct, graded_at').gte('graded_at', since).order('graded_at', { ascending: false }).limit(20),
-    supabase.from('ct_gex_snapshots').select('index_symbol, call_wall, put_wall, gamma_flip, zero_gamma, total_gex, snapshot_at').order('snapshot_at', { ascending: false }).limit(4),
   ]);
 
   return {
@@ -52,7 +51,6 @@ async function gatherContext(supabase: SupabaseClient) {
     open_theses: theses.data ?? [],
     recent_flags_24hr: flags.data ?? [],
     recent_grades_24hr: grades.data ?? [],
-    latest_gex: gex.data ?? [],
   };
 }
 
