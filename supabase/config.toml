@@ -158,3 +158,12 @@ verify_jwt = false
 
 [functions.ct-bias-booth]
 verify_jwt = false
+
+[functions.ct-claude-trade-open]
+verify_jwt = false
+
+[functions.ct-book-manager]
+verify_jwt = false
+
+[functions.ct-book-eod-close]
+verify_jwt = false

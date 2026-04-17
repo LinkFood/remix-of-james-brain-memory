@@ -18,9 +18,17 @@ Co-Trader (linkjac.cloud) is the active build. JAC Agent OS proper is paused; th
 - Scorecard page with calibration, ghost trade tape, breakdowns
 - Voice toggle (ElevenLabs)
 
+**Shipped this session (Apr 17 pre-market):**
+- Learning loop: ct_self_regrades feeds watcher system prompt on every tick
+- Pre-Bell Gauntlet: 3 committed predictions at 9:25 ET, auto-graded at horizons
+- Bias Confession Booth: weekly ct_biases meta-synthesis injected into watcher
+- Morning Brief self-awareness: speaks biases + recent corrections out loud
+- MCP chat live (Claude pulls UW endpoints on demand)
+- Layout reorg, grader after-hours fix
+
 **Why:** User calls these out as "already built, don't suggest" — re-pitching burns credibility.
 
-**How to apply:** When brainstorming, build ON TOP of this infra rather than suggesting it. Tables `ct_observations`, `ct_grades`, `ct_self_regrades`, `ct_disagreements`, `ct_heartbeats`, `ct_flow_alerts`, `ct_news_analyses`, GEX timeseries are the primitives available for remixing.
+**How to apply:** When brainstorming, build ON TOP of this infra rather than suggesting it. Tables `ct_observations`, `ct_grades`, `ct_self_regrades`, `ct_disagreements`, `ct_heartbeats`, `ct_flow_alerts`, `ct_news_analyses`, `ct_biases`, `ct_gauntlet` (new), GEX timeseries are the primitives available for remixing.
 
 **Constraints locked:** Same Supabase, single repo, no new vendors, no new DBs, solo dev.
 

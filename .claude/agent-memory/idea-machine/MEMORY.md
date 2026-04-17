@@ -62,19 +62,32 @@
 - [Co-Trader idea themes](feedback_cotrader_idea_themes.md) — self-awareness, commitment devices, ghost P&L, analogy memory
 
 ## Ideas Pitched (2026-04-17, Co-Trader pre-market session)
-- Pre-Bell Gauntlet (locked 9:25 predictions graded at 10/11/close)
+- Pre-Bell Gauntlet (locked 9:25 predictions graded at 10/11/close) — SHIPPED
 - Ghost Positions (auto paper book shadowing every Trade Card)
 - "Why Am I Different Today?" Panel (embedding-analogy to past setups)
 - Conviction Decay Curve (15min restated conviction vs price path)
 - Slack Whisper Mode (tap-to-log ALERT replies feed ct_disagreements)
 - Calendar Hook (AFK-aware alert escalation via JAC calendar)
-- Bias Confession Booth (weekly structural-wrongness injected as SYSTEM context)
+- Bias Confession Booth (weekly structural-wrongness injected as SYSTEM context) — SHIPPED
 - Counterfactual Replay (post-miss Claude re-read with hindsight)
 - Cross-Source "Who Else Sees This?" (Tavily/UW social corroboration filter)
 - Voice Trading Journal as Brain Object (ElevenLabs dictation, embedded)
 - Red Team Agent (adversarial Claude in Trade Cards)
 - DCD Environmental Crossover (pipe market as domain into DCD narrator)
 - "What Would You Ask For?" Loop (ct_wishlist of missing data)
+
+## Ideas Pitched (2026-04-17, post-foundation stack session)
+Building on shipped: gauntlet + ct_biases + ct_self_regrades + MCP chat.
+- Gauntlet-Weighted Conviction Display (sidebar hit-rate badge on FLAGs)
+- "Disagree With Yesterday-Me" Prompt (morning brief re-underwrite question)
+- Ticker-Specific Bias Cards (split ct_biases by symbol)
+- Gauntlet Positioning Delta (force GEX/NOPE citation in 9:25 reasoning)
+- Slack "Why Did You Change Your Mind?" button (ct_mind_change table)
+- Analogy Recall Bar (top-3 embedding neighbors w/ grades on every FLAG)
+- Regime Tag + Bias-by-Regime (classify days, filter biases per-regime)
+- Ghost Portfolio Equity Curve (dollars-on-paper chart of auto-opened FLAGs)
+- JAC Brain cross-semantic search (6.9M embeddings into watcher context)
+- DCD Environmental Overlay narrow (one stress score into ct_context_env)
 
 ## Session: Rounding Off (2026-03-04)
 - User wants to "round everything else off" before adding new codebases
