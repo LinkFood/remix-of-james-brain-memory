@@ -8,11 +8,13 @@ interface CondensedTicker {
   price: number | null;
   call_wall: number | null;
   put_wall: number | null;
+  gamma_flip: number | null;
   net_gamma_oi: number | null;
   total_call_gamma_oi: number | null;
   total_put_gamma_oi: number | null;
   put_call_volume_ratio: number | null;
   day_put_call_ratio: number | null;
+  near_atm_strike_count: number;
 }
 
 const LABELS: Record<string, { group: string; note?: string }> = {
@@ -95,14 +97,18 @@ export function TickerGrid() {
               <span className="text-base font-semibold text-foreground">${fmtPrice(price)}</span>
             </div>
 
-            <div className="grid grid-cols-3 gap-2 text-[11px] mb-2">
+            <div className="grid grid-cols-4 gap-2 text-[11px] mb-2">
               <div>
-                <div className="text-muted-foreground">Call Wall</div>
+                <div className="text-muted-foreground">Call W</div>
                 <div className="text-foreground font-medium">${fmtPrice(state.call_wall)}</div>
               </div>
               <div>
-                <div className="text-muted-foreground">Put Wall</div>
+                <div className="text-muted-foreground">Put W</div>
                 <div className="text-foreground font-medium">${fmtPrice(state.put_wall)}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">Flip</div>
+                <div className="text-foreground font-medium">${fmtPrice(state.gamma_flip)}</div>
               </div>
               <div>
                 <div className="text-muted-foreground">Net Γ</div>

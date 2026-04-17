@@ -76,7 +76,7 @@ export function MarketBanner() {
             {heartbeat.status_line}
           </p>
 
-          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 text-xs">
+          <div className="grid grid-cols-2 md:grid-cols-7 gap-3 text-xs">
             <div>
               <div className="text-muted-foreground">SPX</div>
               <div className="text-foreground font-semibold text-base">{fmtPrice(macro?.price ?? null)}</div>
@@ -88,6 +88,10 @@ export function MarketBanner() {
             <div>
               <div className="text-muted-foreground">Put Wall</div>
               <div className="text-foreground font-semibold text-base">{fmtPrice(macro?.put_wall ?? null)}</div>
+            </div>
+            <div>
+              <div className="text-muted-foreground">Gamma Flip</div>
+              <div className="text-foreground font-semibold text-base">{fmtPrice((macro as unknown as { gamma_flip?: number | null })?.gamma_flip ?? null)}</div>
             </div>
             <div>
               <div className="text-muted-foreground">Net Γ (SPX)</div>

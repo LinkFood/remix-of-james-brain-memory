@@ -278,32 +278,46 @@ export type WatchlistTicker = typeof WATCHLIST[number];
 /**
  * Pull a full watcher-cycle state bundle.
  *
- * Per ticker: spot GEX by strike + options volume (P/C ratio, volume)
- * Market-wide: SPX spot GEX, market tide
+ * Per ticker, three calls:
+ *  - spot-exposures/strike — real-time dealer positioning, has underlying price
+ *    (used for price + spot totals; strike coverage is narrow, not used for walls)
+ *  - greek-exposure/strike — static GEX across 100+ strikes (used for wall
+ *    detection since spot-exposures often clips to ~50 sub-ATM strikes)
+ *  - options-volume — P/C ratio, volume
+ *
+ * Macro: SPX spot + greek exposure, market tide.
+ *
+ * 3 calls × 12 tickers + 3 macro = 39 req/cycle. At 120 req/min limit,
+ * each cycle fits inside a minute with headroom.
  *
  * Logs per-ticker errors but continues. Returns whatever it got.
  */
 export async function pullWatcherState(tickers: readonly string[] = WATCHLIST): Promise<{
   spot_gex: Record<string, unknown>;
+  greek_exposure: Record<string, unknown>;
   options_volume: Record<string, unknown>;
   spx_spot_gex: unknown | null;
+  spx_greek_exposure: unknown | null;
   market_tide: unknown | null;
   errors: Array<{ ticker: string; endpoint: string; error: string }>;
 }> {
   const spot_gex: Record<string, unknown> = {};
+  const greek_exposure: Record<string, unknown> = {};
   const options_volume: Record<string, unknown> = {};
   const errors: Array<{ ticker: string; endpoint: string; error: string }> = [];
 
-  // Macro: SPX spot GEX (banner)
+  // Macro: SPX spot + static GEX (banner)
   let spx_spot_gex: unknown | null = null;
+  let spx_greek_exposure: unknown | null = null;
   try {
     spx_spot_gex = await getSpotGexByStrike(MARKET_BANNER_SYMBOL);
   } catch (e) {
-    errors.push({
-      ticker: MARKET_BANNER_SYMBOL,
-      endpoint: 'spot-exposures/strike',
-      error: e instanceof Error ? e.message : String(e),
-    });
+    errors.push({ ticker: MARKET_BANNER_SYMBOL, endpoint: 'spot-exposures/strike', error: e instanceof Error ? e.message : String(e) });
+  }
+  try {
+    spx_greek_exposure = await getStaticGexByStrike(MARKET_BANNER_SYMBOL);
+  } catch (e) {
+    errors.push({ ticker: MARKET_BANNER_SYMBOL, endpoint: 'greek-exposure/strike', error: e instanceof Error ? e.message : String(e) });
   }
 
   // Macro: market tide
@@ -314,12 +328,17 @@ export async function pullWatcherState(tickers: readonly string[] = WATCHLIST): 
     errors.push({ ticker: 'MARKET', endpoint: 'market-tide', error: e instanceof Error ? e.message : String(e) });
   }
 
-  // Per-ticker loop (sequential — respects rate limit, 2 calls × 12 tickers = 24/min, well under 120)
+  // Per-ticker loop
   for (const ticker of tickers) {
     try {
       spot_gex[ticker] = await getSpotGexByStrike(ticker);
     } catch (e) {
       errors.push({ ticker, endpoint: 'spot-exposures/strike', error: e instanceof Error ? e.message : String(e) });
+    }
+    try {
+      greek_exposure[ticker] = await getStaticGexByStrike(ticker);
+    } catch (e) {
+      errors.push({ ticker, endpoint: 'greek-exposure/strike', error: e instanceof Error ? e.message : String(e) });
     }
     try {
       options_volume[ticker] = await getOptionsVolume(ticker);
@@ -328,5 +347,5 @@ export async function pullWatcherState(tickers: readonly string[] = WATCHLIST): 
     }
   }
 
-  return { spot_gex, options_volume, spx_spot_gex, market_tide, errors };
+  return { spot_gex, greek_exposure, options_volume, spx_spot_gex, spx_greek_exposure, market_tide, errors };
 }
