@@ -56,6 +56,9 @@ interface ClaudeJson {
   conviction?: number;
   horizon?: '1h' | '4h' | 'EOD' | 'next-day' | 'weekly';
   alert_trigger?: 'regime_shift' | 'thesis_invalidation' | 'news' | 'vol_event' | 'other';
+  // Evidence axes — v1.1 diversity gate. Expected on FLAG and ALERT.
+  // Array of axis letters from {A,B,C,D,E,F}. ALERT requires length >=3.
+  evidence_axes?: string[];
   // inline self-assessment (required by prompt on obs/flag/alert; trust-pass to DB)
   self_assessment?: {
     confidence?: number;
@@ -89,6 +92,24 @@ function toArray<T>(v: T | T[] | undefined | null): T[] {
 
 function asString(v: unknown): string {
   return typeof v === 'string' ? v : '';
+}
+
+// Normalize evidence axes → uppercase single-letter array of {A..F}, dedup.
+// Non-matching entries are dropped. Returns [] if input is missing/garbled.
+function normalizeEvidenceAxes(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const allowed = new Set(['A', 'B', 'C', 'D', 'E', 'F']);
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const v of raw) {
+    if (typeof v !== 'string') continue;
+    const up = v.trim().toUpperCase().slice(0, 1);
+    if (allowed.has(up) && !seen.has(up)) {
+      seen.add(up);
+      out.push(up);
+    }
+  }
+  return out;
 }
 
 function parseClaudeJson(raw: string): ClaudeJson | null {
@@ -311,6 +332,7 @@ async function writeFlag(
     memory_recall_used: { summary: memoryRecallSummary },
     self_assessment: claude.self_assessment ?? null,
     trade_setup: claude.trade_setup ?? null,
+    evidence_axes: normalizeEvidenceAxes(claude.evidence_axes),
     prompt_version: CT_PROMPT_VERSION,
     attention_score: deriveWriteTimeAttention({
       state: 'FLAG',
@@ -442,6 +464,49 @@ async function writeAlert(
   }
 
   // ========================================================================
+  // Evidence-diversity audit (v1.1). SOFT check — logs a warning when the
+  // prompt's diversity rule appears violated, but does NOT block the insert.
+  // Trust the prompt to self-police; hard-gate later once we see the data.
+  // Rule: if prior ALERT on same instruments within 60min exists and >=2 of
+  // its evidence_axes are present in the current ALERT's axes, that's a
+  // repetition under the v1.1 rubric.
+  // ========================================================================
+  const currAxes = normalizeEvidenceAxes(claude.evidence_axes);
+  try {
+    const sixtyMinAgoDiv = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const { data: priorAlerts, error: divErr } = await supabase
+      .from('ct_alerts')
+      .select('id, created_at, instruments, evidence_axes')
+      .gte('created_at', sixtyMinAgoDiv)
+      .overlaps('instruments', instruments)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (divErr) {
+      console.warn('[ct-watcher] evidence-diversity query failed:', divErr.message);
+    } else if (priorAlerts && priorAlerts.length > 0) {
+      const prev = priorAlerts[0] as { id: string; evidence_axes?: string[] | null };
+      const prevAxes = Array.isArray(prev.evidence_axes) ? prev.evidence_axes : [];
+      const overlap = currAxes.filter(a => prevAxes.includes(a));
+      if (prevAxes.length > 0 && overlap.length >= 2) {
+        console.warn(
+          `[ct-watcher] evidence-diversity check failed: prev=${JSON.stringify(prevAxes)} curr=${JSON.stringify(currAxes)} overlap=${JSON.stringify(overlap)} prior_alert=${prev.id.slice(0, 8)} instruments=${JSON.stringify(instruments)}`
+        );
+      }
+      if (currAxes.length < 3) {
+        console.warn(
+          `[ct-watcher] evidence-diversity check: ALERT cited <3 axes (curr=${JSON.stringify(currAxes)}) — v1.1 prompt requires >=3`
+        );
+      }
+    } else if (currAxes.length < 3) {
+      console.warn(
+        `[ct-watcher] evidence-diversity check: ALERT cited <3 axes (curr=${JSON.stringify(currAxes)}) — v1.1 prompt requires >=3`
+      );
+    }
+  } catch (e) {
+    console.warn('[ct-watcher] evidence-diversity audit threw:', e instanceof Error ? e.message : e);
+  }
+
+  // ========================================================================
   // No cooldown — proceed with normal ALERT insert.
   // ========================================================================
 
@@ -464,6 +529,7 @@ async function writeAlert(
     self_assessment: claude.self_assessment ?? null,
     trade_setup: claude.trade_setup ?? null,
     alert_trigger: trigger,
+    evidence_axes: currAxes,
     prompt_version: CT_PROMPT_VERSION,
     attention_score: deriveWriteTimeAttention({
       state: 'ALERT',

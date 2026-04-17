@@ -370,6 +370,44 @@ export interface DarkPoolPrint {
   ingested_at: string;
 }
 
+export interface SweepCluster {
+  id: string;
+  ticker: string;
+  window_start: string;
+  window_end: string;
+  sweep_count: number;
+  total_premium: number;
+  dominant_side: 'call' | 'put' | 'mixed';
+  largest_single_premium: number;
+  call_count: number;
+  put_count: number;
+  attention_score: number;
+  created_at: string;
+}
+
+/**
+ * Recent sweep clusters — always-on flag pattern emitted by ct-sweep-cluster.
+ * Pulls the last `windowMinutes` minutes (default 15) sorted newest-first,
+ * capped at `limit` (default 5) for the strip display.
+ */
+export function useSweepClusters(limit = 5, windowMinutes = 15) {
+  return useQuery<SweepCluster[]>({
+    queryKey: ['ct_sweep_clusters', limit, windowMinutes],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const cutoff = new Date(Date.now() - windowMinutes * 60_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_sweep_clusters')
+        .select('id, ticker, window_start, window_end, sweep_count, total_premium, dominant_side, largest_single_premium, call_count, put_count, attention_score, created_at')
+        .gte('created_at', cutoff)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (error) throw error;
+      return (data ?? []) as SweepCluster[];
+    },
+  });
+}
+
 export function useFlowAlerts(limit = 50) {
   return useQuery<FlowAlert[]>({
     queryKey: ['ct_flow_alerts', limit],

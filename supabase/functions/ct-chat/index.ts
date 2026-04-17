@@ -127,122 +127,124 @@ async function handleCommitCommand(
 }
 
 /**
- * Semantic recall over ct_embeddings for the user's current message.
- * Returns up to 5 hits older than 30 min so we don't echo back the current cycle.
+ * Detect whether the user's query is asking about very recent events.
+ * Keyword heuristic — keeps things fast and cheap (no extra LLM call).
+ */
+const RECENT_QUERY_PATTERNS = [
+  /\brecent(?:ly)?\b/i,
+  /\bjust now\b/i,
+  /\bjust happened\b/i,
+  /\bright now\b/i,
+  /\b\d+\s*min(?:ute)?s?\s+ago\b/i,
+  /\bin the last\s+(?:hour|\d+\s*min(?:ute)?s?)\b/i,
+  /\bpast\s+(?:hour|\d+\s*min(?:ute)?s?)\b/i,
+  /\blast few (?:min(?:ute)?s|minutes)\b/i,
+  /\bthis hour\b/i,
+];
+
+function isRecentQuery(message: string): boolean {
+  return RECENT_QUERY_PATTERNS.some((rx) => rx.test(message));
+}
+
+/**
+ * Extract likely instrument tickers from the user's message (uppercase 1–5 char
+ * tokens). Used to scope the ct_similar_items RPC, which requires p_instrument.
+ * Falls back to a small default set so general queries still recall.
+ */
+const DEFAULT_RECALL_INSTRUMENTS = ['SPY', 'QQQ'] as const;
+const TICKER_STOPWORDS = new Set([
+  'I', 'A', 'AM', 'PM', 'ET', 'UTC', 'OK', 'NO', 'YES', 'THE', 'AND', 'OR',
+  'IF', 'IS', 'IT', 'TO', 'OF', 'ON', 'IN', 'AT', 'BY', 'DO', 'GO', 'MY',
+  'ALL', 'ANY', 'SO', 'US', 'WE', 'UP', 'OUT', 'ARE', 'WAS', 'BE', 'ASK',
+  'NOW', 'GET', 'SEE', 'HAS', 'HAD', 'CAN', 'WHY', 'HOW', 'WHO', 'BUT',
+  'ITM', 'OTM', 'ATM', 'IV', 'OI', 'UW', 'AI', 'ML', 'ETF', 'PR', 'LLM',
+]);
+
+function extractInstruments(message: string): string[] {
+  const matches = message.match(/\b[A-Z]{1,5}\b/g) ?? [];
+  const out: string[] = [];
+  for (const m of matches) {
+    if (TICKER_STOPWORDS.has(m)) continue;
+    if (!out.includes(m)) out.push(m);
+    if (out.length >= 4) break;
+  }
+  return out;
+}
+
+/**
+ * Semantic recall over ct_embeddings via the ct_similar_items RPC.
+ * Matches the call style in _shared/memoryRecall.ts#getSimilarPastSetups.
  * Best-effort — returns [] on any failure (never throws).
+ *
+ * Time-floor heuristic:
+ *   - If message reads like "recently / just now / 10 min ago / in the last hour"
+ *     → include rows from the last 60 min only.
+ *   - Otherwise no time floor (so "what happened 10 min ago?" can actually recall
+ *     fresh rows), with result count capped to avoid context bloat.
  */
 async function recentSemanticHits(
   supabase: ReturnType<typeof createClient>,
   message: string,
-): Promise<Array<Record<string, unknown>>> {
+): Promise<{ hits: Array<Record<string, unknown>>; timeFloorApplied: 'none' | '60min' }> {
   try {
     const queryEmb = await voyageEmbed(message, 'query');
-    const olderThan = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const instruments = extractInstruments(message);
+    const targets = instruments.length > 0 ? instruments : [...DEFAULT_RECALL_INSTRUMENTS];
 
-    // Pull a bounded set of recent-ish embeddings across recall-worthy types.
-    const { data: embRows } = await supabase.from('ct_embeddings')
-      .select('item_type, item_id, metadata, embedding, created_at')
-      .in('item_type', ['observation', 'flag', 'alert', 'news', 'james_view', 'report'])
-      .lt('created_at', olderThan)
-      .order('created_at', { ascending: false })
-      .limit(400);
+    const recent = isRecentQuery(message);
+    const timeFloorApplied: 'none' | '60min' = recent ? '60min' : 'none';
+    const cutoffIso = recent ? new Date(Date.now() - 60 * 60 * 1000).toISOString() : null;
 
-    if (!embRows || embRows.length === 0) return [];
-
-    const scored: Array<{ type: string; id: string; distance: number; metadata: Record<string, unknown> }> = [];
-    for (const r of embRows as Array<Record<string, unknown>>) {
-      const emb = typeof r.embedding === 'string' ? JSON.parse(r.embedding) as number[] : r.embedding as number[];
-      if (!Array.isArray(emb) || emb.length !== queryEmb.length) continue;
-      let dot = 0, na = 0, nb = 0;
-      for (let i = 0; i < emb.length; i++) { dot += emb[i] * queryEmb[i]; na += emb[i] * emb[i]; nb += queryEmb[i] * queryEmb[i]; }
-      scored.push({
-        type: r.item_type as string,
-        id: r.item_id as string,
-        distance: 1 - (dot / (Math.sqrt(na) * Math.sqrt(nb) || 1)),
-        metadata: (r.metadata as Record<string, unknown>) ?? {},
+    // Per-instrument RPC calls run in parallel. Shape matches
+    // getSimilarPastSetups in _shared/memoryRecall.ts.
+    const perInstrumentLimit = 6;
+    const rpcResults = await Promise.all(targets.map(async (instrument) => {
+      const { data, error } = await supabase.rpc('ct_similar_items', {
+        p_instrument: instrument,
+        p_query_embedding: queryEmb as unknown as string,
+        p_limit: perInstrumentLimit,
       });
-    }
-    scored.sort((a, b) => a.distance - b.distance);
-    const top = scored.slice(0, 5);
-    if (top.length === 0) return [];
-
-    // Per-type fetch for source rows.
-    const byType: Record<string, string[]> = {};
-    for (const r of top) (byType[r.type] ??= []).push(r.id);
-
-    const hits = new Map<string, Record<string, unknown>>();
-    await Promise.all(Object.entries(byType).map(async ([type, ids]) => {
-      if (type === 'observation') {
-        const { data } = await supabase.from('ct_observations').select('id, instruments, direction, glance, created_at').in('id', ids);
-        for (const r of (data ?? []) as Array<Record<string, unknown>>) hits.set(`observation:${r.id}`, { type: 'observation', ...r });
-      } else if (type === 'flag' || type === 'alert') {
-        const table = type === 'flag' ? 'ct_flags' : 'ct_alerts';
-        const { data } = await supabase.from(table).select('id, instruments, direction, conviction, horizon, glance, grade_id, created_at').in('id', ids);
-        for (const r of (data ?? []) as Array<Record<string, unknown>>) hits.set(`${type}:${r.id}`, { type, ...r });
-      } else if (type === 'james_view') {
-        const { data } = await supabase.from('ct_james_views').select('id, instrument, direction, conviction, horizon, rationale, grade_id, created_at').in('id', ids);
-        for (const r of (data ?? []) as Array<Record<string, unknown>>) hits.set(`james_view:${r.id}`, { type: 'james_view', ...r });
-      } else if (type === 'news') {
-        const { data } = await supabase.from('ct_news_analyses').select('id, instrument, news_headline, impact, significance, claude_take, created_at').in('id', ids);
-        for (const r of (data ?? []) as Array<Record<string, unknown>>) hits.set(`news:${r.id}`, { type: 'news', ...r });
-      } else if (type === 'report') {
-        const { data } = await supabase.from('ct_reports').select('id, report_type, summary, period_start, period_end, created_at').in('id', ids);
-        for (const r of (data ?? []) as Array<Record<string, unknown>>) hits.set(`report:${r.id}`, { type: 'report', ...r });
+      if (error) {
+        console.warn(`[ct-chat] ct_similar_items RPC failed for ${instrument}:`, error.message);
+        return [] as Array<Record<string, unknown>>;
       }
+      return (data ?? []) as Array<Record<string, unknown>>;
     }));
 
-    // Attach grades for flag/alert/james_view.
-    const gradeIds = [...hits.values()].map(h => h.grade_id).filter((x): x is string => !!x);
-    const gradesById = new Map<string, { verdict: string; actual_return_pct: number | null }>();
-    if (gradeIds.length > 0) {
-      const { data } = await supabase.from('ct_grades').select('id, verdict, actual_return_pct').in('id', gradeIds);
-      for (const g of (data ?? []) as Array<Record<string, unknown>>) {
-        gradesById.set(g.id as string, { verdict: g.verdict as string, actual_return_pct: (g.actual_return_pct as number) ?? null });
-      }
-    }
-
-    // Also subject-lookup in case grade_id isn't set.
-    const subjectLookup: Array<{ type: string; id: string }> = [];
-    for (const h of hits.values()) {
-      if (!h.grade_id && (h.type === 'flag' || h.type === 'alert' || h.type === 'james_view')) {
-        subjectLookup.push({ type: h.type as string, id: h.id as string });
-      }
-    }
-    const gradesBySubject = new Map<string, { verdict: string; actual_return_pct: number | null }>();
-    if (subjectLookup.length > 0) {
-      const byT: Record<string, string[]> = {};
-      for (const r of subjectLookup) (byT[r.type] ??= []).push(r.id);
-      await Promise.all(Object.entries(byT).map(async ([type, ids]) => {
-        const { data } = await supabase.from('ct_grades').select('subject_type, subject_id, verdict, actual_return_pct').eq('subject_type', type).in('subject_id', ids);
-        for (const g of (data ?? []) as Array<Record<string, unknown>>) {
-          gradesBySubject.set(`${g.subject_type}:${g.subject_id}`, { verdict: g.verdict as string, actual_return_pct: (g.actual_return_pct as number) ?? null });
+    // Merge, dedupe by (type:id), apply recent-window floor if heuristic fired,
+    // sort by distance, cap at 7 so context doesn't bloat.
+    const merged = new Map<string, Record<string, unknown>>();
+    for (const rows of rpcResults) {
+      for (const row of rows) {
+        if (cutoffIso && typeof row.created_at === 'string' && row.created_at < cutoffIso) continue;
+        const key = `${row.type}:${row.id}`;
+        const prev = merged.get(key);
+        if (!prev || (row.distance as number) < (prev.distance as number)) {
+          merged.set(key, row);
         }
-      }));
+      }
     }
 
-    // Assemble ordered output.
-    return top.map(r => {
-      const raw = hits.get(`${r.type}:${r.id}`);
-      if (!raw) return null;
-      const grade =
-        (raw.grade_id && gradesById.get(raw.grade_id as string)) ||
-        gradesBySubject.get(`${r.type}:${r.id}`) ||
-        null;
-      return {
+    const hits = [...merged.values()]
+      .sort((a, b) => (a.distance as number) - (b.distance as number))
+      .slice(0, 7)
+      .map((r) => ({
         type: r.type,
         id: r.id,
-        distance: Number(r.distance.toFixed(4)),
-        timestamp: raw.created_at,
-        instruments: raw.instruments ?? (raw.instrument ? [raw.instrument] : []),
-        direction: raw.direction ?? raw.impact ?? null,
-        conviction: raw.conviction ?? raw.significance ?? null,
-        glance: raw.glance ?? (raw.news_headline ? [raw.news_headline, String(raw.claude_take ?? '').slice(0, 200)] : raw.rationale ? [raw.rationale] : null),
-        grade,
-      };
-    }).filter((x): x is Record<string, unknown> => !!x);
+        distance: typeof r.distance === 'number' ? Number((r.distance as number).toFixed(4)) : r.distance,
+        timestamp: r.created_at,
+        instrument: r.instrument ?? null,
+        direction: r.claimed_direction ?? null,
+        conviction: r.conviction ?? null,
+        grade: r.verdict
+          ? { verdict: r.verdict, actual_return_pct: r.actual_return_pct ?? null }
+          : null,
+      }));
+
+    return { hits, timeFloorApplied };
   } catch (e) {
     console.warn('[ct-chat] recentSemanticHits failed:', e instanceof Error ? e.message : e);
-    return [];
+    return { hits: [], timeFloorApplied: 'none' };
   }
 }
 
@@ -327,11 +329,16 @@ serve(async (req) => {
       });
     }
 
-    const [context, semanticHits] = await Promise.all([
+    const [context, recall] = await Promise.all([
       buildContext(supabase),
       recentSemanticHits(supabase, message),
     ]);
-    (context as Record<string, unknown>).recent_semantic_hits = semanticHits;
+    (context as Record<string, unknown>).recent_semantic_hits = recall.hits;
+    const recallDebug = {
+      query: message.slice(0, 200),
+      semantic_hit_count: recall.hits.length,
+      time_floor_applied: recall.timeFloorApplied,
+    };
 
     // Prepend a context block as the first user turn so Claude sees live state
     // before any conversation history. Then real conversation, then new message.
@@ -403,6 +410,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({
       response: responseText || '(empty response)',
       duration_ms: Date.now() - startedAt,
+      recall_debug: recallDebug,
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

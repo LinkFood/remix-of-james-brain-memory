@@ -200,3 +200,6 @@ verify_jwt = false
 
 [functions.ct-curiosity]
 verify_jwt = false
+
+[functions.ct-sweep-cluster]
+verify_jwt = false

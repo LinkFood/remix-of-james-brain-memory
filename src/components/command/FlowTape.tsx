@@ -4,7 +4,7 @@
  * IV / OI / vol/OI / tags. Row tint by directional bias. Badges for
  * sweep/block/split/golden-sweep/whale.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useFlowAlerts, type FlowAlert } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -130,6 +130,22 @@ export function FlowTape() {
   const [sweepOnly, setSweepOnly] = useState(false);
   const [whaleOnly, setWhaleOnly] = useState(false);
   const [tickerFilter, setTickerFilter] = useState('');
+
+  // External filter adapter — sibling strips (e.g. SweepClusterStrip) dispatch
+  // a window CustomEvent to focus FlowTape on a specific ticker without
+  // prop-drilling through CommandStation. If the ticker isn't in the current
+  // watchlist scope, auto-switch to 'all' so the row is actually visible.
+  useEffect(() => {
+    function onFilter(e: Event) {
+      const detail = (e as CustomEvent<{ ticker?: string }>).detail;
+      const t = (detail?.ticker ?? '').toUpperCase();
+      if (!t) return;
+      setTickerFilter(t);
+      if (!WATCHLIST_TICKERS.has(t)) setScope('all');
+    }
+    window.addEventListener('ct:flowtape:filter', onFilter as EventListener);
+    return () => window.removeEventListener('ct:flowtape:filter', onFilter as EventListener);
+  }, []);
 
   const counts = useMemo(() => {
     const all = alerts?.length ?? 0;

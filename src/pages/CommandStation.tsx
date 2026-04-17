@@ -20,6 +20,7 @@ import { PositioningPanel } from '@/components/command/PositioningPanel';
 import { GexHeatmap } from '@/components/command/GexHeatmap';
 import { GexRadar } from '@/components/command/GexRadar';
 import { AlwaysOnFlagStrip } from '@/components/command/AlwaysOnFlagStrip';
+import { SweepClusterStrip } from '@/components/command/SweepClusterStrip';
 import { LinkGexDeep } from '@/components/command/LinkGexDeep';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
@@ -89,6 +90,11 @@ export default function CommandStation() {
           tickers={['SPY', 'QQQ', 'IWM']}
           onOpenDeep={setDeepTicker}
         />
+
+        {/* Sibling strip for sweep-cluster event bursts. Hidden when the
+            15-min window is empty. Click pill → focuses FlowTape via
+            ct:flowtape:filter window event. */}
+        <SweepClusterStrip />
 
         <MarketBanner />
 
