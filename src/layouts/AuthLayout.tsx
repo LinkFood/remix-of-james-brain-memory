@@ -31,9 +31,11 @@ function useMediaQuery(query: string): boolean {
 
 interface AuthLayoutProps {
   children: React.ReactNode;
+  /** When true, suppress the JacSidebar (for routes that bring their own chat). */
+  hideSidebar?: boolean;
 }
 
-export function AuthLayout({ children }: AuthLayoutProps) {
+export function AuthLayout({ children, hideSidebar = false }: AuthLayoutProps) {
   const navigate = useNavigate();
   const [userId, setUserId] = useState<string>('');
   const [authLoading, setAuthLoading] = useState(true);
@@ -82,12 +84,14 @@ export function AuthLayout({ children }: AuthLayoutProps) {
 
         {/* Main area: sidebar + page content */}
         <div className="flex-1 flex overflow-hidden">
-          {/* JacSidebar — desktop: inline panel, mobile: FAB + Sheet */}
-          <JacSidebar
-            isCollapsed={isCollapsed}
-            onToggleCollapsed={toggleCollapsed}
-            isMobile={isMobile}
-          />
+          {/* JacSidebar — hidden on routes that bring their own chat (e.g. CommandStation) */}
+          {!hideSidebar && (
+            <JacSidebar
+              isCollapsed={isCollapsed}
+              onToggleCollapsed={toggleCollapsed}
+              isMobile={isMobile}
+            />
+          )}
 
           {/* Page content */}
           <main className="flex-1 overflow-auto">

@@ -54,9 +54,9 @@ const TrackedRoutes = () => {
       <Route path="/terms" element={<Terms />} />
       <Route path="/privacy" element={<Privacy />} />
 
-      {/* Primary authenticated route — co-trader command station */}
-      <Route path="/" element={<AuthLayout><CommandStation /></AuthLayout>} />
-      <Route path="/scorecard" element={<AuthLayout><Scorecard /></AuthLayout>} />
+      {/* Primary authenticated route — co-trader command station (own ChatBox, no JacSidebar) */}
+      <Route path="/" element={<AuthLayout hideSidebar><CommandStation /></AuthLayout>} />
+      <Route path="/scorecard" element={<AuthLayout hideSidebar><Scorecard /></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><Dashboard /></AuthLayout>} />
