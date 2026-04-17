@@ -18,6 +18,7 @@ import { extractUserId, isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { CT_CHAT_SYSTEM } from '../_shared/chatPromptV1.ts';
+import { logMcpCalls } from '../_shared/mcpLog.ts';
 import { voyageEmbed } from '../_shared/ctEmbed.ts';
 
 interface ChatMessage {
@@ -250,6 +251,8 @@ serve(async (req) => {
         beta: uwKey ? ['mcp-client-2025-04-04'] : undefined,
       });
       responseText = parseTextContent(res).trim();
+      // Log every MCP call Claude made during this turn — user can audit.
+      logMcpCalls(supabase, 'chat', res as unknown as { content?: unknown }, { user_id: null }).catch(() => { /* non-blocking */ });
     } catch (e) {
       const detail = e instanceof ClaudeError ? `Claude ${e.status}` : String(e);
       console.error('[ct-chat] Claude failed:', detail);

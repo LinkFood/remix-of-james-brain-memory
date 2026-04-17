@@ -19,6 +19,7 @@ import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
 import { ClaudesRead } from '@/components/command/ClaudesRead';
 import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
+import { McpCallsPanel } from '@/components/command/McpCallsPanel';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -89,6 +90,7 @@ export default function CommandStation() {
           <div className="lg:col-span-4 space-y-4">
             {/* Morning Brief pinned to the very top — 90-sec pre-bell read */}
             <MorningBriefPanel />
+            <McpCallsPanel />
             <FlowTape />
             <MarketMovers />
             <EventsPanel />
