@@ -48,14 +48,16 @@ function extractHeadlines(raw: unknown, ticker: string): HeadlineRow[] {
 async function getSeenHeadlines(
   supabase: SupabaseClient,
   ticker: string,
-  limit = 200
 ): Promise<Set<string>> {
+  // TTL-based dedup: only consider headlines from the last 48 hours.
+  // UW's news feed rotates older items back in eventually — letting those
+  // re-enter after 48h is fine and gives us fresh Claude takes.
+  const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
   const { data } = await supabase
     .from('ct_news_analyses')
     .select('news_headline')
     .eq('instrument', ticker)
-    .order('created_at', { ascending: false })
-    .limit(limit);
+    .gte('created_at', cutoff);
   return new Set((data ?? []).map((r: { news_headline: string }) => r.news_headline));
 }
 

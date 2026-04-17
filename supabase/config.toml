@@ -131,3 +131,12 @@ verify_jwt = false
 
 [functions.ct-morning-brief]
 verify_jwt = false
+
+[functions.ct-news-causality]
+verify_jwt = false
+
+[functions.ct-eod-positioning]
+verify_jwt = false
+
+[functions.ct-recall]
+verify_jwt = false
