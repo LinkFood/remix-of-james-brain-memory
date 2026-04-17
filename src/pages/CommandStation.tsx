@@ -6,6 +6,8 @@ import { RecapPanel } from '@/components/command/RecapPanel';
 import { ChatBox } from '@/components/command/ChatBox';
 import { FlowTape } from '@/components/command/FlowTape';
 import { DarkPoolTape } from '@/components/command/DarkPoolTape';
+import { FlowPerStrike } from '@/components/command/FlowPerStrike';
+import { NetPremiumLine } from '@/components/command/NetPremiumLine';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -57,6 +59,10 @@ export default function CommandStation() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           <div className="lg:col-span-8 space-y-4">
             <TickerGrid />
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+              <NetPremiumLine />
+              <FlowPerStrike />
+            </div>
             <EventFeed />
           </div>
           <div className="lg:col-span-4 space-y-4">

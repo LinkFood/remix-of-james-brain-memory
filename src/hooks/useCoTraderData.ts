@@ -177,6 +177,7 @@ export interface FlowAlert {
   alert_type: string | null;
   size_gt_oi: boolean | null;
   ingested_at: string;
+  raw?: Record<string, unknown>;
 }
 
 export interface DarkPoolPrint {
@@ -196,7 +197,7 @@ export function useFlowAlerts(limit = 50) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('ct_flow_alerts')
-        .select('id, ticker, option_symbol, strike, expiry, side, is_ask, is_otm, size, premium, price, underlying_price, executed_at, alert_type, size_gt_oi, ingested_at')
+        .select('id, ticker, option_symbol, strike, expiry, side, is_ask, is_otm, size, premium, price, underlying_price, executed_at, alert_type, size_gt_oi, ingested_at, raw')
         .order('ingested_at', { ascending: false })
         .limit(limit);
       if (error) throw error;
