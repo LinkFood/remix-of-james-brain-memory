@@ -18,9 +18,15 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { callClaude, CLAUDE_MODELS, parseToolUse, ClaudeError } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseToolUse, ClaudeError, calculateCost } from '../_shared/anthropic.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { getConfig } from '../_shared/configCache.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
+import {
+  getTickerQuantCard,
+  getCachedTickerSnapshot,
+  TickerQuantCard,
+} from '../_shared/tickerQuantCard.ts';
 
 const VALID_HORIZONS = new Set(['intraday', 'session', 'swing', 'multi_day']);
 const VALID_TRIGGER_TYPES = new Set(['price_cross', 'break_above', 'break_below', 'touch_level', 'time_gate']);
@@ -90,8 +96,18 @@ const TOOLS = [
 ];
 
 const SYSTEM = `You are an independent trader. A hypothesis of yours is currently open.
-Market state is attached: latest heartbeat, recent heartbeats for trend, and
-your recent grades on this hypothesis (for learning).
+Market state is attached: latest heartbeat, recent heartbeats for trend, your
+recent grades on this hypothesis (for learning), AND — critically — a
+per-ticker quant card for every ticker in the hypothesis. Each quant card
+contains: structure (gamma_flip, call_wall, put_wall, max_pain, iv_rank,
+net_gamma, regime), flow_last_hour (whales/sweeps/net_prem), dark_pool_last_hour,
+greek_flow_last_hour, sentiment (nope, put/call, net_prem_cum), events (next
+earnings, upcoming catalysts), news (last 5 breaking items), brief tilt, and
+freshness.
+
+Use the quant card aggressively — it is the "tape." Your hypothesis is the
+"narrative." When they AGREE, size up within limits. When they DISAGREE, either
+size down hard or call no_trade. Never ignore the tape.
 
 If current conditions support a concrete tradeable setup RIGHT NOW with a clear
 trigger, entry, stop, target, and size (bounded by max_size_pct), call
@@ -107,7 +123,153 @@ Rules:
 - Do NOT force a trade. No-trade is a first-class response. Quality > frequency.
 - Prefer tight stops + asymmetric targets when the hypothesis is high-conviction.
 - If your recent grades show the hypothesis has been wrong lately, demote size
-  or skip entirely.`;
+  or skip entirely.
+- If the brief says avoid_today for this ticker, size must be cut in half or
+  you should no_trade.`;
+
+// -----------------------------------------------------------------------------
+// Sonnet size-review escalation. When Haiku proposes a size >= the configured
+// threshold (claude_size_sonnet_escalation_pct, default 2.0), we run a second
+// pass with Sonnet 4 using the full quant card as context and ask it to
+// approve / modify_down / reject. Sonnet can only ADJUST SIZE DOWN — Haiku's
+// size is the ceiling — or reject entirely.
+// -----------------------------------------------------------------------------
+const SONNET_REVIEW_TOOLS = [
+  {
+    name: 'size_approve',
+    description: 'Approve the proposed size as-is. Use when the full quant card confirms the thesis and the size is reasonable given iv_rank, gamma regime, flow, and upcoming catalysts.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        reasoning: { type: 'string', description: 'Why the proposed size is right given the quant card.' },
+      },
+      required: ['reasoning'],
+    },
+  },
+  {
+    name: 'size_modify',
+    description: 'Approve the trade but reduce the size. Use when the thesis is valid but the quant card reveals extra risk (e.g. wide IV, close to earnings, weak flow alignment, negative gamma regime).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        new_size_pct: { type: 'number', description: 'New size percent. MUST be > 0 and STRICTLY LESS than the proposed size_pct.' },
+        reasoning:    { type: 'string', description: 'Why size should be reduced to this level.' },
+      },
+      required: ['new_size_pct', 'reasoning'],
+    },
+  },
+  {
+    name: 'size_reject',
+    description: 'Reject the trade entirely. Use when the quant card materially contradicts the hypothesis, or when the setup is too dangerous at any size (e.g. event day, chop in negative gamma, tape pointing the other way).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        reasoning: { type: 'string', description: 'Why the proposed trade should not be armed at any size.' },
+      },
+      required: ['reasoning'],
+    },
+  },
+];
+
+const SONNET_REVIEW_SYSTEM = `You are the senior reviewer. Haiku just proposed a
+trade idea whose size exceeds the normal risk threshold. Your job is a
+size-risk sanity check.
+
+You can ONLY:
+  - size_approve   (use the proposed size as-is)
+  - size_modify    (lower the size — never raise it)
+  - size_reject    (skip the trade entirely)
+
+Weight the full quant card against the proposed thesis. Particular red flags:
+  - earnings within 2 trading days (cut size or reject),
+  - iv_rank > 80 with a long-option direction (cut size),
+  - structure regime='negative_gamma' with directional momentum trade (reject or cut),
+  - flow pointing the opposite direction of the proposal (reject or cut),
+  - brief.avoid_today for this ticker (reject unless thesis explicitly overrides).
+
+If nothing meaningful contradicts the thesis, approve.`;
+
+interface SonnetReviewOutcome {
+  decision: 'approve' | 'modify' | 'reject';
+  final_size_pct: number | null;
+  reasoning: string;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+}
+
+async function runSonnetSizeReview(
+  supabase: SupabaseClient,
+  proposed: ProposedIdea,
+  hyp: HypothesisRow,
+  quantCards: Record<string, TickerQuantCard | null>,
+): Promise<SonnetReviewOutcome | null> {
+  const payload = {
+    proposed_idea: proposed,
+    hypothesis: {
+      id: hyp.id,
+      claim: hyp.claim,
+      because: hyp.because,
+      invalidate_if: hyp.invalidate_if,
+      confidence: hyp.confidence,
+      elo: hyp.elo,
+    },
+    quant_card_for_instrument: quantCards[proposed.instrument] ?? null,
+    all_quant_cards: quantCards,
+  };
+
+  const callStart = Date.now();
+  try {
+    const res = await callClaude({
+      model: CLAUDE_MODELS.sonnet,
+      system: SONNET_REVIEW_SYSTEM,
+      messages: [{ role: 'user', content: JSON.stringify(payload) }],
+      tools: SONNET_REVIEW_TOOLS,
+      tool_choice: { type: 'any' },
+      max_tokens: 1500,
+      temperature: 0.2,
+    });
+    const tu = parseToolUse(res);
+    const tokensIn = res.usage?.input_tokens ?? 0;
+    const tokensOut = res.usage?.output_tokens ?? 0;
+    const cost = calculateCost(CLAUDE_MODELS.sonnet, res.usage ?? { input_tokens: 0, output_tokens: 0 });
+    logClaudeUsage(supabase, {
+      source: 'ct-trade-idea-generator:sonnet_size_review',
+      model: CLAUDE_MODELS.sonnet,
+      usage: res.usage,
+      duration_ms: Date.now() - callStart,
+      metadata: { hypothesis_id: hyp.id, instrument: proposed.instrument, proposed_size_pct: proposed.size_pct },
+    });
+
+    if (!tu) {
+      return { decision: 'reject', final_size_pct: null, reasoning: 'Sonnet returned no tool use — failing closed.', tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost };
+    }
+    if (tu.name === 'size_approve') {
+      const reasoning = typeof tu.input.reasoning === 'string' ? tu.input.reasoning : 'approved';
+      return { decision: 'approve', final_size_pct: proposed.size_pct, reasoning, tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost };
+    }
+    if (tu.name === 'size_modify') {
+      const candidate = Number(tu.input.new_size_pct);
+      const reasoning = typeof tu.input.reasoning === 'string' ? tu.input.reasoning : 'modified';
+      // Clamp: Sonnet can only go DOWN. If it tries to match or exceed, treat as approve at proposed.
+      if (!Number.isFinite(candidate) || candidate <= 0) {
+        return { decision: 'reject', final_size_pct: null, reasoning: `Sonnet modify returned invalid size ${candidate}: ${reasoning}`, tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost };
+      }
+      if (candidate >= proposed.size_pct) {
+        return { decision: 'approve', final_size_pct: proposed.size_pct, reasoning: `Sonnet tried to raise/match size (${candidate}); clamped to proposed ${proposed.size_pct}. ${reasoning}`, tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost };
+      }
+      return { decision: 'modify', final_size_pct: candidate, reasoning, tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost };
+    }
+    if (tu.name === 'size_reject') {
+      const reasoning = typeof tu.input.reasoning === 'string' ? tu.input.reasoning : 'rejected';
+      return { decision: 'reject', final_size_pct: null, reasoning, tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost };
+    }
+    return { decision: 'reject', final_size_pct: null, reasoning: `Unknown Sonnet tool: ${tu.name}`, tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: cost };
+  } catch (e) {
+    console.warn(`[ct-trade-idea-generator] Sonnet review threw: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  }
+}
 
 interface ProposedIdea {
   instrument: string;
@@ -264,11 +426,12 @@ serve(async (req) => {
   }
 
   // Config
-  const minConfidence     = Number(await getConfig<number>('claude_min_hypothesis_confidence', 0.45));
-  const maxSizePct        = Number(await getConfig<number>('claude_max_position_size_pct', 5));
-  const maxConcurrent     = Number(await getConfig<number>('claude_max_concurrent_positions', 5));
-  const ttlMinutes        = Number(await getConfig<number>('claude_trade_idea_ttl_minutes', 120));
-  const cooldownMinutes   = Number(await getConfig<number>('claude_generator_cooldown_minutes', 5));
+  const minConfidence       = Number(await getConfig<number>('claude_min_hypothesis_confidence', 0.45));
+  const maxSizePct          = Number(await getConfig<number>('claude_max_position_size_pct', 5));
+  const maxConcurrent       = Number(await getConfig<number>('claude_max_concurrent_positions', 5));
+  const ttlMinutes          = Number(await getConfig<number>('claude_trade_idea_ttl_minutes', 120));
+  const cooldownMinutes     = Number(await getConfig<number>('claude_generator_cooldown_minutes', 5));
+  const sizeEscalationPct   = Number(await getConfig<number>('claude_size_sonnet_escalation_pct', 2.0));
 
   // Load open hypotheses above min confidence, capped at 10.
   const { data: hyps, error: hypErr } = await supabase
@@ -323,6 +486,14 @@ serve(async (req) => {
       .gte('armed_at', cooldownIso);
     if ((recentArmed ?? 0) > 0) {
       results.push({ hypothesis_id: hyp.id, outcome: 'cooldown' });
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'none',
+        reasoning: `Cooldown: hypothesis armed a trade idea within last ${cooldownMinutes} min — skipping to avoid duplicate.`,
+        outcome: 'cooldown',
+        linked_hypothesis_id: hyp.id,
+        context_snapshot: { cooldown_minutes: cooldownMinutes, hyp_confidence: hyp.confidence, hyp_elo: hyp.elo, tickers: hyp.tickers },
+      });
       continue;
     }
 
@@ -330,6 +501,14 @@ serve(async (req) => {
     const armedThisRun = results.filter((r) => r.outcome === 'armed').length;
     if (currentConcurrent + armedThisRun >= maxConcurrent) {
       results.push({ hypothesis_id: hyp.id, outcome: 'at_concurrent_cap' });
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'none',
+        reasoning: `At concurrent position cap (${currentConcurrent + armedThisRun}/${maxConcurrent}) — no new arming.`,
+        outcome: 'at_concurrent_cap',
+        linked_hypothesis_id: hyp.id,
+        context_snapshot: { current_concurrent: currentConcurrent, armed_this_run: armedThisRun, max_concurrent: maxConcurrent },
+      });
       continue;
     }
 
@@ -340,6 +519,61 @@ serve(async (req) => {
       .eq('hypothesis_id', hyp.id)
       .order('graded_at', { ascending: false })
       .limit(5);
+
+    // Per-ticker quant cards — prefer cached snapshot; fall back to live RPC
+    // build if the cache is stale or missing. One jsonb blob per hypothesis
+    // ticker replaces what used to be ~6 separate queries.
+    const quantCards: Record<string, TickerQuantCard | null> = {};
+    for (const t of hyp.tickers ?? []) {
+      const cached = await getCachedTickerSnapshot(supabase, t, 300);
+      if (cached) {
+        // The cached row already is the flattened quant card shape — rehydrate.
+        quantCards[t.toUpperCase()] = {
+          ticker: cached.ticker as string,
+          as_of: (cached.snapshot_at as string) ?? new Date().toISOString(),
+          structure: {
+            spot:                    (cached.spot as number) ?? null,
+            gamma_flip:              (cached.gamma_flip as number) ?? null,
+            call_wall:               (cached.call_wall as number) ?? null,
+            put_wall:                (cached.put_wall as number) ?? null,
+            max_pain:                (cached.max_pain as number) ?? null,
+            iv_rank:                 (cached.iv_rank as number) ?? null,
+            iv_percentile:           (cached.iv_percentile as number) ?? null,
+            net_gamma:               (cached.net_gamma as number) ?? null,
+            regime:                  (cached.regime as TickerQuantCard['structure']['regime']) ?? 'neutral',
+            latest_gex_snapshot_at:  (cached.snapshot_at as string) ?? null,
+          },
+          flow_last_hour:      (cached.flow_last_hour as TickerQuantCard['flow_last_hour'])      ?? { alert_count: 0, total_premium: 0, net_call_prem: 0, net_put_prem: 0, net_prem: 0, whale_count: 0, sweep_count: 0, opening_trades: 0 },
+          dark_pool_last_hour: (cached.dark_pool_last_hour as TickerQuantCard['dark_pool_last_hour']) ?? { print_count: 0, total_notional: 0, largest_single: 0, accumulation_score: 0 },
+          greek_flow_last_hour:(cached.greek_flow_last_hour as TickerQuantCard['greek_flow_last_hour']) ?? { net_delta_flow: 0, net_vega_flow: 0, net_call_delta: 0, net_put_delta: 0, tick_count: 0 },
+          sentiment: {
+            nope_latest:     (cached.nope_latest as number) ?? null,
+            put_call_ratio:  (cached.put_call_ratio as number) ?? null,
+            net_premium_cum: (cached.net_premium_cum as number) ?? 0,
+          },
+          events: {
+            next_earnings_date:     (cached.next_earnings_date as string) ?? null,
+            earnings_expected_move: (cached.earnings_expected_move as number) ?? null,
+            upcoming_catalysts:     (cached.upcoming_catalysts as TickerQuantCard['events']['upcoming_catalysts']) ?? [],
+          },
+          news: (cached.recent_news as TickerQuantCard['news']) ?? [],
+          brief: {
+            source_brief_id: (cached.source_brief_id as string) ?? null,
+            tilt:            (cached.brief_tilt as string) ?? null,
+            avoid_today:     (cached.avoid_today as boolean) ?? false,
+            focus_today:     false,
+            session_date:    null,
+          },
+          freshness: {
+            gex_snapshot_at:   (cached.snapshot_at as string) ?? null,
+            seconds_stale_gex: null,
+            as_of:             (cached.snapshot_at as string) ?? new Date().toISOString(),
+          },
+        };
+      } else {
+        quantCards[t.toUpperCase()] = await getTickerQuantCard(supabase, t);
+      }
+    }
 
     // Build user payload for Claude.
     const latest = (heartbeats?.[0] ?? null) as HeartbeatRow | null;
@@ -362,9 +596,13 @@ serve(async (req) => {
       latest_heartbeat: latest,
       recent_heartbeats: (heartbeats ?? []).slice(1),
       recent_grades_on_hypothesis: grades ?? [],
+      quant_cards: quantCards,
     };
 
     let toolUse: { name: string; input: Record<string, unknown> } | null = null;
+    let thisCallTokensIn = 0;
+    let thisCallTokensOut = 0;
+    let thisCallCost = 0;
     const callStart = Date.now();
     try {
       const res = await callClaude({
@@ -377,6 +615,9 @@ serve(async (req) => {
         temperature: 0.3,
       });
       toolUse = parseToolUse(res);
+      thisCallTokensIn = res.usage?.input_tokens ?? 0;
+      thisCallTokensOut = res.usage?.output_tokens ?? 0;
+      thisCallCost = calculateCost(CLAUDE_MODELS.haiku, res.usage ?? { input_tokens: 0, output_tokens: 0 });
       logClaudeUsage(supabase, {
         source: 'ct-trade-idea-generator',
         model: CLAUDE_MODELS.haiku,
@@ -387,29 +628,174 @@ serve(async (req) => {
     } catch (e) {
       const msg = e instanceof ClaudeError ? `Claude ${e.status}` : String(e);
       results.push({ hypothesis_id: hyp.id, outcome: 'claude_error', reason: msg });
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'haiku',
+        reasoning: `Claude error evaluating hypothesis: ${msg}`,
+        outcome: 'claude_error',
+        linked_hypothesis_id: hyp.id,
+        context_snapshot: { hyp_confidence: hyp.confidence, hyp_elo: hyp.elo, tickers: hyp.tickers },
+      });
       continue;
     }
 
+    // Shared decision context snapshot across all branches below.
+    const decisionCtx: Record<string, unknown> = {
+      hyp_claim: hyp.claim.slice(0, 500),
+      hyp_confidence: hyp.confidence,
+      hyp_elo: hyp.elo,
+      hyp_tickers: hyp.tickers,
+      hyp_horizon: hyp.horizon,
+      recent_grades_count: (grades ?? []).length,
+      recent_grades_summary: (grades ?? []).map((g) => g.verdict),
+      latest_heartbeat_status: latest?.status_line ?? null,
+    };
+
     if (!toolUse) {
       results.push({ hypothesis_id: hyp.id, outcome: 'no_tool_use' });
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'haiku',
+        reasoning: 'Claude returned no tool use.',
+        outcome: 'no_tool_use',
+        linked_hypothesis_id: hyp.id,
+        context_snapshot: decisionCtx,
+        tokens_in: thisCallTokensIn,
+        tokens_out: thisCallTokensOut,
+        cost_usd: thisCallCost,
+      });
       continue;
     }
     if (toolUse.name === 'no_trade') {
       const reason = typeof toolUse.input.reason === 'string' ? toolUse.input.reason : 'unstated';
       results.push({ hypothesis_id: hyp.id, outcome: 'no_trade', reason });
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'haiku',
+        reasoning: `Claude chose no_trade: ${reason}`,
+        outcome: 'no_trade',
+        alignment: 'insufficient_data',
+        narrative_signal: { reasoning: reason },
+        tape_signal: { reasoning: latest?.status_line ?? 'no heartbeat' },
+        linked_hypothesis_id: hyp.id,
+        context_snapshot: decisionCtx,
+        tool_calls_summary: { tool: 'no_trade', input: toolUse.input },
+        tokens_in: thisCallTokensIn,
+        tokens_out: thisCallTokensOut,
+        cost_usd: thisCallCost,
+      });
       continue;
     }
     if (toolUse.name !== 'propose_trade_idea') {
       results.push({ hypothesis_id: hyp.id, outcome: 'unknown_tool', reason: toolUse.name });
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'haiku',
+        reasoning: `Unknown tool returned by Claude: ${toolUse.name}`,
+        outcome: 'unknown_tool',
+        linked_hypothesis_id: hyp.id,
+        context_snapshot: decisionCtx,
+        tool_calls_summary: { tool: toolUse.name, input: toolUse.input },
+        tokens_in: thisCallTokensIn,
+        tokens_out: thisCallTokensOut,
+        cost_usd: thisCallCost,
+      });
       continue;
     }
 
     const v = validateIdea(toolUse.input, hyp, maxSizePct);
     if (!v.ok) {
       results.push({ hypothesis_id: hyp.id, outcome: 'validation_failed', reason: v.reason });
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'haiku',
+        reasoning: `Proposed idea failed validation: ${v.reason}`,
+        outcome: 'validation_failed',
+        linked_hypothesis_id: hyp.id,
+        context_snapshot: decisionCtx,
+        tool_calls_summary: { tool: 'propose_trade_idea', input: toolUse.input, validation_error: v.reason },
+        tokens_in: thisCallTokensIn,
+        tokens_out: thisCallTokensOut,
+        cost_usd: thisCallCost,
+      });
       continue;
     }
     const idea = v.idea;
+
+    // -------------------------------------------------------------------------
+    // Size-based Sonnet escalation. When Haiku's proposed size >= threshold
+    // (default 2%), route to Sonnet for a risk review using the full quant
+    // card. Sonnet can approve (use proposed size), modify (lower size — never
+    // raise), or reject (skip the arm entirely). Sonnet errors fall back to
+    // proceeding with the Haiku-approved size.
+    // -------------------------------------------------------------------------
+    let finalSizePct = idea.size_pct;
+    let sonnetOutcome: SonnetReviewOutcome | null = null;
+    if (idea.size_pct >= sizeEscalationPct) {
+      sonnetOutcome = await runSonnetSizeReview(supabase, idea, hyp, quantCards);
+      if (sonnetOutcome) {
+        if (sonnetOutcome.decision === 'reject') {
+          results.push({ hypothesis_id: hyp.id, outcome: 'size_override_reject', reason: sonnetOutcome.reasoning.slice(0, 200) });
+          await recordDecision(supabase, {
+            decision_type: 'size_override',
+            model_tier: 'sonnet',
+            reasoning: `Sonnet rejected Haiku-proposed trade at size ${idea.size_pct}%. ${sonnetOutcome.reasoning}`,
+            outcome: 'rejected',
+            linked_hypothesis_id: hyp.id,
+            context_snapshot: {
+              haiku_proposed_size_pct: idea.size_pct,
+              escalation_threshold_pct: sizeEscalationPct,
+              instrument: idea.instrument,
+              direction: idea.direction,
+              entry_trigger: idea.entry_trigger,
+              quant_card_for_instrument: quantCards[idea.instrument] ?? null,
+            },
+            tool_calls_summary: { haiku_tool: 'propose_trade_idea', haiku_input: toolUse.input, sonnet_decision: 'size_reject' },
+            tokens_in: sonnetOutcome.tokens_in,
+            tokens_out: sonnetOutcome.tokens_out,
+            cost_usd: sonnetOutcome.cost_usd,
+          });
+          continue;
+        }
+        if (sonnetOutcome.decision === 'modify' && sonnetOutcome.final_size_pct !== null) {
+          finalSizePct = sonnetOutcome.final_size_pct;
+          await recordDecision(supabase, {
+            decision_type: 'size_override',
+            model_tier: 'sonnet',
+            reasoning: `Sonnet reduced size from ${idea.size_pct}% to ${finalSizePct}%. ${sonnetOutcome.reasoning}`,
+            outcome: 'modified',
+            linked_hypothesis_id: hyp.id,
+            context_snapshot: {
+              haiku_proposed_size_pct: idea.size_pct,
+              sonnet_final_size_pct: finalSizePct,
+              escalation_threshold_pct: sizeEscalationPct,
+              instrument: idea.instrument,
+              direction: idea.direction,
+              quant_card_for_instrument: quantCards[idea.instrument] ?? null,
+            },
+            tool_calls_summary: { haiku_tool: 'propose_trade_idea', haiku_input: toolUse.input, sonnet_decision: 'size_modify' },
+            tokens_in: sonnetOutcome.tokens_in,
+            tokens_out: sonnetOutcome.tokens_out,
+            cost_usd: sonnetOutcome.cost_usd,
+          });
+        }
+        // decision === 'approve' → keep idea.size_pct, fall through without a size_override row.
+      } else {
+        // Sonnet errored: fail open — proceed with Haiku size, but log the miss.
+        await recordDecision(supabase, {
+          decision_type: 'size_override',
+          model_tier: 'sonnet',
+          reasoning: `Sonnet size review errored — proceeding with Haiku-proposed size ${idea.size_pct}%.`,
+          outcome: 'review_unavailable',
+          linked_hypothesis_id: hyp.id,
+          context_snapshot: {
+            haiku_proposed_size_pct: idea.size_pct,
+            escalation_threshold_pct: sizeEscalationPct,
+            instrument: idea.instrument,
+          },
+        });
+      }
+    }
 
     // Resolve entry price target = current spot for the instrument.
     const spot = await resolveSpot(supabase, idea.instrument);
@@ -430,7 +816,7 @@ serve(async (req) => {
         entry_price_target: spot,
         stop_pct:           idea.stop_pct,
         target_pct:         idea.target_pct,
-        size_pct:           idea.size_pct,
+        size_pct:           finalSizePct,
         horizon:            idea.horizon,
         rationale:          idea.rationale,
         status:             'armed',
@@ -441,6 +827,18 @@ serve(async (req) => {
       .single();
     if (insErr || !inserted) {
       results.push({ hypothesis_id: hyp.id, outcome: 'insert_failed', reason: insErr?.message ?? 'no data' });
+      await recordDecision(supabase, {
+        decision_type: 'arm_trade_idea',
+        model_tier: 'haiku',
+        reasoning: `Claude armed a trade idea but insert failed: ${insErr?.message ?? 'no data'}`,
+        outcome: 'insert_failed',
+        linked_hypothesis_id: hyp.id,
+        context_snapshot: { ...decisionCtx, idea },
+        tool_calls_summary: { tool: 'propose_trade_idea', input: toolUse.input },
+        tokens_in: thisCallTokensIn,
+        tokens_out: thisCallTokensOut,
+        cost_usd: thisCallCost,
+      });
       continue;
     }
 
@@ -455,6 +853,56 @@ serve(async (req) => {
     });
 
     results.push({ hypothesis_id: hyp.id, outcome: 'armed', idea_id: inserted.id });
+
+    // Decision journal — armed trade idea. Include abbreviated quant card
+    // (instrument only) and Sonnet outcome if escalation fired.
+    const abbreviatedQuantCard = quantCards[idea.instrument]
+      ? {
+          ticker: quantCards[idea.instrument]!.ticker,
+          as_of: quantCards[idea.instrument]!.as_of,
+          structure: quantCards[idea.instrument]!.structure,
+          sentiment: quantCards[idea.instrument]!.sentiment,
+          brief: quantCards[idea.instrument]!.brief,
+          flow_net_prem: quantCards[idea.instrument]!.flow_last_hour?.net_prem ?? 0,
+          events_next_earnings: quantCards[idea.instrument]!.events?.next_earnings_date ?? null,
+        }
+      : null;
+
+    await recordDecision(supabase, {
+      decision_type: 'arm_trade_idea',
+      model_tier: sonnetOutcome ? 'sonnet' : 'haiku',
+      reasoning: `Armed ${idea.instrument} ${idea.direction} ${idea.contract_type} size ${finalSizePct}% (haiku proposed ${idea.size_pct}%) stop ${idea.stop_pct}% target ${idea.target_pct}%. Rationale: ${idea.rationale}${sonnetOutcome ? ` | Sonnet: ${sonnetOutcome.decision} — ${sonnetOutcome.reasoning.slice(0, 300)}` : ''}`,
+      outcome: 'armed',
+      alignment: 'aligned',
+      claude_followed: 'both',
+      narrative_signal: {
+        direction: idea.direction === 'long' ? 'bullish' : 'bearish',
+        confidence: hyp.confidence,
+        reasoning: hyp.claim.slice(0, 500),
+        sources: ['ct_hypotheses.claim', 'ct_hypotheses.because'],
+      },
+      tape_signal: {
+        direction: idea.direction === 'long' ? 'bullish' : 'bearish',
+        reasoning: `trigger ${idea.entry_trigger.type} level ${idea.entry_trigger.level ?? idea.entry_trigger.time ?? '?'} vs current spot ${spot ?? '?'}`,
+        sources: ['ct_heartbeats.current_reads', 'ct_ticker_snapshots'],
+      },
+      linked_hypothesis_id: hyp.id,
+      linked_trade_idea_id: inserted.id,
+      context_snapshot: {
+        ...decisionCtx,
+        spot,
+        haiku_proposed_size_pct: idea.size_pct,
+        final_size_pct: finalSizePct,
+        escalated_to_sonnet: sonnetOutcome !== null,
+        sonnet_decision: sonnetOutcome?.decision ?? null,
+        entry_trigger: idea.entry_trigger,
+        quant_card: abbreviatedQuantCard,
+      },
+      tool_calls_summary: { tool: 'propose_trade_idea', input: toolUse.input, sonnet: sonnetOutcome?.decision ?? null },
+      tokens_in: thisCallTokensIn + (sonnetOutcome?.tokens_in ?? 0),
+      tokens_out: thisCallTokensOut + (sonnetOutcome?.tokens_out ?? 0),
+      cost_usd: thisCallCost + (sonnetOutcome?.cost_usd ?? 0),
+    });
   }
 
   const armedCount = results.filter((r) => r.outcome === 'armed').length;
