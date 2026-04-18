@@ -1323,6 +1323,13 @@ export interface CtTradeRow {
   live_pnl_usd?: number | null;
   live_pnl_updated_at?: string | null;
   contract_type?: 'underlying' | 'call' | 'put';
+  // Journal fields (migration 20260419000015). claude_notes is written by
+  // ct-book-manager on close or ct-book-eod-close backfill. james_notes is
+  // freeform user text edited live from Book.tsx.
+  claude_notes?: string | null;
+  james_notes?: string | null;
+  journal_updated_at?: string | null;
+  journal_version?: number | null;
 }
 
 export function useTodayBook() {

@@ -17,6 +17,8 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent } from '../_shared/anthropic.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
+import { POST_MORTEM_SYSTEM } from '../_shared/ctPrompts.ts';
 
 const RECAP_SYSTEM = `You just closed a trading day. Given the session's trades (entry/exit/P&L/thesis), write a brutally honest EOD recap.
 
@@ -162,6 +164,64 @@ serve(async (req) => {
     await supabase.from('ct_book').update({ daily_recap: recapPayload.recap }).eq('session_date', sessionDate);
   }
 
+  // Post-mortem backfill: any trade that closed today without claude_notes
+  // (e.g. eod_flat just now, or a book-manager close where the fire-and-forget
+  // never landed) gets a post-mortem here. Sequential + small volume (one
+  // trading day) so we just await each one. Haiku, ~$0.001 per trade.
+  let postMortemsWritten = 0;
+  const { data: missing } = await supabase
+    .from('ct_trades')
+    .select('id, instrument, side, entry_price, stop_price, target_price, thesis, close_price, close_reason, realized_pnl_pct, opened_at, closed_at, contract_type')
+    .eq('session_date', sessionDate)
+    .eq('status', 'closed')
+    .is('claude_notes', null);
+
+  for (const t of missing ?? []) {
+    if (t.close_price == null) continue;
+    const durationMin = t.opened_at && t.closed_at
+      ? Math.max(0, Math.round((new Date(t.closed_at as string).getTime() - new Date(t.opened_at as string).getTime()) / 60_000))
+      : null;
+    try {
+      const started = Date.now();
+      const res = await callClaude({
+        model: CLAUDE_MODELS.haiku,
+        system: POST_MORTEM_SYSTEM,
+        messages: [{ role: 'user', content: JSON.stringify({
+          instrument: t.instrument,
+          side: t.side,
+          contract_type: t.contract_type ?? 'underlying',
+          entry_price: t.entry_price,
+          stop_price: t.stop_price,
+          target_price: t.target_price,
+          thesis: t.thesis,
+          actual_exit_price: t.close_price,
+          close_reason: t.close_reason,
+          realized_pnl_pct: t.realized_pnl_pct,
+          duration_minutes: durationMin,
+          note: 'Write the 2-3 sentence post-mortem per the system prompt. Plain prose only.',
+        }) }],
+        max_tokens: 400,
+        temperature: 0.3,
+      });
+      const text = parseTextContent(res).trim();
+      if (!text) continue;
+      await supabase.from('ct_trades').update({
+        claude_notes: text,
+        journal_updated_at: new Date().toISOString(),
+      }).eq('id', t.id as string);
+      logClaudeUsage(supabase, {
+        source: 'trade-post-mortem',
+        model: CLAUDE_MODELS.haiku,
+        usage: res.usage,
+        duration_ms: Date.now() - started,
+        metadata: { trade_id: t.id, instrument: t.instrument, close_reason: t.close_reason, via: 'eod-backfill' },
+      });
+      postMortemsWritten++;
+    } catch (e) {
+      console.warn('[eod-close] post-mortem backfill failed for', t.id, e instanceof Error ? e.message : e);
+    }
+  }
+
   return new Response(JSON.stringify({
     ok: true,
     session_date: sessionDate,
@@ -171,6 +231,7 @@ serve(async (req) => {
     realized_pct: +((realizedUsd / startingBalance) * 100).toFixed(3),
     trades_count: trades.length, wins, losses, goal_hit: goalHit,
     recap: recapPayload?.recap ?? null,
+    post_mortems_written: postMortemsWritten,
   }), {
     status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });

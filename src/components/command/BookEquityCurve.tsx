@@ -98,35 +98,50 @@ export function BookEquityCurve() {
   //   - hwmBand: starting..HWM shaded teal (always visible "ceiling" band)
   //   - drawdownShade: balance..HWM when balance < HWM (red delta)
   //   - balance: the line itself (green/red tip based on current vs $10k)
-  const chartData = points.map(p => {
-    const drawdownLow = Math.min(p.balance, p.hwm);
-    const drawdownHigh = Math.max(p.balance, p.hwm);
-    return {
-      label: p.label,
-      date: p.date,
-      balance: p.balance,
-      hwm: p.hwm,
-      starting: p.starting,
-      // Area stacks: we pass [low, high] tuples for the shaded regions
-      hwmBand: [p.starting, p.hwm] as [number, number],
-      drawdownBand:
-        p.balance < p.hwm
-          ? ([drawdownLow, drawdownHigh] as [number, number])
-          : ([p.hwm, p.hwm] as [number, number]), // zero-height if no drawdown
-      isToday: p.isToday,
-    };
-  });
+  const safeNum = (n: unknown, fallback: number): number =>
+    typeof n === 'number' && Number.isFinite(n) ? n : fallback;
+  const chartData = points
+    .filter(p => Number.isFinite(p.balance) || Number.isFinite(p.hwm))
+    .map(p => {
+      const balance = safeNum(p.balance, safeNum(p.starting, 10_000));
+      const hwm = safeNum(p.hwm, balance);
+      const starting = safeNum(p.starting, 10_000);
+      const drawdownLow = Math.min(balance, hwm);
+      const drawdownHigh = Math.max(balance, hwm);
+      return {
+        label: p.label,
+        date: p.date,
+        balance,
+        hwm,
+        starting,
+        // Area stacks: we pass [low, high] tuples for the shaded regions
+        hwmBand: [starting, hwm] as [number, number],
+        drawdownBand:
+          balance < hwm
+            ? ([drawdownLow, drawdownHigh] as [number, number])
+            : ([hwm, hwm] as [number, number]), // zero-height if no drawdown
+        isToday: p.isToday,
+      };
+    });
 
   const above = (stats?.current ?? 10_000) >= 10_000;
   const lineColor = above ? GREEN : RED;
 
   // Y-axis domain: tighten the range so small moves are visible but keep
   // $10k always in view as the "is this winning?" anchor.
-  const allVals = chartData.flatMap(d => [d.balance, d.hwm, d.starting, 10_000]);
-  const minY = allVals.length ? Math.min(...allVals) : 9_800;
-  const maxY = allVals.length ? Math.max(...allVals) : 10_200;
-  const pad = Math.max((maxY - minY) * 0.1, 50);
-  const yDomain: [number, number] = [Math.floor(minY - pad), Math.ceil(maxY + pad)];
+  // Filter out anything non-finite — a null/NaN leaking into Recharts'
+  // axis resolver triggers decimal.js LN10 precision overflow and blows
+  // up the whole page.
+  const allVals = chartData
+    .flatMap(d => [d.balance, d.hwm, d.starting])
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  allVals.push(10_000); // always anchor the seed level
+  const minY = Math.min(...allVals);
+  const maxY = Math.max(...allVals);
+  const safeMin = Number.isFinite(minY) ? minY : 9_800;
+  const safeMax = Number.isFinite(maxY) ? maxY : 10_200;
+  const pad = Math.max((safeMax - safeMin) * 0.1, 50);
+  const yDomain: [number, number] = [Math.floor(safeMin - pad), Math.ceil(safeMax + pad)];
 
   return (
     <Card className="divide-y divide-border">

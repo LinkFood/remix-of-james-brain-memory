@@ -16,6 +16,8 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
+import { POST_MORTEM_SYSTEM } from '../_shared/ctPrompts.ts';
 
 const SYSTEM_PROMPT = `You manage a live paper book. 15min has passed. Each open trade has current price, unrealized P&L, and a reason it was opened.
 
@@ -73,6 +75,78 @@ function unrealizedPct(side: 'long' | 'short', entry: number, current: number): 
   return side === 'long' ? raw : -raw;
 }
 
+/**
+ * Fire-and-forget post-mortem. Spawns a Haiku call, writes claude_notes +
+ * journal_updated_at on success, logs the usage. Never throws out — the
+ * close path must not block on this.
+ *
+ * Pass the trade row AFTER the close UPDATE has been issued, plus the
+ * realized_pnl_pct and close_reason that were written.
+ */
+function firePostMortem(
+  supabase: SupabaseClient,
+  args: {
+    tradeId: string;
+    instrument: string;
+    side: 'long' | 'short';
+    entry: number | null;
+    stop: number | null;
+    target: number | null;
+    thesis: string | null;
+    exit: number;
+    closeReason: string;
+    realizedPnlPct: number | null;
+    openedAt: string | null;
+    closedAt: string;
+    contractType?: string | null;
+  },
+): void {
+  (async () => {
+    try {
+      const durationMin = args.openedAt
+        ? Math.max(0, Math.round((new Date(args.closedAt).getTime() - new Date(args.openedAt).getTime()) / 60_000))
+        : null;
+      const userMessage = JSON.stringify({
+        instrument: args.instrument,
+        side: args.side,
+        contract_type: args.contractType ?? 'underlying',
+        entry_price: args.entry,
+        stop_price: args.stop,
+        target_price: args.target,
+        thesis: args.thesis,
+        actual_exit_price: args.exit,
+        close_reason: args.closeReason,
+        realized_pnl_pct: args.realizedPnlPct,
+        duration_minutes: durationMin,
+        note: 'Write the 2-3 sentence post-mortem per the system prompt. Plain prose only.',
+      });
+      const started = Date.now();
+      const res = await callClaude({
+        model: CLAUDE_MODELS.haiku,
+        system: POST_MORTEM_SYSTEM,
+        messages: [{ role: 'user', content: userMessage }],
+        max_tokens: 400,
+        temperature: 0.3,
+      });
+      const text = parseTextContent(res).trim();
+      if (!text) return;
+      await supabase.from('ct_trades').update({
+        claude_notes: text,
+        journal_updated_at: new Date().toISOString(),
+      }).eq('id', args.tradeId);
+      logClaudeUsage(supabase, {
+        source: 'trade-post-mortem',
+        model: CLAUDE_MODELS.haiku,
+        usage: res.usage,
+        duration_ms: Date.now() - started,
+        metadata: { trade_id: args.tradeId, instrument: args.instrument, close_reason: args.closeReason },
+      });
+    } catch (e) {
+      console.warn('[post-mortem] failed for', args.tradeId, e instanceof Error ? e.message : e);
+    }
+  })();
+}
+
 async function checkHardStops(
   supabase: SupabaseClient,
   trade: OpenTrade,
@@ -90,10 +164,11 @@ async function checkHardStops(
 
   const pct = unrealizedPct(trade.side, trade.entry_price, currentPrice);
   const reason = hitStop ? 'stop_hit' : 'target_hit';
+  const closedAt = new Date().toISOString();
   await supabase.from('ct_trades').update({
     status: 'closed',
     close_price: currentPrice,
-    closed_at: new Date().toISOString(),
+    closed_at: closedAt,
     close_reason: reason,
     realized_pnl_pct: +pct.toFixed(3),
     realized_pnl_usd: null, // computed at EOD
@@ -102,6 +177,21 @@ async function checkHardStops(
     trade_id: trade.id, action: 'cut', price: currentPrice,
     rationale: `deterministic ${reason} @ ${currentPrice}`,
   });
+  firePostMortem(supabase, {
+    tradeId: trade.id,
+    instrument: trade.instrument,
+    side: trade.side,
+    entry: trade.entry_price,
+    stop: trade.stop_price,
+    target: trade.target_price,
+    thesis: trade.thesis,
+    exit: currentPrice,
+    closeReason: reason,
+    realizedPnlPct: +pct.toFixed(3),
+    openedAt: trade.opened_at,
+    closedAt,
+    contractType: trade.contract_type,
+  });
   return true;
 }
 
@@ -109,6 +199,65 @@ serve(async (req) => {
   const corsResponse = handleCors(req);
   if (corsResponse) return corsResponse;
   const corsHeaders = getCorsHeaders(req);
+
+  // Regenerate-post-mortem path: callable from the authenticated frontend
+  // via supabase.functions.invoke (JWT auth, not service role). Runs a
+  // single Haiku call against one trade, bumps journal_version, writes
+  // claude_notes. Does NOT touch decision logic, stops, scales, or any
+  // other trade row. This is an intentional carve-out from the
+  // isServiceRoleRequest gate — every other path still requires it.
+  let regenTradeId: string | null = null;
+  try {
+    if (req.method === 'POST') {
+      const cloned = req.clone();
+      const body = await cloned.json().catch(() => null);
+      if (body && typeof body === 'object' && typeof (body as { regen_trade_id?: unknown }).regen_trade_id === 'string') {
+        regenTradeId = (body as { regen_trade_id: string }).regen_trade_id;
+      }
+    }
+  } catch { /* body read is best-effort */ }
+
+  if (regenTradeId) {
+    const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+    const { data: t, error } = await supabase
+      .from('ct_trades')
+      .select('id, instrument, side, entry_price, stop_price, target_price, thesis, close_price, close_reason, realized_pnl_pct, opened_at, closed_at, contract_type, status, journal_version')
+      .eq('id', regenTradeId)
+      .maybeSingle();
+    if (error || !t) {
+      return new Response(JSON.stringify({ error: 'trade not found', detail: error?.message }), {
+        status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    if (t.status !== 'closed' || t.close_price == null) {
+      return new Response(JSON.stringify({ error: 'trade is not closed yet — nothing to post-mortem' }), {
+        status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    // Bump version immediately so the UI can reflect "regenerating".
+    await supabase.from('ct_trades')
+      .update({ journal_version: (t.journal_version ?? 1) + 1 })
+      .eq('id', t.id as string);
+    firePostMortem(supabase, {
+      tradeId: t.id as string,
+      instrument: t.instrument as string,
+      side: t.side as 'long' | 'short',
+      entry: t.entry_price as number | null,
+      stop: t.stop_price as number | null,
+      target: t.target_price as number | null,
+      thesis: t.thesis as string | null,
+      exit: t.close_price as number,
+      closeReason: `regenerate:${t.close_reason ?? 'unknown'}`,
+      realizedPnlPct: t.realized_pnl_pct as number | null,
+      openedAt: t.opened_at as string | null,
+      closedAt: (t.closed_at as string | null) ?? new Date().toISOString(),
+      contractType: t.contract_type as string | null,
+    });
+    return new Response(JSON.stringify({ ok: true, regenerating: t.id, new_version: (t.journal_version ?? 1) + 1 }), {
+      status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+
   if (!isServiceRoleRequest(req)) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
@@ -297,6 +446,13 @@ serve(async (req) => {
         status: 'closed', close_price: price, closed_at: now, close_reason: 'manual_cut', realized_pnl_pct: +pct.toFixed(3),
       }).eq('id', trade.id);
       await supabase.from('ct_trade_actions').insert({ trade_id: trade.id, action: 'cut', price, rationale: a.rationale });
+      firePostMortem(supabase, {
+        tradeId: trade.id, instrument: trade.instrument, side: trade.side,
+        entry: trade.entry_price, stop: trade.stop_price, target: trade.target_price,
+        thesis: trade.thesis, exit: price, closeReason: 'manual_cut',
+        realizedPnlPct: +pct.toFixed(3), openedAt: trade.opened_at, closedAt: now,
+        contractType: trade.contract_type,
+      });
       closed++;
     } else if (a.action === 'scale_out') {
       const delta = Math.abs(a.delta_size_pct ?? 10);
@@ -304,6 +460,13 @@ serve(async (req) => {
       if (newSize === 0) {
         const pct = unrealizedPct(trade.side, trade.entry_price, price);
         await supabase.from('ct_trades').update({ status: 'closed', close_price: price, closed_at: now, close_reason: 'scaled_to_zero', realized_pnl_pct: +pct.toFixed(3) }).eq('id', trade.id);
+        firePostMortem(supabase, {
+          tradeId: trade.id, instrument: trade.instrument, side: trade.side,
+          entry: trade.entry_price, stop: trade.stop_price, target: trade.target_price,
+          thesis: trade.thesis, exit: price, closeReason: 'scaled_to_zero',
+          realizedPnlPct: +pct.toFixed(3), openedAt: trade.opened_at, closedAt: now,
+          contractType: trade.contract_type,
+        });
         closed++;
       } else {
         await supabase.from('ct_trades').update({ size_pct: newSize }).eq('id', trade.id);
@@ -319,6 +482,13 @@ serve(async (req) => {
     } else if (a.action === 'flip') {
       const pct = unrealizedPct(trade.side, trade.entry_price, price);
       await supabase.from('ct_trades').update({ status: 'closed', close_price: price, closed_at: now, close_reason: 'flipped', realized_pnl_pct: +pct.toFixed(3) }).eq('id', trade.id);
+      firePostMortem(supabase, {
+        tradeId: trade.id, instrument: trade.instrument, side: trade.side,
+        entry: trade.entry_price, stop: trade.stop_price, target: trade.target_price,
+        thesis: trade.thesis, exit: price, closeReason: 'flipped',
+        realizedPnlPct: +pct.toFixed(3), openedAt: trade.opened_at, closedAt: now,
+        contractType: trade.contract_type,
+      });
       await supabase.from('ct_trades').insert({
         session_date: sessionDate,
         instrument: trade.instrument,

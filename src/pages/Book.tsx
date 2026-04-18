@@ -3,20 +3,27 @@
  *
  * Full-width equity curve on top, then:
  *   - Sessions table (every ct_book row)
- *   - Trades table (every ct_trades row, flat across all sessions)
- *
- * Read-only. Pulls all ct_book + all ct_trades via direct supabase queries.
- * No edge functions, no mutation.
+ *   - Trades table (every ct_trades row, flat across all sessions) with
+ *     expandable journal rows (Claude's post-mortem + James's notes).
  */
+import { Fragment, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, Wallet, Target, ListOrdered } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { ArrowLeft, Wallet, Target, ListOrdered, NotebookPen, RefreshCw } from 'lucide-react';
 import { BookEquityCurve } from '@/components/command/BookEquityCurve';
 import { PnLByTheme } from '@/components/command/PnLByTheme';
+import { RiskMetricsPanel } from '@/components/command/RiskMetricsPanel';
+import {
+  SizingCalculatorButton,
+  SizingCalculatorInline,
+} from '@/components/command/SizingCalculator';
 import type { CtBookRow, CtTradeRow } from '@/hooks/useCoTraderData';
+import { useTradeJournal, formatRelativeTime } from '@/hooks/useTradeJournal';
 
 const GREEN = '#00C853';
 const RED = '#FF1744';
@@ -174,9 +181,98 @@ function SessionsTable() {
   );
 }
 
+function JournalPanel({ trade }: { trade: CtTradeRow }) {
+  const {
+    jamesNotes, setJamesNotes, flushSave,
+    saving, saveError, lastSavedAt,
+    regenerate, regenerating, regenError,
+  } = useTradeJournal(trade);
+
+  const hasClaudeNotes = !!(trade.claude_notes && trade.claude_notes.trim());
+  const canRegen = trade.status === 'closed' && trade.close_price != null;
+
+  return (
+    <div className="bg-muted/10 border-t border-border px-6 py-4 text-xs">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Claude's post-mortem — read-only, markdown */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <NotebookPen className="w-3.5 h-3.5 text-primary" />
+              <h4 className="text-[10px] font-semibold uppercase tracking-wide text-foreground">
+                Claude's post-mortem
+              </h4>
+              {trade.journal_version != null && trade.journal_version > 1 && (
+                <Badge variant="outline" className="text-[9px] px-1 py-0">v{trade.journal_version}</Badge>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              {!canRegen && (
+                <span className="text-[9px] text-muted-foreground italic">open trade — no post-mortem yet</span>
+              )}
+              {canRegen && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-[10px] gap-1"
+                  onClick={() => void regenerate()}
+                  disabled={regenerating}
+                >
+                  <RefreshCw className={`w-3 h-3 ${regenerating ? 'animate-spin' : ''}`} />
+                  {regenerating ? 'regenerating…' : 'regenerate'}
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="prose prose-xs prose-invert max-w-none text-foreground/90 leading-relaxed">
+            {hasClaudeNotes ? (
+              <ReactMarkdown>{trade.claude_notes as string}</ReactMarkdown>
+            ) : (
+              <p className="text-muted-foreground italic">
+                {canRegen ? 'No post-mortem yet — click regenerate.' : 'Will appear when the trade closes.'}
+              </p>
+            )}
+          </div>
+          {regenError && (
+            <p className="mt-2 text-[10px] text-red-400">regenerate failed: {regenError}</p>
+          )}
+        </div>
+
+        {/* James's freeform notes */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <h4 className="text-[10px] font-semibold uppercase tracking-wide text-foreground">Your notes</h4>
+            <span className="text-[9px] text-muted-foreground">
+              {saving
+                ? 'saving…'
+                : saveError
+                  ? <span className="text-red-400">save failed</span>
+                  : lastSavedAt
+                    ? `updated ${formatRelativeTime(lastSavedAt)}`
+                    : 'not saved yet'}
+            </span>
+          </div>
+          <textarea
+            className="w-full h-32 px-3 py-2 text-xs font-sans bg-background border border-border rounded resize-y focus:outline-none focus:ring-1 focus:ring-primary/40"
+            value={jamesNotes}
+            onChange={e => setJamesNotes(e.target.value)}
+            onBlur={() => void flushSave()}
+            placeholder={
+              trade.status === 'closed'
+                ? "What did you see? What did you learn? Be specific."
+                : "Pre-trade thesis, live observations, anything you want to revisit later."
+            }
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TradesTable() {
   const { data: trades, isLoading } = useAllTrades();
   const rows = trades ?? [];
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const closedRealized = rows
     .filter(t => t.status === 'closed')
@@ -190,6 +286,7 @@ function TradesTable() {
         <Target className="w-4 h-4 text-primary" />
         <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground">Trades</h3>
         <span className="text-[10px] text-muted-foreground">{rows.length} rows (last 2000)</span>
+        <span className="ml-auto text-[9px] text-muted-foreground italic">click a row to open the journal</span>
       </div>
       {isLoading ? (
         <div className="p-4 text-xs text-muted-foreground">loading…</div>
@@ -210,23 +307,18 @@ function TradesTable() {
                 <th className="px-3 py-2 text-right">P&L %</th>
                 <th className="px-3 py-2 text-right">P&L $</th>
                 <th className="px-3 py-2 text-center">Status</th>
+                <th className="px-3 py-2 text-center" title="Journal: 📝 green = has notes, grey = empty">📝</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {rows.map(t => {
                 const sideColor = t.side === 'long' ? GREEN : RED;
-                // For open trades, show live_pnl_* (set by ct-book-manager
-                // every 15min for underlying). For closed, show realized.
-                // Options open trades stay null and render "—" with tooltip.
                 const isOpen = t.status === 'open';
                 const isOptionOpen = isOpen && t.contract_type && t.contract_type !== 'underlying';
                 const pnlPct = isOpen ? t.live_pnl_pct ?? null : t.realized_pnl_pct;
                 const pnlUsd = isOpen ? t.live_pnl_usd ?? null : t.realized_pnl_usd;
                 const pnlCol = pnlColor(pnlUsd ?? pnlPct);
 
-                // Stale indicator: book-manager runs every 15min, so >20min
-                // without an update means the cron missed, market closed,
-                // or the function errored. Fade + "(stale)" suffix.
                 const updatedAt = t.live_pnl_updated_at ? new Date(t.live_pnl_updated_at).getTime() : null;
                 const isStale =
                   isOpen &&
@@ -241,36 +333,62 @@ function TradesTable() {
                   : undefined;
                 const cellOpacity = isStale ? 0.45 : 1;
 
+                const hasJournal = !!(
+                  (t.claude_notes && t.claude_notes.trim()) ||
+                  (t.james_notes && t.james_notes.trim())
+                );
+                const isExpanded = expandedId === t.id;
+
                 return (
-                  <tr key={t.id} className="hover:bg-muted/10">
-                    <td className="px-3 py-1.5 text-left text-muted-foreground">{t.session_date}</td>
-                    <td className="px-3 py-1.5 text-left font-semibold">{t.instrument}</td>
-                    <td className="px-3 py-1.5 text-left" style={{ color: sideColor }}>{t.side}</td>
-                    <td className="px-3 py-1.5 text-right">{t.size_pct}%</td>
-                    <td className="px-3 py-1.5 text-right">{fmtUsd(t.size_usd)}</td>
-                    <td className="px-3 py-1.5 text-right">{t.entry_price?.toFixed(2) ?? '—'}</td>
-                    <td className="px-3 py-1.5 text-right">{t.close_price?.toFixed(2) ?? '—'}</td>
-                    <td
-                      className="px-3 py-1.5 text-right"
-                      style={{ color: pnlCol, opacity: cellOpacity }}
-                      title={optionTitle ?? staleTitle}
+                  <Fragment key={t.id}>
+                    <tr
+                      className={`hover:bg-muted/10 cursor-pointer ${isExpanded ? 'bg-muted/15' : ''}`}
+                      onClick={() => setExpandedId(isExpanded ? null : t.id)}
                     >
-                      {fmtPct(pnlPct)}
-                      {isStale && <span className="ml-1 text-[9px] text-muted-foreground">(stale)</span>}
-                    </td>
-                    <td
-                      className="px-3 py-1.5 text-right"
-                      style={{ color: pnlCol, opacity: cellOpacity }}
-                      title={optionTitle ?? staleTitle}
-                    >
-                      {fmtUsd(pnlUsd, true)}
-                    </td>
-                    <td className="px-3 py-1.5 text-center">
-                      <Badge variant="outline" className="text-[9px] px-1 py-0">
-                        {t.status === 'closed' ? (t.close_reason ?? 'closed') : t.status}
-                      </Badge>
-                    </td>
-                  </tr>
+                      <td className="px-3 py-1.5 text-left text-muted-foreground">{t.session_date}</td>
+                      <td className="px-3 py-1.5 text-left font-semibold">{t.instrument}</td>
+                      <td className="px-3 py-1.5 text-left" style={{ color: sideColor }}>{t.side}</td>
+                      <td className="px-3 py-1.5 text-right">{t.size_pct}%</td>
+                      <td className="px-3 py-1.5 text-right">{fmtUsd(t.size_usd)}</td>
+                      <td className="px-3 py-1.5 text-right">{t.entry_price?.toFixed(2) ?? '—'}</td>
+                      <td className="px-3 py-1.5 text-right">{t.close_price?.toFixed(2) ?? '—'}</td>
+                      <td
+                        className="px-3 py-1.5 text-right"
+                        style={{ color: pnlCol, opacity: cellOpacity }}
+                        title={optionTitle ?? staleTitle}
+                      >
+                        {fmtPct(pnlPct)}
+                        {isStale && <span className="ml-1 text-[9px] text-muted-foreground">(stale)</span>}
+                      </td>
+                      <td
+                        className="px-3 py-1.5 text-right"
+                        style={{ color: pnlCol, opacity: cellOpacity }}
+                        title={optionTitle ?? staleTitle}
+                      >
+                        {fmtUsd(pnlUsd, true)}
+                      </td>
+                      <td className="px-3 py-1.5 text-center">
+                        <Badge variant="outline" className="text-[9px] px-1 py-0">
+                          {t.status === 'closed' ? (t.close_reason ?? 'closed') : t.status}
+                        </Badge>
+                      </td>
+                      <td
+                        className="px-3 py-1.5 text-center"
+                        title={hasJournal ? 'journal has notes' : 'journal empty'}
+                      >
+                        <span style={{ opacity: hasJournal ? 1 : 0.35, filter: hasJournal ? undefined : 'grayscale(1)' }}>
+                          📝
+                        </span>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr>
+                        <td colSpan={11} className="p-0">
+                          <JournalPanel trade={t} />
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 );
               })}
             </tbody>
@@ -285,6 +403,7 @@ function TradesTable() {
                 <td className="px-3 py-2 text-right font-semibold" style={{ color: pnlColor(closedRealized) }}>
                   {fmtUsd(closedRealized, true)}
                 </td>
+                <td className="px-3 py-2 text-center text-muted-foreground">—</td>
                 <td className="px-3 py-2 text-center text-muted-foreground">—</td>
               </tr>
             </tfoot>
@@ -315,11 +434,25 @@ export default function Book() {
               </p>
             </div>
           </div>
+          <div className="flex items-center gap-2">
+            <SizingCalculatorButton />
+          </div>
         </header>
 
         {/* Full-width equity curve — same component as CommandStation but gets
             the whole page width here. */}
         <BookEquityCurve />
+
+        {/* Hedge-fund-grade risk/performance stats + inline sizing calc.
+            Risk metrics tell you the edge; the calc turns it into a trade. */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="lg:col-span-2">
+            <RiskMetricsPanel />
+          </div>
+          <div>
+            <SizingCalculatorInline />
+          </div>
+        </div>
 
         {/* P&L split by thesis theme — where is the book making/losing money? */}
         <PnLByTheme />

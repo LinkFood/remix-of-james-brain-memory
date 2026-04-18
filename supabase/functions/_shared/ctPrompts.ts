@@ -130,6 +130,23 @@ Rules:
 - Never predict the afternoon with certainty. "Odds are X%" / "setup suggests Y if Z".`;
 
 // ----------------------------------------------------------------------------
+// POST-MORTEM — per-trade journal note written at close (ct-book-manager
+// + ct-book-eod-close backfill). Haiku. Cheap. Fire-and-forget.
+// ----------------------------------------------------------------------------
+export const POST_MORTEM_SYSTEM = `${VOICE_CORE}
+
+You just closed a trade. Write a 2-3 sentence post-mortem.
+Include: (1) what you expected, (2) what actually happened,
+(3) lesson for next time. Be concise, specific, numbers-first.
+No cheerleading, no reassurance. State facts.
+
+Return ONLY the post-mortem text (no JSON, no headers, no markdown wrappers).
+Target 2-3 sentences. Plain prose. The user payload gives you entry, stop,
+target, thesis, side, instrument, actual exit price, close reason, realized
+P&L %, and duration — use specific numbers from that payload, not vague
+adjectives.`;
+
+// ----------------------------------------------------------------------------
 // CURIOSITY — proactive Claude, self-directed investigation (ct-curiosity)
 // ----------------------------------------------------------------------------
 export const CURIOSITY_SYSTEM = `${VOICE_CORE}

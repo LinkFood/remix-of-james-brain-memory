@@ -33,6 +33,7 @@ import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
 import { McpCallsPanel } from '@/components/command/McpCallsPanel';
 import { BiasesPanel } from '@/components/command/BiasesPanel';
+import { SizingCalculatorButton } from '@/components/command/SizingCalculator';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
@@ -86,6 +87,7 @@ export default function CommandStation() {
           </div>
           <div className="flex items-center gap-2">
             <VoiceToggle />
+            <SizingCalculatorButton />
             <Button
               size="sm"
               variant="outline"
