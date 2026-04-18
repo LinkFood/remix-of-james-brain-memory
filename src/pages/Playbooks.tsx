@@ -17,6 +17,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { BookOpen, Target, TrendingUp, Clock, Hash } from 'lucide-react';
 import { toast } from 'sonner';
+import { DataExportButton } from '@/components/DataExportButton';
 
 interface Playbook {
   id: string;
@@ -241,18 +242,28 @@ export function Playbooks() {
   return (
     <div className="min-h-screen bg-background text-foreground p-4">
       <div className="max-w-[1400px] mx-auto space-y-4">
-        <header>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <BookOpen className="w-6 h-6 text-primary" />
-            <span className="text-primary">Playbooks</span>
-            <span className="text-sm text-muted-foreground font-normal">
-              Proven setups — curated weekly from graded outcomes
-            </span>
-          </h1>
-          <p className="text-xs text-muted-foreground mt-1.5">
-            {sorted.length} active {sorted.length === 1 ? 'playbook' : 'playbooks'}
-            {' · sorted by quality score (win_rate × sample_size)'}
-          </p>
+        <header className="flex items-start justify-between gap-3 flex-wrap">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              <BookOpen className="w-6 h-6 text-primary" />
+              <span className="text-primary">Playbooks</span>
+              <span className="text-sm text-muted-foreground font-normal">
+                Proven setups — curated weekly from graded outcomes
+              </span>
+            </h1>
+            <p className="text-xs text-muted-foreground mt-1.5">
+              {sorted.length} active {sorted.length === 1 ? 'playbook' : 'playbooks'}
+              {' · sorted by quality score (win_rate × sample_size)'}
+            </p>
+          </div>
+          {/* JSON backup — playbooks have nested setup_criteria jsonb that
+              belongs in structured form. CSV is still an option for the
+              flat stats (win_rate, sample_size, avg_return_pct). */}
+          <DataExportButton
+            data={sorted as unknown as Record<string, unknown>[]}
+            filename="playbooks"
+            label="Backup"
+          />
         </header>
 
         {isLoading && (

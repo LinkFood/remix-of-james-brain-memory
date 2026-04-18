@@ -31,8 +31,11 @@ import { useCalibration } from '@/hooks/useCalibration';
 import { useQueryFreshness } from '@/hooks/useFreshness';
 import { useClaudesSurprises } from '@/hooks/useClaudesSurprises';
 import { usePromptAbTest } from '@/hooks/usePromptAbTest';
+import { useBiases } from '@/hooks/useBiases';
+import { useAlertPostMortems } from '@/hooks/useAlertPostMortems';
 import { Link } from 'react-router-dom';
 import { FlaskConical, ArrowRight } from 'lucide-react';
+import { DataExportButton } from '@/components/DataExportButton';
 
 interface Grade {
   subject_type: 'flag' | 'alert' | 'james_view';
@@ -173,6 +176,12 @@ export function Scorecard() {
   // Surprise deltas — over/underconfidence counts drive the header bias stat.
   const { data: surprises } = useClaudesSurprises();
 
+  // Extra hook reads for the Export button. TanStack Query dedupes the
+  // same queryKeys used by child panels, so these don't cost extra round
+  // trips — they just give this scope a handle on the data.
+  const { data: biasesData } = useBiases(50);
+  const { rows: postMortems = [] } = useAlertPostMortems();
+
   // Prompt A/B teaser — derive "latest vs previous" deltas from the same hook
   // the /prompts page uses. Skip entirely if fewer than 2 comparable versions.
   const { data: promptVersions } = usePromptAbTest();
@@ -271,6 +280,26 @@ export function Scorecard() {
             <Trophy className="w-6 h-6 text-primary" />
             <span className="text-primary">Scorecard</span>
             <span className="text-sm text-muted-foreground font-normal">Claude's graded track record</span>
+            {/* Export buttons — placed right after the subtitle so the calibration
+                gap stat still floats to the far right via `ml-auto`. Three
+                separate exports for the three data types on this page. */}
+            <div className="flex items-center gap-1 ml-2">
+              <DataExportButton
+                data={(grades ?? []) as unknown as Record<string, unknown>[]}
+                filename="grades"
+                label="Grades"
+              />
+              <DataExportButton
+                data={(biasesData ?? []) as unknown as Record<string, unknown>[]}
+                filename="biases"
+                label="Biases"
+              />
+              <DataExportButton
+                data={postMortems as unknown as Record<string, unknown>[]}
+                filename="alert-post-mortems"
+                label="Post-mortems"
+              />
+            </div>
             {calibrationCurves?.convictionGap != null && (
               <a
                 href="#calibration"

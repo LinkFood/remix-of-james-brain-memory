@@ -29,6 +29,7 @@ import {
 } from '@/components/command/SizingCalculator';
 import type { CtBookRow, CtTradeRow } from '@/hooks/useCoTraderData';
 import { useTradeJournal, formatRelativeTime } from '@/hooks/useTradeJournal';
+import { DataExportButton } from '@/components/DataExportButton';
 
 const GREEN = '#00C853';
 const RED = '#FF1744';
@@ -214,6 +215,13 @@ function SessionsTable() {
         <Wallet className="w-4 h-4 text-primary" />
         <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground">Sessions</h3>
         <span className="text-[10px] text-muted-foreground">{rows.length} rows</span>
+        <div className="ml-auto">
+          <DataExportButton
+            data={rows as unknown as Record<string, unknown>[]}
+            filename="book-sessions"
+            label="Export"
+          />
+        </div>
       </div>
       {isLoading ? (
         <div className="p-4 text-xs text-muted-foreground">loading…</div>
@@ -456,13 +464,56 @@ function TradesTable() {
   const closedWins = rows.filter(t => t.status === 'closed' && (t.realized_pnl_usd ?? 0) > 0).length;
   const closedLosses = rows.filter(t => t.status === 'closed' && (t.realized_pnl_usd ?? 0) < 0).length;
 
+  const closedTrades = rows.filter(t => t.status === 'closed');
+  const openTrades = rows.filter(t => t.status === 'open');
+  // Journal-only export: just the notes fields keyed by trade context.
+  const journalRows = rows
+    .filter(t => (t.claude_notes && String(t.claude_notes).trim()) || (t.james_notes && String(t.james_notes).trim()))
+    .map(t => ({
+      id: t.id,
+      session_date: t.session_date,
+      instrument: t.instrument,
+      side: t.side,
+      status: t.status,
+      opened_at: t.opened_at,
+      closed_at: (t as unknown as { closed_at?: string | null }).closed_at ?? null,
+      realized_pnl_usd: t.realized_pnl_usd,
+      pre_trade_quality: t.pre_trade_quality,
+      post_trade_quality: t.post_trade_quality,
+      quality_delta: t.quality_delta,
+      claude_notes: t.claude_notes ?? '',
+      james_notes: t.james_notes ?? '',
+      journal_version: t.journal_version ?? null,
+    }));
+
   return (
     <Card id="trades-table" className="overflow-hidden scroll-mt-20">
       <div className="px-4 py-2.5 border-b border-border bg-muted/20 flex items-center gap-2">
         <Target className="w-4 h-4 text-primary" />
         <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground">Trades</h3>
         <span className="text-[10px] text-muted-foreground">{rows.length} rows (last 2000)</span>
-        <span className="ml-auto text-[9px] text-muted-foreground italic">click a row to open the journal</span>
+        <span className="ml-2 text-[9px] text-muted-foreground italic">click a row to open the journal</span>
+        {/* Three separate exports — closed, open, journal — because they
+            answer different offline-analysis questions. JSON payload
+            includes all three so a single "full book" backup is one click. */}
+        <div className="ml-auto flex items-center gap-1">
+          <DataExportButton
+            data={closedTrades as unknown as Record<string, unknown>[]}
+            filename="trades-closed"
+            label="Closed"
+          />
+          <DataExportButton
+            data={openTrades as unknown as Record<string, unknown>[]}
+            filename="trades-open"
+            label="Open"
+          />
+          <DataExportButton
+            data={journalRows}
+            filename="trade-journal"
+            label="Journal"
+            jsonData={{ exported_at: new Date().toISOString(), trades: rows, journal: journalRows }}
+          />
+        </div>
       </div>
       {isLoading ? (
         <div className="p-4 text-xs text-muted-foreground">loading…</div>

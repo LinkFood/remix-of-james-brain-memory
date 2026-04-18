@@ -13,7 +13,7 @@
  * existing <Button onClick={killAll}> block in TopNav for that.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -54,6 +54,14 @@ export function KillSwitchButton() {
   const [submitting, setSubmitting] = useState(false);
 
   const active = state?.active === true;
+
+  // Allow CommandPalette (cmd+K → "Kill switch engage") to open this modal
+  // without tight coupling. The palette fires a window CustomEvent; we listen.
+  useEffect(() => {
+    const onOpen = () => setModalOpen(true);
+    window.addEventListener('ct:open-kill-switch', onOpen);
+    return () => window.removeEventListener('ct:open-kill-switch', onOpen);
+  }, []);
 
   const handleEngage = async () => {
     setSubmitting(true);

@@ -44,7 +44,9 @@ import TickerTerminal from "./pages/TickerTerminal";
 import TickerChart from "./pages/TickerChart";
 import CustomRules from "./pages/CustomRules";
 import TradeCommit from "./pages/TradeCommit";
+import Analogs from "./pages/Analogs";
 import { ChatPanel } from "./components/command/ChatPanel";
+import { CommandPalette } from "./components/CommandPalette";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -88,6 +90,7 @@ const TrackedRoutes = () => {
       <Route path="/chart/:symbol/:date" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/chart/:symbol/:date"><TickerChart /></RouteBoundary></AuthLayout>} />
       <Route path="/rules" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/rules"><CustomRules /></RouteBoundary></AuthLayout>} />
       <Route path="/commit" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/commit"><TradeCommit /></RouteBoundary></AuthLayout>} />
+      <Route path="/analogs" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/analogs"><Analogs /></RouteBoundary></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><RouteBoundary route="/dashboard"><Dashboard /></RouteBoundary></AuthLayout>} />
@@ -114,6 +117,7 @@ const TrackedRoutes = () => {
       <ActivityTrackingProvider userId={userId}>
         {routes}
         <Ticker userId={userId} />
+        <CommandPalette />
       </ActivityTrackingProvider>
     );
   }

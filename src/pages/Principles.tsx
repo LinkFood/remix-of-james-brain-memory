@@ -34,6 +34,7 @@ import {
   useRetirePrinciple,
   type JacPrinciple,
 } from '@/hooks/usePrinciples';
+import { DataExportButton } from '@/components/DataExportButton';
 
 type FilterMode = 'all' | 'unread' | 'severe';
 
@@ -242,6 +243,17 @@ export default function Principles() {
             <span className="text-xs text-muted-foreground ml-2">
               {totalActive} active · {unreadCount} unread
             </span>
+            {/* JSON backup — principles are structured objects with
+                source_reflection_ids arrays; the JSON view preserves those
+                as real arrays where CSV would flatten them. CSV remains
+                available for quick spreadsheet scans. */}
+            <div className="ml-auto">
+              <DataExportButton
+                data={(principles ?? []) as unknown as Record<string, unknown>[]}
+                filename="principles"
+                label="Backup"
+              />
+            </div>
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed max-w-2xl">
             Compound lessons distilled weekly from your reflections. These principles are

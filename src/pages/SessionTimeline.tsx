@@ -27,6 +27,7 @@ import { useSessionTimeline, type TimelineEvent, type TimelineKind } from '@/hoo
 import { useSessionSnapshot } from '@/hooks/useSessionSnapshot';
 import { useTodayBook, useBookHistory } from '@/hooks/useCoTraderData';
 import { Zap } from 'lucide-react';
+import { DataExportButton } from '@/components/DataExportButton';
 
 const TICKER_CHOICES = ['all', 'SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'TSLA', 'GLD', 'USO', 'SPX'];
 
@@ -418,6 +419,15 @@ export default function SessionTimeline() {
             <Button size="sm" variant="outline" onClick={() => { setSessionDate(today); setExpanded(null); setFocused(0); }}>
               Today
             </Button>
+            {/* Export the filtered session's events. Nested `detail` /
+                `triggered_by` get JSON.stringify'd in the CSV cell; the
+                JSON export keeps them structured. Filename encodes the
+                session date so re-exports don't overwrite. */}
+            <DataExportButton
+              data={events as unknown as Record<string, unknown>[]}
+              filename={`session-${sessionDate}${ticker !== 'all' ? `-${ticker}` : ''}`}
+              label="Export"
+            />
           </div>
         </header>
 

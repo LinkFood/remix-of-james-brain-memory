@@ -27,6 +27,7 @@ import {
   ACTIVITY_KIND_OPTIONS,
   ACTIVITY_KIND_BADGE,
 } from '@/hooks/useActivityLive';
+import { DataExportButton } from '@/components/DataExportButton';
 
 const TICKER_CHOICES = ['all', 'SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'TSLA', 'GLD', 'USO', 'SPX'];
 
@@ -163,6 +164,15 @@ export default function ActivityLive() {
             <Button size="sm" variant="outline" className="h-7 px-2 text-[11px]" onClick={() => refetch()}>
               Refetch
             </Button>
+            {/* Export the CURRENT filtered view so the file matches what
+                the user is looking at (kind/ticker/minAttention filters
+                applied). `filtered` still respects the 10k cap inside
+                downloadCsv. */}
+            <DataExportButton
+              data={filtered as unknown as Record<string, unknown>[]}
+              filename="activity-live"
+              label="Export"
+            />
           </div>
         </header>
 

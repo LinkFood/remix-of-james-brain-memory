@@ -79,6 +79,7 @@ const NAV_GROUPS: NavGroup[] = [
       { path: '/principles', label: 'Principles' },
       { path: '/prompts', label: 'Prompt A/B' },
       { path: '/replay', label: 'Replay' },
+      { path: '/analogs', label: 'Analogs' },
       { path: '/rules', label: 'Custom Rules' },
     ],
   },
