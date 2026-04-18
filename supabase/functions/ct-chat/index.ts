@@ -363,9 +363,12 @@ interface ChatMessage {
 // ============================================================================
 // /debate — Claude argues BOTH sides of a question with equal rigor.
 // Confirmation-bias antidote. Claude does NOT pick a winner — James decides.
-// Sonnet only (quality-critical; ~$0.02-0.03/debate expected). Ephemeral —
-// not persisted in v1 (handler is wrapped so adding a ct_debates write later
-// is a 3-line change; see persistDebate hook below).
+// Sonnet only (quality-critical; ~$0.02-0.03/debate expected).
+//
+// v2: debates are PERSISTED to ct_debates (wave 27). Topic is embedded once
+// via Voyage for semantic search on /debates. user_pick stays null until James
+// clicks a Pick button in ChatPanel — we NEVER auto-pick. The returned
+// debate_id lets the client PATCH user_pick later.
 // ============================================================================
 
 const DEBATE_SYSTEM = `You must now present BOTH SIDES of the user's question with equal
@@ -513,17 +516,75 @@ async function buildDebateContext(
 }
 
 /**
+ * Persist a DebateCard to ct_debates and embed the topic (Voyage 512-dim).
+ * One row per debate; embedding is one-shot on save, never re-embedded.
+ *
+ * Best-effort: if the insert or embed fails we log and return null — the
+ * chat response still flies back (James sees the card), we just can't
+ * track outcomes. That's acceptable degradation; a retry scaffold would
+ * add more failure surface than the cost it averts.
+ */
+async function persistDebate(
+  supabase: ReturnType<typeof createClient>,
+  userId: string,
+  card: DebateCard,
+): Promise<string | null> {
+  // Rich text for embedding: topic is the load-bearing signal; tail with
+  // instrument + synthesis so semantically-similar framings ("should I hold
+  // SPY" vs "SPY at these levels") retrieve each other.
+  const embedInput = [
+    card.topic,
+    card.instrument ? `instrument:${card.instrument}` : '',
+    card.synthesis,
+  ].filter(Boolean).join(' | ');
+
+  let embedding: number[] | null = null;
+  try {
+    embedding = await voyageEmbed(embedInput, 'document');
+  } catch (e) {
+    console.warn(`[ct-chat/persistDebate] embed failed: ${e instanceof Error ? e.message : e}`);
+    // Continue — we still persist the row, just without an embedding.
+  }
+
+  const { data, error } = await supabase
+    .from('ct_debates')
+    .insert({
+      user_id: userId,
+      topic: card.topic,
+      bull_case: card.bull_case,
+      bear_case: card.bear_case,
+      your_prior_lean: card.your_prior_lean,
+      recent_grade_on_this: card.recent_grade_on_this
+        ? { note: card.recent_grade_on_this }
+        : null,
+      your_bias_risk: card.your_bias_risk,
+      synthesis: card.synthesis,
+      instrument: card.instrument,
+      embedding: embedding as unknown as string | null,
+    })
+    .select('id')
+    .maybeSingle();
+
+  if (error) {
+    console.warn(`[ct-chat/persistDebate] insert failed: ${error.message}`);
+    return null;
+  }
+  return (data?.id as string | undefined) ?? null;
+}
+
+/**
  * Handle /debate — build topic context, call Sonnet with DEBATE_SYSTEM,
- * parse structured JSON, return a DebateCard. Ephemeral; see note atop
- * this section re: v2 persistence.
+ * parse structured JSON, persist to ct_debates, return a DebateCard + its id.
  */
 async function handleDebateCommand(
   supabase: ReturnType<typeof createClient>,
   topic: string,
   instrumentFilter: string | null,
+  userId: string | null,
 ): Promise<{
   response: string;
   debate_card: DebateCard | null;
+  debate_id: string | null;
   model: string;
   tokens_in: number;
   tokens_out: number;
@@ -533,6 +594,7 @@ async function handleDebateCommand(
     return {
       response: `/debate needs a topic. Try "/debate should I hold SPY" or "/debate long NVDA vs short NVDA here".`,
       debate_card: null,
+      debate_id: null,
       model: 'sonnet',
       tokens_in: 0,
       tokens_out: 0,
@@ -565,6 +627,7 @@ async function handleDebateCommand(
     return {
       response: `Debate failed — Claude error: ${detail}`,
       debate_card: null,
+      debate_id: null,
       model: 'sonnet',
       tokens_in: 0,
       tokens_out: 0,
@@ -580,6 +643,7 @@ async function handleDebateCommand(
     return {
       response: `Debate returned malformed JSON — can't render card. Raw head: ${raw.slice(0, 200)}`,
       debate_card: null,
+      debate_id: null,
       model: 'sonnet',
       tokens_in: tokensIn,
       tokens_out: tokensOut,
@@ -611,13 +675,18 @@ async function handleDebateCommand(
     instrument: instrumentFilter ?? null,
   };
 
-  // v2 hook: persistence. When we're ready to save, add a `ct_debates` insert
-  // here. Keeping it a single call-site so adding it later is mechanical.
-  // await persistDebate(supabase, { topic, card, tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: costUsd });
+  // Persist + embed (once, on save). debate_id is returned to the client so
+  // the Pick buttons can PATCH user_pick later. Service-role calls without a
+  // userId (rare — testing path) skip persistence.
+  let debateId: string | null = null;
+  if (userId) {
+    debateId = await persistDebate(supabase, userId, card);
+  }
 
   return {
     response: `Debate on "${card.topic}" — both sides below. Your call.`,
     debate_card: card,
+    debate_id: debateId,
     model: 'sonnet',
     tokens_in: tokensIn,
     tokens_out: tokensOut,
@@ -1206,10 +1275,11 @@ serve(async (req) => {
       // will use general context.
       const tickers = extractInstruments(topic);
       const instrumentFilter = tickers.length > 0 ? tickers[0] : null;
-      const debated = await handleDebateCommand(supabase, topic, instrumentFilter);
+      const debated = await handleDebateCommand(supabase, topic, instrumentFilter, userId);
       return new Response(JSON.stringify({
         response: debated.response,
         debate_card: debated.debate_card,
+        debate_id: debated.debate_id,
         debate: true,
         model: debated.model,
         tokens_in: debated.tokens_in,

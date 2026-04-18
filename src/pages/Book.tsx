@@ -23,6 +23,7 @@ import { ConcentrationPanel } from '@/components/command/ConcentrationPanel';
 import { BookGreeks } from '@/components/command/BookGreeks';
 import { TradeAuditPanel } from '@/components/command/TradeAuditPanel';
 import { TradeAdvisoriesPanel } from '@/components/command/TradeAdvisoriesPanel';
+import { CorrelationMatrix, PortfolioCorrelationWarning } from '@/components/command/CorrelationMatrix';
 import {
   SizingCalculatorButton,
   SizingCalculatorInline,
@@ -707,10 +708,20 @@ export default function Book() {
           </div>
         </div>
 
+        {/* Portfolio-wide correlation banner — warns when open positions are
+            effectively the same directional bet via correlated tickers.
+            Renders null when there are < 2 open positions. */}
+        <PortfolioCorrelationWarning />
+
         {/* Monte Carlo forward simulator — run the observed R-distribution
             forward N days × N paths to visualize the probable equity-curve
             envelope and P(ruin). Client-side only; no DB writes. */}
         <MonteCarloPanel />
+
+        {/* Watchlist correlation heatmap — which pairs are moving together,
+            which are independent. Click any cell for the 30d return scatter.
+            Populated daily by ct-correlation-compute. */}
+        <CorrelationMatrix />
 
         {/* Portfolio concentration — live view of the four caps that gate new
             trades at commit time (ticker, theme, direction, options count). */}

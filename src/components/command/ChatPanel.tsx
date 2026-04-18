@@ -77,6 +77,10 @@ interface MessageMeta {
   proposal_cards?: ProposalCard[];
   /** /debate returned this — rendered as a structured two-column adversarial card. */
   debate_card?: DebateCard;
+  /** ct_debates row id — lets the Pick buttons PATCH user_pick. */
+  debate_id?: string;
+  /** Optimistic local state for which side James picked. Persisted via PATCH. */
+  debate_pick?: 'bull' | 'bear' | 'neither';
 }
 
 interface Message {
@@ -281,10 +285,18 @@ function AssistantBody({ content }: { content: string }) {
  */
 function DebateCardView({
   card,
+  debateId,
+  pick,
   onProposeFromSide,
+  onPick,
 }: {
   card: DebateCard;
+  /** null when persistence failed on save — Pick buttons are disabled in that case. */
+  debateId: string | null;
+  /** Optimistic: which side James has already picked (if any). */
+  pick: 'bull' | 'bear' | 'neither' | null;
   onProposeFromSide: (side: 'bull' | 'bear') => void;
+  onPick: (side: 'bull' | 'bear' | 'neither') => void;
 }) {
   const priorColor = card.your_prior_lean.toLowerCase().includes('bull')
     ? 'text-emerald-600 dark:text-emerald-400'
@@ -351,6 +363,62 @@ function DebateCardView({
           <div className="italic">{card.synthesis}</div>
         </div>
       )}
+
+      {/*
+        Pick row — James's call. Sits BELOW the per-side Propose buttons by
+        design: Propose is the "here's the trade if this side wins" tool,
+        Pick is the "I'm committing to a stance" tool. They're different
+        actions. user_pick stays null until James clicks — we never infer it.
+        Buttons disable once a pick is made (click again same side is a
+        no-op) and when debateId is null (persistence failed on save, so
+        the PATCH has nowhere to land — Pick would be a ghost click).
+      */}
+      <div className="px-3 py-2 border-t border-border/60 bg-background/40">
+        <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-1.5">
+          your call {debateId == null && <span className="text-amber-500/80">· unsaved</span>}
+        </div>
+        <div className="flex gap-1.5">
+          {(['bull', 'bear', 'neither'] as const).map((side) => {
+            const isPicked = pick === side;
+            const color = side === 'bull'
+              ? 'emerald'
+              : side === 'bear'
+                ? 'rose'
+                : 'zinc';
+            const base = 'flex-1 text-[10.5px] px-2 py-1.5 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+            const picked = color === 'emerald'
+              ? 'bg-emerald-500/20 border-emerald-500 text-emerald-700 dark:text-emerald-300'
+              : color === 'rose'
+                ? 'bg-rose-500/20 border-rose-500 text-rose-700 dark:text-rose-300'
+                : 'bg-zinc-500/20 border-zinc-500 text-zinc-700 dark:text-zinc-300';
+            const idle = color === 'emerald'
+              ? 'border-emerald-500/40 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/10'
+              : color === 'rose'
+                ? 'border-rose-500/40 text-rose-700 dark:text-rose-400 hover:bg-rose-500/10'
+                : 'border-border text-muted-foreground hover:bg-muted/50 hover:text-foreground';
+            return (
+              <button
+                key={side}
+                onClick={() => onPick(side)}
+                disabled={debateId == null || pick != null}
+                className={`${base} ${isPicked ? picked : idle}`}
+                title={debateId == null
+                  ? 'Debate not persisted — pick unavailable'
+                  : pick != null
+                    ? `You picked ${pick.toUpperCase()}`
+                    : `Commit to the ${side.toUpperCase()} side`}
+              >
+                {isPicked ? '✓ ' : ''}I pick {side.toUpperCase()}
+              </button>
+            );
+          })}
+        </div>
+        {pick != null && (
+          <div className="text-[10px] text-muted-foreground/80 mt-1.5">
+            Locked in <span className="font-semibold">{pick.toUpperCase()}</span>. Outcome scorer resolves after horizon. Review on <a href="/debates" className="underline hover:text-foreground">/debates</a>.
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -632,6 +700,7 @@ export function ChatPanel() {
         debate_card: body.debate_card && typeof body.debate_card === 'object'
           ? (body.debate_card as DebateCard)
           : undefined,
+        debate_id: typeof body.debate_id === 'string' ? body.debate_id : undefined,
       };
       setMessages([...next, {
         role: 'assistant',
@@ -728,6 +797,38 @@ export function ChatPanel() {
                         <div className="mt-1">
                           <DebateCardView
                             card={m.meta.debate_card}
+                            debateId={m.meta.debate_id ?? null}
+                            pick={m.meta.debate_pick ?? null}
+                            onPick={async (side) => {
+                              const id = m.meta?.debate_id;
+                              if (!id) return; // button is already disabled in this case
+                              // Optimistic update — flip the local pick immediately,
+                              // then PATCH. On failure we roll back so the buttons
+                              // re-enable and James can retry.
+                              const prev = m.meta?.debate_pick ?? null;
+                              setMessages((curr) =>
+                                curr.map((mm, idx) =>
+                                  idx === i
+                                    ? { ...mm, meta: { ...(mm.meta ?? {}), debate_pick: side } }
+                                    : mm,
+                                ),
+                              );
+                              const { error } = await supabase
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                .from('ct_debates' as any)
+                                .update({ user_pick: side, user_pick_at: new Date().toISOString() })
+                                .eq('id', id);
+                              if (error) {
+                                console.warn('[ChatPanel] debate pick PATCH failed:', error.message);
+                                setMessages((curr) =>
+                                  curr.map((mm, idx) =>
+                                    idx === i
+                                      ? { ...mm, meta: { ...(mm.meta ?? {}), debate_pick: prev ?? undefined } }
+                                      : mm,
+                                  ),
+                                );
+                              }
+                            }}
                             onProposeFromSide={(side) => {
                               // Pre-fill /propose with the instrument. If Claude's
                               // debate had no instrument (e.g. "hold my current

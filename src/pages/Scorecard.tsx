@@ -571,6 +571,13 @@ export function Scorecard() {
             command station) because this IS the track record. */}
         <JamesVsClaude variant="scorecard" daysBack={14} />
 
+        {/* Debate track record cross-link — one-liner "is deliberation beating
+            reactive alerts?" with a link to /debates for the full view.
+            Intentionally compact here: the Debates page is where the real
+            breakdown lives; Scorecard just surfaces the headline. */}
+        <DebateTrackRecordLink />
+
+
         {/* Breakdown tables */}
         {grades && grades.length > 0 ? (
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -684,6 +691,83 @@ function GatedGhostTradeTape() {
   const { data } = useGhostPnl(30);
   if (!data || data.rows.length === 0) return null;
   return <GhostTradeTape days={30} />;
+}
+
+/**
+ * Debate track record cross-link.
+ *
+ * Shows James's resolved debate win rate vs. Claude's solo-alert win rate
+ * as a single line + a link to /debates. Hidden entirely when James has
+ * zero resolved debates — no point showing "— vs. 55%" on a fresh install.
+ *
+ * Same rubric as the Debates page: right / (right + wrong) across the full
+ * ct_debates window on James's side, ct_grades last-30d alert subject_type
+ * on Claude's side. Partial/pending excluded from both denominators.
+ */
+function DebateTrackRecordLink() {
+  const { data: jamesStats } = useQuery<{ r: number; w: number }>({
+    queryKey: ['ct_debates_james_winrate'],
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .from('ct_debates' as any)
+        .select('outcome_verdict')
+        .not('user_pick', 'is', null)
+        .in('outcome_verdict', ['right', 'wrong']);
+      if (error || !data) return { r: 0, w: 0 };
+      let r = 0, w = 0;
+      for (const d of data as Array<{ outcome_verdict: string }>) {
+        if (d.outcome_verdict === 'right') r++;
+        else if (d.outcome_verdict === 'wrong') w++;
+      }
+      return { r, w };
+    },
+  });
+
+  const { data: claudeStats } = useQuery<{ r: number; w: number }>({
+    queryKey: ['ct_grades_alert_winrate_30d'],
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - 30 * 24 * 3_600_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_grades')
+        .select('verdict')
+        .eq('subject_type', 'alert')
+        .gte('graded_at', since);
+      if (error || !data) return { r: 0, w: 0 };
+      let r = 0, w = 0;
+      for (const g of data as Array<{ verdict: string }>) {
+        if (g.verdict === 'right') r++;
+        else if (g.verdict === 'wrong') w++;
+      }
+      return { r, w };
+    },
+  });
+
+  if (!jamesStats || jamesStats.r + jamesStats.w === 0) return null;
+
+  const jamesN = jamesStats.r + jamesStats.w;
+  const jamesPct = Math.round((jamesStats.r / jamesN) * 100);
+  const claudeN = (claudeStats?.r ?? 0) + (claudeStats?.w ?? 0);
+  const claudePct = claudeN > 0 ? Math.round(((claudeStats?.r ?? 0) / claudeN) * 100) : null;
+
+  return (
+    <Card className="p-3">
+      <div className="flex items-center gap-2 text-xs">
+        <Brain className="w-3.5 h-3.5 text-primary shrink-0" />
+        <div className="flex-1">
+          <span className="font-semibold">James's debate win rate: {jamesPct}% (n={jamesN})</span>
+          {claudePct != null && (
+            <span className="text-muted-foreground"> · Claude's solo alerts: {claudePct}% (n={claudeN}, last 30d)</span>
+          )}
+        </div>
+        <Link to="/debates" className="text-primary hover:underline text-xs shrink-0">
+          View debates <ArrowRight className="w-3 h-3 inline" />
+        </Link>
+      </div>
+    </Card>
+  );
 }
 
 export default Scorecard;

@@ -278,3 +278,9 @@ verify_jwt = false
 
 [functions.ct-cron-health-check]
 verify_jwt = false
+
+[functions.ct-debate-outcome-scorer]
+verify_jwt = false
+
+[functions.ct-correlation-compute]
+verify_jwt = false
