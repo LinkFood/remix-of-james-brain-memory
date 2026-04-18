@@ -317,3 +317,33 @@ verify_jwt = false
 
 [functions.ct-claude-health-monitor]
 verify_jwt = false
+
+[functions.ct-ticker-snapshot-builder]
+verify_jwt = false
+
+[functions.ct-tavily-news-watcher]
+verify_jwt = false
+
+[functions.ct-daily-brief]
+verify_jwt = false
+
+[functions.ct-insider-ingester]
+verify_jwt = false
+
+[functions.ct-political-ingester]
+verify_jwt = false
+
+[functions.ct-analyst-ingester]
+verify_jwt = false
+
+[functions.ct-short-interest-ingester]
+verify_jwt = false
+
+[functions.ct-sector-tide-ingester]
+verify_jwt = false
+
+[functions.ct-skew-ingester]
+verify_jwt = false
+
+[functions.ct-technicals-ingester]
+verify_jwt = false
