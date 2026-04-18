@@ -8,6 +8,7 @@
  * Ideal line: if any bucket has an `ideal` value, we overlay a dashed line at
  * that target so deviation from calibrated reasoning pops.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import {
   ComposedChart,
   Bar,
@@ -106,7 +107,7 @@ export function CalibrationChart({
         </div>
       ) : (
         <div style={{ height }}>
-          <ResponsiveContainer width="100%" height="100%">
+          <ChartSafe><ResponsiveContainer width="100%" height="100%">
             <ComposedChart
               data={chartData}
               margin={{ top: 16, right: 16, left: 0, bottom: 4 }}
@@ -204,7 +205,7 @@ export function CalibrationChart({
                 />
               )}
             </ComposedChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartSafe>
         </div>
       )}
 

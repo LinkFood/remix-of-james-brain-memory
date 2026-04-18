@@ -12,14 +12,17 @@
  *     for the watched ticker set. Not tied to any single signal — just
  *     "what has Claude been most attentive to in the last 30 min?"
  *
- * Click a pill → opens LinkGexDeep drill-down for that ticker (same surface
- * as AlwaysOnFlagStrip / GexRadar / ColdOpen). Parent owns the Sheet state
- * and passes `onOpenDeep`.
+ * Click a pill → navigates to /ticker/:symbol (TickerTerminal) — the
+ * Bloomberg-style drill-down page. Previously opened a shared LinkGexDeep
+ * Sheet; changed to full-page navigation because the terminal surfaces
+ * attention history, flow, dark pool, graded alerts, and positions — not
+ * just the option chain.
  *
  * Hidden entirely when every ticker scores below 20 — avoid shouting when
  * the market's quiet. Source hook handles the polling / realtime updates.
  */
 import { memo } from 'react';
+import { Link } from 'react-router-dom';
 import { Flame } from 'lucide-react';
 import {
   Tooltip,
@@ -56,27 +59,25 @@ function kindLabel(kind: 'observation' | 'flag' | 'alert'): string {
 
 interface PillProps {
   entry: LeaderboardEntry;
-  onOpenDeep: (ticker: string) => void;
 }
 
-const AttentionPill = memo(function AttentionPill({ entry, onOpenDeep }: PillProps) {
+const AttentionPill = memo(function AttentionPill({ entry }: PillProps) {
   const bg = tierColor(entry.score);
 
   return (
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => onOpenDeep(entry.ticker)}
+          <Link
+            to={`/ticker/${entry.ticker}`}
             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold tabular-nums tracking-wide hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all shadow-sm"
             style={{ background: bg, color: '#000' }}
-            aria-label={`${entry.ticker} attention score ${entry.score} — open LinkGex deep`}
+            aria-label={`${entry.ticker} attention score ${entry.score} — open ticker terminal`}
           >
             <Flame className="w-3 h-3" />
             <span>{entry.ticker}</span>
             <span className="opacity-80">{entry.score}</span>
-          </button>
+          </Link>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="bg-black/95 border-white/10 text-white px-3 py-2">
           <div className="text-[10px] uppercase tracking-wider text-white/60 mb-1">
@@ -93,7 +94,7 @@ const AttentionPill = memo(function AttentionPill({ entry, onOpenDeep }: PillPro
             <span className="text-right">{kindLabel(entry.top_event_kind)}</span>
           </div>
           <div className="text-[9px] text-white/40 mt-1.5 pt-1.5 border-t border-white/10">
-            click → open LinkGex deep for {entry.ticker}
+            click → open ticker terminal for {entry.ticker}
           </div>
         </TooltipContent>
       </Tooltip>
@@ -102,8 +103,12 @@ const AttentionPill = memo(function AttentionPill({ entry, onOpenDeep }: PillPro
 });
 
 interface Props {
-  /** Called when a pill is clicked. Parent owns the shared LinkGexDeep sheet. */
-  onOpenDeep: (ticker: string) => void;
+  /**
+   * Legacy callback — kept for source compatibility with existing parents,
+   * but no longer invoked: pills now navigate to /ticker/:symbol instead of
+   * opening the shared LinkGexDeep sheet.
+   */
+  onOpenDeep?: (ticker: string) => void;
   /** Max pills shown. Default 8. */
   limit?: number;
   /** Window in minutes. Default 30. */
@@ -111,7 +116,6 @@ interface Props {
 }
 
 export const AttentionLeaderboard = memo(function AttentionLeaderboard({
-  onOpenDeep,
   limit = 8,
   windowMinutes = 30,
 }: Props) {
@@ -139,7 +143,7 @@ export const AttentionLeaderboard = memo(function AttentionLeaderboard({
       </span>
       <div className="flex items-center gap-2 flex-nowrap">
         {ranked.map((e) => (
-          <AttentionPill key={e.ticker} entry={e} onOpenDeep={onOpenDeep} />
+          <AttentionPill key={e.ticker} entry={e} />
         ))}
       </div>
     </div>

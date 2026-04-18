@@ -13,6 +13,7 @@
  * `notional_value` (size * price, generated). We treat notional as the $ figure
  * everywhere the spec says "premium".
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import {
@@ -155,7 +156,7 @@ function TickerCell({ group }: { group: DarkPoolChartGroup }) {
         <>
           {/* Top: cumulative notional line */}
           <div className="h-[100px] p-1 border-b border-border/50">
-            <ResponsiveContainer width="100%" height="100%">
+            <ChartSafe><ResponsiveContainer width="100%" height="100%">
               <LineChart data={scaledRows} margin={{ top: 4, right: 6, left: 2, bottom: 0 }}>
                 <XAxis
                   dataKey="t"
@@ -203,12 +204,12 @@ function TickerCell({ group }: { group: DarkPoolChartGroup }) {
                   isAnimationActive={false}
                 />
               </LineChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartSafe>
           </div>
 
           {/* Bottom: scatter of print sizes */}
           <div className="h-[80px] p-1">
-            <ResponsiveContainer width="100%" height="100%">
+            <ChartSafe><ResponsiveContainer width="100%" height="100%">
               <ScatterChart margin={{ top: 4, right: 6, left: 2, bottom: 2 }}>
                 <XAxis
                   dataKey="t"
@@ -289,7 +290,7 @@ function TickerCell({ group }: { group: DarkPoolChartGroup }) {
                   ))}
                 </Scatter>
               </ScatterChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartSafe>
           </div>
         </>
       )}

@@ -8,6 +8,7 @@
  * This replaces the previous single "net" bar which was not how any
  * retail GEX dashboard (SpotGamma, MenthorQ, UW) renders the data.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { Bar, BarChart, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 interface Strike {
@@ -50,7 +51,7 @@ export function GexMiniChart({ strikes, price, flip }: Props) {
 
   return (
     <div className="h-[72px] -mx-1">
-      <ResponsiveContainer width="100%" height="100%">
+      <ChartSafe><ResponsiveContainer width="100%" height="100%">
         <BarChart data={data} stackOffset="sign" margin={{ top: 4, right: 2, left: 2, bottom: 0 }}>
           <XAxis dataKey="strike" hide type="number" domain={['dataMin', 'dataMax']} />
           <YAxis hide />
@@ -87,7 +88,7 @@ export function GexMiniChart({ strikes, price, flip }: Props) {
             />
           )}
         </BarChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer></ChartSafe>
     </div>
   );
 }

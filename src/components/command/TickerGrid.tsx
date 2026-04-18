@@ -1,4 +1,5 @@
 import { memo, useMemo, useState, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import {
   useLatestHeartbeat,
   useTheses,
@@ -598,7 +599,13 @@ export function TickerGrid({ onOpenDeep }: TickerGridProps = {}) {
           <Card key={ticker} className="p-3 hover:border-primary/40 transition-colors">
             <div className="flex items-baseline justify-between mb-1">
               <div className="flex items-baseline gap-2 min-w-0">
-                <span className="text-lg font-bold text-foreground">{ticker}</span>
+                <Link
+                  to={`/ticker/${T}`}
+                  className="text-lg font-bold text-foreground hover:text-primary focus:outline-none focus:ring-2 focus:ring-white/30 rounded-sm transition-colors"
+                  title={`Open ${T} terminal`}
+                >
+                  {ticker}
+                </Link>
                 {label && (
                   <span className="text-[10px] text-muted-foreground/80 uppercase tracking-wide truncate">
                     {label.group}{label.note ? ` · ${label.note}` : ''}

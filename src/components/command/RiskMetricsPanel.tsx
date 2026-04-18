@@ -13,6 +13,7 @@
  * When the sample is too thin (fewer than 5 returns or <5 trades with
  * stop data), we render "insufficient sample" inline rather than NaN.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useState } from 'react';
 import {
   BarChart,
@@ -306,7 +307,7 @@ export function RiskMetricsPanel() {
                 </div>
               ) : (
                 <div className="h-32 w-full">
-                  <ResponsiveContainer width="100%" height="100%">
+                  <ChartSafe><ResponsiveContainer width="100%" height="100%">
                     <BarChart
                       data={metrics.rHistogram.map(b => ({
                         ...b,
@@ -350,7 +351,7 @@ export function RiskMetricsPanel() {
                         ))}
                       </Bar>
                     </BarChart>
-                  </ResponsiveContainer>
+                  </ResponsiveContainer></ChartSafe>
                 </div>
               )}
             </div>

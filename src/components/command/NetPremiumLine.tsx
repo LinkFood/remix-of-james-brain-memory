@@ -6,6 +6,7 @@
  * across the session — the real intraday sentiment signal, not a derived guess
  * cumsummed from flow_alerts.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useMemo, useState } from 'react';
 import { useNetPremiumTicks, useNetPremiumTickers } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
@@ -75,7 +76,7 @@ export function NetPremiumLine() {
             {fmtMoney(latest)} {bullish ? '↑' : '↓'}
           </div>
           <div className="h-[120px]">
-            <ResponsiveContainer width="100%" height="100%">
+            <ChartSafe><ResponsiveContainer width="100%" height="100%">
               <LineChart data={series} margin={{ top: 4, right: 8, left: 4, bottom: 4 }}>
                 <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} interval="preserveStartEnd" />
                 <YAxis tickFormatter={(v) => fmtMoney(v).replace('$', '')} tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} width={40} />
@@ -93,7 +94,7 @@ export function NetPremiumLine() {
                   isAnimationActive={false}
                 />
               </LineChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartSafe>
           </div>
         </div>
       )}

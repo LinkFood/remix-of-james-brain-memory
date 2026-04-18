@@ -7,6 +7,7 @@
  *
  * Fed by ct_greek_flow_minute for SPY/QQQ/IWM.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useMemo, useState } from 'react';
 import { useGreekFlow } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
@@ -79,7 +80,7 @@ export function HiroPanel() {
             {fmtDelta(latest)} {bullish ? '↑' : '↓'}
           </div>
           <div className="h-[120px]">
-            <ResponsiveContainer width="100%" height="100%">
+            <ChartSafe><ResponsiveContainer width="100%" height="100%">
               <LineChart data={series} margin={{ top: 4, right: 8, left: 4, bottom: 4 }}>
                 <defs>
                   <linearGradient id="hiroStroke" x1="0" y1="0" x2="0" y2="1">
@@ -105,7 +106,7 @@ export function HiroPanel() {
                   isAnimationActive={false}
                 />
               </LineChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartSafe>
           </div>
         </div>
       )}

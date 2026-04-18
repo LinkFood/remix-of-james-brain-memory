@@ -9,13 +9,15 @@
  *   Mixing them in one strip creates visual pressure and conflates
  *   "what is SPY right now" with "what just happened to NVDA".
  *
- * Click a pill → fires `ct:flowtape:filter` window event → FlowTape
- * focuses on that ticker. No prop-drilling through CommandStation.
+ * Click a pill → navigates to /ticker/:symbol (TickerTerminal). Previously
+ * fired the `ct:flowtape:filter` window event to focus FlowTape; swapped to
+ * navigation to match the rest of the ticker-drill-down surface.
  *
  * No new UW calls — consumes ct_sweep_clusters populated by ct-sweep-cluster,
  * which is itself a pure internal scan of ct_flow_alerts.
  */
 import { memo } from 'react';
+import { Link } from 'react-router-dom';
 import { Zap } from 'lucide-react';
 import {
   Tooltip,
@@ -65,30 +67,22 @@ function relTime(iso: string): string {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
-function focusFlowTape(ticker: string) {
-  window.dispatchEvent(
-    new CustomEvent('ct:flowtape:filter', { detail: { ticker } }),
-  );
-}
-
 interface PillProps {
   c: SweepCluster;
 }
 
 const SweepPill = memo(function SweepPill({ c }: PillProps) {
   const bg = colorFor(c.dominant_side);
-  const label = `${c.ticker} ◉${c.sweep_count} ${sideLabel(c.dominant_side)} ${fmtMoney(c.total_premium)}`;
 
   return (
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => focusFlowTape(c.ticker)}
+          <Link
+            to={`/ticker/${c.ticker}`}
             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold tabular-nums tracking-wide hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all shadow-sm"
             style={{ background: bg, color: '#000' }}
-            aria-label={`${c.ticker} sweep cluster — focus Flow Tape`}
+            aria-label={`${c.ticker} sweep cluster — open ticker terminal`}
           >
             <Zap className="w-3 h-3" />
             <span>{c.ticker}</span>
@@ -97,7 +91,7 @@ const SweepPill = memo(function SweepPill({ c }: PillProps) {
             <span>{sideLabel(c.dominant_side)}</span>
             <span className="opacity-80">·</span>
             <span>{fmtMoney(c.total_premium)}</span>
-          </button>
+          </Link>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="bg-black/95 border-white/10 text-white px-3 py-2">
           <div className="text-[10px] uppercase tracking-wider text-white/60 mb-1">
@@ -116,7 +110,7 @@ const SweepPill = memo(function SweepPill({ c }: PillProps) {
             <span className="text-right">{c.attention_score}</span>
           </div>
           <div className="text-[9px] text-white/40 mt-1.5 pt-1.5 border-t border-white/10">
-            click → filter Flow Tape to {c.ticker}
+            click → open ticker terminal for {c.ticker}
           </div>
         </TooltipContent>
       </Tooltip>

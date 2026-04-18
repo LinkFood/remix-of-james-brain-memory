@@ -4,6 +4,7 @@
  * horizon close. Signed return respects direction. Running cumulative P&L
  * lights up as grades land.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useGhostPnl, type GhostPnlRow } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -104,7 +105,7 @@ export function GhostTradeTape({ days = 30 }: { days?: number }) {
         </div>
       ) : (
         <div className="h-48 w-full">
-          <ResponsiveContainer width="100%" height="100%">
+          <ChartSafe><ResponsiveContainer width="100%" height="100%">
             <AreaChart data={series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="ghostFill" x1="0" y1="0" x2="0" y2="1">
@@ -151,7 +152,7 @@ export function GhostTradeTape({ days = 30 }: { days?: number }) {
                 isAnimationActive={false}
               />
             </AreaChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartSafe>
         </div>
       )}
 

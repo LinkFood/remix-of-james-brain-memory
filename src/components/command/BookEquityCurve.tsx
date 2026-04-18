@@ -11,6 +11,7 @@
  * ~300px tall. Header carries the stats that answer: "is this book winning,
  * and by how much, and when was the best/worst day?"
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { Link } from 'react-router-dom';
 import { Card } from '@/components/ui/card';
 import { TrendingUp, TrendingDown, ArrowRight, AlertTriangle } from 'lucide-react';
@@ -255,7 +256,7 @@ export function BookEquityCurve() {
         </div>
       ) : (
         <div className="p-2" style={{ height: 220 }}>
-          <ResponsiveContainer width="100%" height="100%">
+          <ChartSafe><ResponsiveContainer width="100%" height="100%">
             <ComposedChart
               data={chartData}
               margin={{ top: 4, right: 10, left: 0, bottom: 4 }}
@@ -369,7 +370,7 @@ export function BookEquityCurve() {
                 name="Equity"
               />
             </ComposedChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartSafe>
         </div>
       )}
     </Card>

@@ -18,6 +18,7 @@
  * option-contracts + spot-exposures for SPY/QQQ/IWM.
  */
 import { memo } from 'react';
+import { Link } from 'react-router-dom';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   useGexRadar,
@@ -82,17 +83,32 @@ const FlagPill = memo(function FlagPill({ t, onOpen }: PillProps) {
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => onOpen(t.ticker)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold tabular-nums tracking-wide hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all shadow-sm"
+          {/* Split pill: ticker slug → /ticker/:symbol (full terminal);
+              verdict slug → shared LinkGexDeep sheet (preserved drill-down). */}
+          <span
+            className="inline-flex items-center rounded-full text-[11px] font-bold tabular-nums tracking-wide shadow-sm overflow-hidden"
             style={{ background: palette.bg, color: palette.fg }}
-            aria-label={`${t.ticker} ${palette.label} — open deep view`}
           >
-            <span>{t.ticker}</span>
-            <span className="opacity-80">·</span>
-            <span>{palette.label}</span>
-          </button>
+            <Link
+              to={`/ticker/${t.ticker}`}
+              className="pl-2.5 pr-1.5 py-1 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all"
+              style={{ color: palette.fg }}
+              aria-label={`${t.ticker} — open ticker terminal`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {t.ticker}
+            </Link>
+            <span className="opacity-60 px-0.5">·</span>
+            <button
+              type="button"
+              onClick={() => onOpen(t.ticker)}
+              className="pl-1.5 pr-2.5 py-1 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all"
+              style={{ color: palette.fg }}
+              aria-label={`${t.ticker} ${palette.label} — open LinkGex deep sheet`}
+            >
+              {palette.label}
+            </button>
+          </span>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="bg-black/95 border-white/10 text-white px-3 py-2">
           <div className="text-[10px] uppercase tracking-wider text-white/60 mb-1">
@@ -124,7 +140,9 @@ const FlagPill = memo(function FlagPill({ t, onOpen }: PillProps) {
             <span>cVel {fmtPct(t.verdicts.cVel)}</span>
             <span>pVel {fmtPct(t.verdicts.pVel)}</span>
           </div>
-          <div className="text-[9px] text-white/40 mt-1">click for LinkGex deep</div>
+          <div className="text-[9px] text-white/40 mt-1">
+            ticker → full terminal · verdict → LinkGex deep sheet
+          </div>
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
@@ -154,15 +172,31 @@ const RegimeFlipPill = memo(function RegimeFlipPill({ flip, onOpen }: RegimePill
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => onOpen(deepTicker)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold tabular-nums tracking-wide hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all shadow-sm"
+          {/* Split pill: ticker → full terminal, body → LinkGex deep sheet. */}
+          <span
+            className="inline-flex items-center rounded-full text-[11px] font-bold tabular-nums tracking-wide shadow-sm overflow-hidden"
             style={{ background: COLOR_GAMMA_FLIP, color: '#000' }}
-            aria-label={`${label} — open deep view`}
           >
-            <span>{label}</span>
-          </button>
+            <Link
+              to={`/ticker/${deepTicker}`}
+              className="pl-2.5 pr-1.5 py-1 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all"
+              style={{ color: '#000' }}
+              aria-label={`${flip.ticker} — open ticker terminal`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {flip.ticker}
+            </Link>
+            <span className="opacity-60 px-0.5">·</span>
+            <button
+              type="button"
+              onClick={() => onOpen(deepTicker)}
+              className="pl-1.5 pr-2.5 py-1 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all"
+              style={{ color: '#000' }}
+              aria-label={`${label} — open LinkGex deep sheet`}
+            >
+              γ-FLIP {dir}{lvl ? ' ' + lvl : ''}
+            </button>
+          </span>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="bg-black/95 border-white/10 text-white px-3 py-2">
           <div className="text-[10px] uppercase tracking-wider text-white/60 mb-1">
@@ -174,7 +208,8 @@ const RegimeFlipPill = memo(function RegimeFlipPill({ flip, onOpen }: RegimePill
             {flip.flip_level !== null && <span>flip {flip.flip_level.toFixed(0)}</span>}
           </div>
           <div className="text-[9px] text-white/40 mt-1">
-            click for LinkGex deep{flip.ticker === 'SPX' ? ' (SPY proxy)' : ''}
+            ticker → full terminal · body → LinkGex deep sheet
+            {flip.ticker === 'SPX' ? ' (SPY proxy)' : ''}
           </div>
         </TooltipContent>
       </Tooltip>
@@ -208,15 +243,31 @@ const IvShiftPill = memo(function IvShiftPill({ shift, onOpen }: IvShiftPillProp
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => onOpen(shift.ticker)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold tabular-nums tracking-wide hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all shadow-sm"
+          {/* Split pill: ticker → full terminal, body → LinkGex deep sheet. */}
+          <span
+            className="inline-flex items-center rounded-full text-[11px] font-bold tabular-nums tracking-wide shadow-sm overflow-hidden"
             style={{ background: bg, color: '#000' }}
-            aria-label={`${label} — open deep view`}
           >
-            <span>{label}</span>
-          </button>
+            <Link
+              to={`/ticker/${shift.ticker}`}
+              className="pl-2.5 pr-1.5 py-1 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all"
+              style={{ color: '#000' }}
+              aria-label={`${shift.ticker} — open ticker terminal`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {shift.ticker}
+            </Link>
+            <span className="opacity-60 px-0.5">·</span>
+            <button
+              type="button"
+              onClick={() => onOpen(shift.ticker)}
+              className="pl-1.5 pr-2.5 py-1 hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all"
+              style={{ color: '#000' }}
+              aria-label={`${label} — open LinkGex deep sheet`}
+            >
+              IV {deltaStr} ({prevStr}→{newStr})
+            </button>
+          </span>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="bg-black/95 border-white/10 text-white px-3 py-2">
           <div className="text-[10px] uppercase tracking-wider text-white/60 mb-1">
@@ -227,7 +278,9 @@ const IvShiftPill = memo(function IvShiftPill({ shift, onOpen }: IvShiftPillProp
             <span>ref {shift.ref_day}</span>
             <span>att {shift.attention_score}</span>
           </div>
-          <div className="text-[9px] text-white/40 mt-1">click for LinkGex deep</div>
+          <div className="text-[9px] text-white/40 mt-1">
+            ticker → full terminal · body → LinkGex deep sheet
+          </div>
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>

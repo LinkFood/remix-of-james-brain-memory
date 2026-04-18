@@ -7,6 +7,7 @@
  * red if negative, with count / win-rate / avg-per-trade shown next to it.
  * Sorted by |P&L| descending so the biggest P&L movers float to the top.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
@@ -151,7 +152,7 @@ export function PnLByTheme() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-0 divide-y md:divide-y-0 md:divide-x divide-border">
           {/* Bar chart — 2/3 width on desktop */}
           <div className="md:col-span-2 p-3" style={{ height: Math.max(240, chartData.length * 42 + 40) }}>
-            <ResponsiveContainer width="100%" height="100%">
+            <ChartSafe><ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={chartData}
                 layout="vertical"
@@ -190,7 +191,7 @@ export function PnLByTheme() {
                   ))}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartSafe>
           </div>
 
           {/* Adjacent stats — compact per-theme readout */}

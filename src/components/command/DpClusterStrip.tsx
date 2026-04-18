@@ -8,13 +8,15 @@
  *   - Dark pool blocks = institutional, non-directional. Size-only signal.
  *   Mixing them conflates "directional conviction" with "whale footprint".
  *
- * Click a pill → fires `ct:darkpool:filter` window event → DarkPoolTape
- * filters on that ticker. No prop-drilling through CommandStation.
+ * Click a pill → navigates to /ticker/:symbol (TickerTerminal). Previously
+ * fired the `ct:darkpool:filter` window event to focus DarkPoolTape; swapped
+ * to navigation to match the rest of the ticker-drill-down surface.
  *
  * No new UW calls — consumes ct_dp_clusters populated by ct-dp-cluster,
  * which is itself a pure internal scan of ct_dark_pool_prints.
  */
 import { memo } from 'react';
+import { Link } from 'react-router-dom';
 import { Square } from 'lucide-react';
 import {
   Tooltip,
@@ -55,12 +57,6 @@ function relTime(iso: string): string {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
-function focusDarkPool(ticker: string) {
-  window.dispatchEvent(
-    new CustomEvent('ct:darkpool:filter', { detail: { ticker } }),
-  );
-}
-
 interface PillProps {
   c: DpCluster;
 }
@@ -72,19 +68,18 @@ const DpPill = memo(function DpPill({ c }: PillProps) {
     <TooltipProvider delayDuration={150}>
       <Tooltip>
         <TooltipTrigger asChild>
-          <button
-            type="button"
-            onClick={() => focusDarkPool(c.ticker)}
+          <Link
+            to={`/ticker/${c.ticker}`}
             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold tabular-nums tracking-wide hover:brightness-110 focus:outline-none focus:ring-2 focus:ring-white/30 transition-all shadow-sm"
             style={{ background: bg, color: '#000' }}
-            aria-label={`${c.ticker} dark pool cluster — focus Dark Pool`}
+            aria-label={`${c.ticker} dark pool cluster — open ticker terminal`}
           >
             <Square className="w-3 h-3 fill-current" />
             <span>{c.ticker}</span>
             <span className="opacity-80">◼{c.print_count}</span>
             <span className="opacity-80">·</span>
             <span>{fmtMoney(c.total_notional)}</span>
-          </button>
+          </Link>
         </TooltipTrigger>
         <TooltipContent side="bottom" className="bg-black/95 border-white/10 text-white px-3 py-2">
           <div className="text-[10px] uppercase tracking-wider text-white/60 mb-1">
@@ -101,7 +96,7 @@ const DpPill = memo(function DpPill({ c }: PillProps) {
             <span className="text-right">{c.attention_score}</span>
           </div>
           <div className="text-[9px] text-white/40 mt-1.5 pt-1.5 border-t border-white/10">
-            click → filter Dark Pool to {c.ticker}
+            click → open ticker terminal for {c.ticker}
           </div>
         </TooltipContent>
       </Tooltip>

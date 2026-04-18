@@ -11,6 +11,7 @@
  *                    the day (temporal view, X = time, Y = $).
  * Both exist because they answer different questions. Don't collapse them.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useMemo, useState } from 'react';
 import { useFlowAlerts, type FlowAlert } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
@@ -105,7 +106,7 @@ export function FlowPerStrike() {
           {/* Container min-height 360 prevents collapse in grid cells;
               scale linearly when >20 strikes so bars stay readable. */}
           <div style={{ height: Math.max(360, buckets.length * 18), minHeight: 360 }}>
-            <ResponsiveContainer width="100%" height="100%">
+            <ChartSafe><ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={buckets}
                 layout="vertical"
@@ -156,7 +157,7 @@ export function FlowPerStrike() {
                   />
                 )}
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartSafe>
           </div>
           <div className="flex items-center justify-between text-[10px] text-muted-foreground px-2 pt-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
             <span>← puts {fmtMoney(totals.put)}</span>

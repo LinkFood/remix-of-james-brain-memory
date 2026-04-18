@@ -2,6 +2,7 @@
  * EquityCurvePanel — Claude's running paper book balance vs time.
  * After 30 days the question is binary: does this beat SPY buy-hold?
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useBookHistory } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { TrendingUp } from 'lucide-react';
@@ -42,7 +43,7 @@ export function EquityCurvePanel() {
         </div>
       ) : (
         <div className="p-3" style={{ height: 220 }}>
-          <ResponsiveContainer width="100%" height="100%">
+          <ChartSafe><ResponsiveContainer width="100%" height="100%">
             <LineChart data={points} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
               <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} />
               <YAxis domain={['auto', 'auto']} tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} axisLine={false} tickLine={false} tickFormatter={v => `$${(v/1000).toFixed(1)}k`} />
@@ -53,7 +54,7 @@ export function EquityCurvePanel() {
               <ReferenceLine y={10000} stroke="hsl(var(--border))" strokeDasharray="2 2" />
               <Line type="monotone" dataKey="balance" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} isAnimationActive={false} />
             </LineChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartSafe>
         </div>
       )}
     </Card>

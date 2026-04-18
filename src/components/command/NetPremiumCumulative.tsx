@@ -12,6 +12,7 @@
  *
  * Compact by design: ~120px tall per mini, 4 x-ticks, 2 y-ticks, no legend.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import {
@@ -97,7 +98,7 @@ function MiniChart({ data }: MiniProps) {
         </div>
       ) : (
         <div className="h-[120px] p-1">
-          <ResponsiveContainer width="100%" height="100%">
+          <ChartSafe><ResponsiveContainer width="100%" height="100%">
             <LineChart data={series} margin={{ top: 4, right: 6, left: 2, bottom: 2 }}>
               <XAxis
                 dataKey="label"
@@ -145,7 +146,7 @@ function MiniChart({ data }: MiniProps) {
                 isAnimationActive={false}
               />
             </LineChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartSafe>
         </div>
       )}
     </div>

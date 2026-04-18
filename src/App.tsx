@@ -33,6 +33,8 @@ import Book from "./pages/Book";
 import Health from "./pages/Health";
 import Preflight from "./pages/Preflight";
 import SessionTimeline from "./pages/SessionTimeline";
+import Stress from "./pages/Stress";
+import TickerTerminal from "./pages/TickerTerminal";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -68,6 +70,8 @@ const TrackedRoutes = () => {
       <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><Health /></AuthLayout>} />
       <Route path="/preflight" element={<AuthLayout sidebar={<ChatPanel />}><Preflight /></AuthLayout>} />
       <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><SessionTimeline /></AuthLayout>} />
+      <Route path="/stress" element={<AuthLayout sidebar={<ChatPanel />}><Stress /></AuthLayout>} />
+      <Route path="/ticker/:symbol" element={<AuthLayout sidebar={<ChatPanel />}><TickerTerminal /></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><Dashboard /></AuthLayout>} />
