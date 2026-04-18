@@ -101,6 +101,7 @@ export interface McpCallRow {
   source: string;
   server_name: string | null;
   tool_name: string | null;
+  tool_use_id: string | null;
   is_error: boolean;
   created_at: string;
 }
@@ -259,7 +260,7 @@ function emptyAttentionBuckets(): AttentionBucket[] {
 async function fetchMcpCalls(): Promise<McpCallRow[]> {
   const { data, error } = await supabase
     .from('ct_mcp_calls')
-    .select('id, source, server_name, tool_name, is_error, created_at')
+    .select('id, source, server_name, tool_name, tool_use_id, is_error, created_at')
     .order('created_at', { ascending: false })
     .limit(20);
   if (error) {

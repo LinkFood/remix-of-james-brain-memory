@@ -605,6 +605,20 @@ function AttentionSection({ buckets, total }: { buckets: AttentionBucket[]; tota
 // ---------------------------------------------------------------------------
 
 function McpCallsSection({ calls }: { calls: McpCallRow[] }) {
+  // Dedupe self-corrected retries: Claude sometimes calls a tool with bad params,
+  // gets an error, then retries with the correct params — both rows share the
+  // same tool_use_id. If the group contains any success, hide the error rows.
+  // Rows with NULL tool_use_id are never deduped (each treated as its own group).
+  const successTuids = new Set<string>();
+  for (const c of calls) {
+    if (c.tool_use_id && !c.is_error) successTuids.add(c.tool_use_id);
+  }
+  const dedupedCalls = calls.filter(c => {
+    if (!c.tool_use_id) return true;
+    if (c.is_error && successTuids.has(c.tool_use_id)) return false;
+    return true;
+  });
+
   return (
     <Card className="overflow-hidden">
       <div className="px-4 py-3 border-b bg-muted/30 flex items-center gap-2">
@@ -612,11 +626,11 @@ function McpCallsSection({ calls }: { calls: McpCallRow[] }) {
         <span className="text-sm font-semibold">MCP Call Log</span>
         <span className="text-[11px] text-muted-foreground ml-2">last 20</span>
       </div>
-      {calls.length === 0 ? (
+      {dedupedCalls.length === 0 ? (
         <div className="p-6 text-center text-xs text-muted-foreground">No MCP calls yet.</div>
       ) : (
         <div className="divide-y divide-border max-h-[320px] overflow-y-auto">
-          {calls.map((c) => (
+          {dedupedCalls.map((c) => (
             <div
               key={c.id}
               className={cn(
