@@ -11,6 +11,9 @@ export const ANTHROPIC_VERSION = '2023-06-01';
 export const CLAUDE_MODELS = {
   opus: 'claude-opus-4-20250514',
   sonnet: 'claude-sonnet-4-20250514',
+  // sonnet_46: PM-tier daily judgment (morning brief, hypothesis proposer).
+  // Same $ rate as base Sonnet. Explicit id so worker functions opt-in.
+  sonnet_46: 'claude-sonnet-4-5-20250929',
   haiku: 'claude-haiku-4-5-20251001',
 } as const;
 
@@ -25,6 +28,7 @@ export function resolveModel(tier: ModelTier): string {
 export const CLAUDE_RATES = {
   [CLAUDE_MODELS.opus]: { input: 15.0, output: 75.0 },
   [CLAUDE_MODELS.sonnet]: { input: 3.0, output: 15.0 },
+  [CLAUDE_MODELS.sonnet_46]: { input: 3.0, output: 15.0 },
   [CLAUDE_MODELS.haiku]: { input: 0.80, output: 4.0 },
 } as const;
 

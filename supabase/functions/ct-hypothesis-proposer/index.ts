@@ -5,11 +5,14 @@
  *   1. Pull the last `hypothesis_proposer_lookback_hours` of ct_observations,
  *      ct_alerts, and ct_grades (especially yesterday's non-confirmed grades).
  *   2. Pull currently open hypotheses so Claude doesn't re-propose.
- *   3. Ask Claude Sonnet for up to `hypothesis_proposer_max_per_day` NEW
- *      hypotheses that don't duplicate existing ones.
+ *   3. Ask Claude Sonnet 4.6 (PM-tier — daily judgment call) for up to
+ *      `hypothesis_proposer_max_per_day` NEW hypotheses that don't duplicate
+ *      existing ones.
  *   4. Insert each into ct_hypotheses (status='open', created_by='claude',
  *      confidence=0.50, elo=1500).
  *   5. Log a ct_hypothesis_events row (event_type='created') for each.
+ *   6. Write one ct_claude_decisions row per proposal (and one for zero-
+ *      proposal passes) for the Decision Journal.
  *
  * Claude returns strict JSON:
  *   {
@@ -28,9 +31,11 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError, calculateCost } from '../_shared/anthropic.ts';
 import { getConfig } from '../_shared/configCache.ts';
 import { buildClaudeContext, claudeSystemPromptPreamble } from '../_shared/claudeReadSurface.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
+import { validateHypothesisClaims } from '../_shared/hallucinationGuard.ts';
 
 const VALID_HORIZONS = new Set(['session', 'week', 'month', 'open']);
 
@@ -201,14 +206,20 @@ serve(async (req) => {
   const systemPrompt = `${claudeSystemPromptPreamble(claudeCtx)}\n\n${SYSTEM}`;
 
   let proposals: Proposal[] = [];
+  let tokensIn = 0;
+  let tokensOut = 0;
+  let costUsd = 0;
   try {
     const res = await callClaude({
-      model: CLAUDE_MODELS.sonnet,
+      model: CLAUDE_MODELS.sonnet_46,
       system: systemPrompt,
       messages: [{ role: 'user', content: JSON.stringify(userPayload) }],
       max_tokens: 2000,
       temperature: 0.4,
     });
+    tokensIn = res.usage?.input_tokens ?? 0;
+    tokensOut = res.usage?.output_tokens ?? 0;
+    costUsd = calculateCost(CLAUDE_MODELS.sonnet_46, res.usage ?? { input_tokens: 0, output_tokens: 0 });
     const raw = parseTextContent(res).trim();
     const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
     const parsed = JSON.parse(stripped) as { proposals?: unknown };
@@ -218,13 +229,31 @@ serve(async (req) => {
     if (proposals.length > maxPerDay) proposals = proposals.slice(0, maxPerDay);
   } catch (e) {
     const detail = e instanceof ClaudeError ? `Claude ${e.status}` : String(e);
+    await recordDecision(supabase, {
+      decision_type: 'propose_hypothesis',
+      model_tier: 'sonnet',
+      reasoning: `proposer llm call failed: ${detail}`,
+      outcome: 'claude_error',
+      context_snapshot: {
+        brief_id: claudeCtx.activeBrief?.id ?? null,
+        lookback_hours: lookbackHours,
+        existing_hypothesis_count: claudeCtx.openHypotheses.length,
+      },
+      linked_brief_id: claudeCtx.activeBrief?.id,
+      tool_calls_summary: { called: 'callClaude(sonnet_46, propose_hypotheses)', error: detail },
+    });
     return new Response(JSON.stringify({ ok: false, error: `proposer llm: ${detail}` }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
-  const inserted: Array<{ id: string; claim: string; horizon: string; tickers: string[] }> = [];
+  const inserted: Array<{ id: string; claim: string; horizon: string; tickers: string[]; hallucination_flag: boolean }> = [];
+  // Spread token+cost across proposals so each decision row carries a share.
+  const perProposalTokensIn = proposals.length > 0 ? Math.round(tokensIn / proposals.length) : tokensIn;
+  const perProposalTokensOut = proposals.length > 0 ? Math.round(tokensOut / proposals.length) : tokensOut;
+  const perProposalCost = proposals.length > 0 ? costUsd / proposals.length : costUsd;
+
   for (const p of proposals) {
     const tickers = p.tickers.map((t) => t.toUpperCase().trim()).filter(Boolean);
     const { data, error } = await supabase
@@ -244,14 +273,97 @@ serve(async (req) => {
       .single();
     if (error || !data) {
       console.warn(`[ct-hypothesis-proposer] insert failed: ${error?.message ?? 'no data'}`);
+      await recordDecision(supabase, {
+        decision_type: 'propose_hypothesis',
+        model_tier: 'sonnet',
+        reasoning: `proposal insert failed: ${error?.message ?? 'no data'}. Claim: ${p.claim.slice(0, 200)}`,
+        outcome: 'insert_failed',
+        context_snapshot: { claim: p.claim, tickers, horizon: p.horizon },
+      });
       continue;
     }
-    inserted.push({ id: data.id, claim: p.claim, horizon: p.horizon, tickers });
+
+    // Hallucination check on because bullets — non-blocking, flag only.
+    let hallucinationFlag = false;
+    let hallucinationReason: string | undefined;
+    try {
+      const check = await validateHypothesisClaims(supabase, p.because);
+      if (!check.valid) {
+        hallucinationFlag = true;
+        hallucinationReason = check.flagged
+          .map((f) => `"${f.bullet.slice(0, 80)}" → ${f.reason}`)
+          .join(' | ')
+          .slice(0, 1000);
+      }
+    } catch (e) {
+      console.warn(`[ct-hypothesis-proposer] hallucination guard threw: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    inserted.push({ id: data.id, claim: p.claim, horizon: p.horizon, tickers, hallucination_flag: hallucinationFlag });
     await supabase.from('ct_hypothesis_events').insert({
       hypothesis_id: data.id,
       event_type: 'created',
       reason: `proposer: ${p.claim.slice(0, 200)}`,
       created_by: 'cron',
+    });
+
+    // Decision journal — one row per proposed hypothesis.
+    await recordDecision(supabase, {
+      decision_type: 'propose_hypothesis',
+      model_tier: 'sonnet',
+      reasoning: `Proposed hypothesis: ${p.claim}. Because: ${p.because.join('; ').slice(0, 1500)}. Invalidate if: ${p.invalidate_if}`,
+      outcome: hallucinationFlag ? 'armed_with_hallucination_flag' : 'armed',
+      context_snapshot: {
+        brief_id: claudeCtx.activeBrief?.id ?? null,
+        lookback_hours: lookbackHours,
+        existing_hypothesis_count: claudeCtx.openHypotheses.length,
+        horizon: p.horizon,
+        tickers,
+        tape_sample_sizes: {
+          observations: tape.observations.length,
+          alerts: tape.alerts.length,
+          wobbly_grades: tape.wobbly_grades.length,
+        },
+      },
+      narrative_signal: {
+        reasoning: p.because.join(' | ').slice(0, 2000),
+        sources: ['ct_observations', 'ct_alerts', 'ct_grades'],
+      },
+      tool_calls_summary: { called: 'callClaude(sonnet_46, propose_hypotheses)', proposals_returned: proposals.length },
+      linked_hypothesis_id: data.id,
+      linked_brief_id: claudeCtx.activeBrief?.id,
+      hallucination_flag: hallucinationFlag,
+      hallucination_reason: hallucinationReason,
+      tokens_in: perProposalTokensIn,
+      tokens_out: perProposalTokensOut,
+      cost_usd: perProposalCost,
+    });
+  }
+
+  // If Claude proposed nothing, still journal the pass. Use decision_type=
+  // 'propose_hypothesis' (not 'no_trade') so every proposer run tells the
+  // same story in the journal, and outcome encodes the zero count.
+  if (proposals.length === 0) {
+    await recordDecision(supabase, {
+      decision_type: 'propose_hypothesis',
+      model_tier: 'sonnet',
+      reasoning: 'Proposer returned zero proposals — nothing tradeable in the tape window.',
+      outcome: '0 proposals — no high-conviction setups in the tape',
+      context_snapshot: {
+        brief_id: claudeCtx.activeBrief?.id ?? null,
+        lookback_hours: lookbackHours,
+        existing_hypothesis_count: claudeCtx.openHypotheses.length,
+        tape_sample_sizes: {
+          observations: tape.observations.length,
+          alerts: tape.alerts.length,
+          wobbly_grades: tape.wobbly_grades.length,
+        },
+      },
+      linked_brief_id: claudeCtx.activeBrief?.id,
+      tool_calls_summary: { called: 'callClaude(sonnet_46, propose_hypotheses)', proposals_returned: 0 },
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+      cost_usd: costUsd,
     });
   }
 
