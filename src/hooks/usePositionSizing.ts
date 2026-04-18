@@ -125,16 +125,17 @@ export function usePositionSizing(input: PositionSizingInput): PositionSizingOut
   const { data: todayBook } = useTodayBook();
   const { data: ghost } = useGhostPnl(60); // 60-day history for expectancy
 
+  const {
+    side,
+    entryPrice,
+    stopPrice,
+    targetPrice,
+    bookEquityOverride,
+    riskPct: rawRiskPct,
+    contractType = 'underlying',
+  } = input;
+
   return useMemo(() => {
-    const {
-      side,
-      entryPrice,
-      stopPrice,
-      targetPrice,
-      bookEquityOverride,
-      riskPct: rawRiskPct,
-      contractType = 'underlying',
-    } = input;
 
     // Resolve book equity
     let bookEquity: number;
@@ -234,7 +235,13 @@ export function usePositionSizing(input: PositionSizingInput): PositionSizingOut
       bookEquitySource,
     };
   }, [
-    input,
+    side,
+    entryPrice,
+    stopPrice,
+    targetPrice,
+    bookEquityOverride,
+    rawRiskPct,
+    contractType,
     todayBook?.starting_balance,
     ghost?.aggregates,
   ]);
