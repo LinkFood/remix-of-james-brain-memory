@@ -9,11 +9,11 @@ export const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 export const ANTHROPIC_VERSION = '2023-06-01';
 
 export const CLAUDE_MODELS = {
-  opus: 'claude-opus-4-20250514',
+  opus: 'claude-opus-4-7',
   sonnet: 'claude-sonnet-4-20250514',
-  // sonnet_46: PM-tier daily judgment (morning brief, hypothesis proposer).
-  // Same $ rate as base Sonnet. Explicit id so worker functions opt-in.
-  sonnet_46: 'claude-sonnet-4-5-20250929',
+  // sonnet_46: PM-tier daily judgment (morning brief, hypothesis proposer,
+  // CIO reviews). Latest Sonnet 4.6.
+  sonnet_46: 'claude-sonnet-4-6',
   haiku: 'claude-haiku-4-5-20251001',
 } as const;
 
