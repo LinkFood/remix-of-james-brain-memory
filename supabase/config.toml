@@ -302,3 +302,12 @@ verify_jwt = false
 
 [functions.ct-hypothesis-proposer]
 verify_jwt = false
+
+[functions.ct-trade-idea-generator]
+verify_jwt = false
+
+[functions.ct-claude-book-writer]
+verify_jwt = false
+
+[functions.ct-claude-book-exit-watcher]
+verify_jwt = false
