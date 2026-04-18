@@ -26,7 +26,7 @@ import {
 } from 'recharts';
 import { useNetPremiumCumulative, type NetPremCumTicker } from '@/hooks/useNetPremiumCumulative';
 import { SessionBadge } from '@/components/command/SessionBadge';
-import { finite } from '@/lib/chartSanitize';
+import { finite, finiteDomain, safeMin, safeMax } from '@/lib/chartSanitize';
 
 const CALL_COLOR = '#00C853';
 const PUT_COLOR = '#FF1744';
@@ -91,6 +91,15 @@ function MiniChart({ data }: MiniProps) {
   const net = latestCall - latestPut;
   const bullish = net > 0;
 
+  // Explicit YAxis domain — Recharts' auto-domain crashes (LN10 precision)
+  // when the computed [min,max] range collapses (all-zero series or long
+  // flat runs). finiteDomain pads a flat range so digit-count stays sane.
+  const yDomain = useMemo<[number, number]>(() => {
+    const all: number[] = [];
+    for (const p of series) { all.push(p.call, p.put); }
+    return finiteDomain(safeMin(all), safeMax(all), [-1, 1], 1);
+  }, [series]);
+
   return (
     <div className="border border-border rounded-md bg-card/40 overflow-hidden">
       <div className="px-2 py-1 flex items-center justify-between border-b border-border bg-muted/20">
@@ -118,12 +127,14 @@ function MiniChart({ data }: MiniProps) {
                 axisLine={false}
               />
               <YAxis
+                domain={yDomain}
                 tickFormatter={fmtMoneyCompact}
                 tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}
                 width={36}
                 tickLine={false}
                 axisLine={false}
                 tickCount={2}
+                allowDataOverflow={false}
               />
               <Tooltip
                 contentStyle={{
