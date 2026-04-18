@@ -31,6 +31,9 @@ import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 import { classifyThesis } from '../_shared/thesisClassifier.ts';
 import { getConfig } from '../_shared/configCache.ts';
 import { writeTradeAudit, deriveMarketRegime, shapeMcpCalls } from '../_shared/tradeAudit.ts';
+import { checkConcentration } from '../_shared/concentration.ts';
+import { preTradeCheck, type Check } from '../_shared/preTradeGate.ts';
+import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 
 const WATCHLIST = new Set([
   'SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT',
@@ -252,6 +255,55 @@ serve(async (req) => {
     const thesisCore = alert.direction === 'bullish' ? (alert.up_case ?? setup.rationale ?? '')
                                                      : (alert.down_case ?? setup.rationale ?? '');
     const thesis = `${thesisCore}`.trim() + ' [alert-sourced]';
+    const theme  = classifyThesis(thesis);
+
+    // Concentration gate — reject if this alert would breach any cap. Alerts
+    // are underlying-only in v1, so size_pct is the full pct of book.
+    const concReport = await checkConcentration(supabase, {
+      instrument:    instrument,
+      side:          side,
+      size_pct:      sizePct,
+      thesis_theme:  theme,
+      contract_type: 'underlying',
+    });
+    if (!concReport.passed) {
+      skipped.push({ alert_id: alert.id, reason: 'concentration_block', detail: concReport.reason ?? 'breach' });
+      // Best-effort Slack so James sees the miss. Never throws.
+      if (userId) {
+        try {
+          await ctSlackPushDirect(
+            supabase, userId,
+            `:no_entry: ct-alert-book-commit rejected ${side.toUpperCase()} ${instrument} ${sizePct}% — ${concReport.reason ?? 'concentration breach'}`,
+            'concentration-gate',
+          );
+        } catch (_) { /* swallow — Slack is best-effort */ }
+      }
+      continue;
+    }
+
+    // Full pre-trade compliance gate — runs 7 checks incl. kill switch,
+    // drawdown tier, cooldown, bias. Blocked alerts skip commit; checklist
+    // is captured on the audit row either way so post-mortems can trace
+    // "this alert was blocked because...".
+    const gateResult = await preTradeCheck(supabase, {
+      instrument,
+      side,
+      size_pct:      sizePct,
+      thesis_theme:  theme,
+      contract_type: 'underlying',
+      source:        'alert',
+      session_date:  sessionDate,
+    });
+    const gateChecksForAudit: Check[] = gateResult.checks;
+    if (!gateResult.passed) {
+      skipped.push({
+        alert_id: alert.id,
+        reason: 'gate_block',
+        detail: gateResult.blockers.map(b => `${b.name}[${b.threshold_key ?? '-'}]: ${b.detail}`).join(' | ').slice(0, 400),
+      });
+      console.log(`[ct-alert-book-commit] gate blocked alert ${alert.id}: ${gateResult.blockers.map(b => b.name).join(',')}`);
+      continue;
+    }
 
     // Insert trade.
     const { data: tradeRow, error: insErr } = await supabase
@@ -266,7 +318,7 @@ serve(async (req) => {
         stop_price:     setup.stop_level ?? null,
         target_price:   setup.target_level ?? null,
         thesis,
-        thesis_theme:   classifyThesis(thesis),
+        thesis_theme:   theme,
         horizon:        'intraday',
         conviction:     5,
         status:         'open',
@@ -337,6 +389,9 @@ serve(async (req) => {
           down_case: alert.down_case,
           glance: alert.glance,
         }),
+        // Full compliance checklist that let this alert pass. All 7 rows,
+        // including warns — forensic answer to "what did the gate see?"
+        pre_trade_checks: gateChecksForAudit,
       });
     })();
 

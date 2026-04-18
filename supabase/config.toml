@@ -224,3 +224,6 @@ verify_jwt = false
 
 [functions.ct-weekly-reflection]
 verify_jwt = false
+
+[functions.ct-pre-trade-check]
+verify_jwt = false

@@ -51,6 +51,7 @@ import {
   Activity,
   Wallet,
   Radar,
+  Scale,
 } from 'lucide-react';
 
 type ConfigValue = number | boolean | string | null;
@@ -80,6 +81,7 @@ const CATEGORY_ORDER: string[] = [
   'slack',
   'usage',
   'book',
+  'concentration',
   'watcher',
 ];
 
@@ -113,6 +115,11 @@ const CATEGORIES: Record<string, CategoryMeta> = {
     label: 'Book',
     icon: Wallet,
     blurb: 'Intraday drawdown alert thresholds.',
+  },
+  concentration: {
+    label: 'Concentration',
+    icon: Scale,
+    blurb: 'Portfolio concentration caps — ticker, theme, direction, options count. Gates NEW trades only; existing positions are never force-closed.',
   },
   watcher: {
     label: 'Watcher',

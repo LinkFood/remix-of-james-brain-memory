@@ -24,6 +24,10 @@ import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { voyageEmbed } from '../_shared/ctEmbed.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 import { writeTradeAudit, deriveMarketRegime, shapeMcpCalls } from '../_shared/tradeAudit.ts';
+import { checkConcentration } from '../_shared/concentration.ts';
+import { classifyThesis } from '../_shared/thesisClassifier.ts';
+import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import { preTradeCheck, type Check } from '../_shared/preTradeGate.ts';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -39,7 +43,14 @@ interface ChatMessage {
 async function handleCommitCommand(
   supabase: ReturnType<typeof createClient>,
   args: string,
-): Promise<{ response: string; trade_id: string | null }> {
+): Promise<{ response: string; trade_id: string | null; pre_trade_checks?: Check[]; force?: boolean }> {
+  // --force strips from args BEFORE grammar parsing so it never confuses the
+  // tokenizer. Force bypasses WARN-level checks only. Block-level checks
+  // (kill switch, drawdown urgent, concentration, high-sev bias, cooldown)
+  // are ALWAYS hard — --force cannot override them.
+  const force = /(^|\s)--force(\s|$)/.test(args);
+  args = args.replace(/(^|\s)--force(\s|$)/g, ' ').trim();
+
   const thesisMatch = args.match(/thesis[:\s]+"([^"]+)"|thesis[:\s]+(.+)$/i);
   const thesis = thesisMatch ? (thesisMatch[1] ?? thesisMatch[2] ?? '').trim() : '';
   const bare = thesisMatch ? args.replace(thesisMatch[0], '').trim() : args.trim();
@@ -119,6 +130,79 @@ async function handleCommitCommand(
     };
   }
 
+  // Concentration gate — reject if the requested trade would breach any
+  // portfolio concentration cap. For options, we size on premium: size_usd
+  // is contracts * entry_premium * 100 (shares/contract).
+  const proposedContractType = (rpcArgs.p_contract_type as string) ?? 'underlying';
+  const proposedSizeUsd = proposedContractType === 'underlying'
+    ? null
+    : Number(rpcArgs.p_contracts ?? 0) * Number(rpcArgs.p_entry_premium ?? 0) * 100;
+  const concReport = await checkConcentration(supabase, {
+    instrument:    (rpcArgs.p_instrument as string) ?? instrument,
+    side:          (rpcArgs.p_side as 'long' | 'short'),
+    size_pct:      Number(rpcArgs.p_size_pct ?? 0),
+    thesis_theme:  classifyThesis(rpcArgs.p_thesis as string | null),
+    contract_type: proposedContractType as 'underlying' | 'call' | 'put',
+    size_usd:      proposedSizeUsd,
+  });
+  if (!concReport.passed) {
+    // Best-effort Slack notify — James can still manually re-issue the
+    // command to override (though nothing about the response hides the
+    // rejection, and CtSettings is the right place to tune the cap).
+    try {
+      const { data: profileRow } = await supabase.from('profiles').select('id').limit(1).maybeSingle();
+      const userId = (profileRow?.id as string | undefined) ?? null;
+      if (userId) {
+        await ctSlackPushDirect(
+          supabase, userId,
+          `:no_entry: ct-chat rejected manual commit on concentration — ${concReport.reason ?? 'breach'}`,
+          'concentration-gate',
+        );
+      }
+    } catch (_) { /* swallow — Slack is best-effort */ }
+    return {
+      response: `✗ commit rejected on concentration: ${concReport.reason ?? 'breach'}\nTune limits in /ct-settings under "concentration" if you want to override.`,
+      trade_id: null,
+    };
+  }
+
+  // Full pre-trade compliance gate — 7 checks. Manual chat commits route
+  // 'chat' as the trade source; cooldown's alert-only rule returns pass.
+  // Blockers are always hard. Warns are bypassed iff --force was passed.
+  const gateResult = await preTradeCheck(supabase, {
+    instrument:    (rpcArgs.p_instrument as string) ?? instrument,
+    side:          (rpcArgs.p_side as 'long' | 'short'),
+    size_pct:      Number(rpcArgs.p_size_pct ?? 0),
+    thesis_theme:  classifyThesis(rpcArgs.p_thesis as string | null),
+    contract_type: proposedContractType as 'underlying' | 'call' | 'put',
+    size_usd:      proposedSizeUsd,
+    source:        'chat',
+  }, { force });
+
+  if (!gateResult.passed) {
+    const lines = gateResult.blockers.map(b => `• ${b.name} [${b.threshold_key ?? 'no-threshold'}]: ${b.detail}`).join('\n');
+    return {
+      response: `✗ commit blocked by pre-trade gate (${gateResult.blockers.length} blocker${gateResult.blockers.length === 1 ? '' : 's'}):\n${lines}\n\nBlock-level checks cannot be bypassed with --force. Tune thresholds in /ct-settings.`,
+      trade_id: null,
+      pre_trade_checks: gateResult.checks,
+      force,
+    };
+  }
+
+  // Warn-level rejection: if any check is a warn AND --force was NOT passed,
+  // we advise the user but do NOT block. This mirrors the UI's Override
+  // behavior: warns are visible friction, not a wall.
+  const warns = gateResult.checks.filter(c => c.status === 'warn');
+  if (warns.length > 0 && !force) {
+    const warnLines = warns.map(w => `• ${w.name}: ${w.detail}`).join('\n');
+    return {
+      response: `⚠ pre-trade gate raised ${warns.length} warn${warns.length === 1 ? '' : 's'} (not blocking):\n${warnLines}\n\nRe-issue with --force to commit through these warnings.`,
+      trade_id: null,
+      pre_trade_checks: gateResult.checks,
+      force,
+    };
+  }
+
   const { data, error } = await supabase.rpc('commit_manual_trade', rpcArgs);
   if (error) {
     return { response: `commit failed: ${error.message}`, trade_id: null };
@@ -127,7 +211,13 @@ async function handleCommitCommand(
   const summary = optMatch
     ? `✓ committed ${instrument} ${rpcArgs.p_strike}${(rpcArgs.p_contract_type as string).toUpperCase()} ${rpcArgs.p_expiry} ${rpcArgs.p_side} ${rpcArgs.p_contracts} @${rpcArgs.p_entry_premium}`
     : `✓ committed ${instrument} ${rpcArgs.p_side} ${rpcArgs.p_size_pct}% stop=${rpcArgs.p_stop_price ?? '—'} target=${rpcArgs.p_target_price ?? '—'}`;
-  return { response: `${summary}\ntrade_id: ${tradeId}\nbook-manager will manage on next :15 tick`, trade_id: tradeId };
+  const forceTag = force ? ' (--force: warns bypassed)' : '';
+  return {
+    response: `${summary}${forceTag}\ntrade_id: ${tradeId}\nbook-manager will manage on next :15 tick`,
+    trade_id: tradeId,
+    pre_trade_checks: gateResult.checks,
+    force,
+  };
 }
 
 /**
@@ -403,6 +493,7 @@ serve(async (req) => {
                 message,
                 tail_history: history.slice(-5),
               }),
+              pre_trade_checks: out.pre_trade_checks ?? [],
             });
           } catch (e) {
             console.warn('[ct-chat] audit write failed:', e instanceof Error ? e.message : e);
@@ -410,7 +501,18 @@ serve(async (req) => {
         })();
       }
 
-      return new Response(JSON.stringify({ response: out.response, trade_id: out.trade_id, commit: true, duration_ms: 0 }), {
+      // Return the full checklist so the UI can render the PreTradeChecklist
+      // card inline. Blocked/warned paths (trade_id=null) still surface the
+      // checks — the UI uses them to decide whether to show the Override
+      // button.
+      return new Response(JSON.stringify({
+        response: out.response,
+        trade_id: out.trade_id,
+        commit: true,
+        pre_trade_checks: out.pre_trade_checks ?? [],
+        force: out.force ?? false,
+        duration_ms: 0,
+      }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });

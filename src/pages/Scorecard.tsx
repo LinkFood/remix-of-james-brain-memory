@@ -20,6 +20,7 @@ import { JamesVsClaude } from '@/components/command/JamesVsClaude';
 import { WeeklyReflectionPanel } from '@/components/command/WeeklyReflectionPanel';
 import { CalibrationChart } from '@/components/scorecard/CalibrationChart';
 import { ClaudesSurprises } from '@/components/scorecard/ClaudesSurprises';
+import { AxisAttributionPanel } from '@/components/scorecard/AxisAttributionPanel';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 import { useCalibration } from '@/hooks/useCalibration';
 import { useClaudesSurprises } from '@/hooks/useClaudesSurprises';
@@ -467,6 +468,11 @@ export function Scorecard() {
             onto each flag/alert at write time — planned for v2.
           </div>
         </Card>
+
+        {/* Axis attribution — which evidence axes (A..F) actually predict?
+            Meta-calibration: if Claude cites A a lot but those calls underperform
+            vs C, that's structural input for the watcher prompt (bump C, dampen A). */}
+        <AxisAttributionPanel />
 
         {/* Claude's Surprises — the furthest-from-reality calls. Most instructive grades. */}
         <ClaudesSurprises />

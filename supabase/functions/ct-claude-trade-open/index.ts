@@ -27,6 +27,9 @@ import { getCurrentPrice } from '../_shared/ctGrader.ts';
 import { classifyThesis } from '../_shared/thesisClassifier.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 import { writeTradeAudit, deriveMarketRegime } from '../_shared/tradeAudit.ts';
+import { checkConcentration } from '../_shared/concentration.ts';
+import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import { preTradeCheck, type Check } from '../_shared/preTradeGate.ts';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA', 'GLD', 'USO'] as const;
 
@@ -250,31 +253,156 @@ serve(async (req) => {
     entryPrices[t.instrument] = await getCurrentPrice(t.instrument);
   }));
 
-  const rows = valid
-    .filter(t => entryPrices[t.instrument] != null)
-    .map(t => {
-      const entry = entryPrices[t.instrument]!;
-      const sizeUsd = startingBalance! * (t.size_pct / 100);
-      const thesisText = t.entry_reasoning ?? '';
-      return {
-        session_date: sessionDate,
+  const rows: Array<Record<string, unknown>> = [];
+  const concentrationSkips: Array<{ instrument: string; side: string; size_pct: number; reason: string }> = [];
+  // Gate results indexed by row position — preserved alongside `rows` so the
+  // post-insert audit writer can attach the right checklist to each trade.
+  const gateChecksPerRow: Check[][] = [];
+  const gateSkips: Array<{ instrument: string; side: string; size_pct: number; blockers: Check[] }> = [];
+
+  // Candidate rows, gated one-by-one against concentration. We feed each
+  // proposed trade into checkConcentration BEFORE insert so the cumulative
+  // state reflects prior rows that already passed (they're inserted at the
+  // end). To mimic that, we track an in-flight accumulator by re-running
+  // checkConcentration after each "virtual" addition — simpler: insert the
+  // gate via a running shadow state embedded in the DB check at insert time.
+  // Trick: call checkConcentration per candidate against the current DB
+  // state + add each passing candidate into a local projection. We achieve
+  // this by calling it sequentially and simulating passing candidates by
+  // pushing temp rows. But since checkConcentration reads from ct_trades
+  // directly, we'd miss prior in-flight candidates. Solve: for claude-trade-
+  // open, sizes sum to ≤100 anyway; we check each candidate independently
+  // first (cheap fail) and then do one final sweep after batch-insert is
+  // simulated by iterating with a local tally. Implement now as a sequential
+  // check where we also project prior-accepted trades by re-fetching after
+  // each accept would be too slow; instead we add a local overlay.
+  const localOverlay: Array<{ instrument: string; side: 'long' | 'short'; size_pct: number; thesis_theme: string; contract_type: 'underlying' }> = [];
+
+  for (const t of valid) {
+    if (entryPrices[t.instrument] == null) continue;
+    const entry = entryPrices[t.instrument]!;
+    const sizeUsd = startingBalance! * (t.size_pct / 100);
+    const thesisText = t.entry_reasoning ?? '';
+    const theme = classifyThesis(thesisText);
+
+    // Full compliance gate — runs all 7 checks (kill switch, drawdown tier,
+    // concentration, bias, UW usage, cooldown, session context). Blocked
+    // candidates skip commit but we still record their checklist so the
+    // audit answers "why did Claude propose this and get blocked?"
+    const gateResult = await preTradeCheck(supabase, {
+      instrument:    t.instrument,
+      side:          t.side,
+      size_pct:      t.size_pct,
+      thesis_theme:  theme,
+      contract_type: 'underlying',
+      source:        'claude-trade-open',
+      session_date:  sessionDate,
+    });
+    if (!gateResult.passed) {
+      gateSkips.push({
         instrument: t.instrument,
         side: t.side,
         size_pct: t.size_pct,
-        size_usd: +sizeUsd.toFixed(2),
-        entry_price: entry,
-        stop_price: t.stop_price ?? null,
-        target_price: t.target_price ?? null,
-        thesis: thesisText,
-        thesis_theme: classifyThesis(thesisText),
-        horizon: t.horizon ?? 'intraday',
-        conviction: Math.min(5, Math.max(1, Math.round(t.conviction ?? 3))),
-        status: 'planned',
-      };
+        blockers: gateResult.blockers,
+      });
+      console.log(`[ct-claude-trade-open] gate blocked ${t.instrument} ${t.side}: ${gateResult.blockers.map(b => `${b.name}(${b.threshold_key ?? '-'})`).join(', ')}`);
+      continue;
+    }
+
+    // Gate: DB state + anything already accepted in this batch.
+    const report = await checkConcentration(supabase, {
+      instrument:    t.instrument,
+      side:          t.side,
+      size_pct:      t.size_pct,
+      thesis_theme:  theme,
+      contract_type: 'underlying',
     });
 
+    // Overlay already-accepted candidates by re-checking their marginal
+    // impact against the limits. This is cheaper than re-querying the DB
+    // per iteration: we manually fold the overlay into the projected
+    // percentages before judging.
+    if (report.passed) {
+      let breach: string | null = null;
+      const proj = { ...report.projected };
+      const tickerProj: Record<string, number> = { ...proj.ticker_pct };
+      const themeProj:  Record<string, number> = { ...proj.theme_pct };
+      let longProj = proj.long_pct;
+      let shortProj = proj.short_pct;
+      for (const o of localOverlay) {
+        tickerProj[o.instrument] = (tickerProj[o.instrument] ?? 0) + o.size_pct;
+        themeProj[o.thesis_theme] = (themeProj[o.thesis_theme] ?? 0) + o.size_pct;
+        if (o.side === 'long')  longProj  += o.size_pct;
+        if (o.side === 'short') shortProj += o.size_pct;
+      }
+      for (const [tkr, pct] of Object.entries(tickerProj)) {
+        if (pct > report.limits.max_ticker_pct) { breach = `would breach max_ticker_pct (batch): ${tkr} at ${pct.toFixed(1)}% > ${report.limits.max_ticker_pct}%`; break; }
+      }
+      if (!breach) for (const [th, pct] of Object.entries(themeProj)) {
+        if (pct > report.limits.max_theme_pct) { breach = `would breach max_theme_pct (batch): ${th} at ${pct.toFixed(1)}% > ${report.limits.max_theme_pct}%`; break; }
+      }
+      if (!breach && longProj  > report.limits.max_direction_pct) breach = `would breach max_direction_pct (batch): long at ${longProj.toFixed(1)}% > ${report.limits.max_direction_pct}%`;
+      if (!breach && shortProj > report.limits.max_direction_pct) breach = `would breach max_direction_pct (batch): short at ${shortProj.toFixed(1)}% > ${report.limits.max_direction_pct}%`;
+      if (breach) {
+        concentrationSkips.push({ instrument: t.instrument, side: t.side, size_pct: t.size_pct, reason: breach });
+        continue;
+      }
+    } else {
+      concentrationSkips.push({ instrument: t.instrument, side: t.side, size_pct: t.size_pct, reason: report.reason ?? 'unknown breach' });
+      continue;
+    }
+
+    localOverlay.push({ instrument: t.instrument, side: t.side, size_pct: t.size_pct, thesis_theme: theme, contract_type: 'underlying' });
+    gateChecksPerRow.push(gateResult.checks);
+    rows.push({
+      session_date: sessionDate,
+      instrument: t.instrument,
+      side: t.side,
+      size_pct: t.size_pct,
+      size_usd: +sizeUsd.toFixed(2),
+      entry_price: entry,
+      stop_price: t.stop_price ?? null,
+      target_price: t.target_price ?? null,
+      thesis: thesisText,
+      thesis_theme: theme,
+      horizon: t.horizon ?? 'intraday',
+      conviction: Math.min(5, Math.max(1, Math.round(t.conviction ?? 3))),
+      status: 'planned',
+    });
+  }
+
+  // Slack + log concentration skips — best-effort, never blocks the commit.
+  if (concentrationSkips.length > 0) {
+    try {
+      const { data: profileRow } = await supabase.from('profiles').select('id').limit(1).maybeSingle();
+      const userId = (profileRow?.id as string | undefined) ?? null;
+      if (userId) {
+        const lines = concentrationSkips.map(s => `• ${s.side.toUpperCase()} ${s.instrument} ${s.size_pct}% — ${s.reason}`).join('\n');
+        await ctSlackPushDirect(supabase, userId, `:no_entry: ct-claude-trade-open rejected ${concentrationSkips.length} trade(s) on concentration:\n${lines}`, 'concentration-gate');
+      }
+    } catch (e) {
+      console.warn('[ct-claude-trade-open] concentration slack push failed:', (e as Error).message);
+    }
+    console.log('[ct-claude-trade-open] concentration skips:', JSON.stringify(concentrationSkips));
+  }
+
   if (rows.length === 0) {
-    return new Response(JSON.stringify({ error: 'no entry prices resolved', attempted: valid.map(v => v.instrument) }), {
+    // Distinguish: all candidates blocked on concentration (200 ok, nothing
+    // committed) vs. price resolution failures (500 — something's wrong with
+    // the pricer).
+    if ((concentrationSkips.length + gateSkips.length) > 0
+        && (concentrationSkips.length + gateSkips.length) === valid.length) {
+      return new Response(JSON.stringify({
+        ok: true, committed: 0, posture: parsed.posture ?? null,
+        skip_reason: 'all candidates blocked by pre-trade gate or concentration',
+        concentration_skips: concentrationSkips,
+        gate_skips: gateSkips,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+    return new Response(JSON.stringify({ error: 'no entry prices resolved', attempted: valid.map(v => v.instrument), concentration_skips: concentrationSkips, gate_skips: gateSkips }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
@@ -300,7 +428,8 @@ serve(async (req) => {
   const marketRegime = deriveMarketRegime(snapshot);
   const activeBiasesSnapshot = (allActiveBiases?.data ?? []) as unknown;
 
-  for (const row of inserted) {
+  for (let i = 0; i < inserted.length; i++) {
+    const row = inserted[i];
     writeTradeAudit(supabase, {
       trade_id: row.id,
       source: 'claude-trade-open',
@@ -322,6 +451,10 @@ serve(async (req) => {
       triggering_flag_id: null,
       prompt_version: CT_PROMPT_VERSION,
       raw_claude_response: claudeText,
+      // Pair by insertion order — gateChecksPerRow[i] is the checklist that
+      // let row i pass; missing index falls back to empty to keep the column
+      // well-formed.
+      pre_trade_checks: gateChecksPerRow[i] ?? [],
     });
   }
 
@@ -333,6 +466,8 @@ serve(async (req) => {
     total_exposure_pct: inserted.reduce((a, r) => a + (r.size_pct ?? 0), 0),
     posture: parsed.posture ?? null,
     trades: inserted.map(r => ({ instrument: r.instrument, side: r.side, size_pct: r.size_pct, entry: r.entry_price, stop: r.stop_price, target: r.target_price })),
+    concentration_skips: concentrationSkips,
+    gate_skips: gateSkips,
   }), {
     status: 200,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },

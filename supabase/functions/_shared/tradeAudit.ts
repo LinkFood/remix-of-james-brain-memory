@@ -35,6 +35,13 @@ export interface TradeAuditInput {
   triggering_flag_id?: string | null;
   prompt_version?: string | null;
   raw_claude_response?: string | null;
+  /**
+   * Full pre-trade gate checklist at commit time. See _shared/preTradeGate.ts.
+   * Empty array OK; null OK (column has no NOT NULL). Writers should pass the
+   * serialized Check[] directly so every audit row tells the blocked/allowed
+   * story.
+   */
+  pre_trade_checks?: unknown;
 }
 
 /**
@@ -132,6 +139,7 @@ export function writeTradeAudit(
     triggering_flag_id:   input.triggering_flag_id ?? null,
     prompt_version:       input.prompt_version ?? null,
     raw_claude_response:  capRawResponse(input.raw_claude_response),
+    pre_trade_checks:     input.pre_trade_checks ?? null,
   };
 
   return supabase

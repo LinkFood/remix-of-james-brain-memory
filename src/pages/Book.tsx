@@ -18,6 +18,7 @@ import { ArrowLeft, Wallet, Target, ListOrdered, NotebookPen, RefreshCw } from '
 import { BookEquityCurve } from '@/components/command/BookEquityCurve';
 import { PnLByTheme } from '@/components/command/PnLByTheme';
 import { RiskMetricsPanel } from '@/components/command/RiskMetricsPanel';
+import { ConcentrationPanel } from '@/components/command/ConcentrationPanel';
 import { TradeAuditPanel } from '@/components/command/TradeAuditPanel';
 import {
   SizingCalculatorButton,
@@ -460,6 +461,10 @@ export default function Book() {
             <SizingCalculatorInline />
           </div>
         </div>
+
+        {/* Portfolio concentration — live view of the four caps that gate new
+            trades at commit time (ticker, theme, direction, options count). */}
+        <ConcentrationPanel />
 
         {/* P&L split by thesis theme — where is the book making/losing money? */}
         <PnLByTheme />
