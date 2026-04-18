@@ -12,6 +12,7 @@ import { useMemo, useState } from 'react';
 import { useGreekFlow } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Line, LineChart, ResponsiveContainer, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
+import { SessionBadge } from '@/components/command/SessionBadge';
 import { finite } from '@/lib/chartSanitize';
 
 type IndexTicker = 'SPY' | 'QQQ' | 'IWM';
@@ -58,6 +59,7 @@ export function HiroPanel() {
       <div className="px-3 py-2 border-b border-border bg-muted/30 flex items-center gap-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-foreground">HIRO</span>
         <span className="text-[10px] text-muted-foreground">cumulative dealer hedging pressure</span>
+        <SessionBadge />
         <div className="flex items-center gap-0.5 ml-auto">
           {TICKERS.map(t => (
             <button

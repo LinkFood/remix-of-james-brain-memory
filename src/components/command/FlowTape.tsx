@@ -9,6 +9,7 @@ import { useFlowAlerts, type FlowAlert } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { SessionBadge } from '@/components/command/SessionBadge';
 import { Flame, Zap, Square, Triangle, Repeat } from 'lucide-react';
 
 type SideFilter = 'all' | 'calls' | 'puts';
@@ -180,6 +181,7 @@ export function FlowTape() {
         <div className="flex items-center gap-2">
           <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Flow Tape</span>
           <span className="text-[10px] text-muted-foreground">{filtered.length}/{alerts?.length ?? 0}</span>
+          <SessionBadge />
         </div>
       </div>
 

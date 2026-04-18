@@ -29,6 +29,7 @@ import {
   Cell,
 } from 'recharts';
 import { useDarkPoolChart, type DarkPoolChartGroup, type DarkPoolPrintLite } from '@/hooks/useDarkPoolChart';
+import { SessionBadge } from '@/components/command/SessionBadge';
 import { finite, finiteDomain } from '@/lib/chartSanitize';
 
 const DP_LINE = '#60A5FA';   // muted blue — institutional
@@ -331,6 +332,7 @@ export function DarkPoolChart() {
         <span className="text-[10px] text-muted-foreground">
           cumulative notional + print scatter · session to now
         </span>
+        <SessionBadge />
         <div className="ml-auto flex items-center gap-3 text-[10px] text-muted-foreground">
           <span>{totalPrints} prints</span>
           <span className="flex items-center gap-1">

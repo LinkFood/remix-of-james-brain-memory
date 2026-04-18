@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react';
 import { useNetPremiumTicks, useNetPremiumTickers } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Line, LineChart, ResponsiveContainer, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
+import { SessionBadge } from '@/components/command/SessionBadge';
 import { finite } from '@/lib/chartSanitize';
 
 function fmtMoney(n: number): string {
@@ -56,6 +57,7 @@ export function NetPremiumLine() {
       <div className="px-3 py-2 border-b border-border bg-muted/30 flex items-center gap-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-foreground">Net Premium</span>
         <span className="text-[10px] text-muted-foreground">UW tick stream · call − put</span>
+        <SessionBadge />
         <div className="flex items-center gap-0.5 ml-auto flex-wrap justify-end">
           {tickers.slice(0, 12).map(t => (
             <button

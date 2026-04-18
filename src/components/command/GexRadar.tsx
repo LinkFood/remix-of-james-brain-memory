@@ -21,6 +21,7 @@ import { Card } from '@/components/ui/card';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { FreshnessChip } from '@/components/FreshnessChip';
 import { useGexRadar, type GexRadarTicker, type GexRadarStrike } from '@/hooks/useGexRadar';
+import { SessionBadge } from './SessionBadge';
 import { LinkGexDeep } from './LinkGexDeep';
 
 // -----------------------------------------------------------------------------
@@ -344,6 +345,7 @@ export const GexRadar = memo(function GexRadar({
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <SessionBadge />
             {data?.generated_at && (
               <span className="text-[10px] text-muted-foreground tabular-nums">
                 {new Date(data.generated_at).toLocaleTimeString('en-US', { hour12: false })}

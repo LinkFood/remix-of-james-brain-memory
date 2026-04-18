@@ -26,6 +26,7 @@ import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 import { ChartSafe } from '@/components/ChartSafe';
 import { useMarketBreadth } from '@/hooks/useMarketBreadth';
 import { useLatestHeartbeat } from '@/hooks/useCoTraderData';
+import { SessionBadge } from '@/components/command/SessionBadge';
 import { finite } from '@/lib/chartSanitize';
 
 // ─── formatters ─────────────────────────────────────────────────────────────
@@ -90,6 +91,7 @@ export function MarketBreadth() {
         <span className="text-[10px] text-muted-foreground/70 ml-1">
           watchlist · {b.ticker_count}/12
         </span>
+        <SessionBadge />
         <FreshnessChip
           timestamp={latestHeartbeat?.created_at ?? null}
           label="heartbeat"

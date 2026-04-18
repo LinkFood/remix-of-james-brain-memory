@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { useEffectiveSessionDate } from './useEffectiveSessionDate';
 
 export interface Heartbeat {
   id: string;
@@ -145,26 +146,28 @@ export function useLatestHeartbeat() {
 }
 
 /**
- * Today's session heartbeats (ordered ascending). Used by MarketBanner to:
+ * Session heartbeats (ordered ascending) for the effective session date —
+ * today during RTH, the latest completed session otherwise. Used by
+ * MarketBanner + MarketBreadth to:
  *   - anchor intraday Δ (first price of session vs latest)
  *   - detect regime flips within session (e.g. gamma regime inverted mid-day)
  * One query, no UW cost — heartbeats already hold _snapshot per cycle.
  */
 export function useSessionHeartbeats() {
+  const { data: session } = useEffectiveSessionDate();
+  const startISO = session?.sessionStartISO ?? null;
+  const endISO = session?.sessionEndISO ?? null;
   return useQuery<Heartbeat[]>({
-    queryKey: ['ct_session_heartbeats'],
+    queryKey: ['ct_session_heartbeats', startISO, endISO],
+    enabled: !!startISO && !!endISO,
     refetchInterval: 60_000,
     queryFn: async () => {
-      // Anchor to start of "today" in ET-ish terms. Using UTC midnight is fine
-      // for this — the session starts at 13:30 UTC, so anything after 00:00
-      // UTC today will include the session. Pre-open heartbeats are welcome
-      // as anchors.
-      const sinceIso = new Date(new Date().setUTCHours(0, 0, 0, 0)).toISOString();
       const { data, error } = await supabase
         .from('ct_heartbeats')
         .select('id, status_line, watching, current_reads, created_at')
         .neq('prompt_version', 'mcp-verify')
-        .gte('created_at', sinceIso)
+        .gte('created_at', startISO!)
+        .lt('created_at', endISO!)
         .order('created_at', { ascending: true })
         .limit(200);
       if (error) throw error;
@@ -1146,20 +1149,31 @@ export interface NetPremiumTick {
 /**
  * True intraday net-premium ticks from UW (written every ~3min by ct-flow-ingester).
  * Ordered ascending so callers can chart cumulative flow straight from the data.
+ * Live (RTH): rolling last-N-hours window. Off-hours: the full effective
+ * session date so NetPremiumLine renders instead of going blank.
  */
 export function useNetPremiumTicks(ticker: string, hours = 4) {
+  const { data: session } = useEffectiveSessionDate();
+  const isLive = session?.isLive ?? false;
+  const startISO = session?.sessionStartISO ?? null;
+  const endISO = session?.sessionEndISO ?? null;
   return useQuery<NetPremiumTick[]>({
-    queryKey: ['ct_net_premium_ticks', ticker, hours],
-    enabled: !!ticker,
+    queryKey: ['ct_net_premium_ticks', ticker, hours, isLive, startISO, endISO],
+    enabled: !!ticker && (isLive || (!!startISO && !!endISO)),
     refetchInterval: 60_000,
     queryFn: async () => {
       if (!ticker) return [];
-      const since = new Date(Date.now() - hours * 3600_000).toISOString();
-      const { data, error } = await supabase
+      let q = supabase
         .from('ct_net_premium_ticks')
         .select('ticker, tick_timestamp, net_call_premium, net_put_premium, net_call_volume, net_put_volume, underlying_price')
-        .eq('ticker', ticker)
-        .gte('tick_timestamp', since)
+        .eq('ticker', ticker);
+      if (isLive) {
+        const since = new Date(Date.now() - hours * 3600_000).toISOString();
+        q = q.gte('tick_timestamp', since);
+      } else {
+        q = q.gte('tick_timestamp', startISO!).lt('tick_timestamp', endISO!);
+      }
+      const { data, error } = await q
         .order('tick_timestamp', { ascending: true })
         .limit(2000);
       if (error) throw error;
@@ -1168,18 +1182,29 @@ export function useNetPremiumTicks(ticker: string, hours = 4) {
   });
 }
 
-/** Distinct tickers currently streaming in ct_net_premium_ticks (last 24h). */
+/**
+ * Distinct tickers currently streaming in ct_net_premium_ticks.
+ * Live: last 24h. Off-hours: the effective session date so the ticker
+ * selector in NetPremiumLine isn't empty over the weekend.
+ */
 export function useNetPremiumTickers() {
+  const { data: session } = useEffectiveSessionDate();
+  const isLive = session?.isLive ?? false;
+  const startISO = session?.sessionStartISO ?? null;
+  const endISO = session?.sessionEndISO ?? null;
   return useQuery<string[]>({
-    queryKey: ['ct_net_premium_tickers'],
+    queryKey: ['ct_net_premium_tickers', isLive, startISO, endISO],
+    enabled: isLive || (!!startISO && !!endISO),
     refetchInterval: 5 * 60_000,
     queryFn: async () => {
-      const since = new Date(Date.now() - 24 * 3600_000).toISOString();
-      const { data, error } = await supabase
-        .from('ct_net_premium_ticks')
-        .select('ticker')
-        .gte('tick_timestamp', since)
-        .limit(5000);
+      let q = supabase.from('ct_net_premium_ticks').select('ticker');
+      if (isLive) {
+        const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+        q = q.gte('tick_timestamp', since);
+      } else {
+        q = q.gte('tick_timestamp', startISO!).lt('tick_timestamp', endISO!);
+      }
+      const { data, error } = await q.limit(5000);
       if (error) throw error;
       const seen = new Set<string>();
       for (const r of (data ?? []) as Array<{ ticker: string }>) seen.add(r.ticker);
@@ -1233,18 +1258,33 @@ export interface GreekFlowRow {
   underlying_price: number | null;
 }
 
-/** Per-minute greek flow for an index ticker (SPY/QQQ/IWM). Last N hours. */
+/**
+ * Per-minute greek flow for an index ticker (SPY/QQQ/IWM).
+ * Live (RTH + fresh heartbeat): last N hours rolling window.
+ * Off-hours: the full effective session date (Friday on weekends) so the HIRO
+ * panel renders instead of going blank.
+ */
 export function useGreekFlow(ticker: 'SPY' | 'QQQ' | 'IWM', hours = 4) {
+  const { data: session } = useEffectiveSessionDate();
+  const isLive = session?.isLive ?? false;
+  const startISO = session?.sessionStartISO ?? null;
+  const endISO = session?.sessionEndISO ?? null;
   return useQuery<GreekFlowRow[]>({
-    queryKey: ['ct_greek_flow', ticker, hours],
+    queryKey: ['ct_greek_flow', ticker, hours, isLive, startISO, endISO],
+    enabled: isLive ? true : (!!startISO && !!endISO),
     refetchInterval: 60_000,
     queryFn: async () => {
-      const since = new Date(Date.now() - hours * 3600_000).toISOString();
-      const { data, error } = await supabase
+      let q = supabase
         .from('ct_greek_flow_minute')
         .select('ticker, tick_timestamp, net_call_delta, net_put_delta, net_call_vega, net_put_vega, total_delta_flow, total_vega_flow, underlying_price')
-        .eq('ticker', ticker)
-        .gte('tick_timestamp', since)
+        .eq('ticker', ticker);
+      if (isLive) {
+        const since = new Date(Date.now() - hours * 3600_000).toISOString();
+        q = q.gte('tick_timestamp', since);
+      } else {
+        q = q.gte('tick_timestamp', startISO!).lt('tick_timestamp', endISO!);
+      }
+      const { data, error } = await q
         .order('tick_timestamp', { ascending: true })
         .limit(5000);
       if (error) throw error;

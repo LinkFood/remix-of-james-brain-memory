@@ -25,6 +25,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { useNetPremiumCumulative, type NetPremCumTicker } from '@/hooks/useNetPremiumCumulative';
+import { SessionBadge } from '@/components/command/SessionBadge';
 import { finite } from '@/lib/chartSanitize';
 
 const CALL_COLOR = '#00C853';
@@ -175,6 +176,7 @@ export function NetPremiumCumulative() {
         <span className="text-[10px] text-muted-foreground">
           per-ticker running net premium · UW net-prem-ticks
         </span>
+        <SessionBadge />
         <div className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground">
           <span className="flex items-center gap-1">
             <span className="inline-block w-2 h-2 rounded-full" style={{ background: CALL_COLOR }} />
