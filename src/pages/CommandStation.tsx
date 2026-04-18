@@ -4,7 +4,7 @@ import { EventFeed } from '@/components/command/EventFeed';
 import { CuriosityFeed } from '@/components/command/CuriosityFeed';
 import { NewsFeed } from '@/components/command/NewsFeed';
 import { RecapPanel } from '@/components/command/RecapPanel';
-import { DisagreementPanel } from '@/components/command/DisagreementPanel';
+import { JamesVsClaude } from '@/components/command/JamesVsClaude';
 import { JamesViewForm } from '@/components/command/JamesViewForm';
 // ChatBox replaced by docked ChatPanel (rendered by AuthLayout via sidebar prop)
 import { FlowTape } from '@/components/command/FlowTape';
@@ -32,11 +32,12 @@ import { ColdOpen } from '@/components/command/ColdOpen';
 import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
 import { McpCallsPanel } from '@/components/command/McpCallsPanel';
+import { BiasesPanel } from '@/components/command/BiasesPanel';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { RefreshCw, Zap } from 'lucide-react';
+import { RefreshCw, Zap, Flag } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function CommandStation() {
@@ -58,6 +59,18 @@ export default function CommandStation() {
     }
   }
 
+  function scrollToPostView() {
+    const el = document.getElementById('co-post-view');
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Brief attention pulse — CSS handles the animation via the ring class.
+      el.classList.add('ring-2', 'ring-blue-400/60', 'transition-shadow');
+      setTimeout(() => {
+        el.classList.remove('ring-2', 'ring-blue-400/60', 'transition-shadow');
+      }, 1600);
+    }
+  }
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="max-w-[1600px] mx-auto p-4 space-y-4">
@@ -73,6 +86,14 @@ export default function CommandStation() {
           </div>
           <div className="flex items-center gap-2">
             <VoiceToggle />
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={scrollToPostView}
+              className="border-blue-500/40 text-blue-300 hover:bg-blue-500/10 hover:text-blue-200"
+            >
+              <Flag className="w-3.5 h-3.5 mr-1" /> Post your view
+            </Button>
             <Button size="sm" variant="outline" onClick={() => qc.invalidateQueries()}>
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
             </Button>
@@ -140,6 +161,9 @@ export default function CommandStation() {
               <EventFeed />
             </div>
             <CuriosityFeed />
+            {/* Biases — Claude's self-identified blindspots, weekly cadence.
+                Below CuriosityFeed: calibration data, not real-time tape. */}
+            <BiasesPanel />
             <DarkPoolTape />
             <DarkPoolChart />
             <NewsFeed />
@@ -159,10 +183,16 @@ export default function CommandStation() {
           </div>
         </div>
 
-        {/* Bottom tools row — post-a-view + claude's self-critique, side-by-side */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+        {/* James vs Claude — head-to-head comparison of disagreements. Full
+            width so the paired cards have room for rationale side-by-side.
+            Replaced the old DisagreementPanel (April 2026). */}
+        <JamesVsClaude variant="command" onPostView={scrollToPostView} />
+
+        {/* Post-a-view form — target of the "Post your view" header button
+            and the JamesVsClaude CTA. Wrapped in an id'd section so
+            scrollToPostView can find it and the pulse ring can land here. */}
+        <div id="co-post-view" className="pt-2 rounded-md">
           <JamesViewForm />
-          <DisagreementPanel />
         </div>
 
         <footer className="pt-4 text-[10px] text-muted-foreground/60 text-center">

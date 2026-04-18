@@ -11,10 +11,12 @@ import { Badge } from '@/components/ui/badge';
 import { Trophy, Target, TrendingUp, TrendingDown, Activity, AlertTriangle, Brain } from 'lucide-react';
 import { GhostTradeTape } from '@/components/command/GhostTradeTape';
 import { SelfCorrectionsPanel } from '@/components/command/SelfCorrectionsPanel';
+import { BiasesPanel } from '@/components/command/BiasesPanel';
 import { PreBellGauntletPanel } from '@/components/command/PreBellGauntletPanel';
 import { BookPanel } from '@/components/command/BookPanel';
 import { EquityCurvePanel } from '@/components/command/EquityCurvePanel';
 import { RecallSearch } from '@/components/command/RecallSearch';
+import { JamesVsClaude } from '@/components/command/JamesVsClaude';
 import { CalibrationChart } from '@/components/scorecard/CalibrationChart';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 import { useCalibration } from '@/hooks/useCalibration';
@@ -371,6 +373,16 @@ export function Scorecard() {
         {/* Claude's self-corrections — hindsight paired with original read.
             The feedback loop the watcher now reads on every tick. */}
         <SelfCorrectionsPanel />
+
+        {/* Claude's self-identified biases — META-level blindspots written
+            weekly by ct-bias-booth. Calibration data. James can veto any
+            bias (retire button) after a 3-day self-correction window. */}
+        <BiasesPanel />
+
+        {/* James vs Claude — head-to-head disagreement scoreboard with paired
+            rationale + grades. 14-day window on the dossier page (wider than
+            command station) because this IS the track record. */}
+        <JamesVsClaude variant="scorecard" daysBack={14} />
 
         {/* Breakdown tables */}
         {grades && grades.length > 0 ? (

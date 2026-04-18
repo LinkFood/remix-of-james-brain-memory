@@ -3,15 +3,19 @@
  *
  * Runs every 10min during RTH (cron: `*&#47;10 13-20 * * 1-5`).
  *
+ * Thresholds live in ct_config (keys: book.drawdown.warn_pct,
+ * book.drawdown.urgent_pct, book.drawdown.hwm_urgent_pct). Tune via
+ * /ct-settings. 60s cache TTL — changes propagate within ~1 minute.
+ *
  * Reads the current session's ct_book row (no UW calls — ct-book-manager
  * already refreshed realized_pnl / unrealized_pnl on the 15min tick), then:
  *   live_equity        = starting_balance + realized_pnl + unrealized_pnl
  *   intraday_pnl_pct   = (live_equity - starting_balance) / starting_balance * 100
  *   drawdown_from_hwm  = (live_equity - high_water_mark) / high_water_mark * 100
  *
- * Tiers:
- *   WARN   — intraday_pnl_pct <= -1%
- *   URGENT — intraday_pnl_pct <= -2%  OR  drawdown_from_hwm <= -3%
+ * Tiers (defaults; overridable via ct_config):
+ *   WARN   — intraday_pnl_pct <= warn_pct (-1%)
+ *   URGENT — intraday_pnl_pct <= urgent_pct (-2%)  OR  drawdown_from_hwm <= hwm_urgent_pct (-3%)
  *
  * Dedupe is done BY THE TABLE CONSTRAINT (session_date, tier) UNIQUE —
  * we attempt INSERT; a 23505 unique violation is caught and treated as
@@ -29,6 +33,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import { getConfig } from '../_shared/configCache.ts';
 
 interface BookRow {
   session_date: string;
@@ -60,17 +65,20 @@ function buildSlackText(
     intradayPnlUsd: number;
     hwm: number;
     drawdownFromHwmPct: number;
+    warnPct: number;
+    urgentPct: number;
+    hwmUrgentPct: number;
   },
 ): string {
   if (tier === 'warn') {
     // Short — one line of context. James glances, decides.
-    return `:large_yellow_circle: *BOOK WARN* · equity ${fmtUsd(opts.equity)} (${fmtPct(opts.intradayPnlPct)} intraday, ${fmtUsd(opts.intradayPnlUsd, true)} on ${fmtUsd(opts.starting)}). Kill switch: \`/kill\``;
+    return `:large_yellow_circle: *BOOK WARN* · equity ${fmtUsd(opts.equity)} (${fmtPct(opts.intradayPnlPct)} intraday — warn at ${fmtPct(opts.warnPct)}, ${fmtUsd(opts.intradayPnlUsd, true)} on ${fmtUsd(opts.starting)}). Kill switch: \`/kill\``;
   }
   // URGENT — fuller context, kill-switch reminder louder.
   return [
     `:red_circle: *BOOK URGENT* · equity ${fmtUsd(opts.equity)}`,
-    `• intraday: ${fmtPct(opts.intradayPnlPct)} (${fmtUsd(opts.intradayPnlUsd, true)} on ${fmtUsd(opts.starting)})`,
-    `• HWM: ${fmtUsd(opts.hwm)} · drawdown from HWM: ${fmtPct(opts.drawdownFromHwmPct)}`,
+    `• intraday: ${fmtPct(opts.intradayPnlPct)} — urgent at ${fmtPct(opts.urgentPct)} (${fmtUsd(opts.intradayPnlUsd, true)} on ${fmtUsd(opts.starting)})`,
+    `• HWM: ${fmtUsd(opts.hwm)} · drawdown from HWM: ${fmtPct(opts.drawdownFromHwmPct)} — urgent at ${fmtPct(opts.hwmUrgentPct)}`,
     `Consider kill switch: \`/kill\` — James decides.`,
   ].join('\n');
 }
@@ -91,6 +99,14 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
+
+  // Pull tunable thresholds from ct_config (60s cache TTL, defaults preserve
+  // legacy behavior if the row is missing or the RPC errors).
+  const warnPct = await getConfig<number>('book.drawdown.warn_pct', -1.0);
+  const urgentPct = await getConfig<number>('book.drawdown.urgent_pct', -2.0);
+  const hwmUrgentPct = await getConfig<number>('book.drawdown.hwm_urgent_pct', -3.0);
+  console.log(`[ct-drawdown-watch] thresholds: warn=${warnPct}% urgent=${urgentPct}% hwm=${hwmUrgentPct}%`);
+
   const sessionDate = new Date().toISOString().slice(0, 10);
 
   // 1. Pull current session's book row.
@@ -129,8 +145,8 @@ serve(async (req) => {
 
   // 2. Classify tier. URGENT wins over WARN — we check URGENT first.
   const tiersToFire: Tier[] = [];
-  const urgentTripped = intradayPnlPct <= -2 || drawdownFromHwmPct <= -3;
-  const warnTripped = intradayPnlPct <= -1;
+  const urgentTripped = intradayPnlPct <= urgentPct || drawdownFromHwmPct <= hwmUrgentPct;
+  const warnTripped = intradayPnlPct <= warnPct;
   if (warnTripped) tiersToFire.push('warn');       // fires once — the table catches re-fires
   if (urgentTripped) tiersToFire.push('urgent');   // different tier key → separate INSERT
 
@@ -184,6 +200,9 @@ serve(async (req) => {
         intradayPnlUsd,
         hwm,
         drawdownFromHwmPct,
+        warnPct,
+        urgentPct,
+        hwmUrgentPct,
       });
       await ctSlackPushDirect(supabase, userId, text, `drawdown_${tier}`);
     }

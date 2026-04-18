@@ -1,14 +1,19 @@
 /**
  * ct-sweep-cluster — always-on flag pattern, no UW calls.
  *
+ * Thresholds live in ct_config (keys: clusters.sweep.window_min,
+ * clusters.sweep.count_min, clusters.sweep.premium_usd). Tune via
+ * /ct-settings. 60s cache TTL — changes propagate within ~1 minute.
+ *
  * Every minute during weekday market hours, scan ct_flow_alerts for the last
- * 5 minutes where alert_type ilike '%sweep%' AND premium >= $500k, group by
- * ticker, and emit a "SWEEP CLUSTER" finding for any ticker with count >= 3.
+ * window_min minutes where alert_type ilike '%sweep%' AND premium >= premium_usd,
+ * group by ticker, and emit a "SWEEP CLUSTER" finding for any ticker with
+ * count >= count_min.
  *
  * Dedupe: per-ticker 10-min cooldown — we check ct_sweep_clusters.created_at
  * before inserting so a single hot ticker doesn't spam the strip.
  *
- * Attention score:  count >= 5 → 85   count >= 4 → 75   count >= 3 → 65
+ * Attention score:  count >= 5 → 85   count >= 4 → 75   count >= count_min → 65
  * Slack push:       score >= 75       (count >= 4)
  */
 
@@ -17,6 +22,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import { getConfig } from '../_shared/configCache.ts';
 
 interface FlowRow {
   ticker: string;
@@ -42,7 +48,7 @@ interface ClusterResult {
 function scoreFor(count: number): number {
   if (count >= 5) return 85;
   if (count >= 4) return 75;
-  return 65; // count >= 3
+  return 65; // count >= count_min
 }
 
 function isCall(side: string | null): boolean {
@@ -97,8 +103,9 @@ async function scanWindow(
   supabase: SupabaseClient,
   windowStart: string,
   windowEnd: string,
+  premiumUsd: number,
 ): Promise<FlowRow[]> {
-  // Pull all sweeps >= $500k in the 5-min window. alert_type is a free-text
+  // Pull all sweeps >= premiumUsd in the window. alert_type is a free-text
   // column; the ingester writes 'sweep' or variants ('golden_sweep', etc.).
   // ilike '%sweep%' catches them all. Index: ct_flow_alerts_time (executed_at DESC).
   const { data, error } = await supabase
@@ -107,7 +114,7 @@ async function scanWindow(
     .gte('executed_at', windowStart)
     .lte('executed_at', windowEnd)
     .ilike('alert_type', '%sweep%')
-    .gte('premium', 500_000)
+    .gte('premium', premiumUsd)
     .limit(2000);
   if (error) {
     console.warn('[ct-sweep-cluster] flow scan failed:', error.message);
@@ -132,9 +139,10 @@ function buildCluster(
   rows: FlowRow[],
   windowStart: string,
   windowEnd: string,
+  countMin: number,
 ): ClusterResult | null {
   const count = rows.length;
-  if (count < 3) return null;
+  if (count < countMin) return null;
   let total = 0;
   let largest = 0;
   let calls = 0;
@@ -179,19 +187,26 @@ serve(async (req) => {
   const startedAt = Date.now();
 
   try {
+    // Pull tunable thresholds from ct_config (60s cache TTL, defaults preserve
+    // legacy behavior if the row is missing or the RPC errors).
+    const windowMin = await getConfig<number>('clusters.sweep.window_min', 5);
+    const countMin = await getConfig<number>('clusters.sweep.count_min', 3);
+    const premiumUsd = await getConfig<number>('clusters.sweep.premium_usd', 500_000);
+    console.log(`[ct-sweep-cluster] thresholds: window=${windowMin}min count=${countMin} premium=$${premiumUsd}`);
+
     const windowEnd = new Date();
-    const windowStart = new Date(windowEnd.getTime() - 5 * 60_000);
+    const windowStart = new Date(windowEnd.getTime() - windowMin * 60_000);
     const windowStartIso = windowStart.toISOString();
     const windowEndIso = windowEnd.toISOString();
 
-    const rows = await scanWindow(supabase, windowStartIso, windowEndIso);
+    const rows = await scanWindow(supabase, windowStartIso, windowEndIso, premiumUsd);
     const byTicker = groupByTicker(rows);
 
     const perTicker: Record<string, { count: number; total_premium: number; emitted: boolean; reason?: string }> = {};
     const emitted: ClusterResult[] = [];
 
     for (const [ticker, tickerRows] of byTicker.entries()) {
-      const cluster = buildCluster(ticker, tickerRows, windowStartIso, windowEndIso);
+      const cluster = buildCluster(ticker, tickerRows, windowStartIso, windowEndIso, countMin);
       if (!cluster) {
         perTicker[ticker] = { count: tickerRows.length, total_premium: 0, emitted: false, reason: 'below_threshold' };
         continue;

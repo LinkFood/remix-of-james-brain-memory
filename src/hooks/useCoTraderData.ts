@@ -615,6 +615,207 @@ export function useDisagreements(limit = 20) {
 }
 
 // ============================================================================
+// Disagreements — DETAILED pair view (james view + claude flag + both grades)
+// Client-side join. One query per table, keyed-lookup assembly.
+// Three parallel selects (disagreements -> then james_views + flags + grades
+// by id) is cleaner than a heavy SQL function and avoids another migration.
+// ============================================================================
+export interface DisagreementPair {
+  disagreement: Disagreement;
+  james: {
+    id: string;
+    direction: string;
+    conviction: number;
+    rationale: string | null;
+    created_at: string;
+    grade: DisagreementGrade | null;
+  } | null;
+  claude: {
+    id: string;
+    direction: string;
+    conviction: number;
+    glance: string[] | null;
+    full_reasoning: string | null;
+    created_at: string;
+    grade: DisagreementGrade | null;
+  } | null;
+  winner: 'james' | 'claude' | 'tie' | 'both_wrong' | 'pending';
+  actual_return_pct: number | null;
+}
+
+export interface DisagreementGrade {
+  id: string;
+  verdict: 'right' | 'wrong' | 'ambiguous' | 'partial';
+  actual_return_pct: number;
+  actual_direction: 'bullish' | 'bearish' | 'flat';
+}
+
+function deriveWinner(
+  resolution: Disagreement['resolution'],
+  jamesGrade: DisagreementGrade | null,
+  claudeGrade: DisagreementGrade | null,
+): DisagreementPair['winner'] {
+  // Trust the materializer's resolution first — it has the canonical call
+  // when both grades are in.
+  if (resolution === 'james_right') return 'james';
+  if (resolution === 'claude_right') return 'claude';
+  if (resolution === 'both_right' || resolution === 'ambiguous') return 'tie';
+  if (resolution === 'both_wrong') return 'both_wrong';
+  // pending fallback: if both grades landed but resolution hasn't caught up,
+  // derive from verdicts. If either grade is missing, still pending.
+  if (!jamesGrade || !claudeGrade) return 'pending';
+  const jRight = jamesGrade.verdict === 'right';
+  const cRight = claudeGrade.verdict === 'right';
+  if (jRight && !cRight) return 'james';
+  if (cRight && !jRight) return 'claude';
+  if (jRight && cRight) return 'tie';
+  return 'both_wrong';
+}
+
+export function useDisagreementsDetailed(daysBack = 7, limit = 50) {
+  return useQuery<DisagreementPair[]>({
+    queryKey: ['ct_disagreements_detailed', daysBack, limit],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - daysBack * 86400_000).toISOString();
+
+      const { data: dRows, error: dErr } = await supabase
+        .from('ct_disagreements')
+        .select('id, instrument, horizon, horizon_end, james_view_id, claude_flag_id, james_direction, claude_direction, resolution, resolution_detail, resolved_at, created_at')
+        .gte('created_at', since)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (dErr) throw dErr;
+      const disagreements = (dRows ?? []) as Disagreement[];
+      if (disagreements.length === 0) return [];
+
+      const jamesIds = Array.from(new Set(disagreements.map(d => d.james_view_id)));
+      const claudeIds = Array.from(new Set(disagreements.map(d => d.claude_flag_id)));
+
+      const [jamesQ, claudeQ] = await Promise.all([
+        supabase
+          .from('ct_james_views')
+          .select('id, direction, conviction, rationale, created_at, grade_id')
+          .in('id', jamesIds),
+        supabase
+          .from('ct_flags')
+          .select('id, direction, conviction, glance, full_reasoning, created_at, grade_id')
+          .in('id', claudeIds),
+      ]);
+      if (jamesQ.error) throw jamesQ.error;
+      if (claudeQ.error) throw claudeQ.error;
+
+      type JamesRow = { id: string; direction: string; conviction: number; rationale: string | null; created_at: string; grade_id: string | null };
+      type ClaudeRow = { id: string; direction: string; conviction: number; glance: string[] | null; full_reasoning: string | null; created_at: string; grade_id: string | null };
+      const jamesRows = (jamesQ.data ?? []) as JamesRow[];
+      const claudeRows = (claudeQ.data ?? []) as ClaudeRow[];
+
+      const gradeIds = Array.from(new Set([
+        ...jamesRows.map(r => r.grade_id).filter((x): x is string => !!x),
+        ...claudeRows.map(r => r.grade_id).filter((x): x is string => !!x),
+      ]));
+
+      let gradeMap = new Map<string, DisagreementGrade>();
+      if (gradeIds.length > 0) {
+        const { data: gRows, error: gErr } = await supabase
+          .from('ct_grades')
+          .select('id, verdict, actual_return_pct, actual_direction')
+          .in('id', gradeIds);
+        if (gErr) throw gErr;
+        for (const g of (gRows ?? []) as DisagreementGrade[]) gradeMap.set(g.id, g);
+      }
+
+      const jamesMap = new Map(jamesRows.map(r => [r.id, r]));
+      const claudeMap = new Map(claudeRows.map(r => [r.id, r]));
+
+      return disagreements.map(d => {
+        const j = jamesMap.get(d.james_view_id) ?? null;
+        const c = claudeMap.get(d.claude_flag_id) ?? null;
+        const jGrade = j?.grade_id ? gradeMap.get(j.grade_id) ?? null : null;
+        const cGrade = c?.grade_id ? gradeMap.get(c.grade_id) ?? null : null;
+        const winner = deriveWinner(d.resolution, jGrade, cGrade);
+        const actual_return_pct =
+          cGrade?.actual_return_pct ?? jGrade?.actual_return_pct ?? null;
+        return {
+          disagreement: d,
+          james: j
+            ? { id: j.id, direction: j.direction, conviction: j.conviction, rationale: j.rationale, created_at: j.created_at, grade: jGrade }
+            : null,
+          claude: c
+            ? { id: c.id, direction: c.direction, conviction: c.conviction, glance: c.glance, full_reasoning: c.full_reasoning, created_at: c.created_at, grade: cGrade }
+            : null,
+          winner,
+          actual_return_pct,
+        };
+      });
+    },
+  });
+}
+
+export interface DisagreementScoreboard {
+  james_wins: number;
+  claude_wins: number;
+  ties: number;
+  both_wrong: number;
+  pending: number;
+  total: number;
+}
+
+/** Head-to-head scoreboard over the last N days. */
+export function useDisagreementScoreboard(daysBack = 30) {
+  return useQuery<DisagreementScoreboard>({
+    queryKey: ['ct_disagreements_scoreboard', daysBack],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - daysBack * 86400_000).toISOString();
+      const { data, error } = await supabase
+        .from('ct_disagreements')
+        .select('resolution')
+        .gte('created_at', since)
+        .limit(1000);
+      if (error) throw error;
+      const rows = (data ?? []) as Array<{ resolution: Disagreement['resolution'] }>;
+      const sb: DisagreementScoreboard = {
+        james_wins: 0, claude_wins: 0, ties: 0, both_wrong: 0, pending: 0, total: rows.length,
+      };
+      for (const r of rows) {
+        if (r.resolution === 'james_right')     sb.james_wins++;
+        else if (r.resolution === 'claude_right') sb.claude_wins++;
+        else if (r.resolution === 'both_right' || r.resolution === 'ambiguous') sb.ties++;
+        else if (r.resolution === 'both_wrong') sb.both_wrong++;
+        else sb.pending++;
+      }
+      return sb;
+    },
+  });
+}
+
+/** Today's james_views — used to decide whether to nudge "post your view". */
+export interface JamesViewRow {
+  id: string;
+  instrument: string;
+  direction: string;
+  created_at: string;
+}
+
+export function useTodayJamesViews() {
+  return useQuery<JamesViewRow[]>({
+    queryKey: ['ct_james_views_today'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const todayStart = new Date(new Date().setUTCHours(0, 0, 0, 0)).toISOString();
+      const { data, error } = await supabase
+        .from('ct_james_views')
+        .select('id, instrument, direction, created_at')
+        .gte('created_at', todayStart)
+        .order('created_at', { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as JamesViewRow[];
+    },
+  });
+}
+
+// ============================================================================
 // Post a james_view directly from the browser
 // ============================================================================
 export interface PostJamesViewInput {
