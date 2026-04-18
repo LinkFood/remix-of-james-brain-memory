@@ -30,6 +30,7 @@ import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
 import { BookEquityCurve } from '@/components/command/BookEquityCurve';
 import { ClaudesRead } from '@/components/command/ClaudesRead';
 import { ColdOpen } from '@/components/command/ColdOpen';
+import { HistoricalAnalogsCard } from '@/components/command/HistoricalAnalogsCard';
 import { PremarketGapsCard } from '@/components/command/PremarketGapsCard';
 import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
@@ -116,6 +117,12 @@ export default function CommandStation() {
         {/* Cold Open — "what matters right now?" digest. Literal first block.
             Scrolls to or opens the right panel for each bullet. */}
         <ColdOpen onOpenDeep={setDeepTicker} />
+
+        {/* Historical Analogs — "today's tape matches these past sessions".
+            Directional forecast (avg EOD return of top-N analogs) + link to
+            /session?date= for each match. Warming-up copy shown until the
+            nightly cron has accumulated ~5 days of embeddings. */}
+        <HistoricalAnalogsCard />
 
         <ClaudesRead />
 

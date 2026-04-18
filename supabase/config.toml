@@ -147,6 +147,9 @@ verify_jwt = false
 [functions.ct-eod-positioning]
 verify_jwt = false
 
+[functions.ct-session-analog]
+verify_jwt = false
+
 [functions.ct-recall]
 verify_jwt = false
 

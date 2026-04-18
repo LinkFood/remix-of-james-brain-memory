@@ -143,6 +143,34 @@ serve(async (req) => {
   const intradayPnlPct = ((liveEquity - starting) / starting) * 100;
   const drawdownFromHwmPct = hwm > 0 ? ((liveEquity - hwm) / hwm) * 100 : 0;
 
+  // Theta-burn check — log-only (not a blocker, not a distinct alert tier).
+  // Reads the latest ct_book_greeks row (written by ct-book-manager on the
+  // 15min tick when ≥1 open option position exists). If theta decay > 2% of
+  // live equity per day, log an elevated-burn warning. Zero UW calls added.
+  try {
+    const { data: greeksRow } = await supabase
+      .from('ct_book_greeks')
+      .select('total_theta, captured_at, open_options_count')
+      .eq('session_date', sessionDate)
+      .order('captured_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (greeksRow && (greeksRow.open_options_count ?? 0) > 0) {
+      const thetaUsdPerDay = Number(greeksRow.total_theta ?? 0);
+      const thetaBurnPct = liveEquity > 0 ? Math.abs(thetaUsdPerDay) / liveEquity * 100 : 0;
+      if (thetaBurnPct > 2) {
+        console.warn(
+          `[ct-drawdown-watch] Theta burn rate elevated — $${thetaUsdPerDay.toFixed(2)}/day decay ` +
+          `(${thetaBurnPct.toFixed(2)}% of $${liveEquity.toFixed(2)} book, > 2% threshold). ` +
+          `captured_at=${greeksRow.captured_at}`,
+        );
+      }
+    }
+  } catch (e) {
+    // Best-effort — never block the drawdown path on a greeks read failure.
+    console.warn('[ct-drawdown-watch] theta-burn check failed:', e instanceof Error ? e.message : e);
+  }
+
   // 2. Classify tier. URGENT wins over WARN — we check URGENT first.
   const tiersToFire: Tier[] = [];
   const urgentTripped = intradayPnlPct <= urgentPct || drawdownFromHwmPct <= hwmUrgentPct;

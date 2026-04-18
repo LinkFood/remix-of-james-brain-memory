@@ -19,6 +19,7 @@ import { BookEquityCurve } from '@/components/command/BookEquityCurve';
 import { PnLByTheme } from '@/components/command/PnLByTheme';
 import { RiskMetricsPanel } from '@/components/command/RiskMetricsPanel';
 import { ConcentrationPanel } from '@/components/command/ConcentrationPanel';
+import { BookGreeks } from '@/components/command/BookGreeks';
 import { TradeAuditPanel } from '@/components/command/TradeAuditPanel';
 import {
   SizingCalculatorButton,
@@ -651,6 +652,11 @@ export default function Book() {
         {/* Portfolio concentration — live view of the four caps that gate new
             trades at commit time (ticker, theme, direction, options count). */}
         <ConcentrationPanel />
+
+        {/* Book-level Greeks — live aggregate delta / gamma / theta / vega /
+            rho across open option positions. Skips rendering when there are
+            no options (book is pure-underlying). */}
+        <BookGreeks />
 
         {/* P&L split by thesis theme — where is the book making/losing money? */}
         <PnLByTheme />

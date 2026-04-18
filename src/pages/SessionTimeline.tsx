@@ -13,6 +13,7 @@
  * Scrubber at "now" hides the marker and disables muting.
  */
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -172,7 +173,16 @@ const PLAY_TICK_MS = 1000;
 
 export default function SessionTimeline() {
   const today = new Date().toISOString().slice(0, 10);
-  const [sessionDate, setSessionDate] = useState(today);
+  // Honor ?date=YYYY-MM-DD (used by HistoricalAnalogsCard links on CommandStation).
+  // Invalid / missing values fall back to today. Updates propagate so the date
+  // picker remains the source of truth after the user changes it.
+  const [searchParams] = useSearchParams();
+  const initialDate = useMemo(() => {
+    const q = searchParams.get('date');
+    return q && /^\d{4}-\d{2}-\d{2}$/.test(q) ? q : today;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const [sessionDate, setSessionDate] = useState(initialDate);
   const [ticker, setTicker] = useState<string>('all');
   const [expanded, setExpanded] = useState<string | null>(null);
   const [focused, setFocused] = useState<number>(0);

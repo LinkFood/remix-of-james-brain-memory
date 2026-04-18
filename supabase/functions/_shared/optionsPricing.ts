@@ -26,11 +26,20 @@ export interface ParsedOccSymbol {
  * UW /option-contracts row shape (fields we rely on).
  * UW returns more than this; we narrow to what mark-to-market needs.
  */
+export interface OptionGreeks {
+  delta?: number | string | null;
+  gamma?: number | string | null;
+  theta?: number | string | null;
+  vega?: number | string | null;
+  rho?: number | string | null;
+}
+
 export interface OptionChainRow {
   option_symbol: string;
   last_price?: number | string | null;
   nbbo_bid?: number | string | null;
   nbbo_ask?: number | string | null;
+  greeks?: OptionGreeks | null;
 }
 
 export interface OptionTradeLike {

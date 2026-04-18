@@ -26,8 +26,18 @@ import {
   isExpired as isOptionExpired,
   matchContract,
   type OptionChainRow,
+  type OptionGreeks,
   type OptionTradeLike,
 } from '../_shared/optionsPricing.ts';
+
+// Coerce a greek field that UW may return as number | string | null.
+// Missing/unparseable → 0 and a "missing" flag the caller can count.
+function greekOrZero(v: unknown): { value: number; missing: boolean } {
+  if (v == null) return { value: 0, missing: true };
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n)) return { value: 0, missing: true };
+  return { value: n, missing: false };
+}
 
 const SYSTEM_PROMPT = `You manage a live paper book. 15min has passed. Each open trade has current price, unrealized P&L, and a reason it was opened.
 
@@ -424,6 +434,16 @@ serve(async (req) => {
     t.contracts != null &&
     t.entry_premium != null,
   );
+  // Book-level Greeks aggregation — collected inside the options loop below
+  // so we reuse the already-fetched /option-contracts response (zero extra UW
+  // calls). Per-position contributions land in `positionBreakdown`; totals in
+  // `greekTotals`. A row is inserted into ct_book_greeks after the loop only
+  // when ≥1 position contributed (zero-options ticks don't spam the table).
+  const greekTotals = { delta: 0, gamma: 0, theta: 0, vega: 0, rho: 0 };
+  const positionBreakdown: Array<Record<string, unknown>> = [];
+  const uniqueTickersWithOptions = new Set<string>();
+  let missingGreeksCount = 0;
+
   if (optionTrades.length > 0) {
     const byTicker = new Map<string, OpenTrade[]>();
     for (const t of optionTrades) {
@@ -478,7 +498,82 @@ serve(async (req) => {
           live_pnl_usd: pnl.live_pnl_usd,
           live_pnl_updated_at: nowTs,
         }).eq('id', t.id);
+
+        // ----- Greeks aggregation -----
+        //
+        // Formula (per position, per greek):
+        //   position_greek = chain_greek * contracts * 100 * side_sign
+        //     side_sign = +1 for 'long', -1 for 'short'
+        //
+        // Missing greeks default to 0 and are counted in `missingGreeksCount`
+        // so the UI can flag "N of M positions missing greeks."
+        const contracts = t.contracts ?? 0;
+        const sideSign = t.side === 'long' ? 1 : -1;
+        const mult = contracts * 100 * sideSign;
+        const g: OptionGreeks = row.greeks ?? {};
+        const d = greekOrZero(g.delta);
+        const gm = greekOrZero(g.gamma);
+        const th = greekOrZero(g.theta);
+        const v = greekOrZero(g.vega);
+        const r = greekOrZero(g.rho);
+        if (d.missing || gm.missing || th.missing || v.missing || r.missing) {
+          missingGreeksCount++;
+        }
+        const contribDelta = d.value * mult;
+        const contribGamma = gm.value * mult;
+        const contribTheta = th.value * mult;
+        const contribVega  = v.value  * mult;
+        const contribRho   = r.value  * mult;
+        greekTotals.delta += contribDelta;
+        greekTotals.gamma += contribGamma;
+        greekTotals.theta += contribTheta;
+        greekTotals.vega  += contribVega;
+        greekTotals.rho   += contribRho;
+        uniqueTickersWithOptions.add(t.instrument.toUpperCase());
+        positionBreakdown.push({
+          trade_id: t.id,
+          instrument: t.instrument,
+          type: t.contract_type,
+          strike: t.strike,
+          expiry: t.expiry,
+          contracts,
+          side: t.side,
+          greeks: {
+            delta: d.value, gamma: gm.value, theta: th.value, vega: v.value, rho: r.value,
+          },
+          contributions: {
+            delta: +contribDelta.toFixed(4),
+            gamma: +contribGamma.toFixed(4),
+            theta: +contribTheta.toFixed(4),
+            vega:  +contribVega.toFixed(4),
+            rho:   +contribRho.toFixed(4),
+          },
+          missing_any_greek: d.missing || gm.missing || th.missing || v.missing || r.missing,
+        });
       }
+    }
+  }
+
+  // Insert book-level Greeks row — only when ≥1 position contributed.
+  // Pure-underlying books skip the write entirely (don't spam zero rows).
+  if (positionBreakdown.length > 0) {
+    const { error: greeksErr } = await supabase.from('ct_book_greeks').insert({
+      captured_at: nowTs,
+      session_date: sessionDate,
+      total_delta: +greekTotals.delta.toFixed(4),
+      total_gamma: +greekTotals.gamma.toFixed(4),
+      total_vega:  +greekTotals.vega.toFixed(4),
+      total_theta: +greekTotals.theta.toFixed(4),
+      total_rho:   +greekTotals.rho.toFixed(4),
+      open_options_count: positionBreakdown.length,
+      unique_tickers: Array.from(uniqueTickersWithOptions),
+      metadata: {
+        positions: positionBreakdown,
+        missing_greeks_count: missingGreeksCount,
+      },
+    });
+    if (greeksErr) {
+      console.warn('[ct-book-manager] ct_book_greeks insert failed:', greeksErr.message);
     }
   }
 

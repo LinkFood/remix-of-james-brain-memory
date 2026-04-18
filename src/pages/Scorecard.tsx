@@ -21,6 +21,7 @@ import { WeeklyReflectionPanel } from '@/components/command/WeeklyReflectionPane
 import { CalibrationChart } from '@/components/scorecard/CalibrationChart';
 import { ClaudesSurprises } from '@/components/scorecard/ClaudesSurprises';
 import { AxisAttributionPanel } from '@/components/scorecard/AxisAttributionPanel';
+import { RegimeConditionalPanel } from '@/components/scorecard/RegimeConditionalPanel';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 import { useCalibration } from '@/hooks/useCalibration';
 import { useClaudesSurprises } from '@/hooks/useClaudesSurprises';
@@ -473,6 +474,11 @@ export function Scorecard() {
             Meta-calibration: if Claude cites A a lot but those calls underperform
             vs C, that's structural input for the watcher prompt (bump C, dampen A). */}
         <AxisAttributionPanel />
+
+        {/* Regime-conditional edge — where Claude has real conditional edge vs the
+            overall hit rate. Six dimensions + gamma×session heatmap. Sits between
+            Calibration/AxisAttribution and Surprises per wave 19 placement. */}
+        <RegimeConditionalPanel />
 
         {/* Claude's Surprises — the furthest-from-reality calls. Most instructive grades. */}
         <ClaudesSurprises />
