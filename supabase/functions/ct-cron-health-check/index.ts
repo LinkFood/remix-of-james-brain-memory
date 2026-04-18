@@ -164,6 +164,52 @@ function isRthRestrictedSchedule(schedule: string): boolean {
   return hourRestricted && dowRestricted;
 }
 
+/** True if the schedule's day-of-week field restricts to weekdays only
+ *  (i.e. excludes 0 and 6). Examples that return true:
+ *    `1-5`, `1,2,3,4,5`, `1-4`, `2-5`
+ *  Examples that return false:
+ *    `*`, `0-6`, `*\/1`, `1,3,5`, `0,6` (weekend-only), anything with 0 or 6
+ *
+ *  Used independently of hour restrictions — a `30 13 * * 1-5` cron should
+ *  NOT be flagged as `never_ran` or `stale` on a Saturday/Sunday, because
+ *  pg_cron simply won't fire it then.
+ */
+function isWeekdayOnlySchedule(schedule: string): boolean {
+  const parts = (schedule ?? '').trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  const dow = parts[4];
+  if (!dow || dow === '*') return false;
+
+  // Normalize: extract individual day numbers from ranges and lists.
+  const days = new Set<number>();
+  for (const seg of dow.split(',')) {
+    const rangeMatch = seg.match(/^(\d+)-(\d+)$/);
+    if (rangeMatch) {
+      const lo = parseInt(rangeMatch[1], 10);
+      const hi = parseInt(rangeMatch[2], 10);
+      for (let d = lo; d <= hi; d++) days.add(d);
+      continue;
+    }
+    if (/^\d+$/.test(seg)) {
+      days.add(parseInt(seg, 10));
+      continue;
+    }
+    // Unknown token (e.g. `*/2`) — don't claim weekday-only.
+    return false;
+  }
+  if (days.size === 0) return false;
+  // Must exclude Sunday (0) and Saturday (6), and contain at least one weekday.
+  if (days.has(0) || days.has(6)) return false;
+  for (const d of days) if (d >= 1 && d <= 5) return true;
+  return false;
+}
+
+/** True if today (in UTC — pg_cron uses UTC) is Saturday or Sunday. */
+function isWeekendUtc(d: Date = new Date()): boolean {
+  const day = d.getUTCDay();
+  return day === 0 || day === 6;
+}
+
 /** Best-effort "is this schedule's window currently open?" — used to suppress
  *  stale alerts for RTH-only crons outside their window. A stale alert
  *  during the window is still legit.
@@ -211,6 +257,8 @@ function classify(row: CronRow, now: Date): Classification {
   const ageMin = minutesAgo(row.last_run_at);
   const rthRestricted = isRthRestrictedSchedule(row.schedule);
   const windowOpen = isScheduleWindowOpen(row.schedule, now);
+  const weekdayOnly = isWeekdayOnlySchedule(row.schedule);
+  const weekendNow = isWeekendUtc(now);
 
   // failed: trumps everything. Even an RTH-only cron that failed should
   // alert — the failure happened, regardless of current hour.
@@ -229,6 +277,19 @@ function classify(row: CronRow, now: Date): Classification {
   // never_ran: null last_run_at AND scheduled more than 1h ago. Brand-new
   // crons whose first tick hasn't landed yet stay quiet.
   if (!row.last_run_at) {
+    // Weekday-only cron on a weekend — pg_cron won't fire it, so null
+    // last_run_at is expected. Suppress.
+    if (weekdayOnly && weekendNow) {
+      return {
+        jobname: row.jobname,
+        status: 'skipped_off_hours',
+        last_run_at: null,
+        last_run_status: row.last_run_status,
+        ageMin,
+        cadenceMin,
+        note: 'no run yet (weekday-only cron, weekend — suppressed)',
+      };
+    }
     // We can't tell from the RPC when the cron was created, so use a
     // simple rule: if the expected cadence < 60m AND the cron is active,
     // it should've ticked by now. For longer-cadence crons, err on quiet —
@@ -261,6 +322,19 @@ function classify(row: CronRow, now: Date): Classification {
   // RTH-only carve-out: if the cron's window isn't open right now, suppress
   // stale alerts — overnight/weekend silence is expected.
   if (ageMin > threshold) {
+    // Weekday-only cron on a weekend — pg_cron won't fire it, so staleness
+    // is expected until Monday. Suppress.
+    if (weekdayOnly && weekendNow) {
+      return {
+        jobname: row.jobname,
+        status: 'skipped_off_hours',
+        last_run_at: row.last_run_at,
+        last_run_status: row.last_run_status,
+        ageMin,
+        cadenceMin,
+        note: `stale ${Math.round(ageMin)}m (weekday-only cron, weekend — suppressed)`,
+      };
+    }
     if (rthRestricted && !windowOpen) {
       return {
         jobname: row.jobname,
