@@ -142,7 +142,7 @@ function HeaderStat({
   if (!mr && !lr) {
     return (
       <div className="text-xs text-muted-foreground">
-        No axis has >=3 graded samples yet — win rates below are provisional.
+        No axis has ≥3 graded samples yet — win rates below are provisional.
       </div>
     );
   }
