@@ -251,3 +251,9 @@ verify_jwt = false
 
 [functions.ct-preset-apply]
 verify_jwt = false
+
+[functions.ct-earnings-sync]
+verify_jwt = false
+
+[functions.ct-earnings-pre-event-check]
+verify_jwt = false

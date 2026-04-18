@@ -6,8 +6,10 @@ import {
   useRecentEvents,
   useSessionHeartbeats,
   useTickerDensity,
+  useNextEarningsByTicker,
   type Heartbeat,
   type TickerDensityEntry,
+  type NextEarningsRow,
 } from '@/hooks/useCoTraderData';
 import { useGexRadar, type GexComboVerdict, type GexRadarTicker } from '@/hooks/useGexRadar';
 import {
@@ -404,6 +406,71 @@ const LastNote = memo(function LastNote({
   );
 });
 
+/**
+ * Earnings countdown chip: '📅 NVDA rpts in 12d' (muted), 3d (amber), tomorrow/today (red).
+ * Hidden when no upcoming earnings within 30 days.
+ */
+const EarningsChip = memo(function EarningsChip({
+  row,
+  ticker,
+}: {
+  row: NextEarningsRow | null | undefined;
+  ticker: string;
+}) {
+  if (!row) return null;
+  // Compute days between now (local midnight) and report_date.
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const [y, m, d] = row.report_date.split('-').map((n) => parseInt(n, 10));
+  const report = new Date(y, (m || 1) - 1, d || 1);
+  const diffMs = report.getTime() - today.getTime();
+  const days = Math.round(diffMs / (24 * 60 * 60 * 1000));
+  if (days < 0 || days > 30) return null;
+
+  const rt = row.report_time ? row.report_time.toUpperCase() : '';
+  let label: string;
+  if (days === 0) label = `${ticker} rpts today${rt ? ` ${rt}` : ''}`;
+  else if (days === 1) label = `${ticker} rpts tomorrow${rt ? ` ${rt}` : ''}`;
+  else label = `${ticker} rpts in ${days}d${rt ? ` ${rt}` : ''}`;
+
+  const tone =
+    days <= 1
+      ? 'bg-red-500/15 text-red-400 border-red-500/30'
+      : days <= 3
+      ? 'bg-amber-500/15 text-amber-400 border-amber-500/30'
+      : 'bg-muted/40 text-muted-foreground border-border';
+
+  const tip =
+    row.eps_estimate != null || row.iv_rank_at_capture != null
+      ? [
+          row.eps_estimate != null ? `est EPS ${row.eps_estimate.toFixed(2)}` : null,
+          row.prev_actual != null ? `prev ${row.prev_actual.toFixed(2)}` : null,
+          row.iv_rank_at_capture != null ? `IV rank ${Math.round(row.iv_rank_at_capture)}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')
+      : 'earnings advisory: tighter stops, smaller size';
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[9px] font-medium uppercase tracking-wide cursor-help ${tone}`}
+            aria-label={label}
+          >
+            <span aria-hidden="true">📅</span>
+            <span className="tabular-nums">{label}</span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" className="bg-black/95 border-white/10 text-white px-2 py-1 text-[10px]">
+          {tip}
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  );
+});
+
 // Extract today's per-ticker price series from session heartbeats.
 function buildPriceHistory(heartbeats: Heartbeat[] | undefined): Record<string, number[]> {
   const out: Record<string, number[]> = {};
@@ -481,6 +548,7 @@ export function TickerGrid({ onOpenDeep }: TickerGridProps = {}) {
   // shape AlwaysOnFlagStrip / ColdOpen use.
   const { data: gex } = useGexRadar(['SPY', 'QQQ', 'IWM'], 30);
   const { data: netPrem } = useNetPremiumCumulative();
+  const { data: nextEarnings } = useNextEarningsByTicker();
   const [showAll, setShowAll] = useState(false);
 
   // Per-ticker verdicts map (only non-null for radar tickers; others get null).
@@ -618,13 +686,14 @@ export function TickerGrid({ onOpenDeep }: TickerGridProps = {}) {
               </div>
             </div>
 
-            {/* 2) Combo verdict pill + 3) cluster badges — tight row under header */}
-            {(comboIsStructural || tickerDensity) && (
-              <div className="flex items-center gap-2 mb-1.5 min-h-[14px]">
+            {/* 2) Combo verdict pill + 3) cluster badges + earnings chip — tight row under header */}
+            {(comboIsStructural || tickerDensity || nextEarnings?.[T]) && (
+              <div className="flex items-center gap-2 mb-1.5 min-h-[14px] flex-wrap">
                 {comboIsStructural && combo && (
                   <ComboPill combo={combo} ticker={T} onOpenDeep={onOpenDeep} />
                 )}
                 {tickerDensity && <ClusterBadges density={tickerDensity} />}
+                <EarningsChip row={nextEarnings?.[T]} ticker={T} />
               </div>
             )}
 

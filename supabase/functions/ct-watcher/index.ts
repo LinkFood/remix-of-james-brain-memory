@@ -289,6 +289,17 @@ interface TriggerInfo {
   reason: string;
   priority: string;
   trigger_id?: string | null;
+  /**
+   * Populated only when source='earnings_approach' — surfaced to the model via
+   * a system-prompt addendum so Haiku tilts sizing/stops/horizon accordingly.
+   */
+  earnings?: {
+    ticker: string;
+    report_date: string;
+    report_time: string | null;
+    threshold_hours: number;
+    hours_remaining: number;
+  } | null;
 }
 
 function triggerTag(info: TriggerInfo | null): string {
@@ -774,12 +785,28 @@ serve(async (req) => {
   try {
     const body = await req.json();
     if (body && typeof body === 'object' && typeof body.triggered_by === 'string') {
+      const src = String(body.triggered_by);
       triggerInfo = {
-        source: String(body.triggered_by),
+        source: src,
         reason: typeof body.reason === 'string' ? body.reason : '',
         priority: typeof body.priority === 'string' ? body.priority : 'high',
         trigger_id: typeof body.trigger_id === 'string' ? body.trigger_id : null,
       };
+      if (
+        src === 'earnings_approach' &&
+        typeof body.earnings_ticker === 'string' &&
+        typeof body.earnings_report_date === 'string' &&
+        typeof body.earnings_threshold_hours === 'number' &&
+        typeof body.earnings_hours_remaining === 'number'
+      ) {
+        triggerInfo.earnings = {
+          ticker: body.earnings_ticker,
+          report_date: body.earnings_report_date,
+          report_time: typeof body.earnings_report_time === 'string' ? body.earnings_report_time : null,
+          threshold_hours: body.earnings_threshold_hours,
+          hours_remaining: body.earnings_hours_remaining,
+        };
+      }
       console.log(`[ct-watcher] event-driven fire: source=${triggerInfo.source} priority=${triggerInfo.priority} reason=${triggerInfo.reason.slice(0, 200)}`);
     }
   } catch {
@@ -1160,10 +1187,18 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
     let mcpCalls = 0;
     const uwKey = Deno.env.get('UW_API_KEY');
     const claudeCallStart = Date.now();
+    // If this tick was fired by an approaching earnings report, tack an
+    // addendum onto the system prompt — Haiku should tilt sizing smaller,
+    // stops tighter, and favor shorter-horizon framing in the narrative.
+    const earningsAddendum = (triggerInfo?.source === 'earnings_approach' && triggerInfo.earnings)
+      ? `\n\n--- EARNINGS ADDENDUM (event-driven fire) ---
+Earnings in ${triggerInfo.earnings.hours_remaining.toFixed(1)}h for ${triggerInfo.earnings.ticker} (${triggerInfo.earnings.report_date}${triggerInfo.earnings.report_time ? ` ${triggerInfo.earnings.report_time.toUpperCase()}` : ''}). IV typically expands 20–40% leading in; vol is priced to the known event, so long-premium setups into the print are expensive and directional conviction should be LOWER than flow alone suggests. Size trades on ${triggerInfo.earnings.ticker} smaller, tighter stops, consider shorter horizons or explicit defined-risk structures. Advisory only — do NOT auto-close anything. When surfacing reads on ${triggerInfo.earnings.ticker} in this tick, cite the earnings proximity in the glance.`
+      : '';
+
     try {
       const response = await callClaude({
         model: CLAUDE_MODELS.haiku,
-        system: CT_SYSTEM_PROMPT_V1,
+        system: earningsAddendum ? CT_SYSTEM_PROMPT_V1 + earningsAddendum : CT_SYSTEM_PROMPT_V1,
         messages: [{ role: 'user', content: userMessage }],
         max_tokens: 3000,
         temperature: 0.2,

@@ -889,6 +889,68 @@ export interface CtEventRow {
   title: string | null;
   importance: number | null;
   fetched_at: string;
+  /** Earnings-only fields from ct-earnings-sync. Null for fda/econ rows. */
+  report_time?: 'bmo' | 'amc' | 'intraday' | null;
+  eps_estimate?: number | null;
+  prev_actual?: number | null;
+  iv_rank_at_capture?: number | null;
+}
+
+export interface NextEarningsRow {
+  ticker: string;
+  report_date: string;
+  report_time: 'bmo' | 'amc' | 'intraday' | null;
+  eps_estimate: number | null;
+  prev_actual: number | null;
+  iv_rank_at_capture: number | null;
+}
+
+/**
+ * Next upcoming earnings per watchlist ticker (keyed by UPPER(ticker)).
+ * Reads ct_events filtered to event_type='earnings' + event_date >= today,
+ * takes the soonest per ticker. Refreshes every 30 minutes — calendar is
+ * quasi-static.
+ */
+export function useNextEarningsByTicker() {
+  return useQuery<Record<string, NextEarningsRow>>({
+    queryKey: ['ct_events_next_earnings'],
+    refetchInterval: 30 * 60_000,
+    staleTime: 10 * 60_000,
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_events')
+        .select('ticker, event_date, report_time, eps_estimate, prev_actual, iv_rank_at_capture')
+        .eq('event_type', 'earnings')
+        .not('ticker', 'is', null)
+        .gte('event_date', today)
+        .order('event_date', { ascending: true })
+        .limit(300);
+      if (error) throw error;
+      const byTicker: Record<string, NextEarningsRow> = {};
+      for (const r of (data ?? []) as Array<{
+        ticker: string;
+        event_date: string;
+        report_time: 'bmo' | 'amc' | 'intraday' | null;
+        eps_estimate: number | null;
+        prev_actual: number | null;
+        iv_rank_at_capture: number | null;
+      }>) {
+        const key = r.ticker.toUpperCase();
+        if (!byTicker[key]) {
+          byTicker[key] = {
+            ticker: key,
+            report_date: r.event_date,
+            report_time: r.report_time,
+            eps_estimate: r.eps_estimate,
+            prev_actual: r.prev_actual,
+            iv_rank_at_capture: r.iv_rank_at_capture,
+          };
+        }
+      }
+      return byTicker;
+    },
+  });
 }
 
 /** Next 24hr of events across all three types. */

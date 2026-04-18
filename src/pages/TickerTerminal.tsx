@@ -39,6 +39,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { LinkGexDeep } from '@/components/command/LinkGexDeep';
+import { TickerChartWithAlerts } from '@/components/command/TickerChartWithAlerts';
 import {
   useTickerTerminal,
   type TickerHeartbeatPoint,
@@ -51,7 +52,9 @@ import type {
   NewsItem,
   CtTradeRow,
   CtEvent,
+  NextEarningsRow,
 } from '@/hooks/useCoTraderData';
+import { useNextEarningsByTicker } from '@/hooks/useCoTraderData';
 
 // ─── palette (matches the rest of the co-trader surface) ───────────────
 const COLOR_CALL = '#00C853';
@@ -765,6 +768,64 @@ const RecentReadsCard = memo(function RecentReadsCard({ events }: { events: CtEv
   );
 });
 
+// ─── Earnings countdown card ───────────────────────────────────────────
+
+const EarningsCountdownCard = memo(function EarningsCountdownCard({
+  ticker,
+  row,
+}: {
+  ticker: string;
+  row: NextEarningsRow | null | undefined;
+}) {
+  if (!row) {
+    return (
+      <Card className="p-3 text-[11px] text-muted-foreground/70">
+        <span className="uppercase tracking-wider text-[10px] text-muted-foreground/60 mr-2">Earnings</span>
+        No upcoming report in ct_events for {ticker}.
+      </Card>
+    );
+  }
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const [y, m, d] = row.report_date.split('-').map((n) => parseInt(n, 10));
+  const report = new Date(y, (m || 1) - 1, d || 1);
+  const diffDays = Math.round((report.getTime() - today.getTime()) / (24 * 60 * 60 * 1000));
+  const tone =
+    diffDays <= 1 ? 'text-red-400' : diffDays <= 3 ? 'text-amber-400' : 'text-muted-foreground';
+  const whenLabel =
+    diffDays === 0 ? 'today' : diffDays === 1 ? 'tomorrow' : diffDays < 0 ? `${Math.abs(diffDays)}d ago` : `in ${diffDays}d`;
+
+  return (
+    <Card className="p-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <span className="uppercase tracking-wider text-[10px] text-muted-foreground/70">Next earnings</span>
+          <span className={`text-sm font-semibold ${tone}`}>{whenLabel}</span>
+          <span className="text-[11px] text-muted-foreground tabular-nums">
+            {row.report_date}{row.report_time ? ` · ${row.report_time.toUpperCase()}` : ''}
+          </span>
+        </div>
+        <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+          {row.eps_estimate != null && (
+            <span>est EPS <span className="text-foreground tabular-nums">{row.eps_estimate.toFixed(2)}</span></span>
+          )}
+          {row.prev_actual != null && (
+            <span>prev <span className="text-foreground tabular-nums">{row.prev_actual.toFixed(2)}</span></span>
+          )}
+          {row.iv_rank_at_capture != null && (
+            <span>IV rank at capture <span className="text-foreground tabular-nums">{Math.round(row.iv_rank_at_capture)}</span></span>
+          )}
+        </div>
+      </div>
+      {diffDays <= 3 && diffDays >= 0 && (
+        <div className="text-[10px] text-amber-400/90 mt-1 italic">
+          IV typically expands 20–40% into the print — tighter stops, smaller size, consider shorter horizons.
+        </div>
+      )}
+    </Card>
+  );
+});
+
 // ─── Page ──────────────────────────────────────────────────────────────
 
 export default function TickerTerminal() {
@@ -772,6 +833,7 @@ export default function TickerTerminal() {
   const ticker = (symbol ?? '').toUpperCase().trim();
 
   const { data, isLoading, isError, error } = useTickerTerminal(ticker);
+  const { data: nextEarnings } = useNextEarningsByTicker();
 
   if (!ticker) {
     return (
@@ -855,11 +917,11 @@ export default function TickerTerminal() {
           </Card>
         )}
 
-        {/* ─── Row 1: session price sparkline (span 12) ───────────── */}
-        <PriceSparklineRow
-          points={data?.sparkline ?? []}
-          sessionOpen={header?.sessionOpen ?? null}
-        />
+        {/* ─── Earnings countdown (compact, always visible) ──────── */}
+        <EarningsCountdownCard ticker={ticker} row={nextEarnings?.[ticker]} />
+
+        {/* ─── Row 1: session chart with Claude's alerts overlaid ── */}
+        <TickerChartWithAlerts ticker={ticker} />
 
         {/* ─── Row 2: attention history + option chain ───────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">

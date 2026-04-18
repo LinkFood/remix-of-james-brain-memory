@@ -32,12 +32,14 @@ import Scorecard from "./pages/Scorecard";
 import PromptAbTest from "./pages/PromptAbTest";
 import Replay from "./pages/Replay";
 import Playbooks from "./pages/Playbooks";
+import Principles from "./pages/Principles";
 import Book from "./pages/Book";
 import Health from "./pages/Health";
 import Preflight from "./pages/Preflight";
 import SessionTimeline from "./pages/SessionTimeline";
 import Stress from "./pages/Stress";
 import TickerTerminal from "./pages/TickerTerminal";
+import TickerChart from "./pages/TickerChart";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -70,6 +72,7 @@ const TrackedRoutes = () => {
       <Route path="/" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/"><CommandStation /></RouteBoundary></AuthLayout>} />
       <Route path="/scorecard" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/scorecard"><Scorecard /></RouteBoundary></AuthLayout>} />
       <Route path="/playbooks" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/playbooks"><Playbooks /></RouteBoundary></AuthLayout>} />
+      <Route path="/principles" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/principles"><Principles /></RouteBoundary></AuthLayout>} />
       <Route path="/prompts" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/prompts"><PromptAbTest /></RouteBoundary></AuthLayout>} />
       <Route path="/book" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/book"><Book /></RouteBoundary></AuthLayout>} />
       <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/health"><Health /></RouteBoundary></AuthLayout>} />
@@ -77,6 +80,7 @@ const TrackedRoutes = () => {
       <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/session"><SessionTimeline /></RouteBoundary></AuthLayout>} />
       <Route path="/stress" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/stress"><Stress /></RouteBoundary></AuthLayout>} />
       <Route path="/ticker/:symbol" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/ticker/:symbol"><TickerTerminal /></RouteBoundary></AuthLayout>} />
+      <Route path="/chart/:symbol/:date" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/chart/:symbol/:date"><TickerChart /></RouteBoundary></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><RouteBoundary route="/dashboard"><Dashboard /></RouteBoundary></AuthLayout>} />
