@@ -4,6 +4,7 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { useEffectiveSessionDate } from '@/hooks/useEffectiveSessionDate';
 import { Card } from '@/components/ui/card';
 import { Flame, TrendingUp, TrendingDown, Zap } from 'lucide-react';
 
@@ -48,11 +49,15 @@ function relTime(iso: string): string {
   // net premium per ticker. Call-heavy = bullish, put-heavy = bearish.
   // This keeps the panel live off the flow-ingester data we already have.
 export function MarketMovers() {
+  const { data: session } = useEffectiveSessionDate();
+  const sinceKey = session?.isLive === false ? session.sessionStartISO : 'live30';
   const { data: movers } = useQuery<TopMover[]>({
-    queryKey: ['ct_top_movers_with_fallback'],
+    queryKey: ['ct_top_movers_with_fallback', sinceKey],
     refetchInterval: 60_000,
     queryFn: async () => {
-      const since = new Date(Date.now() - 30 * 60_000).toISOString();
+      const since = session?.isLive === false && session?.sessionStartISO
+        ? session.sessionStartISO
+        : new Date(Date.now() - 30 * 60_000).toISOString();
       const primary = await supabase
         .from('ct_top_movers')
         .select('ticker, side, rank, net_premium, snapshot_at')
@@ -93,10 +98,12 @@ export function MarketMovers() {
   });
 
   const { data: sweeps } = useQuery<Sweep[]>({
-    queryKey: ['ct_sweeps'],
+    queryKey: ['ct_sweeps', sinceKey],
     refetchInterval: 60_000,
     queryFn: async () => {
-      const since = new Date(Date.now() - 30 * 60_000).toISOString();
+      const since = session?.isLive === false && session?.sessionStartISO
+        ? session.sessionStartISO
+        : new Date(Date.now() - 30 * 60_000).toISOString();
       const { data } = await supabase
         .from('ct_sweeps')
         .select('ticker, type, strike, expiry, premium, volume, open_interest, sweep_ratio, snapshot_at')
