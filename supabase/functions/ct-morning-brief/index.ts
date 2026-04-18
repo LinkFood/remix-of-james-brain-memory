@@ -464,6 +464,7 @@ serve(async (req) => {
     // Back-compat: also upsert the narratable script into ct_morning_briefs
     // so the existing audio player / frontend keeps working.
     const duration = audioUrl && script ? estimateDurationSeconds(script) : null;
+    const audioDurationMs = duration != null ? Math.round(duration * 1000) : null;
     await supabase.from('ct_morning_briefs').upsert({
       for_date: forDate,
       script,
@@ -471,6 +472,20 @@ serve(async (req) => {
       duration_seconds: duration,
       prompt_version: PROMPT_VERSION,
     }, { onConflict: 'for_date' });
+
+    // Stamp the ct_reports row with audio URL + duration so any report_type
+    // (not just morning_brief) can carry narration going forward.
+    if (audioUrl) {
+      const { error: audioErr } = await supabase
+        .from('ct_reports')
+        .update({ audio_url: audioUrl, audio_duration_ms: audioDurationMs })
+        .eq('id', report.id);
+      if (audioErr) {
+        console.warn('[ct-morning-brief] ct_reports audio stamp failed (non-blocking):', audioErr.message);
+      } else {
+        console.log(`[ct-morning-brief] audio stamped on report ${report.id} — ${audioBytes} bytes, ~${audioDurationMs}ms`);
+      }
+    }
 
     return new Response(JSON.stringify({
       success: true,

@@ -186,12 +186,17 @@ export async function ctSlackPush(
 /**
  * Direct Slack push with no dedupe — for scheduled digests that MUST go
  * through regardless. Still logs to ct_slack_log.
+ *
+ * `text` is always sent as the fallback / notification body. If `blocks` is
+ * provided, Slack renders the Block Kit layout instead of the plain text
+ * (text becomes the push-notification / screenreader summary).
  */
 export async function ctSlackPushDirect(
   supabase: SupabaseClient,
   userId: string,
   text: string,
   source: string,
+  blocks?: Array<Record<string, unknown>>,
 ): Promise<void> {
   try {
     const botToken = Deno.env.get('SLACK_BOT_TOKEN');
@@ -201,10 +206,13 @@ export async function ctSlackPushDirect(
     const channelId = (settings?.settings as Record<string, unknown> | null)?.slack_channel_id as string | undefined;
     if (!channelId) return;
 
+    const payload: Record<string, unknown> = { channel: channelId, text, mrkdwn: true };
+    if (blocks && blocks.length > 0) payload.blocks = blocks;
+
     const res = await fetch('https://slack.com/api/chat.postMessage', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel: channelId, text, mrkdwn: true }),
+      body: JSON.stringify(payload),
     });
     const json = await res.ok ? await res.json().catch(() => ({})) : {};
     await supabase.from('ct_slack_log').insert({
