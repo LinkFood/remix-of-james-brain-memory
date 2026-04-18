@@ -14,7 +14,8 @@
  * stop data), we render "insufficient sample" inline rather than NaN.
  */
 import { ChartSafe } from '@/components/ChartSafe';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { finiteDomain, safeMax } from '@/lib/chartSanitize';
 import {
   BarChart,
   Bar,
@@ -136,6 +137,14 @@ export function RiskMetricsPanel() {
     metrics && Number.isFinite(metrics.maxDd) && metrics.maxDd < 0
       ? 'text-red-400'
       : 'text-muted-foreground';
+
+  // Explicit YAxis domain for R-multiple histogram — counts are non-negative
+  // integers. When every bin is 0 or equal, auto-domain collapses and trips
+  // LN10. Anchor at 0 and pad up by at least 1.
+  const histDomain = useMemo<[number, number]>(() => {
+    const counts = (metrics?.rHistogram ?? []).map(b => b.count);
+    return finiteDomain(0, safeMax(counts), [0, 1], 1);
+  }, [metrics?.rHistogram]);
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -334,6 +343,8 @@ export function RiskMetricsPanel() {
                         tickLine={false}
                       />
                       <YAxis
+                        domain={histDomain}
+                        allowDataOverflow={false}
                         tick={{ fontSize: 10, fill: '#94A3B8' }}
                         axisLine={false}
                         tickLine={false}

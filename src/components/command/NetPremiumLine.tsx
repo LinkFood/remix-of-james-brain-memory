@@ -12,7 +12,7 @@ import { useNetPremiumTicks, useNetPremiumTickers } from '@/hooks/useCoTraderDat
 import { Card } from '@/components/ui/card';
 import { Line, LineChart, ResponsiveContainer, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
 import { SessionBadge } from '@/components/command/SessionBadge';
-import { finite } from '@/lib/chartSanitize';
+import { finite, finiteDomain, safeMin, safeMax } from '@/lib/chartSanitize';
 
 function fmtMoney(n: number): string {
   const abs = Math.abs(n);
@@ -52,6 +52,13 @@ export function NetPremiumLine() {
   const latest = series[series.length - 1]?.cum ?? 0;
   const bullish = latest > 0;
 
+  // Explicit YAxis domain — Recharts' auto-domain crashes (LN10 precision)
+  // when a flat cumulative run collapses [min,max] to a single value.
+  const yDomain = useMemo<[number, number]>(() => {
+    const all = series.map(p => p.cum);
+    return finiteDomain(safeMin(all), safeMax(all), [-1, 1], 1);
+  }, [series]);
+
   return (
     <Card>
       <div className="px-3 py-2 border-b border-border bg-muted/30 flex items-center gap-2">
@@ -86,7 +93,7 @@ export function NetPremiumLine() {
             <ChartSafe><ResponsiveContainer width="100%" height="100%">
               <LineChart data={series} margin={{ top: 4, right: 8, left: 4, bottom: 4 }}>
                 <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} interval="preserveStartEnd" />
-                <YAxis tickFormatter={(v) => fmtMoney(v).replace('$', '')} tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} width={40} />
+                <YAxis domain={yDomain} allowDataOverflow={false} tickFormatter={(v) => fmtMoney(v).replace('$', '')} tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} width={40} />
                 <Tooltip
                   contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', fontSize: '10px', padding: '4px 6px' }}
                   formatter={(v: number) => [fmtMoney(v), 'Net Prem']}

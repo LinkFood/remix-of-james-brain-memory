@@ -13,7 +13,7 @@ import { useGreekFlow } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Line, LineChart, ResponsiveContainer, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
 import { SessionBadge } from '@/components/command/SessionBadge';
-import { finite } from '@/lib/chartSanitize';
+import { finite, finiteDomain, safeMin, safeMax } from '@/lib/chartSanitize';
 
 type IndexTicker = 'SPY' | 'QQQ' | 'IWM';
 const TICKERS: IndexTicker[] = ['SPY', 'QQQ', 'IWM'];
@@ -53,6 +53,13 @@ export function HiroPanel() {
 
   const latest = series[series.length - 1]?.hiro ?? 0;
   const bullish = latest > 0;
+
+  // Explicit YAxis domain — cumulative delta can sit flat near zero early
+  // in the session, which collapses the auto-domain and trips LN10.
+  const yDomain = useMemo<[number, number]>(() => {
+    const all = series.map(p => p.hiro);
+    return finiteDomain(safeMin(all), safeMax(all), [-1, 1], 1);
+  }, [series]);
 
   return (
     <Card>
@@ -96,7 +103,7 @@ export function HiroPanel() {
                   </linearGradient>
                 </defs>
                 <XAxis dataKey="label" tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} interval="preserveStartEnd" />
-                <YAxis tickFormatter={(v) => fmtDelta(v)} tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} width={48} />
+                <YAxis domain={yDomain} allowDataOverflow={false} tickFormatter={(v) => fmtDelta(v)} tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }} width={48} />
                 <Tooltip
                   contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', fontSize: '10px', padding: '4px 6px' }}
                   formatter={(v: number) => [fmtDelta(v), 'HIRO']}

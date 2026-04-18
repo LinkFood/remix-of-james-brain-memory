@@ -17,7 +17,7 @@ import { useFlowAlerts, type FlowAlert } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Bar, BarChart, Cell, ResponsiveContainer, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
 import { SessionBadge } from '@/components/command/SessionBadge';
-import { finite } from '@/lib/chartSanitize';
+import { finite, finiteDomain, safeMin, safeMax } from '@/lib/chartSanitize';
 
 function fmtMoney(n: number): string {
   const abs = Math.abs(n);
@@ -84,6 +84,16 @@ export function FlowPerStrike() {
     return finite(first?.underlying_price);
   }, [alerts, active]);
 
+  // Explicit numeric-axis domain — layout="vertical" makes XAxis the value
+  // axis. Recharts' auto-domain crashes (LN10) when all bars are zero. Puts
+  // are stored negative, calls positive; include both plus a 0 floor so the
+  // ReferenceLine x={0} always sits in-domain.
+  const xDomain = useMemo<[number, number]>(() => {
+    const all: number[] = [0];
+    for (const b of buckets) { all.push(b.call_prem, b.put_prem); }
+    return finiteDomain(safeMin(all), safeMax(all), [-1, 1], 1);
+  }, [buckets]);
+
   return (
     <Card>
       <div className="px-3 py-2 border-b border-border bg-muted/30 flex items-center gap-2">
@@ -121,7 +131,7 @@ export function FlowPerStrike() {
                 stackOffset="sign"
                 barCategoryGap={buckets.length < 6 ? '40%' : '10%'}
               >
-                <XAxis type="number" hide />
+                <XAxis type="number" domain={xDomain} allowDataOverflow={false} hide />
                 <YAxis
                   type="category"
                   dataKey="strike"

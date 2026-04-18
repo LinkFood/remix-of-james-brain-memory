@@ -46,6 +46,7 @@ import { ChartSafe } from '@/components/ChartSafe';
 import { Grid3x3, AlertTriangle } from 'lucide-react';
 import { pearson, toReturns } from '@/lib/correlation';
 import { useOpenTrades } from '@/hooks/useStressScenarios';
+import { finiteDomain, safeMin, safeMax } from '@/lib/chartSanitize';
 
 const LOOKBACK_DAYS = 30;
 const MIN_SAMPLE = 7;
@@ -217,6 +218,19 @@ function CorrelationDetailDialog({
     return { points: pts, r: pearson(xs, ys) };
   }, [aRows, bRows]);
 
+  // Explicit scatter axis domains — ScatterChart auto-domains collapse when
+  // all returns on one axis are identical (stale prices, constants), which
+  // trips decimal.js LN10. Returns are small decimals (~-0.1..0.1); nudge
+  // 0.01 when flat.
+  const xDomain = useMemo<[number, number]>(() => {
+    const xs = points.map(p => p.x);
+    return finiteDomain(safeMin(xs), safeMax(xs), [-0.05, 0.05], 0.01);
+  }, [points]);
+  const yDomain = useMemo<[number, number]>(() => {
+    const ys = points.map(p => p.y);
+    return finiteDomain(safeMin(ys), safeMax(ys), [-0.05, 0.05], 0.01);
+  }, [points]);
+
   const open = !!detail;
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
@@ -252,6 +266,8 @@ function CorrelationDetailDialog({
                   <XAxis
                     type="number"
                     dataKey="x"
+                    domain={xDomain}
+                    allowDataOverflow={false}
                     name={`${detail?.tickerA} return`}
                     tickFormatter={(v: number) => `${(v * 100).toFixed(1)}%`}
                     tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}
@@ -260,6 +276,8 @@ function CorrelationDetailDialog({
                   <YAxis
                     type="number"
                     dataKey="y"
+                    domain={yDomain}
+                    allowDataOverflow={false}
                     name={`${detail?.tickerB} return`}
                     tickFormatter={(v: number) => `${(v * 100).toFixed(1)}%`}
                     tick={{ fontSize: 9, fill: 'hsl(var(--muted-foreground))' }}

@@ -5,7 +5,9 @@
  * lights up as grades land.
  */
 import { ChartSafe } from '@/components/ChartSafe';
+import { useMemo } from 'react';
 import { useGhostPnl, type GhostPnlRow } from '@/hooks/useCoTraderData';
+import { finiteDomain, safeMin, safeMax } from '@/lib/chartSanitize';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { LineChart, TrendingUp, TrendingDown, Zap, Target } from 'lucide-react';
@@ -43,6 +45,14 @@ export function GhostTradeTape({ days = 30 }: { days?: number }) {
   const cumulative = agg?.cumulative_pct ?? 0;
   const cumColor = cumulative >= 0 ? 'text-green-400' : 'text-red-400';
   const areaColor = cumulative >= 0 ? '#4ade80' : '#f87171';
+
+  // Explicit YAxis domain — the cumulative P&L curve can run flat for long
+  // stretches (no grades landing), collapsing the auto-domain and tripping
+  // LN10. Values are percentages; nudge 1 when flat.
+  const yDomain = useMemo<[number, number]>(() => {
+    const all = series.map(p => p.cumulative_pct);
+    return finiteDomain(safeMin(all), safeMax(all), [-1, 1], 1);
+  }, [series]);
 
   return (
     <Card className="p-4 space-y-3">
@@ -124,6 +134,8 @@ export function GhostTradeTape({ days = 30 }: { days?: number }) {
                 minTickGap={32}
               />
               <YAxis
+                domain={yDomain}
+                allowDataOverflow={false}
                 tickFormatter={(v) => `${v.toFixed(1)}%`}
                 stroke="hsl(var(--muted-foreground))"
                 fontSize={10}

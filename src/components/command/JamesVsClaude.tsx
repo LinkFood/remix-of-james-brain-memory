@@ -18,7 +18,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Swords, Trophy, Minus, Clock, AlertTriangle } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip } from 'recharts';
-import { finiteOr } from '@/lib/chartSanitize';
+import { finiteOr, finiteDomain, safeMax } from '@/lib/chartSanitize';
 
 function fmtAgo(iso: string): string {
   const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
@@ -78,6 +78,14 @@ export function JamesVsClaude({ variant = 'command', daysBack = 7, onPostView }:
     ];
   }, [scoreboard]);
 
+  // Explicit numeric-axis domain — counts are non-negative, so anchor at 0.
+  // Without this the axis collapses when all three values are equal (common
+  // early: 0/0/0) and trips LN10.
+  const xDomain = useMemo<[number, number]>(() => {
+    const max = safeMax(chartData.map(d => d.value));
+    return finiteDomain(0, max, [0, 1], 1);
+  }, [chartData]);
+
   const hasNoViewToday = (todayViews?.length ?? 0) === 0;
   const hasPairs = (pairs?.length ?? 0) > 0;
 
@@ -129,7 +137,7 @@ export function JamesVsClaude({ variant = 'command', daysBack = 7, onPostView }:
             <div className="mt-2 h-12">
               <ChartSafe><ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
-                  <XAxis type="number" hide />
+                  <XAxis type="number" domain={xDomain} allowDataOverflow={false} hide />
                   <YAxis type="category" dataKey="name" hide />
                   <Tooltip
                     cursor={{ fill: 'rgba(255,255,255,0.04)' }}
