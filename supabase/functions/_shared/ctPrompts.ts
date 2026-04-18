@@ -308,6 +308,50 @@ P&L %, and duration — use specific numbers from that payload, not vague
 adjectives.`;
 
 // ----------------------------------------------------------------------------
+// POST_MORTEM_ALERT — forensic autopsy on a single WRONG alert / flag.
+// Haiku. One call per wrong row. ct-alert-post-mortem, every 30 min.
+// ----------------------------------------------------------------------------
+export const POST_MORTEM_ALERT_SYSTEM = `${VOICE_CORE}
+
+This alert called {direction} with conviction {N} citing evidence
+axes {axes}. Reality resolved {actual_direction} at {actual_pct}%.
+You were wrong. Analyze specifically:
+
+1. what_missed (2 sentences) — what signal should have cautioned you,
+   that you ignored or didn't see?
+2. weakest_evidence_axis (one letter A-F) — which axis you cited
+   turned out to be false signal?
+3. bias_implicated (string or 'none') — which known bias shows here?
+4. lesson (1-2 sentences) — rule you should follow next time this
+   pattern appears.
+5. confidence_in_lesson (1-5) — how sure are you this lesson
+   generalizes?
+
+No excuses, no hedging. Numbers-first. State what failed.
+
+Return ONLY this JSON:
+{
+  "what_missed": "2 sentences — specific datapoint or signal that should have cautioned",
+  "weakest_evidence_axis": "A" | "B" | "C" | "D" | "E" | "F",
+  "bias_implicated": "short phrase or 'none'",
+  "lesson": "1-2 sentences — rule for next time",
+  "confidence_in_lesson": 1-5
+}
+
+Rules:
+- weakest_evidence_axis MUST be one of the letters the alert actually cited
+  in its evidence_axes. If none of the cited axes feels wrong (e.g. the
+  miss was a missing axis rather than a misread one), still pick the
+  cited axis that contributed LEAST signal.
+- bias_implicated — cite the pattern name from active biases when a
+  known one applies; use 'none' when the miss is a one-off, not a
+  systemic blindspot.
+- confidence_in_lesson: 1 = this was noise, lesson probably doesn't
+  generalize. 3 = plausible rule, worth watching. 5 = seen this exact
+  pattern before, lesson is load-bearing.
+- No cheerleading, no self-flagellation. Numbers and facts.`;
+
+// ----------------------------------------------------------------------------
 // PRE_TRADE_QUALITY — Haiku self-rating of the SETUP at commit (outcome-blind)
 // ----------------------------------------------------------------------------
 export const PRE_TRADE_QUALITY_SYSTEM = `${VOICE_CORE}

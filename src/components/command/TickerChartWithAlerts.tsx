@@ -5,10 +5,12 @@
  * WHAT IT ANSWERS: "Did the alert at 14:30 actually precede the move?"
  *
  * DATA SHAPE
- *   - Price series: today's ct_heartbeats.current_reads._snapshot.per_ticker[T].price
+ *   - Price series (preferred): ct_price_ticks, ~2-minute resolution, populated
+ *     by ct-price-tick-capture during RTH. True intraday shape.
+ *   - Price series (fallback): ct_heartbeats.current_reads._snapshot.per_ticker[T].price
  *     sorted by created_at. Granularity is ~15 minutes (the heartbeat cron cadence).
- *     That is coarse for a chart — this gives the SHAPE of the session, not
- *     tick-level candles. See the "15-min caveat" banner in the empty-state area.
+ *     Used when ct_price_ticks has no rows for the session — e.g. first deploy
+ *     day, outside RTH, or if the capture cron was disabled.
  *   - Alerts/flags: ct_alerts + ct_flags where `instruments` contains the ticker
  *     within the same session window (UTC day for sessionDate, else today).
  *   - Grades: ct_grades joined by subject_id ⇒ id match. Each alert/flag may or
@@ -152,11 +154,14 @@ function fmtPrice(n: number | null | undefined): string {
 
 // ─── data hook ─────────────────────────────────────────────────────────
 
+type PriceSource = 'ticks' | 'heartbeat';
+
 interface ChartData {
   series: PricePoint[];
   markers: AlertMarker[];
   sessionStartIso: string;
   sessionEndIso: string;
+  priceSource: PriceSource;
 }
 
 function dayBoundsUtc(sessionDate?: string): { startIso: string; endIso: string } {
@@ -190,7 +195,18 @@ function useTickerChartWithAlerts(ticker: string, sessionDate?: string) {
     refetchInterval: 30_000,
     staleTime: 15_000,
     queryFn: async () => {
-      const [hbQ, alertsQ, flagsQ] = await Promise.all([
+      // Fetch ct_price_ticks (2-min resolution) in parallel with heartbeats
+      // (15-min fallback). If no ticks exist for the session, heartbeats
+      // provide a coarse shape so first-deploy days still render.
+      const [tickQ, hbQ, alertsQ, flagsQ] = await Promise.all([
+        supabase
+          .from('ct_price_ticks')
+          .select('ticker, tick_time, price')
+          .eq('ticker', ticker)
+          .gte('tick_time', startIso)
+          .lte('tick_time', endIso)
+          .order('tick_time', { ascending: true })
+          .limit(1000),
         supabase
           .from('ct_heartbeats')
           .select('id, current_reads, created_at')
@@ -220,16 +236,31 @@ function useTickerChartWithAlerts(ticker: string, sessionDate?: string) {
           .order('created_at', { ascending: true })
           .limit(200),
       ]);
+      // tickQ errors are non-fatal — fall back to heartbeats silently.
       if (hbQ.error) throw hbQ.error;
       if (alertsQ.error) throw alertsQ.error;
       if (flagsQ.error) throw flagsQ.error;
 
-      // ── price series ────────────────────────────────────────────
+      // ── price series (prefer ticks, fall back to heartbeat) ─────
+      const tickRows = (tickQ.error || !tickQ.data ? [] : tickQ.data) as Array<{
+        tick_time: string;
+        price: number;
+      }>;
       const series: PricePoint[] = [];
-      for (const hb of (hbQ.data ?? []) as Heartbeat[]) {
-        const p = extractPrice(hb, ticker);
-        if (p === null) continue;
-        series.push({ t: Date.parse(hb.created_at), price: p, iso: hb.created_at });
+      let priceSource: PriceSource = 'heartbeat';
+      if (tickRows.length > 0) {
+        priceSource = 'ticks';
+        for (const r of tickRows) {
+          const p = typeof r.price === 'number' ? r.price : Number(r.price);
+          if (!Number.isFinite(p)) continue;
+          series.push({ t: Date.parse(r.tick_time), price: p, iso: r.tick_time });
+        }
+      } else {
+        for (const hb of (hbQ.data ?? []) as Heartbeat[]) {
+          const p = extractPrice(hb, ticker);
+          if (p === null) continue;
+          series.push({ t: Date.parse(hb.created_at), price: p, iso: hb.created_at });
+        }
       }
 
       // ── fetch grades for these alert/flag ids ──────────────────
@@ -307,6 +338,7 @@ function useTickerChartWithAlerts(ticker: string, sessionDate?: string) {
         markers,
         sessionStartIso: startIso,
         sessionEndIso: endIso,
+        priceSource,
       };
     },
   });
@@ -618,6 +650,7 @@ export function TickerChartWithAlerts({
 
   const series = data?.series ?? [];
   const markers = data?.markers ?? [];
+  const priceSource: PriceSource = data?.priceSource ?? 'heartbeat';
 
   const sessionEndMs = useMemo(
     () => (data?.sessionEndIso ? Date.parse(data.sessionEndIso) : Date.now()),
@@ -673,7 +706,7 @@ export function TickerChartWithAlerts({
             {ticker} · session chart · alerts overlaid
           </span>
           <span className="text-[10px] text-muted-foreground/70">
-            15-min heartbeat resolution
+            {priceSource === 'ticks' ? '2-min tick resolution' : '15-min heartbeat resolution'}
           </span>
         </div>
         <div className="flex items-center gap-3 text-[9px] text-muted-foreground">
@@ -692,7 +725,7 @@ export function TickerChartWithAlerts({
 
       {empty && (
         <div className="px-2 py-10 text-center text-xs text-muted-foreground">
-          no heartbeat data for this session
+          no price data for this session
         </div>
       )}
 
@@ -810,7 +843,9 @@ export function TickerChartWithAlerts({
       )}
 
       <div className="pt-2 text-[9px] text-muted-foreground/60 text-center">
-        heartbeat cadence ~15 min — session shape, not tick-level. click a marker for detail.
+        {priceSource === 'ticks'
+          ? '2-min tick cadence — click a marker for detail.'
+          : 'heartbeat cadence ~15 min — session shape, not tick-level. click a marker for detail.'}
       </div>
     </Wrapper>
   );

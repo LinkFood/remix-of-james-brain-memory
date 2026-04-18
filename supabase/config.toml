@@ -105,6 +105,9 @@ verify_jwt = false
 [functions.ct-grader]
 verify_jwt = false
 
+[functions.ct-alert-post-mortem]
+verify_jwt = false
+
 [functions.ct-self-grader]
 verify_jwt = false
 
@@ -256,4 +259,10 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ct-earnings-pre-event-check]
+verify_jwt = false
+
+[functions.ct-price-tick-capture]
+verify_jwt = false
+
+[functions.ct-custom-rule-eval]
 verify_jwt = false
