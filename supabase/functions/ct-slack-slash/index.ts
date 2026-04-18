@@ -2,10 +2,16 @@
  * ct-slack-slash — Slack slash commands for Co-Trader
  *
  * Commands:
- *   /ct-view      — post a james_view: <direction> <ticker> <horizon> conv <n> "rationale"
- *   /ct-recap     — latest EOD/weekly recap (summary + rabbit hole)
- *   /ct-scorecard — overall precision + recent-week precision from ct_grades
- *   /ct-status    — latest heartbeat status_line + watching list
+ *   /ct-view       — post a james_view: <direction> <ticker> <horizon> conv <n> "rationale"
+ *   /ct-recap      — latest EOD/weekly recap (summary + rabbit hole)
+ *   /ct-scorecard  — overall precision + recent-week precision from ct_grades
+ *   /ct-status     — latest heartbeat status_line + watching list
+ *   /kill <reason> [minutes]  — engage ct_kill_switch (halts all Claude + trade writes)
+ *   /disarm        — disarm the kill switch
+ *   /kill-status   — current kill switch state + countdown if auto-release set
+ *
+ * Slack commands are NEVER gated by the kill switch — the user always keeps
+ * control of this channel.
  *
  * Slack sends application/x-www-form-urlencoded bodies. Signature is HMAC-SHA256
  * of `v0:<timestamp>:<raw-body>` under SLACK_SIGNING_SECRET. We constant-time
@@ -246,6 +252,101 @@ serve(async (req) => {
         `• overall precision: ${fmt(all)}\n` +
         `• last 7 days: ${fmt(wk)}`
       );
+    }
+
+    // ========== /kill <reason> [minutes] ==========
+    //   /kill echo chamber on QQQ           → manual-only disarm
+    //   /kill costs spiking 60               → auto-release in 60 min
+    if (command === '/kill') {
+      if (!text) {
+        return ephemeral(
+          'usage: `/kill <reason> [minutes]`\n' +
+          'examples:\n' +
+          '  `/kill echo chamber on QQQ`  → manual disarm only\n' +
+          '  `/kill costs spiking 60`      → auto-release in 60 min'
+        );
+      }
+
+      // Trailing integer = auto-release minutes. Everything else is the reason.
+      const parts = text.trim().split(/\s+/);
+      const maybeMin = parts[parts.length - 1];
+      const minMatch = /^\d+$/.test(maybeMin) ? parseInt(maybeMin, 10) : null;
+      const reason = minMatch != null
+        ? parts.slice(0, -1).join(' ').trim() || '(no reason given)'
+        : text.trim();
+
+      const { data, error } = await sb.rpc('ct_killswitch_engage', {
+        reason,
+        minutes_until_auto_release: minMatch,
+      });
+
+      if (error) {
+        return ephemeral(`failed to engage kill switch: ${error.message}`);
+      }
+
+      const row = Array.isArray(data) ? data[0] : data;
+      const engagedAt = row?.engaged_at ? new Date(row.engaged_at).toLocaleString() : 'now';
+      const release = row?.auto_release_at
+        ? `auto-release at ${new Date(row.auto_release_at).toLocaleString()}`
+        : 'manual disarm only (no timer)';
+
+      return ephemeral(
+        `:red_circle: *KILL SWITCH ENGAGED*\n` +
+        `reason: ${reason}\n` +
+        `engaged: ${engagedAt}\n` +
+        `${release}\n` +
+        `all Claude-calling + trade-writing functions will skip on next tick. disarm with \`/disarm\`.`
+      );
+    }
+
+    // ========== /disarm ==========
+    if (command === '/disarm') {
+      const { data, error } = await sb.rpc('ct_killswitch_disarm');
+      if (error) return ephemeral(`failed to disarm: ${error.message}`);
+      const row = Array.isArray(data) ? data[0] : data;
+      const disarmedAt = row?.disarmed_at ? new Date(row.disarmed_at).toLocaleString() : 'now';
+      return ephemeral(
+        `:large_green_circle: *kill switch DISARMED* at ${disarmedAt}\n` +
+        `Claude + trade writes resume on next tick (up to ~10s isolate cache lag).`
+      );
+    }
+
+    // ========== /kill-status ==========
+    if (command === '/kill-status') {
+      const { data } = await sb
+        .from('ct_kill_switch')
+        .select('active, engaged_at, engaged_by, engaged_reason, auto_release_at, disarmed_at, disarmed_by')
+        .eq('id', 1)
+        .maybeSingle();
+
+      if (!data) return ephemeral('no ct_kill_switch row — migration may not be applied');
+
+      if (data.active) {
+        const engagedAt = data.engaged_at ? new Date(data.engaged_at as string).toLocaleString() : 'unknown';
+        let countdown = 'manual disarm only';
+        if (data.auto_release_at) {
+          const msLeft = new Date(data.auto_release_at as string).getTime() - Date.now();
+          if (msLeft <= 0) {
+            countdown = 'auto-release due (will clear on next read)';
+          } else {
+            const m = Math.floor(msLeft / 60_000);
+            const s = Math.floor((msLeft % 60_000) / 1000);
+            countdown = `auto-release in ${m}m ${s}s`;
+          }
+        }
+        return ephemeral(
+          `:red_circle: *KILL SWITCH ACTIVE*\n` +
+          `reason: ${data.engaged_reason ?? '(none)'}\n` +
+          `engaged by: ${data.engaged_by ?? '?'} at ${engagedAt}\n` +
+          `${countdown}`
+        );
+      } else {
+        const disarmedAt = data.disarmed_at ? new Date(data.disarmed_at as string).toLocaleString() : 'never';
+        return ephemeral(
+          `:large_green_circle: kill switch is DISARMED\n` +
+          `last disarmed: ${disarmedAt} (${data.disarmed_by ?? '?'})`
+        );
+      }
     }
 
     // ========== /ct-status ==========

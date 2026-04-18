@@ -16,6 +16,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { extractUserId, isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { isKillSwitchActive } from '../_shared/killSwitch.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { CT_CHAT_SYSTEM } from '../_shared/chatPromptV1.ts';
 import { logMcpCalls } from '../_shared/mcpLog.ts';
@@ -328,6 +329,21 @@ serve(async (req) => {
     //   commit SPY 710C 4/18 long 5 @1.25 [stop 0.8 target 2.5] [thesis: text]
     const commitMatch = message.match(/^\s*\/?commit\s+(.*)$/i);
     if (commitMatch) {
+      // Kill switch — chat READS pass through but COMMITS are gated.
+      // Chat is James's main talk-to-Claude channel; we deliberately keep it
+      // available while killed so he can still ask questions, just not bind
+      // the book.
+      if (await isKillSwitchActive(supabase)) {
+        return new Response(
+          JSON.stringify({
+            response: 'Kill switch is engaged — commit blocked. Disarm via TopNav, Slack `/disarm`, or the UI button to resume writes.',
+            skipped: true,
+            reason: 'kill_switch_active',
+            duration_ms: Date.now() - startedAt,
+          }),
+          { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
       const args = commitMatch[1];
       const out = await handleCommitCommand(supabase, args);
 

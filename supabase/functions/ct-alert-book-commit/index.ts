@@ -24,6 +24,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
@@ -93,6 +94,11 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
+
+  // Kill switch — no new trade commits when engaged.
+  if (await isKillSwitchActive(supabase)) {
+    return killSwitchSkipResponse(supabase, 'ct-alert-book-commit', corsHeaders);
+  }
 
   // Pull tunable thresholds from ct_config (60s cache TTL, defaults preserve
   // legacy behavior if the row is missing or the RPC errors).

@@ -57,7 +57,8 @@ export type CheckKey =
   | 'heartbeat'
   | 'biases'
   | 'weekend_news'
-  | 'config';
+  | 'config'
+  | 'kill_switch';
 
 export interface PreflightSummary {
   overall: CheckStatus;
@@ -730,6 +731,88 @@ async function runConfigCheck(): Promise<PreflightCheck> {
   }
 }
 
+async function runKillSwitchCheck(now: Date): Promise<PreflightCheck> {
+  const startedIso = new Date().toISOString();
+  try {
+    const { data, error } = await supabase
+      .from('ct_kill_switch')
+      .select('active, engaged_at, engaged_by, engaged_reason, auto_release_at' as '*')
+      .eq('id', 1)
+      .maybeSingle();
+
+    if (error) throw error;
+
+    if (!data) {
+      return {
+        key: 'kill_switch',
+        name: 'Kill switch disarmed',
+        status: 'yellow',
+        explanation: 'No ct_kill_switch row — migration may be pending',
+        lastCheckedAt: startedIso,
+        details: [],
+      };
+    }
+
+    const row = data as unknown as {
+      active: boolean;
+      engaged_at: string | null;
+      engaged_by: string | null;
+      engaged_reason: string | null;
+      auto_release_at: string | null;
+    };
+
+    if (!row.active) {
+      return {
+        key: 'kill_switch',
+        name: 'Kill switch disarmed',
+        status: 'green',
+        explanation: 'Disarmed — Claude + trade writes free to run',
+        lastCheckedAt: startedIso,
+        details: [],
+      };
+    }
+
+    // Engaged: red during market hours (trading is halted), yellow off-hours
+    // (we're deliberately paused, not broken).
+    const marketActive = isMarketActive(now);
+    const status: CheckStatus = marketActive ? 'red' : 'yellow';
+    const releaseNote = row.auto_release_at
+      ? `auto-release at ${new Date(row.auto_release_at).toLocaleString()}`
+      : 'manual disarm only';
+
+    return {
+      key: 'kill_switch',
+      name: marketActive ? 'Kill switch engaged (market hours)' : 'Kill switch engaged',
+      status,
+      explanation: marketActive
+        ? `HALTED — ${row.engaged_reason ?? '(no reason)'}`
+        : `Paused off-hours — ${row.engaged_reason ?? '(no reason)'}`,
+      lastCheckedAt: startedIso,
+      details: [
+        { label: 'reason', status, note: row.engaged_reason ?? '(none)' },
+        {
+          label: 'engaged',
+          status,
+          note: row.engaged_at ? new Date(row.engaged_at).toLocaleString() : '?',
+        },
+        { label: 'engaged by', status: 'green', note: row.engaged_by ?? '?' },
+        { label: 'release', status, note: releaseNote },
+      ],
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      key: 'kill_switch',
+      name: 'Kill switch disarmed',
+      status: 'red',
+      explanation: 'Failed to query ct_kill_switch',
+      lastCheckedAt: startedIso,
+      details: [],
+      error: message,
+    };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Summary rollup
 // ---------------------------------------------------------------------------
@@ -787,6 +870,7 @@ export function usePreflightChecks(options?: { refreshMs?: number }): PreflightR
       runBiasesCheck(),
       runWeekendNewsCheck(now),
       runConfigCheck(),
+      runKillSwitchCheck(now),
     ]);
     setChecks(results);
     setLastRun(new Date().toISOString());

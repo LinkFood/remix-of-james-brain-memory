@@ -28,6 +28,7 @@ import Reports from "./pages/Reports";
 import Landing from "./pages/Landing";
 import CommandStation from "./pages/CommandStation";
 import Scorecard from "./pages/Scorecard";
+import PromptAbTest from "./pages/PromptAbTest";
 import Replay from "./pages/Replay";
 import Book from "./pages/Book";
 import Health from "./pages/Health";
@@ -66,6 +67,7 @@ const TrackedRoutes = () => {
       {/* Primary authenticated route — co-trader with docked ChatPanel in sidebar slot */}
       <Route path="/" element={<AuthLayout sidebar={<ChatPanel />}><CommandStation /></AuthLayout>} />
       <Route path="/scorecard" element={<AuthLayout sidebar={<ChatPanel />}><Scorecard /></AuthLayout>} />
+      <Route path="/prompts" element={<AuthLayout sidebar={<ChatPanel />}><PromptAbTest /></AuthLayout>} />
       <Route path="/book" element={<AuthLayout sidebar={<ChatPanel />}><Book /></AuthLayout>} />
       <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><Health /></AuthLayout>} />
       <Route path="/preflight" element={<AuthLayout sidebar={<ChatPanel />}><Preflight /></AuthLayout>} />

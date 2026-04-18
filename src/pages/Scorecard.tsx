@@ -17,11 +17,15 @@ import { BookPanel } from '@/components/command/BookPanel';
 import { EquityCurvePanel } from '@/components/command/EquityCurvePanel';
 import { RecallSearch } from '@/components/command/RecallSearch';
 import { JamesVsClaude } from '@/components/command/JamesVsClaude';
+import { WeeklyReflectionPanel } from '@/components/command/WeeklyReflectionPanel';
 import { CalibrationChart } from '@/components/scorecard/CalibrationChart';
 import { ClaudesSurprises } from '@/components/scorecard/ClaudesSurprises';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 import { useCalibration } from '@/hooks/useCalibration';
 import { useClaudesSurprises } from '@/hooks/useClaudesSurprises';
+import { usePromptAbTest } from '@/hooks/usePromptAbTest';
+import { Link } from 'react-router-dom';
+import { FlaskConical, ArrowRight } from 'lucide-react';
 
 interface Grade {
   subject_type: 'flag' | 'alert' | 'james_view';
@@ -161,6 +165,35 @@ export function Scorecard() {
   // Surprise deltas — over/underconfidence counts drive the header bias stat.
   const { data: surprises } = useClaudesSurprises();
 
+  // Prompt A/B teaser — derive "latest vs previous" deltas from the same hook
+  // the /prompts page uses. Skip entirely if fewer than 2 comparable versions.
+  const { data: promptVersions } = usePromptAbTest();
+  const promptTeaser = useMemo(() => {
+    if (!promptVersions || promptVersions.length < 2) return null;
+    const comparable = promptVersions.filter((v) => !v.insufficient);
+    if (comparable.length < 2) return null;
+    const prev = comparable[comparable.length - 2];
+    const curr = comparable[comparable.length - 1];
+    const bits: string[] = [];
+    if (prev.hit_rate != null && curr.hit_rate != null) {
+      const delta = (curr.hit_rate - prev.hit_rate) * 100;
+      const sign = delta >= 0 ? '+' : '';
+      bits.push(`${sign}${delta.toFixed(0)}% hit rate`);
+    }
+    if (prev.alerts_per_day != null && curr.alerts_per_day != null && prev.alerts_per_day > 0) {
+      const pct = ((curr.alerts_per_day - prev.alerts_per_day) / prev.alerts_per_day) * 100;
+      const sign = pct >= 0 ? '+' : '';
+      bits.push(`${sign}${pct.toFixed(0)}% alerts/day`);
+    }
+    if (prev.calibration_gap_pp != null && curr.calibration_gap_pp != null) {
+      const delta = curr.calibration_gap_pp - prev.calibration_gap_pp;
+      const sign = delta >= 0 ? '+' : '';
+      bits.push(`${sign}${delta.toFixed(1)}pp calibration`);
+    }
+    if (bits.length === 0) return null;
+    return { prev: prev.version, curr: curr.version, bits };
+  }, [promptVersions]);
+
   /**
    * Net calibration bias:
    *   over = count of grades with calibration_delta <= -BIG (claimed high, missed)
@@ -271,8 +304,32 @@ export function Scorecard() {
           )}
         </header>
 
+        {/* Weekly reflection — Claude's Sunday cross-day journal. Top placement:
+            when a fresh one lands, it's the first thing you read. */}
+        <WeeklyReflectionPanel />
+
         {/* Memory recall search */}
         <RecallSearch />
+
+        {/* Prompt A/B teaser — compact strip linking to /prompts. Only renders
+            once we have at least two comparable versions so it doesn't add
+            noise for early users. */}
+        {promptTeaser && (
+          <Link
+            to="/prompts"
+            className="group flex items-center gap-3 px-3 py-2 rounded border border-border bg-muted/10 hover:bg-muted/25 transition-colors"
+          >
+            <FlaskConical className="w-4 h-4 text-primary shrink-0" />
+            <div className="text-xs text-foreground/90">
+              <span className="font-mono font-semibold">Prompt {promptTeaser.curr}</span>
+              <span className="text-muted-foreground"> vs </span>
+              <span className="font-mono font-semibold">{promptTeaser.prev}</span>
+              <span className="text-muted-foreground">: </span>
+              <span className="text-foreground">{promptTeaser.bits.join(', ')}</span>
+            </div>
+            <ArrowRight className="w-3.5 h-3.5 ml-auto text-muted-foreground group-hover:text-foreground transition-colors" />
+          </Link>
+        )}
 
         {/* Top metric tiles */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

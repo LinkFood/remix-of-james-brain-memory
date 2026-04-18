@@ -37,6 +37,7 @@ import { useTickerData } from '@/hooks/useTickerData';
 import { UwUsageBadge } from '@/components/command/UwUsageBadge';
 import { MarketClock } from '@/components/nav/MarketClock';
 import { PreflightChip } from '@/components/nav/PreflightChip';
+import { KillSwitchButton } from '@/components/nav/KillSwitchButton';
 
 const AGENT_LABELS: Record<string, string> = {
   'jac-dispatcher': 'JAC',
@@ -71,6 +72,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Review',
     items: [
       { path: '/scorecard', label: 'Scorecard' },
+      { path: '/prompts', label: 'Prompt A/B' },
       { path: '/replay', label: 'Replay' },
     ],
   },
@@ -284,6 +286,10 @@ export function TopNav({ userId }: TopNavProps) {
 
       {/* Right — System vitals */}
       <div className="ml-auto flex items-center gap-2">
+        {/* Claude kill switch — emergency halt for watcher/book/alerts/chat commits.
+            NOT the same as the "stop agents" button below (that cancels JAC tasks). */}
+        <KillSwitchButton />
+
         {/* Preflight readiness — overall green/yellow/red at a glance */}
         <PreflightChip />
 

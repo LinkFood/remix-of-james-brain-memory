@@ -23,6 +23,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
 
@@ -98,6 +99,12 @@ serve(async (req) => {
   }
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+
+  // Kill switch — no second-chance commits.
+  if (await isKillSwitchActive(supabase)) {
+    return killSwitchSkipResponse(supabase, 'ct-claude-trade-reopen', corsHeaders);
+  }
+
   const sessionDate = new Date().toISOString().slice(0, 10);
 
   // Gate 1: if already has open trades, skip (morning trades still live)

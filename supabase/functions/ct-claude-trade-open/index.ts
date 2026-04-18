@@ -21,6 +21,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
 import { classifyThesis } from '../_shared/thesisClassifier.ts';
@@ -106,6 +107,11 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
+
+  // Kill switch — skip morning trade opens entirely.
+  if (await isKillSwitchActive(supabase)) {
+    return killSwitchSkipResponse(supabase, 'ct-claude-trade-open', corsHeaders);
+  }
 
   const sessionDate = new Date().toISOString().slice(0, 10);
 

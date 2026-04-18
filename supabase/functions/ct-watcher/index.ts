@@ -22,6 +22,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
 import { pullWatcherState, WATCHLIST } from '../_shared/uwClient.ts';
 import { now as clockNow } from '../_shared/clock.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
@@ -739,6 +740,12 @@ serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, serviceRoleKey);
+
+  // Kill switch — skip entire watcher tick if engaged. <15s stale-cache lag
+  // tolerated; the next isolate to cold-start reads fresh.
+  if (await isKillSwitchActive(supabase)) {
+    return killSwitchSkipResponse(supabase, 'ct-watcher', corsHeaders);
+  }
 
   const clock = clockNow();
   const startedAt = Date.now();

@@ -14,6 +14,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { MORNING_BRIEF_SYSTEM, PROMPT_VERSION } from '../_shared/morningBriefPrompt.ts';
@@ -317,6 +318,12 @@ serve(async (req) => {
   }
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
+
+  // Kill switch — no morning brief Claude call when engaged.
+  if (await isKillSwitchActive(supabase)) {
+    return killSwitchSkipResponse(supabase, 'ct-morning-brief', corsHeaders);
+  }
+
   const startedAt = Date.now();
   const forDate = todayIsoDate();
 
