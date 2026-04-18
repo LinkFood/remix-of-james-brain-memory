@@ -1,19 +1,23 @@
 /**
  * ct-dp-cluster — always-on flag pattern for dark pool blocks. No UW calls.
  *
+ * Thresholds live in ct_config (keys: clusters.dp.window_min,
+ * clusters.dp.count_min, clusters.dp.notional_usd). Tune via /ct-settings.
+ * 60s cache TTL — changes propagate within ~1 minute.
+ *
  * Every minute during weekday market hours, scan ct_dark_pool_prints for the
- * last 10 minutes where notional_value >= $1M, group by ticker, and emit a
- * "DP CLUSTER" finding for any ticker with count >= 3.
+ * last window_min minutes where notional_value >= notional_usd, group by
+ * ticker, and emit a "DP CLUSTER" finding for any ticker with count >= count_min.
  *
  * Dedupe: per-ticker 15-min cooldown — DP blocks arrive slower and chunkier
  * than sweeps, so the cooldown is more generous than the sweep cluster's 10m.
  * Fail-closed: if the dedupe query errors, treat as recently-emitted and skip.
  *
- * Attention score:  count >= 5 → 85   count >= 4 → 75   count >= 3 → 65
+ * Attention score:  count >= 5 → 85   count >= 4 → 75   count >= count_min → 65
  * Slack push:       score >= 75       (count >= 4)
  *
- * Window = 10min (not 5 like sweeps) because DP prints trickle in slower.
- * Threshold = $1M per print (vs $500k for sweeps) — DP blocks are chunkier.
+ * Window defaults to 10min (not 5 like sweeps) because DP prints trickle in slower.
+ * Threshold defaults to $1M per print (vs $500k for sweeps) — DP blocks are chunkier.
  */
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -21,6 +25,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import { getConfig } from '../_shared/configCache.ts';
 
 interface DpRow {
   ticker: string;
@@ -43,7 +48,7 @@ interface ClusterResult {
 function scoreFor(count: number): number {
   if (count >= 5) return 85;
   if (count >= 4) return 75;
-  return 65; // count >= 3
+  return 65; // count >= count_min
 }
 
 function fmtMoney(n: number): string {
@@ -81,15 +86,16 @@ async function scanWindow(
   supabase: SupabaseClient,
   windowStart: string,
   windowEnd: string,
+  notionalUsd: number,
 ): Promise<DpRow[]> {
-  // Pull all DP prints >= $1M in the 10-min window. notional_value is a
+  // Pull all DP prints >= notionalUsd in the window. notional_value is a
   // generated column (size * price), indexed via standard DP indexes.
   const { data, error } = await supabase
     .from('ct_dark_pool_prints')
     .select('ticker, executed_at, size, price, notional_value')
     .gte('executed_at', windowStart)
     .lte('executed_at', windowEnd)
-    .gte('notional_value', 1_000_000)
+    .gte('notional_value', notionalUsd)
     .limit(2000);
   if (error) {
     console.warn('[ct-dp-cluster] dp scan failed:', error.message);
@@ -114,9 +120,10 @@ function buildCluster(
   rows: DpRow[],
   windowStart: string,
   windowEnd: string,
+  countMin: number,
 ): ClusterResult | null {
   const count = rows.length;
-  if (count < 3) return null;
+  if (count < countMin) return null;
   let total = 0;
   let largest = 0;
   for (const r of rows) {
@@ -154,19 +161,28 @@ serve(async (req) => {
   const startedAt = Date.now();
 
   try {
+    // Pull tunable thresholds from ct_config (60s cache TTL, defaults preserve
+    // legacy behavior if the row is missing or the RPC errors).
+    const [windowMin, countMin, notionalUsd] = await Promise.all([
+      getConfig<number>('clusters.dp.window_min', 10),
+      getConfig<number>('clusters.dp.count_min', 3),
+      getConfig<number>('clusters.dp.notional_usd', 1_000_000),
+    ]);
+    console.log(`[ct-dp-cluster] thresholds: window=${windowMin}min count=${countMin} notional=$${notionalUsd}`);
+
     const windowEnd = new Date();
-    const windowStart = new Date(windowEnd.getTime() - 10 * 60_000);
+    const windowStart = new Date(windowEnd.getTime() - windowMin * 60_000);
     const windowStartIso = windowStart.toISOString();
     const windowEndIso = windowEnd.toISOString();
 
-    const rows = await scanWindow(supabase, windowStartIso, windowEndIso);
+    const rows = await scanWindow(supabase, windowStartIso, windowEndIso, notionalUsd);
     const byTicker = groupByTicker(rows);
 
     const perTicker: Record<string, { count: number; total_notional: number; emitted: boolean; reason?: string }> = {};
     const emitted: ClusterResult[] = [];
 
     for (const [ticker, tickerRows] of byTicker.entries()) {
-      const cluster = buildCluster(ticker, tickerRows, windowStartIso, windowEndIso);
+      const cluster = buildCluster(ticker, tickerRows, windowStartIso, windowEndIso, countMin);
       if (!cluster) {
         perTicker[ticker] = { count: tickerRows.length, total_notional: 0, emitted: false, reason: 'below_threshold' };
         continue;

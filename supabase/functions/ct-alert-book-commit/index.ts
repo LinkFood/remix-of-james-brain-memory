@@ -28,15 +28,20 @@ import { getCurrentPrice } from '../_shared/ctGrader.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 import { classifyThesis } from '../_shared/thesisClassifier.ts';
+import { getConfig } from '../_shared/configCache.ts';
 
 const WATCHLIST = new Set([
   'SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT',
   'META', 'GOOGL', 'AMZN', 'TSLA', 'GLD', 'USO',
 ]);
 
-const ALERT_SIZE_PCT = 20;
-const ALERT_SIZE_USD = 2000;           // = $10k * 20% — recomputed at EOD
-const COOLDOWN_MINUTES = 60;
+// Defaults — overridable via ct_config keys alert_commit.size_pct,
+// alert_commit.cooldown_min, alert_commit.max_concurrent. size_usd is derived
+// from size_pct at runtime against the $10k book.
+const DEFAULT_ALERT_SIZE_PCT = 20;
+const BOOK_EQUITY_USD = 10_000;
+const DEFAULT_COOLDOWN_MINUTES = 60;
+const DEFAULT_MAX_CONCURRENT = 3;
 const LOOKBACK_MINUTES = 15;
 const BIAS_MIN_SEVERITY = 4;
 
@@ -88,9 +93,19 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
 
+  // Pull tunable thresholds from ct_config (60s cache TTL, defaults preserve
+  // legacy behavior if the row is missing or the RPC errors).
+  const [cooldownMin, sizePct, maxConcurrent] = await Promise.all([
+    getConfig<number>('alert_commit.cooldown_min', DEFAULT_COOLDOWN_MINUTES),
+    getConfig<number>('alert_commit.size_pct', DEFAULT_ALERT_SIZE_PCT),
+    getConfig<number>('alert_commit.max_concurrent', DEFAULT_MAX_CONCURRENT),
+  ]);
+  const alertSizeUsd = Math.round(BOOK_EQUITY_USD * (sizePct / 100));
+  console.log(`[ct-alert-book-commit] thresholds: cooldown=${cooldownMin}min size=${sizePct}% max_concurrent=${maxConcurrent}`);
+
   const sessionDate = new Date().toISOString().slice(0, 10);
   const lookbackIso = new Date(Date.now() - LOOKBACK_MINUTES * 60_000).toISOString();
-  const cooldownIso = new Date(Date.now() - COOLDOWN_MINUTES * 60_000).toISOString();
+  const cooldownIso = new Date(Date.now() - cooldownMin * 60_000).toISOString();
 
   // 1. Cooldown — one alert trade per hour, global.
   const { data: recentAlertTrades } = await supabase
@@ -106,7 +121,7 @@ serve(async (req) => {
       committed: 0,
       skipped: [],
       cooldown_blocked: true,
-      reason: `alert-sourced trade within last ${COOLDOWN_MINUTES}min`,
+      reason: `alert-sourced trade within last ${cooldownMin}min`,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
@@ -175,12 +190,12 @@ serve(async (req) => {
 
     // Capacity — re-check every iteration so consecutive commits don't
     // breach limits if we ever raise the cooldown.
-    if (openCount >= 3) {
+    if (openCount >= maxConcurrent) {
       skipped.push({ alert_id: alert.id, reason: 'book_full' });
       continue;
     }
-    if (totalExposure + ALERT_SIZE_PCT > 100) {
-      skipped.push({ alert_id: alert.id, reason: 'exposure_cap', detail: `would be ${totalExposure + ALERT_SIZE_PCT}%` });
+    if (totalExposure + sizePct > 100) {
+      skipped.push({ alert_id: alert.id, reason: 'exposure_cap', detail: `would be ${totalExposure + sizePct}%` });
       continue;
     }
 
@@ -225,8 +240,8 @@ serve(async (req) => {
         session_date:   sessionDate,
         instrument,
         side,
-        size_pct:       ALERT_SIZE_PCT,
-        size_usd:       ALERT_SIZE_USD,
+        size_pct:       sizePct,
+        size_usd:       alertSizeUsd,
         entry_price:    price,
         stop_price:     setup.stop_level ?? null,
         target_price:   setup.target_level ?? null,
@@ -264,7 +279,7 @@ serve(async (req) => {
     // Slack push — best effort.
     if (userId) {
       const glanceLines = [
-        `Alert committed to book: ${side.toUpperCase()} ${instrument} @ ${price} (20%)`,
+        `Alert committed to book: ${side.toUpperCase()} ${instrument} @ ${price} (${sizePct}%)`,
         ...((alert.glance ?? []).slice(0, 3)),
         setup.stop_level ? `stop ${setup.stop_level}` : '',
         setup.target_level ? `target ${setup.target_level}` : '',
@@ -283,7 +298,7 @@ serve(async (req) => {
 
     // Reserve capacity for the rest of the loop.
     openCount += 1;
-    totalExposure += ALERT_SIZE_PCT;
+    totalExposure += sizePct;
 
     committed.push({ alert_id: alert.id, trade_id: tradeId, instrument, side, entry: price });
   }

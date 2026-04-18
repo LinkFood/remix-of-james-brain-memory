@@ -28,17 +28,24 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { WATCHLIST, MARKET_BANNER_SYMBOL } from '../_shared/uwClient.ts';
+import { getConfig } from '../_shared/configCache.ts';
 
 // Window to pull recent iv-rank rows from — wide enough to safely cover
 // the last 2 distinct dates across all tickers even after a long weekend
 // or holiday (7 days is plenty for a daily-cadence series).
 const LOOKBACK_DAYS = 10;
 
-// Attention ladder (magnitude only — direction is separate).
-function attentionFor(absDelta: number): number {
-  if (absDelta >= 30) return 85;
-  if (absDelta >= 20) return 75;
-  if (absDelta >= 10) return 60;
+// Attention ladder (magnitude only — direction is separate). Thresholds are
+// config-driven via ct_config keys clusters.iv.delta_{warn,urgent,extreme}.
+function attentionFor(
+  absDelta: number,
+  deltaWarn: number,
+  deltaUrgent: number,
+  deltaExtreme: number,
+): number {
+  if (absDelta >= deltaExtreme) return 85;
+  if (absDelta >= deltaUrgent) return 75;
+  if (absDelta >= deltaWarn) return 60;
   return 0; // below threshold — caller should skip
 }
 
@@ -123,6 +130,15 @@ serve(async (req) => {
   const sessionDate = new Date().toISOString().slice(0, 10);
 
   try {
+    // Pull tunable thresholds from ct_config (60s cache TTL, defaults preserve
+    // legacy behavior if the row is missing or the RPC errors).
+    const [deltaWarn, deltaUrgent, deltaExtreme] = await Promise.all([
+      getConfig<number>('clusters.iv.delta_warn', 10),
+      getConfig<number>('clusters.iv.delta_urgent', 20),
+      getConfig<number>('clusters.iv.delta_extreme', 30),
+    ]);
+    console.log(`[ct-iv-shift-watch] thresholds: warn=${deltaWarn} urgent=${deltaUrgent} extreme=${deltaExtreme}`);
+
     // Candidate universe: watchlist + market banner (SPX). ct-eod-positioning
     // writes ct_iv_rank_daily for the same universe, so we mirror it.
     const tickers: string[] = Array.from(new Set([...WATCHLIST, MARKET_BANNER_SYMBOL]));
@@ -186,7 +202,7 @@ serve(async (req) => {
       const delta = newRank - prevRank;
       perTicker[t].delta = delta;
       const abs = Math.abs(delta);
-      if (abs < 10) {
+      if (abs < deltaWarn) {
         perTicker[t].skipped_reason = `below_threshold_${abs.toFixed(1)}`;
         continue;
       }
@@ -196,7 +212,7 @@ serve(async (req) => {
         new_rank: newRank,
         delta,
         direction: delta >= 0 ? 'up' : 'down',
-        attention_score: attentionFor(abs),
+        attention_score: attentionFor(abs, deltaWarn, deltaUrgent, deltaExtreme),
         ref_day: pair.latest.date,
         prev_day: pair.prior.date,
       });

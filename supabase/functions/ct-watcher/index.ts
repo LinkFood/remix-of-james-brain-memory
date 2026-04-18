@@ -33,6 +33,7 @@ import { condenseWatcherState, type CondensedState } from '../_shared/ctStateCon
 import { ctSlackPush } from '../_shared/ctSlack.ts';
 import { deriveWriteTimeAttention } from '../_shared/attentionScore.ts';
 import { logMcpCalls } from '../_shared/mcpLog.ts';
+import { getConfig } from '../_shared/configCache.ts';
 
 // Watcher MCP budget — ONE drill-down call per tick. The scheduled snapshot
 // covers the 12-ticker watchlist; MCP is only for chasing specific outliers
@@ -402,6 +403,7 @@ async function writeAlert(
   condensed: CondensedState,
   claude: ClaudeJson,
   convergenceCount?: number,
+  cooldowns?: { sameDirectionMin: number; invalidationMin: number },
 ): Promise<WriteAlertResult> {
   const instruments = toArray(claude.instruments).filter(Boolean) as string[];
   if (instruments.length === 0) {
@@ -412,19 +414,22 @@ async function writeAlert(
   const nowIso = new Date().toISOString();
   const trigger = claude.alert_trigger ?? 'other';
   const direction = claude.direction ?? 'neutral';
+  const sameDirectionMin = cooldowns?.sameDirectionMin ?? 30;
+  const invalidationMin = cooldowns?.invalidationMin ?? 60;
 
   // ========================================================================
   // COOLDOWN CHECKS — run BOTH before insert. First match wins and demotes.
   // ========================================================================
 
-  // Check 1: Thesis-invalidation suppression (60 min). Higher priority —
-  // check this first because invalidations at conv=5 are the loudest symptom.
+  // Check 1: Thesis-invalidation suppression (invalidation_min, default 60m).
+  // Higher priority — check this first because invalidations at conv=5 are
+  // the loudest symptom.
   if (trigger === 'thesis_invalidation') {
-    const sixtyMinAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const invalidationCutoff = new Date(Date.now() - invalidationMin * 60 * 1000).toISOString();
     const { data: recentInvalidations, error: invErr } = await supabase
       .from('ct_alerts')
       .select('id, created_at, instruments')
-      .gte('created_at', sixtyMinAgo)
+      .gte('created_at', invalidationCutoff)
       .eq('alert_trigger', 'thesis_invalidation')
       .overlaps('instruments', instruments)
       .order('created_at', { ascending: false })
@@ -434,13 +439,13 @@ async function writeAlert(
       console.warn('[ct-watcher] invalidation cooldown query failed:', invErr.message);
     } else if (recentInvalidations && recentInvalidations.length > 0) {
       const recentId = recentInvalidations[0].id as string;
-      console.log(`[ct-watcher] INVALIDATION COOLDOWN triggered — prior invalidation ${recentId.slice(0, 8)} within 60min, downgrading ALERT→FLAG conv=3`);
+      console.log(`[ct-watcher] INVALIDATION COOLDOWN triggered — prior invalidation ${recentId.slice(0, 8)} within ${invalidationMin}min, downgrading ALERT→FLAG conv=3`);
       const origGlance = toArray(claude.glance).filter(s => typeof s === 'string') as string[];
       const prefixedClaude: ClaudeJson = {
         ...claude,
         glance: ['[INVALIDATION COOLDOWN — downgraded from ALERT]', ...origGlance],
       };
-      const cooldownNote = `[cooldown: thesis_invalidation suppressed within 60min — see alert ${recentId}] ${asString(claude.memory_recall)}`.trim();
+      const cooldownNote = `[cooldown: thesis_invalidation suppressed within ${invalidationMin}min — see alert ${recentId}] ${asString(claude.memory_recall)}`.trim();
       const flagId = await writeFlag(supabase, userId, condensed, prefixedClaude, {
         convictionOverride: 3,
         memoryRecallOverride: cooldownNote,
@@ -450,13 +455,14 @@ async function writeAlert(
     }
   }
 
-  // Check 2: Same-direction cooldown (30 min). Only applies to bullish/bearish.
+  // Check 2: Same-direction cooldown (same_direction_min, default 30m).
+  // Only applies to bullish/bearish.
   if (direction === 'bullish' || direction === 'bearish') {
-    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const sameDirCutoff = new Date(Date.now() - sameDirectionMin * 60 * 1000).toISOString();
     const { data: recentSameDir, error: sdErr } = await supabase
       .from('ct_alerts')
       .select('id, created_at, instruments, direction')
-      .gte('created_at', thirtyMinAgo)
+      .gte('created_at', sameDirCutoff)
       .eq('direction', direction)
       .overlaps('instruments', instruments)
       .order('created_at', { ascending: false })
@@ -466,13 +472,13 @@ async function writeAlert(
       console.warn('[ct-watcher] same-direction cooldown query failed:', sdErr.message);
     } else if (recentSameDir && recentSameDir.length > 0) {
       const recentId = recentSameDir[0].id as string;
-      console.log(`[ct-watcher] SAME-DIRECTION COOLDOWN triggered — prior ${direction} alert ${recentId.slice(0, 8)} within 30min, downgrading ALERT→OBSERVATION`);
+      console.log(`[ct-watcher] SAME-DIRECTION COOLDOWN triggered — prior ${direction} alert ${recentId.slice(0, 8)} within ${sameDirectionMin}min, downgrading ALERT→OBSERVATION`);
       const origGlance = toArray(claude.glance).filter(s => typeof s === 'string') as string[];
       const prefixedClaude: ClaudeJson = {
         ...claude,
         glance: ['[COOLDOWN — suppressed conv=5 repeat]', ...origGlance],
       };
-      const cooldownNote = `[cooldown: same-direction suppressed within 30min — see alert ${recentId}] ${asString(claude.memory_recall)}`.trim();
+      const cooldownNote = `[cooldown: same-direction suppressed within ${sameDirectionMin}min — see alert ${recentId}] ${asString(claude.memory_recall)}`.trim();
       const obsId = await writeObservation(supabase, userId, condensed, prefixedClaude, cooldownNote, convergenceCount);
       return { alertId: null, demotedTo: 'observation', demotedEventId: obsId };
     }
@@ -672,6 +678,15 @@ serve(async (req) => {
   const startedAt = Date.now();
 
   try {
+    // Pull tunable thresholds from ct_config (60s cache TTL, defaults preserve
+    // legacy behavior if the row is missing or the RPC errors). Cooldowns feed
+    // writeAlert's demotion logic.
+    const [sameDirectionMin, invalidationMin] = await Promise.all([
+      getConfig<number>('cooldown.same_direction_min', 30),
+      getConfig<number>('cooldown.invalidation_min', 60),
+    ]);
+    console.log(`[ct-watcher] cooldowns: same_direction=${sameDirectionMin}min invalidation=${invalidationMin}min`);
+
     // 1. Single-user: fetch James's user_id
     const { data: users } = await supabase.from('profiles').select('id').limit(1);
     const userId = (users?.[0]?.id as string | undefined) ?? null;
@@ -1062,7 +1077,7 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
           );
           break;
         case 'ALERT': {
-          const alertResult = await writeAlert(supabase, userId, condensed, parsed, convergence.count);
+          const alertResult = await writeAlert(supabase, userId, condensed, parsed, convergence.count, { sameDirectionMin, invalidationMin });
           let hbStatus: string;
           if (alertResult.alertId) {
             eventId = alertResult.alertId;

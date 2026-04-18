@@ -30,8 +30,13 @@ import { CURIOSITY_SYSTEM } from '../_shared/ctPrompts.ts';
 import { logMcpCalls } from '../_shared/mcpLog.ts';
 import { embedCtItem } from '../_shared/ctEmbed.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
+import { getConfig } from '../_shared/configCache.ts';
 
-const MCP_BUDGET = 2;
+// Default MCP budget if ct_config key watcher.mcp.budget_per_tick is missing.
+// The watcher and curiosity share this single source of truth — same key.
+// Default is 1 (matches the seed in 20260419000012_ct_config.sql); curiosity
+// was historically 2 and becomes config-driven with this wave.
+const DEFAULT_MCP_BUDGET = 1;
 const PROMPT_VERSION = 'v1';
 // Haiku 4.5 rates per CLAUDE_RATES ($0.80/M in, $4/M out).
 const HAIKU_IN_PER_MTOK  = 0.80;
@@ -198,13 +203,19 @@ serve(async (req) => {
   const startedAt = Date.now();
 
   try {
+    // Pull tunable MCP budget from ct_config (single source of truth with
+    // ct-watcher). 60s cache TTL, fallback to the legacy curiosity default
+    // if the row is missing or the RPC errors.
+    const mcpBudget = await getConfig<number>('watcher.mcp.budget_per_tick', DEFAULT_MCP_BUDGET);
+    console.log(`[ct-curiosity] mcp_budget=${mcpBudget}`);
+
     // Single-user: fetch James's profile id (same pattern as ct-watcher).
     const { data: users } = await supabase.from('profiles').select('id').limit(1);
     const userId = (users?.[0]?.id as string | undefined) ?? null;
 
     const context = await buildContext(supabase);
 
-    const userPayload = `[TAPE STATE — last 30 min]\n${JSON.stringify(context, null, 2)}\n\n[END STATE]\n\nGiven this, pick ONE specific investigation worth a deeper look — or skip cleanly if nothing warrants it. Budget: ${MCP_BUDGET} UW MCP calls max. Return the JSON shape specified in the system prompt.`;
+    const userPayload = `[TAPE STATE — last 30 min]\n${JSON.stringify(context, null, 2)}\n\n[END STATE]\n\nGiven this, pick ONE specific investigation worth a deeper look — or skip cleanly if nothing warrants it. Budget: ${mcpBudget} UW MCP calls max. Return the JSON shape specified in the system prompt.`;
 
     const uwKey = Deno.env.get('UW_API_KEY');
     if (!uwKey) {
@@ -244,9 +255,9 @@ serve(async (req) => {
     logMcpCalls(supabase, 'curiosity', claudeRes as { content?: unknown }, { user_id: userId })
       .catch((e) => console.warn('[ct-curiosity] mcpLog failed:', e));
 
-    // Budget enforcement — warn loudly if Claude cited more than MCP_BUDGET.
-    if (actualMcpCalls > MCP_BUDGET) {
-      console.warn(`[ct-curiosity] BUDGET BREACH: Claude made ${actualMcpCalls} MCP calls (budget ${MCP_BUDGET})`);
+    // Budget enforcement — warn loudly if Claude cited more than mcpBudget.
+    if (actualMcpCalls > mcpBudget) {
+      console.warn(`[ct-curiosity] BUDGET BREACH: Claude made ${actualMcpCalls} MCP calls (budget ${mcpBudget})`);
     }
 
     const usage = (claudeRes as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
@@ -362,7 +373,7 @@ serve(async (req) => {
       actionable: parsed.actionable,
       related_instruments: parsed.related_instruments,
       mcp_calls: actualMcpCalls,
-      budget_breach: actualMcpCalls > MCP_BUDGET,
+      budget_breach: actualMcpCalls > mcpBudget,
       duration_ms: Date.now() - startedAt,
       cost_usd: costUsd,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

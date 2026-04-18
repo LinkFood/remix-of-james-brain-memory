@@ -288,11 +288,15 @@ serve(async (req) => {
 
   // Accept either authenticated user JWT or service role (for testing).
   let authorized = false;
+  let userId: string | null = null;
   if (isServiceRoleRequest(req)) {
     authorized = true;
   } else {
-    const { userId } = await extractUserId(req);
-    if (userId) authorized = true;
+    const extracted = await extractUserId(req);
+    if (extracted.userId) {
+      authorized = true;
+      userId = extracted.userId;
+    }
   }
   if (!authorized) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {
@@ -353,6 +357,12 @@ serve(async (req) => {
     ];
 
     let responseText = '';
+    // Surfaced on the response payload so the chat UI can render per-message metadata
+    // (model · tokens · cost · mcp calls). Populated after the Claude call returns.
+    let tokensIn = 0;
+    let tokensOut = 0;
+    let costUsd = 0;
+    let mcpCalls = 0;
     try {
       const uwKey = Deno.env.get('UW_API_KEY');
       const res = await callClaude({
@@ -387,6 +397,11 @@ serve(async (req) => {
         const outTok = usage?.output_tokens ?? 0;
         // Sonnet 4: $3/M in, $15/M out.
         const cost = (inTok / 1_000_000) * 3 + (outTok / 1_000_000) * 15;
+        // Hoist for the response payload.
+        tokensIn = inTok;
+        tokensOut = outTok;
+        costUsd = Number(cost.toFixed(6));
+        mcpCalls = mcpCount;
         supabase.from('ct_chat_tokens').insert({
           user_id: userId,
           model: 'sonnet',
@@ -427,6 +442,12 @@ serve(async (req) => {
       response: responseText || '(empty response)',
       duration_ms: Date.now() - startedAt,
       recall_debug: recallDebug,
+      // Chat UI renders these under each assistant bubble.
+      model: 'sonnet',
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+      cost_usd: costUsd,
+      mcp_calls: mcpCalls,
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
