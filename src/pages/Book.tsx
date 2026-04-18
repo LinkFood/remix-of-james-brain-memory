@@ -18,9 +18,11 @@ import { ArrowLeft, Wallet, Target, ListOrdered, NotebookPen, RefreshCw } from '
 import { BookEquityCurve } from '@/components/command/BookEquityCurve';
 import { PnLByTheme } from '@/components/command/PnLByTheme';
 import { RiskMetricsPanel } from '@/components/command/RiskMetricsPanel';
+import { MonteCarloPanel } from '@/components/command/MonteCarloPanel';
 import { ConcentrationPanel } from '@/components/command/ConcentrationPanel';
 import { BookGreeks } from '@/components/command/BookGreeks';
 import { TradeAuditPanel } from '@/components/command/TradeAuditPanel';
+import { TradeAdvisoriesPanel } from '@/components/command/TradeAdvisoriesPanel';
 import {
   SizingCalculatorButton,
   SizingCalculatorInline,
@@ -309,6 +311,11 @@ function JournalPanel({ trade }: { trade: CtTradeRow }) {
 
   return (
     <div className="bg-muted/10 border-t border-border px-6 py-4 text-xs space-y-4">
+      {/* Advisories — per-tick, non-executing recommendations from
+          ct-trade-advisories (15min offset from book-manager). Shows for
+          every trade regardless of status — closed trades keep their
+          historical advisory trail for after-the-fact review. */}
+      <TradeAdvisoriesPanel tradeId={trade.id} />
       {/* Quality ratings — Claude's self-grade of process (pre) and
           outcome-informed execution (post). Only shown when at least one
           rating exists. Clicking the row already expanded this panel;
@@ -648,6 +655,11 @@ export default function Book() {
             <SizingCalculatorInline />
           </div>
         </div>
+
+        {/* Monte Carlo forward simulator — run the observed R-distribution
+            forward N days × N paths to visualize the probable equity-curve
+            envelope and P(ruin). Client-side only; no DB writes. */}
+        <MonteCarloPanel />
 
         {/* Portfolio concentration — live view of the four caps that gate new
             trades at commit time (ticker, theme, direction, options count). */}

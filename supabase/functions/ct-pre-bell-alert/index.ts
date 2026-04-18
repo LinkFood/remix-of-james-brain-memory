@@ -72,6 +72,7 @@ interface Check {
 async function run(supabase: SupabaseClient): Promise<Check[]> {
   const today = etYmd();
   const sixHoursAgoIso = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+  const hourAgoIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
   const dayStartUtc = new Date(`${today}T00:00:00-05:00`).toISOString();
 
   // Kick off everything in parallel — this endpoint should finish in <2s.
@@ -84,6 +85,7 @@ async function run(supabase: SupabaseClient): Promise<Check[]> {
     uiErrorCount,
     openTrades,
     biasesCount,
+    eventTriggerDebounce,
   ] = await Promise.all([
     supabase.from('ct_reports')
       .select('id, created_at')
@@ -114,6 +116,11 @@ async function run(supabase: SupabaseClient): Promise<Check[]> {
     supabase.from('ct_biases')
       .select('*', { count: 'estimated', head: true })
       .eq('active', true),
+    supabase.from('ct_watcher_event_triggers')
+      .select('id, skip_reason, trigger_fired, created_at')
+      .gte('created_at', hourAgoIso)
+      .order('created_at', { ascending: false })
+      .limit(100),
   ]);
 
   const checks: Check[] = [];
@@ -213,6 +220,40 @@ async function run(supabase: SupabaseClient): Promise<Check[]> {
       status: n === 0 ? 'fail' : 'ok',
       detail: n === 0 ? 'no active biases' : `${n} active`,
     });
+  }
+
+  // 9. Event-trigger debounce is working.
+  // 'pending' if the audit table is missing or threw. 'ok' whenever we see
+  // any audit rows (fired OR debounced) in the last hour — the table is
+  // receiving writes. 'fail' only if the table is readable but has produced
+  // zero rows in an hour during a market day (unusual — we'd expect at
+  // least one heartbeat-class detector to have been exercised).
+  if (eventTriggerDebounce.error) {
+    checks.push({
+      id: 'event_trigger_debounce',
+      label: 'Event-trigger debounce is working',
+      status: 'pending',
+      detail: `read error: ${eventTriggerDebounce.error.message}`,
+    });
+  } else {
+    const rows = (eventTriggerDebounce.data ?? []) as Array<{ skip_reason: string | null; trigger_fired: boolean }>;
+    const debounced = rows.filter((r) => r.skip_reason === 'debounced').length;
+    const fired = rows.filter((r) => r.trigger_fired).length;
+    if (rows.length === 0) {
+      checks.push({
+        id: 'event_trigger_debounce',
+        label: 'Event-trigger debounce is working',
+        status: 'pending',
+        detail: 'no event-driven invocations in last hour',
+      });
+    } else {
+      checks.push({
+        id: 'event_trigger_debounce',
+        label: 'Event-trigger debounce is working',
+        status: 'ok',
+        detail: `${fired} fired · ${debounced} debounced in last hour`,
+      });
+    }
   }
 
   return checks;

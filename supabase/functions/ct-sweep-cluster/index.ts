@@ -23,6 +23,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { getConfig } from '../_shared/configCache.ts';
+import { fireWatcherImmediate } from '../_shared/watcherDispatch.ts';
 
 interface FlowRow {
   ticker: string;
@@ -238,6 +239,21 @@ serve(async (req) => {
 
       emitted.push(cluster);
       perTicker[ticker] = { count: cluster.sweep_count, total_premium: cluster.total_premium, emitted: true };
+
+      // Event-driven watcher trigger at attention >= 85 — a 5+ sweep burst
+      // on one ticker is the kind of flow we want the watcher to weigh
+      // in real time, not at the next scheduled tick.
+      if (cluster.attention_score >= 85) {
+        const sideWord =
+          cluster.dominant_side === 'call' ? 'calls'
+          : cluster.dominant_side === 'put' ? 'puts'
+          : 'mixed';
+        await fireWatcherImmediate(supabase, {
+          source: 'sweep_cluster',
+          priority: 'high',
+          reason: `${cluster.ticker} ${cluster.sweep_count} sweeps ${sideWord} · score ${cluster.attention_score}`,
+        });
+      }
 
       // Slack push only on attention_score >= 75 (count >= 4 sweeps). Best-effort,
       // we use the first user we find so the push has a channel. No dedupe here

@@ -26,6 +26,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { getConfig } from '../_shared/configCache.ts';
+import { fireWatcherImmediate } from '../_shared/watcherDispatch.ts';
 
 interface DpRow {
   ticker: string;
@@ -211,6 +212,17 @@ serve(async (req) => {
 
       emitted.push(cluster);
       perTicker[ticker] = { count: cluster.print_count, total_notional: cluster.total_notional, emitted: true };
+
+      // Event-driven watcher trigger at attention >= 85 — a 5+ block burst on
+      // one ticker is the kind of dark-pool signal that deserves immediate
+      // watcher attention, not the next scheduled tick.
+      if (cluster.attention_score >= 85) {
+        await fireWatcherImmediate(supabase, {
+          source: 'dp_cluster',
+          priority: 'high',
+          reason: `${cluster.ticker} ${cluster.print_count} DP blocks · score ${cluster.attention_score}`,
+        });
+      }
 
       // Slack push only on attention_score >= 75 (count >= 4 prints). Best-effort,
       // use the first user we find so the push has a channel. No dedupe here

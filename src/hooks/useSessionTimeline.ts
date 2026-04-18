@@ -37,6 +37,16 @@ export interface TimelineEvent {
   detail: Record<string, unknown>;
   color_class: string;          // Tailwind classes for stripe + badge bg
   direction?: string | null;    // bullish/bearish/etc — used for color shifts
+  /**
+   * When present, this row was produced by an event-driven watcher tick
+   * (news_event/sweep_cluster/dp_cluster/regime_inversion). UI renders a
+   * lightning bolt icon when set.
+   */
+  triggered_by?: {
+    source?: string;
+    priority?: string;
+    reason?: string;
+  } | null;
 }
 
 interface Args {
@@ -131,7 +141,7 @@ export function useSessionTimeline({ sessionDate, ticker }: Args) {
       ] = await Promise.all([
         supabase
           .from('ct_heartbeats')
-          .select('id, status_line, watching, created_at')
+          .select('id, status_line, watching, current_reads, created_at')
           .neq('prompt_version', 'mcp-verify')
           .gte('created_at', startIso)
           .lte('created_at', endIso)
@@ -139,21 +149,21 @@ export function useSessionTimeline({ sessionDate, ticker }: Args) {
           .limit(500),
         supabase
           .from('ct_observations')
-          .select('id, instruments, direction, glance, observation, self_assessment, created_at')
+          .select('id, instruments, direction, glance, observation, self_assessment, triggered_by, created_at')
           .gte('created_at', startIso)
           .lte('created_at', endIso)
           .order('created_at', { ascending: true })
           .limit(500),
         supabase
           .from('ct_flags')
-          .select('id, instruments, direction, conviction, horizon, glance, full_reasoning, self_assessment, trade_setup, created_at')
+          .select('id, instruments, direction, conviction, horizon, glance, full_reasoning, self_assessment, trade_setup, triggered_by, created_at')
           .gte('created_at', startIso)
           .lte('created_at', endIso)
           .order('created_at', { ascending: true })
           .limit(500),
         supabase
           .from('ct_alerts')
-          .select('id, instruments, direction, conviction, horizon, alert_trigger, glance, full_reasoning, self_assessment, trade_setup, created_at')
+          .select('id, instruments, direction, conviction, horizon, alert_trigger, glance, full_reasoning, self_assessment, trade_setup, triggered_by, created_at')
           .gte('created_at', startIso)
           .lte('created_at', endIso)
           .order('created_at', { ascending: true })
@@ -203,6 +213,10 @@ export function useSessionTimeline({ sessionDate, ticker }: Args) {
       // --- Heartbeats (market-wide) ---
       for (const r of (heartbeats.data ?? []) as Array<Record<string, unknown>>) {
         if (!tickerMatches(ticker, null, null, true)) continue;
+        // Event-driven watcher ticks tag current_reads._event_trigger; expose
+        // it as triggered_by so the UI can render a bolt icon.
+        const cr = (r.current_reads ?? null) as { _event_trigger?: { source?: string; priority?: string; reason?: string } } | null;
+        const trig = cr?._event_trigger ?? null;
         events.push({
           id: `hb_${r.id}`,
           time: r.created_at as string,
@@ -212,6 +226,7 @@ export function useSessionTimeline({ sessionDate, ticker }: Args) {
           summary: (r.status_line as string) ?? 'heartbeat',
           detail: r,
           color_class: 'border-l-slate-500/50 bg-slate-500/5',
+          triggered_by: trig,
         });
       }
 
@@ -229,6 +244,7 @@ export function useSessionTimeline({ sessionDate, ticker }: Args) {
           detail: r,
           color_class: 'border-l-slate-400 bg-slate-400/5',
           direction: (r.direction as string) ?? null,
+          triggered_by: (r.triggered_by as TimelineEvent['triggered_by']) ?? null,
         });
       }
 
@@ -246,6 +262,7 @@ export function useSessionTimeline({ sessionDate, ticker }: Args) {
           detail: r,
           color_class: 'border-l-amber-400 bg-amber-400/10',
           direction: (r.direction as string) ?? null,
+          triggered_by: (r.triggered_by as TimelineEvent['triggered_by']) ?? null,
         });
       }
 
@@ -265,6 +282,7 @@ export function useSessionTimeline({ sessionDate, ticker }: Args) {
           detail: r,
           color_class: alertColor(r.direction as string | null),
           direction: (r.direction as string) ?? null,
+          triggered_by: (r.triggered_by as TimelineEvent['triggered_by']) ?? null,
         });
       }
 

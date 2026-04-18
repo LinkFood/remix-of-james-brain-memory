@@ -28,6 +28,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
 import { WATCHLIST } from '../_shared/uwClient.ts';
+import { fireWatcherImmediate } from '../_shared/watcherDispatch.ts';
 
 const RE_FIRE_MS = 60 * 60 * 1000; // 60min re-fire exception per ticker per session
 
@@ -220,6 +221,16 @@ serve(async (req) => {
       }
       perTicker[f.ticker].emitted = true;
       emitted++;
+
+      // Event-driven watcher trigger — regime inversions are structural and
+      // always deserve the watcher's attention immediately. urgent priority
+      // (90s debounce) so a sector-wide flip still collapses multiple
+      // inversions to one watcher cycle.
+      await fireWatcherImmediate(supabase, {
+        source: 'regime_inversion',
+        priority: 'urgent',
+        reason: `${f.ticker} γ-flip ${f.prev_regime}→${f.new_regime}${f.flip_level !== null ? ` @${f.flip_level.toFixed(0)}` : ''}`,
+      });
 
       // Slack push — ALERT state, attention 80, always push.
       if (userId) {

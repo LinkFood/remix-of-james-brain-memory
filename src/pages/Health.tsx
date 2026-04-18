@@ -984,6 +984,161 @@ interface UiErrorRow {
   resolved: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Event-driven watcher triggers — event vs scheduled counts, source breakdown,
+// debounce rate. Populated by ct-watcher-event-triggers audit table.
+// ---------------------------------------------------------------------------
+
+interface EventTriggerRow {
+  id: string;
+  created_at: string;
+  source: string;
+  reason: string;
+  priority: 'high' | 'urgent';
+  trigger_fired: boolean;
+  skip_reason: string | null;
+}
+
+interface EventTriggerStats {
+  rowsToday: EventTriggerRow[];
+  firedCount: number;
+  debouncedCount: number;
+  killSwitchCount: number;
+  bySource: Record<string, { fired: number; debounced: number }>;
+  scheduledWatcherTicksToday: number;
+  lastHourDebounced: number;
+}
+
+function useEventTriggerStats() {
+  return useQuery<EventTriggerStats>({
+    queryKey: ['ct_watcher_event_triggers_today'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const dayStartUtc = new Date();
+      dayStartUtc.setUTCHours(0, 0, 0, 0);
+      const dayStartIso = dayStartUtc.toISOString();
+      const hourAgoIso = new Date(Date.now() - 3600_000).toISOString();
+
+      const [triggersRes, scheduledRes, lastHourDebouncedRes] = await Promise.all([
+        supabase
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .from('ct_watcher_event_triggers' as any)
+          .select('id, created_at, source, reason, priority, trigger_fired, skip_reason')
+          .gte('created_at', dayStartIso)
+          .order('created_at', { ascending: false })
+          .limit(500),
+        supabase
+          .from('ct_heartbeats')
+          .select('id', { count: 'exact', head: true })
+          .gte('created_at', dayStartIso),
+        supabase
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .from('ct_watcher_event_triggers' as any)
+          .select('id', { count: 'exact', head: true })
+          .eq('skip_reason', 'debounced')
+          .gte('created_at', hourAgoIso),
+      ]);
+
+      if (triggersRes.error) throw triggersRes.error;
+      const rows = (triggersRes.data ?? []) as unknown as EventTriggerRow[];
+      const fired = rows.filter((r) => r.trigger_fired);
+      const debounced = rows.filter((r) => !r.trigger_fired && r.skip_reason === 'debounced');
+      const killSwitched = rows.filter((r) => !r.trigger_fired && r.skip_reason === 'kill_switch');
+
+      const bySource: Record<string, { fired: number; debounced: number }> = {};
+      for (const r of rows) {
+        const src = r.source;
+        if (!bySource[src]) bySource[src] = { fired: 0, debounced: 0 };
+        if (r.trigger_fired) bySource[src].fired += 1;
+        else if (r.skip_reason === 'debounced') bySource[src].debounced += 1;
+      }
+
+      return {
+        rowsToday: rows,
+        firedCount: fired.length,
+        debouncedCount: debounced.length,
+        killSwitchCount: killSwitched.length,
+        bySource,
+        scheduledWatcherTicksToday: scheduledRes.count ?? 0,
+        lastHourDebounced: lastHourDebouncedRes.count ?? 0,
+      };
+    },
+  });
+}
+
+function EventTriggersSection() {
+  const { data, isLoading } = useEventTriggerStats();
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-4 py-3 border-b bg-muted/30 flex items-center gap-2">
+        <Activity className="w-4 h-4 text-primary" />
+        <span className="text-sm font-semibold">Event-driven watcher triggers</span>
+        <span className="text-[11px] text-muted-foreground ml-2">today (UTC)</span>
+      </div>
+      {isLoading && !data ? (
+        <div className="p-6 text-center text-xs text-muted-foreground">Loading…</div>
+      ) : !data ? (
+        <div className="p-6 text-center text-xs text-muted-foreground">No data</div>
+      ) : (
+        <div className="p-4 space-y-3">
+          <div className="grid grid-cols-4 gap-3">
+            <div className="rounded border bg-muted/20 p-2">
+              <div className="text-[10px] uppercase text-muted-foreground">Event-fired</div>
+              <div className="text-lg font-bold tabular-nums">{data.firedCount}</div>
+            </div>
+            <div className="rounded border bg-muted/20 p-2">
+              <div className="text-[10px] uppercase text-muted-foreground">Debounced</div>
+              <div className="text-lg font-bold tabular-nums text-amber-300">{data.debouncedCount}</div>
+              <div className="text-[10px] text-muted-foreground">
+                {data.firedCount + data.debouncedCount > 0
+                  ? `${Math.round((100 * data.debouncedCount) / (data.firedCount + data.debouncedCount))}% rate`
+                  : '0% rate'}
+              </div>
+            </div>
+            <div className="rounded border bg-muted/20 p-2">
+              <div className="text-[10px] uppercase text-muted-foreground">Kill-switched</div>
+              <div className="text-lg font-bold tabular-nums text-red-300">{data.killSwitchCount}</div>
+            </div>
+            <div className="rounded border bg-muted/20 p-2">
+              <div className="text-[10px] uppercase text-muted-foreground">Scheduled ticks</div>
+              <div className="text-lg font-bold tabular-nums text-muted-foreground">
+                {data.scheduledWatcherTicksToday}
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div className="text-[10px] uppercase text-muted-foreground mb-1">By source</div>
+            {Object.keys(data.bySource).length === 0 ? (
+              <div className="text-[11px] text-muted-foreground">No event-driven invocations yet today.</div>
+            ) : (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                {Object.entries(data.bySource).map(([src, counts]) => (
+                  <div key={src} className="rounded border bg-muted/10 p-2">
+                    <div className="text-[11px] font-semibold font-mono">{src}</div>
+                    <div className="text-[11px] text-muted-foreground">
+                      fired {counts.fired} · debounced {counts.debounced}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="text-[11px] text-muted-foreground">
+            Pre-flight: debounce is working{' '}
+            <span className={cn('font-semibold', data.lastHourDebounced > 0 ? 'text-emerald-300' : 'text-muted-foreground')}>
+              {data.lastHourDebounced > 0 ? 'OK' : 'no-op'}
+            </span>{' '}
+            ({data.lastHourDebounced} debounced in last hour)
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function useUiErrors() {
   return useQuery<UiErrorRow[]>({
     queryKey: ['ct_ui_errors_recent'],
@@ -1119,6 +1274,9 @@ export default function Health() {
 
             {/* Row 2.5: Recent UI crashes */}
             <UiErrorsSection />
+
+            {/* Row 2.75: Event-driven watcher triggers */}
+            <EventTriggersSection />
 
             {/* Row 3: Watcher v1.2 observability — full width */}
             <WatcherObservabilitySection />

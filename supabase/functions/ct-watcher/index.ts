@@ -280,20 +280,39 @@ function condensedWatching(condensed: CondensedState): string[] {
 // State writers
 // ============================================================================
 
+// Event-trigger metadata threaded from the request body down into every write.
+// When present, every row the watcher produces during this tick carries a
+// pointer back to ct_watcher_event_triggers, and the heartbeat status_line is
+// tagged `[event: source/priority]` for quick filtering on /session.
+interface TriggerInfo {
+  source: string;
+  reason: string;
+  priority: string;
+  trigger_id?: string | null;
+}
+
+function triggerTag(info: TriggerInfo | null): string {
+  if (!info) return '';
+  return ` [event: ${info.source}/${info.priority}]`;
+}
+
 async function writeHeartbeat(
   supabase: SupabaseClient,
   condensed: CondensedState,
   claude: ClaudeJson,
-  fallbackReason: string | null
+  fallbackReason: string | null,
+  triggerInfo: TriggerInfo | null = null,
 ): Promise<string | null> {
-  const statusLine = asString(claude?.status_line) || fallbackReason || 'watcher cycle — claude output unparsable, wrote fallback heartbeat';
+  const baseLine = asString(claude?.status_line) || fallbackReason || 'watcher cycle — claude output unparsable, wrote fallback heartbeat';
+  const statusLine = `${baseLine}${triggerTag(triggerInfo)}`;
   const watching = toArray(claude?.watching as string | string[]).filter(s => typeof s === 'string') as string[];
   const current_reads = claude?.current_reads && typeof claude.current_reads === 'object' ? claude.current_reads : {};
+  const triggerMeta = triggerInfo ? { _event_trigger: triggerInfo } : {};
 
   const { data, error } = await supabase.from('ct_heartbeats').insert({
     status_line: statusLine,
     watching: watching.length > 0 ? watching : condensedWatching(condensed),
-    current_reads: { ...current_reads, _snapshot: condensed },
+    current_reads: { ...current_reads, ...triggerMeta, _snapshot: condensed },
     prompt_version: CT_PROMPT_VERSION,
     attention_score: deriveWriteTimeAttention({ state: 'HEARTBEAT' }),
   }).select('id').maybeSingle();
@@ -312,6 +331,7 @@ async function writeObservation(
   claude: ClaudeJson,
   memoryRecallOverride?: string,
   convergenceCount?: number,
+  triggerInfo: TriggerInfo | null = null,
 ): Promise<string | null> {
   const instruments = toArray(claude.instruments).filter(Boolean) as string[];
   if (instruments.length === 0) {
@@ -338,6 +358,7 @@ async function writeObservation(
     watching: asString(claude.memory_recall || claude.watching as string),
     memory_recall_used: { summary: memoryRecallSummary },
     self_assessment: claude.self_assessment ?? null,
+    triggered_by: triggerInfo ?? null,
     prompt_version: CT_PROMPT_VERSION,
     attention_score: deriveWriteTimeAttention({
       state: 'OBSERVATION',
@@ -381,7 +402,7 @@ async function writeFlag(
   userId: string | null,
   condensed: CondensedState,
   claude: ClaudeJson,
-  opts?: { convictionOverride?: number; memoryRecallOverride?: string; convergenceCount?: number },
+  opts?: { convictionOverride?: number; memoryRecallOverride?: string; convergenceCount?: number; triggerInfo?: TriggerInfo | null },
 ): Promise<string | null> {
   const instruments = toArray(claude.instruments).filter(Boolean) as string[];
   if (instruments.length === 0) {
@@ -416,6 +437,7 @@ async function writeFlag(
     trade_setup: claude.trade_setup ?? null,
     evidence_axes: normalizeEvidenceAxes(claude.evidence_axes),
     expected_move: validateExpectedMove(claude.expected_move, `flag ${instruments.join(',')} ${claude.direction ?? ''}`),
+    triggered_by: opts?.triggerInfo ?? null,
     prompt_version: CT_PROMPT_VERSION,
     attention_score: deriveWriteTimeAttention({
       state: 'FLAG',
@@ -471,6 +493,7 @@ async function writeAlert(
   claude: ClaudeJson,
   convergenceCount?: number,
   cooldowns?: { sameDirectionMin: number; invalidationMin: number },
+  triggerInfo: TriggerInfo | null = null,
 ): Promise<WriteAlertResult> {
   const instruments = toArray(claude.instruments).filter(Boolean) as string[];
   if (instruments.length === 0) {
@@ -517,6 +540,7 @@ async function writeAlert(
         convictionOverride: 3,
         memoryRecallOverride: cooldownNote,
         convergenceCount,
+        triggerInfo,
       });
       return { alertId: null, demotedTo: 'flag', demotedEventId: flagId };
     }
@@ -546,7 +570,7 @@ async function writeAlert(
         glance: ['[COOLDOWN — suppressed conv=5 repeat]', ...origGlance],
       };
       const cooldownNote = `[cooldown: same-direction suppressed within ${sameDirectionMin}min — see alert ${recentId}] ${asString(claude.memory_recall)}`.trim();
-      const obsId = await writeObservation(supabase, userId, condensed, prefixedClaude, cooldownNote, convergenceCount);
+      const obsId = await writeObservation(supabase, userId, condensed, prefixedClaude, cooldownNote, convergenceCount, triggerInfo);
       return { alertId: null, demotedTo: 'observation', demotedEventId: obsId };
     }
   }
@@ -619,6 +643,7 @@ async function writeAlert(
     alert_trigger: trigger,
     evidence_axes: currAxes,
     expected_move: validateExpectedMove(claude.expected_move, `alert ${instruments.join(',')} ${direction} ${trigger}`),
+    triggered_by: triggerInfo ?? null,
     prompt_version: CT_PROMPT_VERSION,
     attention_score: deriveWriteTimeAttention({
       state: 'ALERT',
@@ -741,6 +766,25 @@ serve(async (req) => {
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const supabase = createClient(supabaseUrl, serviceRoleKey);
+
+  // Parse event-trigger metadata (if present) — body params threaded from
+  // _shared/watcherDispatch. A scheduled tick sends no body, so all fields
+  // default to null and we behave exactly as before.
+  let triggerInfo: TriggerInfo | null = null;
+  try {
+    const body = await req.json();
+    if (body && typeof body === 'object' && typeof body.triggered_by === 'string') {
+      triggerInfo = {
+        source: String(body.triggered_by),
+        reason: typeof body.reason === 'string' ? body.reason : '',
+        priority: typeof body.priority === 'string' ? body.priority : 'high',
+        trigger_id: typeof body.trigger_id === 'string' ? body.trigger_id : null,
+      };
+      console.log(`[ct-watcher] event-driven fire: source=${triggerInfo.source} priority=${triggerInfo.priority} reason=${triggerInfo.reason.slice(0, 200)}`);
+    }
+  } catch {
+    /* empty body is fine */
+  }
 
   // Kill switch — skip entire watcher tick if engaged. <15s stale-cache lag
   // tolerated; the next isolate to cold-start reads fresh.
@@ -1170,34 +1214,36 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
       const fallback = claudeError
         ? `Claude error: ${claudeError}`
         : `Claude returned unparsable output (${claudeText.length} chars)`;
-      heartbeatId = await writeHeartbeat(supabase, condensed, { state: 'HEARTBEAT', watching: condensedWatching(condensed) } as ClaudeJson, fallback);
+      heartbeatId = await writeHeartbeat(supabase, condensed, { state: 'HEARTBEAT', watching: condensedWatching(condensed) } as ClaudeJson, fallback, triggerInfo);
     } else {
       eventType = parsed.state;
       switch (parsed.state) {
         case 'HEARTBEAT':
-          heartbeatId = await writeHeartbeat(supabase, condensed, parsed, null);
+          heartbeatId = await writeHeartbeat(supabase, condensed, parsed, null, triggerInfo);
           break;
         case 'OBSERVATION':
-          eventId = await writeObservation(supabase, userId, condensed, parsed, undefined, convergence.count);
+          eventId = await writeObservation(supabase, userId, condensed, parsed, undefined, convergence.count, triggerInfo);
           // Also write a heartbeat to keep the pulse row
           heartbeatId = await writeHeartbeat(
             supabase,
             condensed,
             { state: 'HEARTBEAT', status_line: `observation written: ${eventId?.slice(0, 8) ?? 'err'}`, watching: condensedWatching(condensed) } as ClaudeJson,
             null,
+            triggerInfo,
           );
           break;
         case 'FLAG':
-          eventId = await writeFlag(supabase, userId, condensed, parsed, { convergenceCount: convergence.count });
+          eventId = await writeFlag(supabase, userId, condensed, parsed, { convergenceCount: convergence.count, triggerInfo });
           heartbeatId = await writeHeartbeat(
             supabase,
             condensed,
             { state: 'HEARTBEAT', status_line: `flag written: ${eventId?.slice(0, 8) ?? 'err'} conv ${parsed.conviction} ${parsed.direction}`, watching: condensedWatching(condensed) } as ClaudeJson,
             null,
+            triggerInfo,
           );
           break;
         case 'ALERT': {
-          const alertResult = await writeAlert(supabase, userId, condensed, parsed, convergence.count, { sameDirectionMin, invalidationMin });
+          const alertResult = await writeAlert(supabase, userId, condensed, parsed, convergence.count, { sameDirectionMin, invalidationMin }, triggerInfo);
           let hbStatus: string;
           if (alertResult.alertId) {
             eventId = alertResult.alertId;
@@ -1215,11 +1261,25 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
             condensed,
             { state: 'HEARTBEAT', status_line: hbStatus, watching: condensedWatching(condensed) } as ClaudeJson,
             null,
+            triggerInfo,
           );
           break;
         }
         default:
-          heartbeatId = await writeHeartbeat(supabase, condensed, { state: 'HEARTBEAT', watching: condensedWatching(condensed) } as ClaudeJson, `unknown state: ${parsed.state}`);
+          heartbeatId = await writeHeartbeat(supabase, condensed, { state: 'HEARTBEAT', watching: condensedWatching(condensed) } as ClaudeJson, `unknown state: ${parsed.state}`, triggerInfo);
+      }
+    }
+
+    // Backfill heartbeat_id on the audit row so operators can join the
+    // watcher cycle to its trigger. Best-effort; failure is not fatal.
+    if (triggerInfo?.trigger_id && heartbeatId) {
+      try {
+        await supabase
+          .from('ct_watcher_event_triggers')
+          .update({ heartbeat_id: heartbeatId })
+          .eq('id', triggerInfo.trigger_id);
+      } catch (e) {
+        console.warn('[ct-watcher] heartbeat backfill to event-trigger row failed:', e instanceof Error ? e.message : e);
       }
     }
 

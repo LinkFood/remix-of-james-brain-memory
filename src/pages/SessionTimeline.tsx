@@ -26,6 +26,7 @@ import {
 import { useSessionTimeline, type TimelineEvent, type TimelineKind } from '@/hooks/useSessionTimeline';
 import { useSessionSnapshot } from '@/hooks/useSessionSnapshot';
 import { useTodayBook, useBookHistory } from '@/hooks/useCoTraderData';
+import { Zap } from 'lucide-react';
 
 const TICKER_CHOICES = ['all', 'SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'TSLA', 'GLD', 'USO', 'SPX'];
 
@@ -562,6 +563,19 @@ export default function SessionTimeline() {
                         <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 ${KIND_BADGE[e.kind]}`}>
                           {KIND_LABEL[e.kind]}
                         </span>
+                        {e.triggered_by?.source && (
+                          <span
+                            className="shrink-0 inline-flex items-center"
+                            title={`event-driven: ${e.triggered_by.source}${e.triggered_by.priority ? '/' + e.triggered_by.priority : ''}${e.triggered_by.reason ? ' — ' + e.triggered_by.reason : ''}`}
+                            aria-label={`event-driven: ${e.triggered_by.source}`}
+                          >
+                            <Zap
+                              className={`w-3 h-3 ${
+                                e.triggered_by.priority === 'urgent' ? 'text-red-400' : 'text-amber-300'
+                              }`}
+                            />
+                          </span>
+                        )}
                         <span className="font-semibold text-[11px] shrink-0 min-w-[60px]">{e.subject}</span>
                         {e.attention_score != null && (
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-primary/20 text-primary shrink-0">

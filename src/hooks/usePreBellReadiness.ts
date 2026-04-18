@@ -46,6 +46,7 @@ export type PreBellItemId =
   | 'ui_errors_clean'
   | 'concentration_headroom'
   | 'biases_loaded'
+  | 'event_trigger_debounce'
   | 'countdown';
 
 export interface PreBellItem {
@@ -197,6 +198,28 @@ async function checkBiasesLoaded(): Promise<CheckResult> {
   return { status: 'ok', detail: `${n} active` };
 }
 
+/**
+ * Event-trigger debounce is working. Reads ct_watcher_event_triggers for the
+ * last hour — presence of rows (fired or debounced) shows the audit pipe is
+ * live. Seeing at least one skip_reason='debounced' within an hour is a
+ * positive signal that the per-source debounce is actually kicking in.
+ */
+async function checkEventTriggerDebounce(): Promise<CheckResult> {
+  const hourAgoIso = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    .from('ct_watcher_event_triggers' as any)
+    .select('id, skip_reason, trigger_fired')
+    .gte('created_at', hourAgoIso)
+    .limit(200);
+  if (error) return { status: 'pending', detail: `read error: ${error.message}` };
+  const rows = (data ?? []) as Array<{ skip_reason: string | null; trigger_fired: boolean }>;
+  if (rows.length === 0) return { status: 'pending', detail: 'no event-driven invocations in last hour' };
+  const fired = rows.filter((r) => r.trigger_fired).length;
+  const debounced = rows.filter((r) => r.skip_reason === 'debounced').length;
+  return { status: 'ok', detail: `${fired} fired · ${debounced} debounced in last hour` };
+}
+
 // ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
@@ -217,6 +240,7 @@ const CHECKS: readonly CheckSpec[] = [
   { id: 'ui_errors_clean',       label: 'No UI errors in last 6h',      href: '/health',            fn: checkUiErrorsClean },
   { id: 'concentration_headroom',label: 'Concentration headroom',       href: '/book',              fn: checkConcentrationHeadroom },
   { id: 'biases_loaded',         label: 'Active biases loaded',         href: '/ct-settings',       fn: checkBiasesLoaded },
+  { id: 'event_trigger_debounce',label: 'Event-trigger debounce is working', href: '/health',       fn: checkEventTriggerDebounce },
 ];
 
 export const PRE_BELL_QUERY_KEY_ROOT = ['pre-bell-readiness'] as const;

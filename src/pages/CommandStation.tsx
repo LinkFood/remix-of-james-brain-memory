@@ -28,6 +28,7 @@ import { LinkGexDeep } from '@/components/command/LinkGexDeep';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
 import { BookEquityCurve } from '@/components/command/BookEquityCurve';
+import { TradeAdvisoriesStrip } from '@/components/command/TradeAdvisoriesStrip';
 import { ClaudesRead } from '@/components/command/ClaudesRead';
 import { ColdOpen } from '@/components/command/ColdOpen';
 import { PreBellChecklist } from '@/components/command/PreBellChecklist';
@@ -206,6 +207,10 @@ export default function CommandStation() {
             <NewsFeed />
           </div>
           <div className="lg:col-span-4 space-y-4">
+            {/* Advisories strip — highest-urgency unacked trade advisories,
+                from ct-trade-advisories. Renders null when none outstanding
+                so the sidebar isn't padded with an empty card. */}
+            <TradeAdvisoriesStrip />
             {/* Morning Brief pinned to top — 90-sec pre-bell read */}
             <MorningBriefPanel />
             {/* Book equity — Claude's $10k paper book, live. Equity curve +

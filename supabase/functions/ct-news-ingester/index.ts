@@ -28,6 +28,7 @@ import { NEWS_ANALYSIS_SYSTEM } from '../_shared/ctPrompts.ts';
 import { WATCHLIST } from '../_shared/uwClient.ts';
 import { embedCtItem } from '../_shared/ctEmbed.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
+import { fireWatcherImmediate } from '../_shared/watcherDispatch.ts';
 
 interface HeadlineRow {
   headline: string;
@@ -208,6 +209,20 @@ async function analyzeAndStore(
       },
     });
   }
+
+  // Event-driven watcher trigger: magnitude-5 sentiment is a catalyst-class
+  // headline. Don't wait for the next scheduled tick (~7 min avg). Debounce
+  // enforced in watcherDispatch — multiple magnitude-5 headlines within 90s
+  // collapse to one watcher invocation.
+  if (sentimentMagnitude >= 5) {
+    const truncHead = row.headline.length > 140 ? row.headline.slice(0, 137) + '…' : row.headline;
+    await fireWatcherImmediate(supabase, {
+      source: 'news_event',
+      priority: 'urgent',
+      reason: `${row.ticker} ${sentiment} magnitude 5 — ${truncHead}`,
+    });
+  }
+
   return { ok: true, id: data.id as string, tokens_in: tokensIn, tokens_out: tokensOut };
 }
 
