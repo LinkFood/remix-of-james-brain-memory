@@ -275,3 +275,6 @@ verify_jwt = false
 
 [functions.ct-custom-rule-eval]
 verify_jwt = false
+
+[functions.ct-cron-health-check]
+verify_jwt = false

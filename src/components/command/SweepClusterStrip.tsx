@@ -25,6 +25,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import { useSweepClusters, type SweepCluster } from '@/hooks/useCoTraderData';
 
 // James's TrendSpider color vocabulary.
@@ -145,6 +146,10 @@ export const SweepClusterStrip = memo(function SweepClusterStrip({
   const clusters = data ?? [];
   if (clusters.length === 0) return null;
 
+  // Most-recent cluster timestamp — clusters are ordered DESC by created_at
+  // in the hook, so [0] is the newest signal in-window.
+  const latestTs = clusters[0]?.created_at ?? null;
+
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-black/40 border border-white/5 overflow-x-auto">
       <span className="text-[10px] uppercase tracking-wider text-white/40 shrink-0">
@@ -153,6 +158,7 @@ export const SweepClusterStrip = memo(function SweepClusterStrip({
       <div className="flex items-center gap-2 flex-nowrap">
         {clusters.map(c => <SweepPill key={c.id} c={c} />)}
       </div>
+      <FreshnessChip timestamp={latestTs} className="ml-auto shrink-0" />
     </div>
   );
 });

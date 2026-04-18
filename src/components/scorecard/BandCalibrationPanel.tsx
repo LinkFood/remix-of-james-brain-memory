@@ -25,6 +25,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import { Target } from 'lucide-react';
 import { ChartSafe } from '@/components/ChartSafe';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import {
   BarChart,
   Bar,
@@ -177,6 +178,7 @@ export function BandCalibrationPanel() {
         <span className="ml-auto normal-case tracking-normal font-mono">
           n={stats?.n ?? 0}
         </span>
+        <FreshnessChip timestamp={rows?.[0]?.graded_at ?? null} />
       </div>
 
       {isLoading ? (

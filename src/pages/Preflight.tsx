@@ -12,6 +12,7 @@
 import { useState } from 'react';
 import { RefreshCw, CheckCircle2, AlertTriangle, XCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import {
   usePreflightChecks,
   type CheckStatus,
@@ -74,6 +75,7 @@ function CheckCard({ check }: { check: PreflightCheck }) {
               <span className={`text-[10px] uppercase tracking-wider font-bold ${style.fg}`}>
                 {check.status}
               </span>
+              <FreshnessChip timestamp={check.lastCheckedAt} />
             </div>
             <div className="text-xs text-muted-foreground mt-1">{check.explanation}</div>
             <div className="text-[10px] text-muted-foreground/60 mt-1">

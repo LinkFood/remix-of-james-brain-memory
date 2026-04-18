@@ -40,6 +40,7 @@ import { ArrowLeft, ExternalLink } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import { LinkGexDeep } from '@/components/command/LinkGexDeep';
 import { TickerChartWithAlerts } from '@/components/command/TickerChartWithAlerts';
 import { TickerCandleChart } from '@/components/command/TickerCandleChart';
@@ -1003,6 +1004,7 @@ export default function TickerTerminal() {
                 updated {fmtTime(header.updatedAt)}
               </span>
             )}
+            <FreshnessChip timestamp={header?.updatedAt ?? null} />
           </div>
         </header>
 

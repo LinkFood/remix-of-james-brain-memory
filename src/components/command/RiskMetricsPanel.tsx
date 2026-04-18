@@ -34,6 +34,8 @@ import {
 } from '@/components/ui/tooltip';
 import { Activity, Info, TrendingUp } from 'lucide-react';
 import { useRiskMetrics, type RiskPeriod } from '@/hooks/useRiskMetrics';
+import { FreshnessChip } from '@/components/FreshnessChip';
+import { useQueryFreshness } from '@/hooks/useFreshness';
 
 const GREEN = '#00C853';
 const RED = '#FF1744';
@@ -108,6 +110,9 @@ const PERIODS: { key: RiskPeriod; label: string }[] = [
 export function RiskMetricsPanel() {
   const [period, setPeriod] = useState<RiskPeriod>('30d');
   const { metrics, isLoading } = useRiskMetrics(period);
+  // useRiskMetrics doesn't expose a domain timestamp — anchor freshness to
+  // the last successful refetch of the underlying ct_book+ct_trades query.
+  const riskUpdatedAt = useQueryFreshness(['risk_metrics_raw']);
 
   const insufficient =
     !!metrics && metrics.sampleSize.sessions < 5;
@@ -158,20 +163,23 @@ export function RiskMetricsPanel() {
             </Tooltip>
           )}
 
-          <div className="ml-auto flex items-center gap-1">
-            {PERIODS.map(p => (
-              <button
-                key={p.key}
-                onClick={() => setPeriod(p.key)}
-                className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded border transition-colors ${
-                  period === p.key
-                    ? 'bg-primary/20 border-primary/40 text-primary'
-                    : 'bg-transparent border-border text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {p.label}
-              </button>
-            ))}
+          <div className="ml-auto flex items-center gap-2">
+            <div className="flex items-center gap-1">
+              {PERIODS.map(p => (
+                <button
+                  key={p.key}
+                  onClick={() => setPeriod(p.key)}
+                  className={`text-[10px] uppercase tracking-wide px-2 py-1 rounded border transition-colors ${
+                    period === p.key
+                      ? 'bg-primary/20 border-primary/40 text-primary'
+                      : 'bg-transparent border-border text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <FreshnessChip timestamp={riskUpdatedAt} />
           </div>
         </div>
 

@@ -15,6 +15,7 @@
  */
 import { memo, useCallback } from 'react';
 import { Card } from '@/components/ui/card';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import { useColdOpen, type ColdOpenBullet, type ColdOpenSeverity } from '@/hooks/useColdOpen';
 
 interface SeverityStyle {
@@ -106,9 +107,12 @@ export function ColdOpen({ onOpenDeep }: ColdOpenProps) {
         <div className="text-[10px] uppercase tracking-[0.15em] text-muted-foreground font-semibold">
           Cold Open · what matters right now
         </div>
-        {isLoading && !lastUpdated && (
-          <span className="text-[10px] text-muted-foreground">loading…</span>
-        )}
+        <div className="flex items-center gap-2">
+          {isLoading && !lastUpdated && (
+            <span className="text-[10px] text-muted-foreground">loading…</span>
+          )}
+          <FreshnessChip timestamp={lastUpdated ?? null} />
+        </div>
       </div>
       <ul className="space-y-0.5">
         {bullets.map(b => (

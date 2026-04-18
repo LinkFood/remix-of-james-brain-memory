@@ -44,6 +44,8 @@ import { Dice5, Info, AlertTriangle } from 'lucide-react';
 import { ChartSafe } from '@/components/ChartSafe';
 import { useMonteCarloInputs } from '@/hooks/useMonteCarloInputs';
 import { runMonteCarlo, MAX_PATHS } from '@/lib/monteCarlo';
+import { FreshnessChip } from '@/components/FreshnessChip';
+import { useQueryFreshness } from '@/hooks/useFreshness';
 
 const DAYS_STEPS = [7, 30, 60, 90] as const;
 const PATHS_STEPS = [1000, 5000, 10000] as const;
@@ -135,6 +137,9 @@ function SliderRow({
 
 export function MonteCarloPanel() {
   const inputs = useMonteCarloInputs();
+  // Inputs are derived from the latest ct_book row; anchor freshness to that
+  // query's refetch time so "the sim uses data pulled N seconds ago" is obvious.
+  const inputsUpdatedAt = useQueryFreshness(['mc_latest_book_row']);
 
   // Slider state.
   const [days, setDays] = useState<number>(30);
@@ -242,6 +247,7 @@ export function MonteCarloPanel() {
                 className="w-16 bg-background border border-border rounded px-1 py-0.5 text-[11px] font-mono"
               />
             )}
+            <FreshnessChip timestamp={inputsUpdatedAt} label="inputs" />
           </div>
         </div>
 

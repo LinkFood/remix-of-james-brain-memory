@@ -89,6 +89,7 @@ const NAV_GROUPS: NavGroup[] = [
       { path: '/health', label: 'Health' },
       { path: '/crons', label: 'Crons' },
       { path: '/agents', label: 'Agents' },
+      { path: '/activity-live', label: 'Activity Live' },
     ],
   },
   {
@@ -152,6 +153,31 @@ function useUnresolvedUiErrors24h() {
   });
 }
 
+/**
+ * Unresolved ct_cron_failures in the last 24h — drives the red dot on the
+ * System dropdown so a silently-failed cron doesn't go unnoticed.
+ */
+function useUnresolvedCronFailures24h() {
+  return useQuery<number>({
+    queryKey: ['ct_cron_failures_unresolved_24h'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { count, error } = await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .from('ct_cron_failures' as any)
+        .select('id', { count: 'estimated', head: true })
+        .is('resolved_at', null)
+        .gte('detected_at', since);
+      if (error) {
+        console.warn('[TopNav] ct_cron_failures count failed:', error);
+        return 0;
+      }
+      return count ?? 0;
+    },
+  });
+}
+
 export function TopNav({ userId }: TopNavProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -164,6 +190,9 @@ export function TopNav({ userId }: TopNavProps) {
   const [healthAlerts, setHealthAlerts] = useState<{ id: string; title: string; body: string }[]>([]);
   const [mobileOpen, setMobileOpen] = useState(false);
   const { data: uiErrorCount = 0 } = useUnresolvedUiErrors24h();
+  const { data: cronFailCount = 0 } = useUnresolvedCronFailures24h();
+  // Anything in System that needs attention — UI crashes OR failed crons.
+  const systemAttentionCount = uiErrorCount + cronFailCount;
 
   // Last heartbeat insight
   useEffect(() => {
@@ -261,10 +290,13 @@ export function TopNav({ userId }: TopNavProps) {
                       >
                         <span className="inline-flex items-center gap-1.5">
                           {item.label}
-                          {item.path === '/health' && uiErrorCount > 0 && (
+                          {item.path === '/health' && systemAttentionCount > 0 && (
                             <span
                               className="w-1.5 h-1.5 rounded-full bg-red-500"
-                              title={`${uiErrorCount} unresolved UI crash${uiErrorCount > 1 ? 'es' : ''}`}
+                              title={[
+                                uiErrorCount > 0 && `${uiErrorCount} unresolved UI crash${uiErrorCount > 1 ? 'es' : ''}`,
+                                cronFailCount > 0 && `${cronFailCount} unresolved cron failure${cronFailCount > 1 ? 's' : ''}`,
+                              ].filter(Boolean).join(' · ')}
                             />
                           )}
                         </span>
@@ -293,8 +325,13 @@ export function TopNav({ userId }: TopNavProps) {
           const active = isGroupActive(group, location.pathname);
           const triggerLabel = group.label === 'More' ? 'More' : group.label;
           // Red dot: System contains Health, so show group-level indicator
-          // when there are unresolved UI crashes in the last 24h.
-          const showCrashDot = group.label === 'System' && uiErrorCount > 0;
+          // when there are unresolved UI crashes OR unresolved ct-* cron
+          // failures in the last 24h.
+          const showCrashDot = group.label === 'System' && systemAttentionCount > 0;
+          const crashDotTitle = [
+            uiErrorCount > 0 && `${uiErrorCount} unresolved UI crash${uiErrorCount > 1 ? 'es' : ''}`,
+            cronFailCount > 0 && `${cronFailCount} unresolved cron failure${cronFailCount > 1 ? 's' : ''}`,
+          ].filter(Boolean).join(' · ') || 'System attention';
           return (
             <DropdownMenu key={group.label}>
               <DropdownMenuTrigger asChild>
@@ -310,7 +347,7 @@ export function TopNav({ userId }: TopNavProps) {
                   {showCrashDot && (
                     <span
                       className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500 ring-2 ring-card"
-                      title={`${uiErrorCount} unresolved UI crash${uiErrorCount > 1 ? 'es' : ''} in the last 24h`}
+                      title={`${crashDotTitle} in the last 24h`}
                     />
                   )}
                 </button>
@@ -325,10 +362,10 @@ export function TopNav({ userId }: TopNavProps) {
                     >
                       <span className="inline-flex items-center gap-1.5">
                         {item.label}
-                        {item.path === '/health' && uiErrorCount > 0 && (
+                        {item.path === '/health' && systemAttentionCount > 0 && (
                           <span
                             className="w-1.5 h-1.5 rounded-full bg-red-500"
-                            title={`${uiErrorCount} unresolved UI crash${uiErrorCount > 1 ? 'es' : ''}`}
+                            title={crashDotTitle}
                           />
                         )}
                       </span>

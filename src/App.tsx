@@ -8,6 +8,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { RouteBoundary } from "./components/RouteBoundary";
 import { InstallPrompt } from "./components/InstallPrompt";
 import { ActivityTrackingProvider } from "./components/ActivityTrackingProvider";
+import { FreshnessClockProvider } from "./components/FreshnessClock";
 import { Ticker } from "./components/jac/Ticker";
 import { AuthLayout } from "./layouts/AuthLayout";
 import Dashboard from "./pages/Dashboard";
@@ -37,6 +38,7 @@ import Book from "./pages/Book";
 import Health from "./pages/Health";
 import Preflight from "./pages/Preflight";
 import SessionTimeline from "./pages/SessionTimeline";
+import ActivityLive from "./pages/ActivityLive";
 import Stress from "./pages/Stress";
 import TickerTerminal from "./pages/TickerTerminal";
 import TickerChart from "./pages/TickerChart";
@@ -80,6 +82,7 @@ const TrackedRoutes = () => {
       <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/health"><Health /></RouteBoundary></AuthLayout>} />
       <Route path="/preflight" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/preflight"><Preflight /></RouteBoundary></AuthLayout>} />
       <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/session"><SessionTimeline /></RouteBoundary></AuthLayout>} />
+      <Route path="/activity-live" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/activity-live"><ActivityLive /></RouteBoundary></AuthLayout>} />
       <Route path="/stress" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/stress"><Stress /></RouteBoundary></AuthLayout>} />
       <Route path="/ticker/:symbol" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/ticker/:symbol"><TickerTerminal /></RouteBoundary></AuthLayout>} />
       <Route path="/chart/:symbol/:date" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/chart/:symbol/:date"><TickerChart /></RouteBoundary></AuthLayout>} />
@@ -123,12 +126,14 @@ const App = () => (
     <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
-          <Toaster />
-          <Sonner />
-          <BrowserRouter>
-            <TrackedRoutes />
-            <InstallPrompt />
-          </BrowserRouter>
+          <FreshnessClockProvider>
+            <Toaster />
+            <Sonner />
+            <BrowserRouter>
+              <TrackedRoutes />
+              <InstallPrompt />
+            </BrowserRouter>
+          </FreshnessClockProvider>
         </TooltipProvider>
       </QueryClientProvider>
     </ThemeProvider>

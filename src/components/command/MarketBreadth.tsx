@@ -20,10 +20,12 @@
  */
 import { useMemo } from 'react';
 import { Card } from '@/components/ui/card';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import { Activity, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 import { ChartSafe } from '@/components/ChartSafe';
 import { useMarketBreadth } from '@/hooks/useMarketBreadth';
+import { useLatestHeartbeat } from '@/hooks/useCoTraderData';
 
 // ─── formatters ─────────────────────────────────────────────────────────────
 
@@ -57,6 +59,7 @@ function corrBarColor(label: 'high' | 'mixed' | 'divergent' | 'n/a'): string {
 
 export function MarketBreadth() {
   const b = useMarketBreadth();
+  const { data: latestHeartbeat } = useLatestHeartbeat();
 
   const warmingUp = !b.loading && !b.has_data;
 
@@ -80,6 +83,11 @@ export function MarketBreadth() {
         <span className="text-[10px] text-muted-foreground/70 ml-1">
           watchlist · {b.ticker_count}/12
         </span>
+        <FreshnessChip
+          timestamp={latestHeartbeat?.created_at ?? null}
+          label="heartbeat"
+          className={b.vix ? '' : 'ml-auto'}
+        />
         {b.vix && (
           <span
             className={`ml-auto inline-flex items-center gap-1 px-1.5 py-0 rounded text-[9px] font-semibold uppercase tracking-wider border ${

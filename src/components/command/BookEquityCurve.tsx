@@ -28,6 +28,8 @@ import {
 import { useBookEquityCurve } from '@/hooks/useBookEquityCurve';
 import { useDrawdownAlerts } from '@/hooks/useDrawdownAlerts';
 import { usePnlByTheme, formatBestWorstLine } from '@/components/command/PnLByTheme';
+import { FreshnessChip } from '@/components/FreshnessChip';
+import { useMemo } from 'react';
 
 const GREEN = '#00C853';
 const RED = '#FF1744';
@@ -75,10 +77,29 @@ function Stat({
 }
 
 export function BookEquityCurve() {
-  const { data, isLoading } = useBookEquityCurve();
+  const { data, isLoading, dataUpdatedAt } = useBookEquityCurve();
   const { data: themeRows } = usePnlByTheme('all');
   const { data: drawdownAlerts } = useDrawdownAlerts();
   const bestWorstLine = formatBestWorstLine(themeRows);
+
+  // Freshness anchor: max(closed_at, live_pnl_updated_at) across today's
+  // trades — i.e. the most recent real write to ct_trades. Falls back to
+  // the React Query dataUpdatedAt (last successful refetch) when there's
+  // no trade activity yet today, which is still a truthful "last pulled".
+  const bookTs = useMemo<string | null>(() => {
+    let maxMs = 0;
+    for (const t of data?.todayTrades ?? []) {
+      const candidates = [t.closed_at, t.live_pnl_updated_at, t.opened_at];
+      for (const c of candidates) {
+        if (!c) continue;
+        const m = Date.parse(c);
+        if (Number.isFinite(m) && m > maxMs) maxMs = m;
+      }
+    }
+    if (maxMs > 0) return new Date(maxMs).toISOString();
+    if (dataUpdatedAt) return new Date(dataUpdatedAt).toISOString();
+    return null;
+  }, [data?.todayTrades, dataUpdatedAt]);
 
   // Worst tier wins for the chip display (urgent > warn). Alerts are today-only.
   const urgentAlert = drawdownAlerts?.find(a => a.tier === 'urgent');
@@ -185,6 +206,7 @@ export function BookEquityCurve() {
           >
             full book <ArrowRight className="w-3 h-3" />
           </Link>
+          <FreshnessChip timestamp={bookTs} />
         </div>
         {bestWorstLine && (
           <div className="text-[10px] text-muted-foreground font-mono pl-6 truncate">

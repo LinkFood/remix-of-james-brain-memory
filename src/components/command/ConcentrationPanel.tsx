@@ -29,6 +29,8 @@ import {
 } from '@/components/ui/tooltip';
 import { Scale, AlertTriangle } from 'lucide-react';
 import { useConcentration, type ConcentrationSnapshot } from '@/hooks/useConcentration';
+import { FreshnessChip } from '@/components/FreshnessChip';
+import { useQueryFreshness } from '@/hooks/useFreshness';
 
 type Tier = 'green' | 'yellow' | 'orange' | 'red';
 
@@ -247,6 +249,10 @@ function DirectionColumn({ snap }: { snap: ConcentrationSnapshot }) {
 
 export function ConcentrationPanel() {
   const { data: snap, isLoading, error } = useConcentration();
+  // Snapshot has no per-row timestamp — use the query's dataUpdatedAt as a
+  // truthful "last recomputed" anchor (concentration is recomputed on every
+  // refetch of the underlying open trades + config).
+  const concUpdatedAt = useQueryFreshness(['ct_concentration_snapshot']);
 
   // Any currently-breached limit? Surface a banner so it's obvious. Note:
   // this is a VIEW — breaches on the live book don't force-close; new
@@ -289,6 +295,7 @@ export function ConcentrationPanel() {
               Changes from /ct-settings propagate within 60s.
             </TooltipContent>
           </Tooltip>
+          <FreshnessChip timestamp={concUpdatedAt} />
         </div>
 
         {isLoading && (

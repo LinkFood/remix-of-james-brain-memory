@@ -22,6 +22,7 @@ import {
   LabelList,
 } from 'recharts';
 import type { CalibrationBucket } from '@/hooks/useCalibration';
+import { FreshnessChip } from '@/components/FreshnessChip';
 
 const GREEN = '#00C853';
 const RED = '#FF1744';
@@ -38,6 +39,8 @@ interface CalibrationChartProps {
   /** X-axis label for the bucket dimension, e.g. "conviction" or "attention score". */
   xLabel?: string;
   height?: number;
+  /** Optional: anchor for the freshness chip in the header (e.g. latest graded_at). */
+  updatedAt?: Date | string | number | null;
 }
 
 function pct(n: number): string {
@@ -65,6 +68,7 @@ export function CalibrationChart({
   showIdealLine,
   xLabel,
   height = 220,
+  updatedAt,
 }: CalibrationChartProps) {
   const hasIdeal = buckets.some((b) => b.ideal != null);
   const drawIdeal = showIdealLine ?? hasIdeal;
@@ -98,6 +102,7 @@ export function CalibrationChart({
         <span className="ml-auto text-[10px] text-muted-foreground font-mono">
           n={totalSamples}
         </span>
+        {updatedAt !== undefined && <FreshnessChip timestamp={updatedAt ?? null} />}
       </div>
 
       {populated.length === 0 ? (

@@ -51,6 +51,7 @@ export interface PreflightDetail {
 
 export type CheckKey =
   | 'crons'
+  | 'cron_failures_6h'
   | 'morning_brief'
   | 'book'
   | 'uw_usage'
@@ -259,6 +260,88 @@ async function runCronCheck(now: Date): Promise<PreflightCheck> {
       name: 'Crons healthy',
       status: 'red',
       explanation: 'Failed to query cron status',
+      lastCheckedAt: startedIso,
+      details: [],
+      error: message,
+    };
+  }
+}
+
+/**
+ * runCronFailuresCheck — red if any ct_cron_failures rows with resolved_at
+ * IS NULL exist inside the last 6h window. This is the proactive companion
+ * to runCronCheck: that one asks "are the crons alive right now?"; this
+ * one asks "did any cron fall over since I last looked?"
+ *
+ * The 6h window matches the pre-bell cadence — James is looking back at
+ * overnight/premarket activity, and rows older than that are either
+ * resolved, stale-noise, or already reflected in the live cron check.
+ */
+async function runCronFailuresCheck(): Promise<PreflightCheck> {
+  const startedIso = new Date().toISOString();
+  try {
+    const since = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .from('ct_cron_failures' as any)
+      .select('id, cron_name, status, detected_at, last_run_at, resolved_at')
+      .is('resolved_at', null)
+      .gte('detected_at', since)
+      .order('detected_at', { ascending: false })
+      .limit(25);
+
+    if (error) throw error;
+
+    const rows = (data ?? []) as unknown as Array<{
+      id: string;
+      cron_name: string;
+      status: 'failed' | 'stale' | 'never_ran';
+      detected_at: string;
+      last_run_at: string | null;
+      resolved_at: string | null;
+    }>;
+
+    // Dedupe by (cron_name, status) so a repeated 10m-cron detection doesn't
+    // balloon the count. Same logic the /health section uses.
+    const seen = new Set<string>();
+    const deduped: typeof rows = [];
+    for (const r of rows) {
+      const k = `${r.cron_name}:${r.status}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      deduped.push(r);
+    }
+
+    if (deduped.length === 0) {
+      return {
+        key: 'cron_failures_6h',
+        name: 'No failed ct-* crons last 6h',
+        status: 'green',
+        explanation: 'No unresolved cron failures in the last 6 hours',
+        lastCheckedAt: startedIso,
+        details: [],
+      };
+    }
+
+    return {
+      key: 'cron_failures_6h',
+      name: 'No failed ct-* crons last 6h',
+      status: 'red',
+      explanation: `${deduped.length} unresolved cron failure${deduped.length > 1 ? 's' : ''} in last 6h`,
+      lastCheckedAt: startedIso,
+      details: deduped.slice(0, 10).map((r) => ({
+        label: r.cron_name,
+        status: 'red' as const,
+        note: `${r.status} · detected ${new Date(r.detected_at).toLocaleTimeString()}`,
+      })),
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      key: 'cron_failures_6h',
+      name: 'No failed ct-* crons last 6h',
+      status: 'red',
+      explanation: 'Failed to query ct_cron_failures',
       lastCheckedAt: startedIso,
       details: [],
       error: message,
@@ -863,6 +946,7 @@ export function usePreflightChecks(options?: { refreshMs?: number }): PreflightR
     // contained inside the check function (try/catch → red card).
     const results = await Promise.all([
       runCronCheck(now),
+      runCronFailuresCheck(),
       runMorningBriefCheck(now),
       runBookCheck(),
       runUwUsageCheck(),

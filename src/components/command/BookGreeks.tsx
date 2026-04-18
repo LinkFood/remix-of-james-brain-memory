@@ -39,6 +39,7 @@ import {
   TooltipProvider,
 } from '@/components/ui/tooltip';
 import { Activity, AlertTriangle } from 'lucide-react';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import {
   LineChart,
   Line,
@@ -355,6 +356,7 @@ export function BookGreeks() {
               would be orders of magnitude larger.
             </TooltipContent>
           </Tooltip>
+          <FreshnessChip timestamp={latest?.captured_at ?? null} />
         </div>
 
         {isLoading && (

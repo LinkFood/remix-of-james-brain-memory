@@ -21,6 +21,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Check, Copy, Loader2, MessageSquare, Send, Trash2 } from 'lucide-react';
+import { FreshnessChip } from '@/components/FreshnessChip';
 
 interface ProposalCard {
   instrument: string;
@@ -656,6 +657,10 @@ export function ChatPanel() {
           {messages.length > 0 && (
             <span className="text-[10px] text-muted-foreground">{messages.length} messages</span>
           )}
+          <FreshnessChip
+            timestamp={messages[messages.length - 1]?.ts ?? null}
+            label="last msg"
+          />
         </div>
         {messages.length > 0 && (
           <Button

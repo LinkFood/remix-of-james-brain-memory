@@ -17,9 +17,10 @@
  * No new UW calls — consumes useGexRadar which already fetches
  * option-contracts + spot-exposures for SPY/QQQ/IWM.
  */
-import { memo } from 'react';
+import { memo, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import {
   useGexRadar,
   type GexComboVerdict,
@@ -329,6 +330,27 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
   const hasFlips = flips.length > 0;
   const hasIvShifts = ivShifts.length > 0;
 
+  // Freshness anchor: max of the three feeds' most-recent event timestamps.
+  // Multi-source panel — show the most recent event rather than the oldest,
+  // since "the strip is live if ANY signal updated recently".
+  const latestTs = useMemo(() => {
+    const candidates: number[] = [];
+    if (data?.generated_at) {
+      const t = Date.parse(data.generated_at);
+      if (Number.isFinite(t)) candidates.push(t);
+    }
+    for (const f of flips) {
+      const t = Date.parse(f.created_at);
+      if (Number.isFinite(t)) candidates.push(t);
+    }
+    for (const s of ivShifts) {
+      const t = Date.parse(s.created_at);
+      if (Number.isFinite(t)) candidates.push(t);
+    }
+    if (candidates.length === 0) return null;
+    return new Date(Math.max(...candidates)).toISOString();
+  }, [data?.generated_at, flips, ivShifts]);
+
   // If every ticker came back LEAN/NEUTRAL AND there are no regime flips
   // AND no IV shifts: show the muted pill.
   if (!hasStructural && !hasFlips && !hasIvShifts) {
@@ -338,6 +360,7 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-medium text-white/50 bg-white/5 border border-white/10">
           no structural signals — consolidation
         </span>
+        <FreshnessChip timestamp={latestTs} className="ml-auto" />
       </div>
     );
   }
@@ -356,6 +379,7 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
           <IvShiftPill key={s.id} shift={s} onOpen={onOpenDeep} />
         ))}
       </div>
+      <FreshnessChip timestamp={latestTs} className="ml-auto shrink-0" />
     </div>
   );
 });

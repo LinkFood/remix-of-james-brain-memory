@@ -79,6 +79,7 @@ import {
   useTopAttention,
 } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import { Activity, TrendingUp, TrendingDown, Minus, Flame, Clock, AlertTriangle } from 'lucide-react';
 import { GexMiniChart } from './GexMiniChart';
 
@@ -262,11 +263,14 @@ export function MarketBanner() {
       <div className="flex items-center gap-2 mb-3">
         <Activity className="w-4 h-4 text-primary" />
         <h2 className="text-sm font-semibold text-foreground">Market State</h2>
-        {heartbeat && (
-          <span className="text-xs text-muted-foreground ml-auto font-mono tabular-nums">
-            pulse {relativeTime(heartbeat.created_at)}
-          </span>
-        )}
+        <div className="ml-auto flex items-center gap-2">
+          {heartbeat && (
+            <span className="text-xs text-muted-foreground font-mono tabular-nums">
+              pulse {relativeTime(heartbeat.created_at)}
+            </span>
+          )}
+          <FreshnessChip timestamp={heartbeat?.created_at ?? null} label="heartbeat" />
+        </div>
       </div>
 
       {isLoading ? (

@@ -52,6 +52,7 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import {
   Table,
   TableBody,
@@ -212,6 +213,20 @@ function CronsSection({ crons }: { crons: HealthCronRow[] }) {
     return { ok, fail, never };
   }, [crons]);
 
+  // Most recent cron run across the fleet — a proxy for "the scheduler is
+  // still alive". Using max rather than the oldest here: one stale cron among
+  // 80 doesn't mean the dashboard is stale, but "nothing has run in 20 min"
+  // does.
+  const latestRun = useMemo(() => {
+    let maxMs = 0;
+    for (const c of crons) {
+      if (!c.last_run_at) continue;
+      const t = Date.parse(c.last_run_at);
+      if (Number.isFinite(t) && t > maxMs) maxMs = t;
+    }
+    return maxMs > 0 ? new Date(maxMs).toISOString() : null;
+  }, [crons]);
+
   return (
     <Card className="overflow-hidden">
       <div className="px-4 py-3 border-b bg-muted/30 flex items-center gap-2">
@@ -224,6 +239,7 @@ function CronsSection({ crons }: { crons: HealthCronRow[] }) {
           <span className="text-emerald-400 tabular-nums">{counts.ok} ok</span>
           <span className="text-red-400 tabular-nums">{counts.fail} failed</span>
           <span className="text-muted-foreground tabular-nums">{counts.never} never</span>
+          <FreshnessChip timestamp={latestRun} label="last run" />
         </div>
       </div>
       {crons.length === 0 ? (
@@ -313,6 +329,7 @@ function UwSection({
             {tier.label}
           </span>
         )}
+        <FreshnessChip timestamp={latest?.observed_at ?? null} className={latest ? '' : 'ml-auto'} />
       </div>
       <div className="p-4 space-y-4">
         {!latest ? (
@@ -382,10 +399,12 @@ function ClaudeCostSection({
   todayTotal,
   todayBySource,
   daily,
+  claudeUpdatedAt,
 }: {
   todayTotal: ClaudeUsageDailyTotal | null;
   todayBySource: ClaudeUsageBySource[];
   daily: ClaudeUsageDailyTotal[];
+  claudeUpdatedAt: number | null;
 }) {
   const chartData = daily.map((d) => ({
     date: d.session_date.slice(5),
@@ -401,6 +420,7 @@ function ClaudeCostSection({
         <DollarSign className="w-4 h-4 text-primary" />
         <span className="text-sm font-semibold">Claude Cost</span>
         <span className="text-[11px] text-muted-foreground ml-2">ct_claude_usage · per function</span>
+        <FreshnessChip timestamp={claudeUpdatedAt} className="ml-auto" />
       </div>
       <div className="p-4 space-y-3">
         <div className="grid grid-cols-3 gap-3">
@@ -976,6 +996,143 @@ function WatcherObservabilitySection() {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Section: Cron health (ct_cron_failures) — unresolved non-healthy crons in
+// the last 24h, with a "Resolve" button. Populated by ct-cron-health-check.
+// ---------------------------------------------------------------------------
+
+interface CronFailureRow {
+  id: string;
+  created_at: string;
+  detected_at: string;
+  cron_name: string;
+  status: 'failed' | 'stale' | 'never_ran';
+  last_run_at: string | null;
+  last_run_status: string | null;
+  slack_pushed_at: string | null;
+  resolved_at: string | null;
+}
+
+function useCronFailures24h() {
+  return useQuery<CronFailureRow[]>({
+    queryKey: ['ct_cron_failures_24h'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data, error } = await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .from('ct_cron_failures' as any)
+        .select('id, created_at, detected_at, cron_name, status, last_run_at, last_run_status, slack_pushed_at, resolved_at')
+        .is('resolved_at', null)
+        .gte('detected_at', since)
+        .order('detected_at', { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return (data ?? []) as unknown as CronFailureRow[];
+    },
+  });
+}
+
+function CronHealthSection() {
+  const { data: rows, isLoading } = useCronFailures24h();
+  const qc = useQueryClient();
+
+  const resolve = async (id: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('ct_cron_failures' as any) as any)
+      .update({ resolved_at: new Date().toISOString() })
+      .eq('id', id);
+    if (error) {
+      console.warn('[Health] resolve ct_cron_failures failed:', error);
+      return;
+    }
+    qc.invalidateQueries({ queryKey: ['ct_cron_failures_24h'] });
+    qc.invalidateQueries({ queryKey: ['ct_cron_failures_unresolved_24h'] });
+  };
+
+  // Dedupe by (cron_name, status) so a 10m-cron emitting the same 'stale'
+  // detection every tick doesn't spam the section. Show the newest row only.
+  const deduped = useMemo(() => {
+    if (!rows) return [];
+    const seen = new Set<string>();
+    const out: CronFailureRow[] = [];
+    for (const r of rows) {
+      const k = `${r.cron_name}:${r.status}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(r);
+    }
+    return out;
+  }, [rows]);
+
+  const statusColor = (s: CronFailureRow['status']): string =>
+    s === 'failed' ? 'text-red-400'
+    : s === 'stale' ? 'text-amber-300'
+    : 'text-yellow-300';
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-4 py-3 border-b bg-muted/30 flex items-center gap-2">
+        <AlertCircle className="w-4 h-4 text-primary" />
+        <span className="text-sm font-semibold">Cron health</span>
+        <span className="text-[11px] text-muted-foreground ml-2">
+          unresolved ct-* failures · last 24h
+        </span>
+        {deduped.length > 0 && (
+          <span className="ml-auto text-[11px] text-red-400 font-semibold tabular-nums">
+            {deduped.length} degraded
+          </span>
+        )}
+      </div>
+      {isLoading ? (
+        <div className="p-6 text-center text-xs text-muted-foreground">Loading…</div>
+      ) : deduped.length === 0 ? (
+        <div className="p-6 text-center text-xs text-muted-foreground">
+          All ct-* crons healthy in the last 24h.
+        </div>
+      ) : (
+        <div className="divide-y divide-border max-h-[320px] overflow-y-auto">
+          {deduped.map((r) => (
+            <div key={r.id} className="px-3 py-2 flex items-center gap-2 text-[11px]">
+              <span className={cn('font-mono font-semibold shrink-0', statusColor(r.status))}>
+                {r.status}
+              </span>
+              <span className="font-mono text-foreground truncate max-w-[260px]">
+                {r.cron_name}
+              </span>
+              <span className="text-muted-foreground truncate min-w-0 flex-1">
+                {r.last_run_at
+                  ? `last run ${timeAgo(r.last_run_at)}${r.last_run_status ? ` (${r.last_run_status})` : ''}`
+                  : 'never ran'}
+              </span>
+              <span className="text-muted-foreground text-[10px] shrink-0">
+                detected {timeAgo(r.detected_at)}
+              </span>
+              {r.slack_pushed_at ? (
+                <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono shrink-0">
+                  slacked
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono shrink-0 text-muted-foreground">
+                  deduped
+                </Badge>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-[10px]"
+                onClick={() => resolve(r.id)}
+              >
+                Resolve
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Section: Recent UI crashes (ct_ui_errors)
 // ---------------------------------------------------------------------------
 
@@ -1299,8 +1456,11 @@ export default function Health() {
             </p>
           </div>
           {dataUpdatedAt > 0 && (
-            <div className="text-[11px] text-muted-foreground tabular-nums">
-              updated {timeAgo(new Date(dataUpdatedAt).toISOString())}
+            <div className="flex items-center gap-2">
+              <div className="text-[11px] text-muted-foreground tabular-nums">
+                updated {timeAgo(new Date(dataUpdatedAt).toISOString())}
+              </div>
+              <FreshnessChip timestamp={dataUpdatedAt} />
             </div>
           )}
         </header>
@@ -1329,6 +1489,7 @@ export default function Health() {
                 todayTotal={data.claudeTodayTotal}
                 todayBySource={data.claudeTodayBySource}
                 daily={data.claudeDailyTotals}
+                claudeUpdatedAt={dataUpdatedAt > 0 ? dataUpdatedAt : null}
               />
             </div>
 
@@ -1337,6 +1498,9 @@ export default function Health() {
               <AttentionSection buckets={data.attentionBuckets} total={data.attentionTotal} />
               <McpCallsSection calls={data.mcpCalls} />
             </div>
+
+            {/* Row 2.4: Cron health — unresolved ct-* failures */}
+            <CronHealthSection />
 
             {/* Row 2.5: Recent UI crashes */}
             <UiErrorsSection />

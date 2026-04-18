@@ -30,10 +30,12 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import {
   useAttentionLeaderboard,
   type LeaderboardEntry,
 } from '@/hooks/useAttentionLeaderboard';
+import { useTopAttention } from '@/hooks/useCoTraderData';
 
 // Color tiers — picked to read at a glance, no text needed to distinguish.
 // Matches the "heat" vocabulary: red = drop-what-you're-doing, grey = background.
@@ -120,6 +122,10 @@ export const AttentionLeaderboard = memo(function AttentionLeaderboard({
   windowMinutes = 30,
 }: Props) {
   const { data, isLoading } = useAttentionLeaderboard(windowMinutes);
+  // Latest attention-producing row (any score) for the freshness anchor.
+  // Reuses useTopAttention with minScore=0 so it returns the newest event
+  // regardless of score — cheap, just one extra view read.
+  const { data: latestRow } = useTopAttention(windowMinutes, 0);
 
   if (isLoading && data.length === 0) {
     return (
@@ -146,6 +152,7 @@ export const AttentionLeaderboard = memo(function AttentionLeaderboard({
           <AttentionPill key={e.ticker} entry={e} />
         ))}
       </div>
+      <FreshnessChip timestamp={latestRow?.created_at ?? null} className="ml-auto shrink-0" />
     </div>
   );
 });

@@ -28,6 +28,7 @@ import { RegimeConditionalPanel } from '@/components/scorecard/RegimeConditional
 import { HourlyPerformancePanel } from '@/components/scorecard/HourlyPerformancePanel';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 import { useCalibration } from '@/hooks/useCalibration';
+import { useQueryFreshness } from '@/hooks/useFreshness';
 import { useClaudesSurprises } from '@/hooks/useClaudesSurprises';
 import { usePromptAbTest } from '@/hooks/usePromptAbTest';
 import { Link } from 'react-router-dom';
@@ -167,6 +168,7 @@ export function Scorecard() {
   // New structured calibration: conviction buckets (1-5) + attention_score buckets (0-20..80-100).
   // Uses ct_flags.conviction/attention_score and ct_alerts.conviction/attention_score joined to ct_grades.
   const { data: calibrationCurves } = useCalibration();
+  const calibrationUpdatedAt = useQueryFreshness(['ct_calibration']);
 
   // Surprise deltas — over/underconfidence counts drive the header bias stat.
   const { data: surprises } = useClaudesSurprises();
@@ -460,12 +462,14 @@ export function Scorecard() {
               subtitle="stated 1-5 vs actual hit rate · dashed line = ideal"
               buckets={calibrationCurves?.conviction ?? []}
               xLabel="conviction"
+              updatedAt={calibrationUpdatedAt}
             />
             <CalibrationChart
               title="Attention-Score Calibration"
               subtitle="0-100 buckets vs actual hit rate"
               buckets={calibrationCurves?.attention ?? []}
               xLabel="attention score"
+              updatedAt={calibrationUpdatedAt}
             />
           </div>
 

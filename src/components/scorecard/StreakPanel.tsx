@@ -16,6 +16,7 @@ import { useMemo } from 'react';
 import { Card } from '@/components/ui/card';
 import { Flame, AlertTriangle, TrendingUp, TrendingDown, Activity, ArrowRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import {
   useStreaks,
   nextOutcomeAfterNWrong,
@@ -142,6 +143,10 @@ export function StreakPanel() {
     return { n, ...nextOutcomeAfterNWrong(allCombined, n) };
   }, [data]);
 
+  // Most recent graded dot's timestamp anchors freshness — combined.recent
+  // is ordered DESC in useStreaks so [0] is the latest verdict the user sees.
+  const latestGradedAt = combined?.recent?.[0]?.graded_at ?? null;
+
   return (
     <Card id="streaks" className="p-4 scroll-mt-4">
       <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
@@ -149,6 +154,7 @@ export function StreakPanel() {
         <span className="normal-case tracking-normal text-muted-foreground/70">
           — psychology surface: 3 wrong in a row or &le;40% over last 5 → pause signal
         </span>
+        <FreshnessChip timestamp={latestGradedAt} className="ml-auto" />
       </div>
 
       {isLoading ? (

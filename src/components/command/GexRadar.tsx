@@ -19,6 +19,7 @@
 import { memo, useMemo, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
+import { FreshnessChip } from '@/components/FreshnessChip';
 import { useGexRadar, type GexRadarTicker, type GexRadarStrike } from '@/hooks/useGexRadar';
 import { LinkGexDeep } from './LinkGexDeep';
 
@@ -342,11 +343,14 @@ export const GexRadar = memo(function GexRadar({
               Dealer gamma + OI velocity · {tickers.join(' · ')} · click a ticker for LinkGex deep
             </p>
           </div>
-          {data?.generated_at && (
-            <span className="text-[10px] text-muted-foreground tabular-nums">
-              {new Date(data.generated_at).toLocaleTimeString('en-US', { hour12: false })}
-            </span>
-          )}
+          <div className="flex items-center gap-2">
+            {data?.generated_at && (
+              <span className="text-[10px] text-muted-foreground tabular-nums">
+                {new Date(data.generated_at).toLocaleTimeString('en-US', { hour12: false })}
+              </span>
+            )}
+            <FreshnessChip timestamp={data?.generated_at ?? null} />
+          </div>
         </div>
 
         {isError && (
