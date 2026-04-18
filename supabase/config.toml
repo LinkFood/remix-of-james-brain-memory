@@ -290,3 +290,15 @@ verify_jwt = false
 
 [functions.ct-dream]
 verify_jwt = false
+
+[functions.ct-hypothesis-health-check]
+verify_jwt = false
+
+[functions.ct-hypothesis-confidence-update]
+verify_jwt = false
+
+[functions.ct-hypothesis-reaper]
+verify_jwt = false
+
+[functions.ct-hypothesis-proposer]
+verify_jwt = false
