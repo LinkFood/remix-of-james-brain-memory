@@ -19,6 +19,7 @@ import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_sh
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { POST_MORTEM_SYSTEM } from '../_shared/ctPrompts.ts';
+import { firePostTradeQuality } from '../_shared/tradeQuality.ts';
 
 const SYSTEM_PROMPT = `You manage a live paper book. 15min has passed. Each open trade has current price, unrealized P&L, and a reason it was opened.
 
@@ -62,6 +63,8 @@ interface OpenTrade {
   status: string;
   contract_type: 'underlying' | 'call' | 'put';
   entry_premium: number | null;
+  pre_trade_quality: number | null;
+  pre_trade_quality_reasoning: string | null;
 }
 
 interface Action {
@@ -193,6 +196,24 @@ async function checkHardStops(
     closedAt,
     contractType: trade.contract_type,
   });
+  firePostTradeQuality(supabase, {
+    tradeId: trade.id,
+    instrument: trade.instrument,
+    side: trade.side,
+    entry_price: trade.entry_price,
+    stop_price: trade.stop_price,
+    target_price: trade.target_price,
+    close_price: currentPrice,
+    close_reason: reason,
+    realized_pnl_pct: +pct.toFixed(3),
+    thesis: trade.thesis,
+    opened_at: trade.opened_at,
+    closed_at: closedAt,
+    pre_trade_quality: trade.pre_trade_quality,
+    pre_trade_quality_reasoning: trade.pre_trade_quality_reasoning,
+    contract_type: trade.contract_type,
+    source: 'book-manager-hard-stop',
+  });
   return true;
 }
 
@@ -276,7 +297,7 @@ serve(async (req) => {
   // Flip any 'planned' trades to 'open' at current (fill) price on the first tick
   const { data: planned } = await supabase
     .from('ct_trades')
-    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium')
+    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium, pre_trade_quality, pre_trade_quality_reasoning')
     .eq('session_date', sessionDate)
     .eq('status', 'planned');
 
@@ -328,7 +349,7 @@ serve(async (req) => {
   // Pull current open book
   const { data: openTrades } = await supabase
     .from('ct_trades')
-    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium')
+    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium, pre_trade_quality, pre_trade_quality_reasoning')
     .eq('session_date', sessionDate)
     .eq('status', 'open');
 
@@ -374,7 +395,7 @@ serve(async (req) => {
   // Re-pull open after stops/targets
   const { data: stillOpen } = await supabase
     .from('ct_trades')
-    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium')
+    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium, pre_trade_quality, pre_trade_quality_reasoning')
     .eq('session_date', sessionDate)
     .eq('status', 'open');
 
@@ -461,6 +482,15 @@ serve(async (req) => {
         realizedPnlPct: +pct.toFixed(3), openedAt: trade.opened_at, closedAt: now,
         contractType: trade.contract_type,
       });
+      firePostTradeQuality(supabase, {
+        tradeId: trade.id, instrument: trade.instrument, side: trade.side,
+        entry_price: trade.entry_price, stop_price: trade.stop_price, target_price: trade.target_price,
+        close_price: price, close_reason: 'manual_cut', realized_pnl_pct: +pct.toFixed(3),
+        thesis: trade.thesis, opened_at: trade.opened_at, closed_at: now,
+        pre_trade_quality: trade.pre_trade_quality,
+        pre_trade_quality_reasoning: trade.pre_trade_quality_reasoning,
+        contract_type: trade.contract_type, source: 'book-manager-cut',
+      });
       closed++;
     } else if (a.action === 'scale_out') {
       const delta = Math.abs(a.delta_size_pct ?? 10);
@@ -474,6 +504,15 @@ serve(async (req) => {
           thesis: trade.thesis, exit: price, closeReason: 'scaled_to_zero',
           realizedPnlPct: +pct.toFixed(3), openedAt: trade.opened_at, closedAt: now,
           contractType: trade.contract_type,
+        });
+        firePostTradeQuality(supabase, {
+          tradeId: trade.id, instrument: trade.instrument, side: trade.side,
+          entry_price: trade.entry_price, stop_price: trade.stop_price, target_price: trade.target_price,
+          close_price: price, close_reason: 'scaled_to_zero', realized_pnl_pct: +pct.toFixed(3),
+          thesis: trade.thesis, opened_at: trade.opened_at, closed_at: now,
+          pre_trade_quality: trade.pre_trade_quality,
+          pre_trade_quality_reasoning: trade.pre_trade_quality_reasoning,
+          contract_type: trade.contract_type, source: 'book-manager-scale-zero',
         });
         closed++;
       } else {
@@ -496,6 +535,15 @@ serve(async (req) => {
         thesis: trade.thesis, exit: price, closeReason: 'flipped',
         realizedPnlPct: +pct.toFixed(3), openedAt: trade.opened_at, closedAt: now,
         contractType: trade.contract_type,
+      });
+      firePostTradeQuality(supabase, {
+        tradeId: trade.id, instrument: trade.instrument, side: trade.side,
+        entry_price: trade.entry_price, stop_price: trade.stop_price, target_price: trade.target_price,
+        close_price: price, close_reason: 'flipped', realized_pnl_pct: +pct.toFixed(3),
+        thesis: trade.thesis, opened_at: trade.opened_at, closed_at: now,
+        pre_trade_quality: trade.pre_trade_quality,
+        pre_trade_quality_reasoning: trade.pre_trade_quality_reasoning,
+        contract_type: trade.contract_type, source: 'book-manager-flip',
       });
       await supabase.from('ct_trades').insert({
         session_date: sessionDate,

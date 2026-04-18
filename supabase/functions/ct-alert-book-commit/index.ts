@@ -34,6 +34,7 @@ import { writeTradeAudit, deriveMarketRegime, shapeMcpCalls } from '../_shared/t
 import { checkConcentration } from '../_shared/concentration.ts';
 import { preTradeCheck, type Check } from '../_shared/preTradeGate.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import { firePreTradeQuality } from '../_shared/tradeQuality.ts';
 
 const WATCHLIST = new Set([
   'SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT',
@@ -402,6 +403,34 @@ serve(async (req) => {
       action: 'alert_commit',
       price,
       rationale: firstGlance || `alert ${alert.id} → ${side} ${instrument} @ ${price}`,
+    });
+
+    // Fire-and-forget pre-trade quality rating. Alert-sourced trades are
+    // hard-coded conviction=5 and 20% sizing — a perfect test case for "is
+    // Claude rating his own setups honestly or always 10/10?". Outcome-blind
+    // grade written to pre_trade_quality; re-rated on close.
+    firePreTradeQuality(supabase, {
+      tradeId:       tradeId,
+      instrument,
+      side,
+      size_pct:      sizePct,
+      entry_price:   price,
+      stop_price:    setup.stop_level ?? null,
+      target_price:  setup.target_level ?? null,
+      thesis,
+      conviction:    5,
+      contract_type: 'underlying',
+      source:        'alert-book-commit',
+      context: {
+        alert_id: alert.id,
+        alert_trigger: alert.alert_trigger,
+        direction: alert.direction,
+        up_case: alert.up_case,
+        down_case: alert.down_case,
+        glance: alert.glance,
+        active_biases: allActiveBiases,
+        market_regime: marketRegime,
+      },
     });
 
     // Slack push — best effort.

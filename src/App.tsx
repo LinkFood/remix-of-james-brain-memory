@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { RouteBoundary } from "./components/RouteBoundary";
 import { InstallPrompt } from "./components/InstallPrompt";
 import { ActivityTrackingProvider } from "./components/ActivityTrackingProvider";
 import { Ticker } from "./components/jac/Ticker";
@@ -59,38 +60,38 @@ const TrackedRoutes = () => {
   const routes = (
     <Routes>
       {/* Public routes */}
-      <Route path="/welcome" element={<Landing />} />
-      <Route path="/auth" element={<Auth />} />
-      <Route path="/terms" element={<Terms />} />
-      <Route path="/privacy" element={<Privacy />} />
+      <Route path="/welcome" element={<RouteBoundary route="/welcome"><Landing /></RouteBoundary>} />
+      <Route path="/auth" element={<RouteBoundary route="/auth"><Auth /></RouteBoundary>} />
+      <Route path="/terms" element={<RouteBoundary route="/terms"><Terms /></RouteBoundary>} />
+      <Route path="/privacy" element={<RouteBoundary route="/privacy"><Privacy /></RouteBoundary>} />
 
       {/* Primary authenticated route — co-trader with docked ChatPanel in sidebar slot */}
-      <Route path="/" element={<AuthLayout sidebar={<ChatPanel />}><CommandStation /></AuthLayout>} />
-      <Route path="/scorecard" element={<AuthLayout sidebar={<ChatPanel />}><Scorecard /></AuthLayout>} />
-      <Route path="/prompts" element={<AuthLayout sidebar={<ChatPanel />}><PromptAbTest /></AuthLayout>} />
-      <Route path="/book" element={<AuthLayout sidebar={<ChatPanel />}><Book /></AuthLayout>} />
-      <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><Health /></AuthLayout>} />
-      <Route path="/preflight" element={<AuthLayout sidebar={<ChatPanel />}><Preflight /></AuthLayout>} />
-      <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><SessionTimeline /></AuthLayout>} />
-      <Route path="/stress" element={<AuthLayout sidebar={<ChatPanel />}><Stress /></AuthLayout>} />
-      <Route path="/ticker/:symbol" element={<AuthLayout sidebar={<ChatPanel />}><TickerTerminal /></AuthLayout>} />
+      <Route path="/" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/"><CommandStation /></RouteBoundary></AuthLayout>} />
+      <Route path="/scorecard" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/scorecard"><Scorecard /></RouteBoundary></AuthLayout>} />
+      <Route path="/prompts" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/prompts"><PromptAbTest /></RouteBoundary></AuthLayout>} />
+      <Route path="/book" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/book"><Book /></RouteBoundary></AuthLayout>} />
+      <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/health"><Health /></RouteBoundary></AuthLayout>} />
+      <Route path="/preflight" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/preflight"><Preflight /></RouteBoundary></AuthLayout>} />
+      <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/session"><SessionTimeline /></RouteBoundary></AuthLayout>} />
+      <Route path="/stress" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/stress"><Stress /></RouteBoundary></AuthLayout>} />
+      <Route path="/ticker/:symbol" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/ticker/:symbol"><TickerTerminal /></RouteBoundary></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
-      <Route path="/dashboard" element={<AuthLayout><Dashboard /></AuthLayout>} />
-      <Route path="/code" element={<AuthLayout><CodeWorkspace /></AuthLayout>} />
-      <Route path="/jac" element={<AuthLayout><Jac /></AuthLayout>} />
-      <Route path="/settings" element={<AuthLayout><Settings /></AuthLayout>} />
-      <Route path="/ct-settings" element={<AuthLayout><CtSettings /></AuthLayout>} />
-      <Route path="/calendar" element={<AuthLayout><Calendar /></AuthLayout>} />
-      <Route path="/search" element={<AuthLayout><Search /></AuthLayout>} />
-      <Route path="/activity" element={<AuthLayout><ActivityLog /></AuthLayout>} />
-      <Route path="/agents" element={<AuthLayout><Agents /></AuthLayout>} />
-      <Route path="/brain" element={<AuthLayout><BrainInspector /></AuthLayout>} />
-      <Route path="/crons" element={<AuthLayout><CronJobs /></AuthLayout>} />
-      <Route path="/reports" element={<AuthLayout><Reports /></AuthLayout>} />
-      <Route path="/replay" element={<AuthLayout><Replay /></AuthLayout>} />
+      <Route path="/dashboard" element={<AuthLayout><RouteBoundary route="/dashboard"><Dashboard /></RouteBoundary></AuthLayout>} />
+      <Route path="/code" element={<AuthLayout><RouteBoundary route="/code"><CodeWorkspace /></RouteBoundary></AuthLayout>} />
+      <Route path="/jac" element={<AuthLayout><RouteBoundary route="/jac"><Jac /></RouteBoundary></AuthLayout>} />
+      <Route path="/settings" element={<AuthLayout><RouteBoundary route="/settings"><Settings /></RouteBoundary></AuthLayout>} />
+      <Route path="/ct-settings" element={<AuthLayout><RouteBoundary route="/ct-settings"><CtSettings /></RouteBoundary></AuthLayout>} />
+      <Route path="/calendar" element={<AuthLayout><RouteBoundary route="/calendar"><Calendar /></RouteBoundary></AuthLayout>} />
+      <Route path="/search" element={<AuthLayout><RouteBoundary route="/search"><Search /></RouteBoundary></AuthLayout>} />
+      <Route path="/activity" element={<AuthLayout><RouteBoundary route="/activity"><ActivityLog /></RouteBoundary></AuthLayout>} />
+      <Route path="/agents" element={<AuthLayout><RouteBoundary route="/agents"><Agents /></RouteBoundary></AuthLayout>} />
+      <Route path="/brain" element={<AuthLayout><RouteBoundary route="/brain"><BrainInspector /></RouteBoundary></AuthLayout>} />
+      <Route path="/crons" element={<AuthLayout><RouteBoundary route="/crons"><CronJobs /></RouteBoundary></AuthLayout>} />
+      <Route path="/reports" element={<AuthLayout><RouteBoundary route="/reports"><Reports /></RouteBoundary></AuthLayout>} />
+      <Route path="/replay" element={<AuthLayout><RouteBoundary route="/replay"><Replay /></RouteBoundary></AuthLayout>} />
 
-      <Route path="*" element={<NotFound />} />
+      <Route path="*" element={<RouteBoundary route="*"><NotFound /></RouteBoundary>} />
     </Routes>
   );
 

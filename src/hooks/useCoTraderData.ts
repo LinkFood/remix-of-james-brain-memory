@@ -1339,6 +1339,15 @@ export interface CtTradeRow {
   james_notes?: string | null;
   journal_updated_at?: string | null;
   journal_version?: number | null;
+  // Trade quality self-rating (migration 20260420000013). Claude grades the
+  // SETUP at commit (pre, outcome-blind) and re-rates EXECUTION at close
+  // (post, outcome-informed). quality_delta is a generated column
+  // (post - pre) — the learning signal.
+  pre_trade_quality?: number | null;
+  pre_trade_quality_reasoning?: string | null;
+  post_trade_quality?: number | null;
+  post_trade_quality_reasoning?: string | null;
+  quality_delta?: number | null;
 }
 
 export function useTodayBook() {

@@ -30,6 +30,7 @@ import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
 import { BookEquityCurve } from '@/components/command/BookEquityCurve';
 import { ClaudesRead } from '@/components/command/ClaudesRead';
 import { ColdOpen } from '@/components/command/ColdOpen';
+import { PremarketGapsCard } from '@/components/command/PremarketGapsCard';
 import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
 import { McpCallsPanel } from '@/components/command/McpCallsPanel';
@@ -105,6 +106,12 @@ export default function CommandStation() {
             </Button>
           </div>
         </header>
+
+        {/* Pre-market Gaps — only mounts above ColdOpen in the pre-open window.
+            The component self-hides when every ticker is 'flat' tier, so it
+            disappears after the first hour of trade without us having to
+            orchestrate visibility here. */}
+        <PremarketGapsCard />
 
         {/* Cold Open — "what matters right now?" digest. Literal first block.
             Scrolls to or opens the right panel for each bullet. */}

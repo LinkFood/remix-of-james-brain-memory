@@ -64,6 +64,118 @@ function useAllSessions() {
   });
 }
 
+interface QualityRollupRow {
+  session_date: string;
+  trades_count: number;
+  pre_rated_count: number;
+  post_rated_count: number;
+  graded_count: number;
+  avg_pre_quality: number | null;
+  avg_post_quality: number | null;
+  avg_delta: number | null;
+}
+
+function useQualityRollup() {
+  return useQuery<QualityRollupRow[]>({
+    queryKey: ['ct_trade_quality_rollup'],
+    refetchInterval: 5 * 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - 7 * 86400_000).toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_trade_quality_rollup')
+        .select('*')
+        .gte('session_date', since)
+        .order('session_date', { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as QualityRollupRow[];
+    },
+  });
+}
+
+/** Pick the delta color — mirrors Claude's framing: positive delta (post > pre)
+ *  means execution graded higher than setup signalled (a win for process);
+ *  -1/-2 = mild humility; <= -3 = outcome taught a hard lesson. */
+function deltaColor(delta: number | null | undefined): string | undefined {
+  if (delta == null) return undefined;
+  if (delta > 0) return GREEN;
+  if (delta === 0) return undefined;
+  if (delta >= -2) return '#F59E0B'; // amber
+  return RED;
+}
+
+function QualityRollupStrip() {
+  const { data, isLoading } = useQualityRollup();
+  const rows = data ?? [];
+  if (isLoading) return null;
+  if (rows.length === 0) return null;
+
+  // Aggregate across the 7-day window (weighted by counts — each trade contributes equally).
+  let sumPre = 0, nPre = 0, sumPost = 0, nPost = 0, sumDelta = 0, nDelta = 0;
+  for (const r of rows) {
+    if (r.avg_pre_quality != null && r.pre_rated_count > 0) {
+      sumPre += Number(r.avg_pre_quality) * r.pre_rated_count;
+      nPre  += r.pre_rated_count;
+    }
+    if (r.avg_post_quality != null && r.post_rated_count > 0) {
+      sumPost += Number(r.avg_post_quality) * r.post_rated_count;
+      nPost  += r.post_rated_count;
+    }
+    if (r.avg_delta != null && r.graded_count > 0) {
+      sumDelta += Number(r.avg_delta) * r.graded_count;
+      nDelta  += r.graded_count;
+    }
+  }
+  if (nPre === 0 && nPost === 0) return null;
+
+  const avgPre  = nPre  > 0 ? sumPre  / nPre  : null;
+  const avgPost = nPost > 0 ? sumPost / nPost : null;
+  const avgDelta = nDelta > 0 ? sumDelta / nDelta : null;
+  const deltaSign = avgDelta == null ? '' : avgDelta >= 0 ? '+' : '';
+  const deltaLabel = avgDelta == null
+    ? null
+    : avgDelta > 0
+      ? 'execution exceeded setup'
+      : avgDelta === 0
+        ? 'setup played as rated'
+        : avgDelta >= -1
+          ? 'mild humility'
+          : avgDelta >= -2
+            ? 'tight execution'
+            : 'outcome taught a lesson';
+
+  return (
+    <Card className="px-4 py-3 flex items-center gap-4 flex-wrap text-[11px]">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        This week avg quality
+      </span>
+      <span>
+        <span className="text-muted-foreground">pre</span>{' '}
+        <span className="font-mono font-semibold">{avgPre != null ? avgPre.toFixed(1) : '—'}</span>
+        <span className="text-muted-foreground">/10</span>
+      </span>
+      <span className="text-muted-foreground">·</span>
+      <span>
+        <span className="text-muted-foreground">post</span>{' '}
+        <span className="font-mono font-semibold">{avgPost != null ? avgPost.toFixed(1) : '—'}</span>
+        <span className="text-muted-foreground">/10</span>
+      </span>
+      <span className="text-muted-foreground">·</span>
+      <span>
+        <span className="text-muted-foreground">delta</span>{' '}
+        <span className="font-mono font-semibold" style={{ color: deltaColor(avgDelta ?? 0) }}>
+          {avgDelta != null ? `${deltaSign}${avgDelta.toFixed(1)}` : '—'}
+        </span>
+        {deltaLabel && (
+          <span className="text-muted-foreground italic ml-2">({deltaLabel})</span>
+        )}
+      </span>
+      <span className="ml-auto text-[9px] text-muted-foreground">
+        n={nPost}/{nPre} trades graded (post/pre)
+      </span>
+    </Card>
+  );
+}
+
 function useAllTrades() {
   return useQuery<CtTradeRow[]>({
     queryKey: ['book_all_trades'],
@@ -192,9 +304,63 @@ function JournalPanel({ trade }: { trade: CtTradeRow }) {
 
   const hasClaudeNotes = !!(trade.claude_notes && trade.claude_notes.trim());
   const canRegen = trade.status === 'closed' && trade.close_price != null;
+  const hasAnyQuality = trade.pre_trade_quality != null || trade.post_trade_quality != null;
 
   return (
-    <div className="bg-muted/10 border-t border-border px-6 py-4 text-xs">
+    <div className="bg-muted/10 border-t border-border px-6 py-4 text-xs space-y-4">
+      {/* Quality ratings — Claude's self-grade of process (pre) and
+          outcome-informed execution (post). Only shown when at least one
+          rating exists. Clicking the row already expanded this panel;
+          the reasonings are always visible here. */}
+      {hasAnyQuality && (
+        <div className="border border-border/60 rounded bg-background/40 px-4 py-3">
+          <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+            <h4 className="text-[10px] font-semibold uppercase tracking-wide text-foreground">
+              Quality self-rating
+            </h4>
+            <div className="flex items-center gap-3 text-[11px] font-mono">
+              <span>
+                <span className="text-muted-foreground">pre</span>{' '}
+                <span className="font-semibold">{trade.pre_trade_quality ?? '—'}</span>
+                <span className="text-muted-foreground">/10</span>
+              </span>
+              <span className="text-muted-foreground">·</span>
+              <span>
+                <span className="text-muted-foreground">post</span>{' '}
+                <span className="font-semibold">{trade.post_trade_quality ?? '—'}</span>
+                <span className="text-muted-foreground">/10</span>
+              </span>
+              {trade.quality_delta != null && (
+                <>
+                  <span className="text-muted-foreground">·</span>
+                  <span>
+                    <span className="text-muted-foreground">Δ</span>{' '}
+                    <span className="font-semibold" style={{ color: deltaColor(trade.quality_delta) }}>
+                      {trade.quality_delta > 0 ? `+${trade.quality_delta}` : trade.quality_delta}
+                    </span>
+                  </span>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-[11px] leading-relaxed">
+            <div>
+              <div className="text-[9px] uppercase tracking-wide text-muted-foreground mb-1">Setup (pre)</div>
+              {trade.pre_trade_quality_reasoning
+                ? <p className="text-foreground/90">{trade.pre_trade_quality_reasoning}</p>
+                : <p className="text-muted-foreground italic">No pre-trade reasoning recorded.</p>}
+            </div>
+            <div>
+              <div className="text-[9px] uppercase tracking-wide text-muted-foreground mb-1">Execution (post)</div>
+              {trade.post_trade_quality_reasoning
+                ? <p className="text-foreground/90">{trade.post_trade_quality_reasoning}</p>
+                : trade.status === 'closed'
+                  ? <p className="text-muted-foreground italic">Post-rating pending — fire-and-forget Haiku call may still be in flight, or this close path predates the rating feature.</p>
+                  : <p className="text-muted-foreground italic">Trade still open — post-rating is written at close.</p>}
+            </div>
+          </div>
+        </div>
+      )}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Claude's post-mortem — read-only, markdown */}
         <div>
@@ -309,6 +475,7 @@ function TradesTable() {
                 <th className="px-3 py-2 text-right">P&L %</th>
                 <th className="px-3 py-2 text-right">P&L $</th>
                 <th className="px-3 py-2 text-center">Status</th>
+                <th className="px-3 py-2 text-center" title="Claude's self-rated trade quality — pre (setup) / post (execution) / delta">Quality</th>
                 <th className="px-3 py-2 text-center" title="Journal: 📝 green = has notes, grey = empty">📝</th>
               </tr>
             </thead>
@@ -375,6 +542,29 @@ function TradesTable() {
                         </Badge>
                       </td>
                       <td
+                        className="px-3 py-1.5 text-center whitespace-nowrap"
+                        title={
+                          t.pre_trade_quality == null
+                            ? 'no quality rating'
+                            : `pre: ${t.pre_trade_quality}/10${t.post_trade_quality != null ? ` · post: ${t.post_trade_quality}/10 · Δ ${t.quality_delta != null && t.quality_delta > 0 ? '+' : ''}${t.quality_delta ?? '—'}` : ' · post pending'}`
+                        }
+                      >
+                        {t.pre_trade_quality == null ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <span className="text-[10px] font-mono">
+                            <span>{t.pre_trade_quality}</span>
+                            <span className="text-muted-foreground mx-0.5">/</span>
+                            <span>{t.post_trade_quality ?? '·'}</span>
+                            {t.quality_delta != null && (
+                              <span className="ml-1 font-semibold" style={{ color: deltaColor(t.quality_delta) }}>
+                                {t.quality_delta > 0 ? `+${t.quality_delta}` : t.quality_delta}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </td>
+                      <td
                         className="px-3 py-1.5 text-center"
                         title={hasJournal ? 'journal has notes' : 'journal empty'}
                       >
@@ -385,7 +575,7 @@ function TradesTable() {
                     </tr>
                     {isExpanded && (
                       <tr>
-                        <td colSpan={11} className="p-0">
+                        <td colSpan={12} className="p-0">
                           <JournalPanel trade={t} />
                           {/* Second section: forensic audit trail. One row
                               gives James post-mortem (above) + full forensic
@@ -411,6 +601,7 @@ function TradesTable() {
                 <td className="px-3 py-2 text-right font-semibold" style={{ color: pnlColor(closedRealized) }}>
                   {fmtUsd(closedRealized, true)}
                 </td>
+                <td className="px-3 py-2 text-center text-muted-foreground">—</td>
                 <td className="px-3 py-2 text-center text-muted-foreground">—</td>
                 <td className="px-3 py-2 text-center text-muted-foreground">—</td>
               </tr>
@@ -468,6 +659,10 @@ export default function Book() {
 
         {/* P&L split by thesis theme — where is the book making/losing money? */}
         <PnLByTheme />
+
+        {/* Pre/Post/Delta quality rollup — Claude's self-graded process-vs-outcome
+            signal. Appears only when there's data in the 7-day window. */}
+        <QualityRollupStrip />
 
         {/* Sessions + Trades */}
         <SessionsTable />

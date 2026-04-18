@@ -30,6 +30,7 @@ import { writeTradeAudit, deriveMarketRegime } from '../_shared/tradeAudit.ts';
 import { checkConcentration } from '../_shared/concentration.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { preTradeCheck, type Check } from '../_shared/preTradeGate.ts';
+import { firePreTradeQuality } from '../_shared/tradeQuality.ts';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA', 'GLD', 'USO'] as const;
 
@@ -455,6 +456,31 @@ serve(async (req) => {
       // let row i pass; missing index falls back to empty to keep the column
       // well-formed.
       pre_trade_checks: gateChecksPerRow[i] ?? [],
+    });
+
+    // Fire-and-forget pre-trade quality rating. Claude grades his own SETUP
+    // 1-10 right after commit, outcome-blind. This is the "process half" of
+    // the process-vs-outcome split — paired with a post-trade rating at
+    // close (firePostTradeQuality in ct-book-manager / ct-book-eod-close).
+    firePreTradeQuality(supabase, {
+      tradeId:       row.id,
+      instrument:    row.instrument,
+      side:          row.side as 'long' | 'short',
+      size_pct:      row.size_pct,
+      entry_price:   row.entry_price,
+      stop_price:    row.stop_price,
+      target_price:  row.target_price,
+      thesis:        row.thesis,
+      conviction:    row.conviction,
+      contract_type: 'underlying',
+      source:        'claude-trade-open',
+      context: {
+        active_biases: activeBiasesSnapshot,
+        recent_grades_72h: recentGrades.data ?? [],
+        self_corrections_72h: corrections.data ?? [],
+        market_regime: marketRegime,
+        pre_trade_checks: gateChecksPerRow[i] ?? [],
+      },
     });
   }
 

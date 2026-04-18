@@ -12,13 +12,14 @@
 
 import { VOICE_CORE } from './ctPrompts.ts';
 
-export const PROMPT_VERSION = 'v1.1';
+export const PROMPT_VERSION = 'v1.2';
 
 export const MORNING_BRIEF_REQUIRED_KEYS = [
   'friday_recap',
   'weekend_news',
   'friday_structural_carryover',
   'open_trades_check',
+  'premarket_gaps',
   'fresh_posture',
   'pre_open_watching',
   'script',
@@ -39,6 +40,7 @@ Return ONLY valid JSON (no markdown fence, no preamble) with these keys, exactly
   "weekend_news":                 "Any significant developments since Friday 22:00 UTC on watched tickers. If none in the input, say 'Nothing new since Friday close on the watchlist.' — do NOT invent headlines.",
   "friday_structural_carryover":  "What structural signals were present at Friday close that still apply this morning. Sweep clusters from the last 4hrs of Friday session, DP clusters from that same window, any regime inversion that hasn't reverted. If a ticker flipped regime Friday and stayed flipped, call it out by name. If nothing structural carries, say so plainly.",
   "open_trades_check":            "Overnight positions carried from Friday. For each, give instrument + side + entry + thesis + how a gap up/down changes the read. If no open trades carried, one sentence: 'Book is flat into the open.'",
+  "premarket_gaps":               "2-3 sentences on overnight gaps from ct_premarket_gaps. Only call out tickers at tier 'moderate' or worse (|gap| ≥ 0.5%). Name the ticker, the direction, and the % to one decimal. Mention the largest gap first. If the input has no moderate-or-worse gaps, say exactly: 'No material overnight gaps on the watchlist.' Never invent a gap.",
   "fresh_posture":                "2-3 sentences on how Claude is entering Monday. REFERENCE ct_biases (cite the most severe bias by name in plain English). Cite Friday's self-correction if one is in the input. Explicitly avoid echo-chambering Friday's thesis — if Friday was bearish and conviction compounded on one axis, say 'resist the echo' out loud.",
   "pre_open_watching":            ["3 to 5 bullet triggers. Each is ONE specific level or signal. Example format: 'QQQ 644.76 gamma flip — gap below flips us to negative regime; watch for dealer short-vol cascade toward 640 put wall.' Use real numbers from the supplied gamma / flow / cluster data. No vague 'watch price action.'"],
   "script":                       "The narratable version — plain prose, no markdown, no bullets, ~180 words max. This gets read by ElevenLabs. Lead with fresh_posture, then the top 2-3 items from pre_open_watching in conversational sentences, then end with the exact phrase: \\"That's your brief.\\""

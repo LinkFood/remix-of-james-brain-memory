@@ -19,6 +19,7 @@ import { callClaude, CLAUDE_MODELS, parseTextContent } from '../_shared/anthropi
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { POST_MORTEM_SYSTEM } from '../_shared/ctPrompts.ts';
+import { firePostTradeQuality } from '../_shared/tradeQuality.ts';
 
 const RECAP_SYSTEM = `You just closed a trading day. Given the session's trades (entry/exit/P&L/thesis), write a brutally honest EOD recap.
 
@@ -55,7 +56,7 @@ serve(async (req) => {
   // Close any still-open trades at current price
   const { data: stillOpen } = await supabase
     .from('ct_trades')
-    .select('id, instrument, side, size_pct, size_usd, entry_price')
+    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, opened_at, contract_type, pre_trade_quality, pre_trade_quality_reasoning')
     .eq('session_date', sessionDate)
     .eq('status', 'open');
 
@@ -66,6 +67,26 @@ serve(async (req) => {
     await supabase.from('ct_trades').update({
       status: 'closed', close_price: price, closed_at: now, close_reason: 'eod_flat', realized_pnl_pct: +pct.toFixed(3),
     }).eq('id', t.id);
+    // Fire post-trade quality rating for every eod_flat close. Pairs with
+    // whatever pre_trade_quality was set at commit.
+    firePostTradeQuality(supabase, {
+      tradeId:       t.id as string,
+      instrument:    t.instrument as string,
+      side:          t.side as 'long' | 'short',
+      entry_price:   t.entry_price as number | null,
+      stop_price:    t.stop_price as number | null,
+      target_price:  t.target_price as number | null,
+      close_price:   price,
+      close_reason:  'eod_flat',
+      realized_pnl_pct: +pct.toFixed(3),
+      thesis:        t.thesis as string | null,
+      opened_at:     t.opened_at as string | null,
+      closed_at:     now,
+      pre_trade_quality:           (t.pre_trade_quality as number | null) ?? null,
+      pre_trade_quality_reasoning: (t.pre_trade_quality_reasoning as string | null) ?? null,
+      contract_type: t.contract_type as string | null,
+      source:        'eod-flat',
+    });
   }
 
   // Pull all of today's closed trades for P&L accounting
@@ -222,6 +243,43 @@ serve(async (req) => {
     }
   }
 
+  // Post-trade-quality backfill: any trade that closed today with a
+  // pre_trade_quality set but no post_trade_quality yet (fire-and-forget
+  // miss, or a close path that fired before this feature deployed) gets
+  // a rating written here. We deliberately skip rows without
+  // pre_trade_quality — a post-only grade has no delta to contribute.
+  let postQualityWritten = 0;
+  const { data: missingPostQuality } = await supabase
+    .from('ct_trades')
+    .select('id, instrument, side, entry_price, stop_price, target_price, thesis, close_price, close_reason, realized_pnl_pct, opened_at, closed_at, contract_type, pre_trade_quality, pre_trade_quality_reasoning')
+    .eq('session_date', sessionDate)
+    .eq('status', 'closed')
+    .not('pre_trade_quality', 'is', null)
+    .is('post_trade_quality', null);
+
+  for (const t of missingPostQuality ?? []) {
+    if (t.close_price == null) continue;
+    firePostTradeQuality(supabase, {
+      tradeId:       t.id as string,
+      instrument:    t.instrument as string,
+      side:          t.side as 'long' | 'short',
+      entry_price:   t.entry_price as number | null,
+      stop_price:    t.stop_price as number | null,
+      target_price:  t.target_price as number | null,
+      close_price:   t.close_price as number,
+      close_reason:  t.close_reason as string | null,
+      realized_pnl_pct: t.realized_pnl_pct as number | null,
+      thesis:        t.thesis as string | null,
+      opened_at:     t.opened_at as string | null,
+      closed_at:     (t.closed_at as string | null) ?? now,
+      pre_trade_quality:           t.pre_trade_quality as number,
+      pre_trade_quality_reasoning: t.pre_trade_quality_reasoning as string | null,
+      contract_type: t.contract_type as string | null,
+      source:        'eod-backfill',
+    });
+    postQualityWritten++;
+  }
+
   return new Response(JSON.stringify({
     ok: true,
     session_date: sessionDate,
@@ -232,6 +290,7 @@ serve(async (req) => {
     trades_count: trades.length, wins, losses, goal_hit: goalHit,
     recap: recapPayload?.recap ?? null,
     post_mortems_written: postMortemsWritten,
+    post_quality_fired: postQualityWritten,
   }), {
     status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });

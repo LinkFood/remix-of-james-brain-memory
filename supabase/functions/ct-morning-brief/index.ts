@@ -1,5 +1,5 @@
 /**
- * ct-morning-brief — structured pre-market brief (v1.1).
+ * ct-morning-brief — structured pre-market brief (v1.2).
  *
  * Fires at 10:45 UTC (6:45 AM ET) weekdays. The first thing James reads
  * before the bell. Gathers Friday's EOD + trades + book + weekend news +
@@ -84,6 +84,7 @@ async function gatherContext(supabase: SupabaseClient) {
     recentBiasChanges,
     curiosity,
     theses,
+    premarketGaps,
   ] = await Promise.all([
     // Latest watcher state — carries current_reads (gamma, regime, walls)
     supabase.from('ct_heartbeats')
@@ -183,6 +184,14 @@ async function gatherContext(supabase: SupabaseClient) {
     // Current theses — just the frame
     supabase.from('ct_theses')
       .select('instrument, direction, conviction, up_case, down_case, watching, updated_at'),
+
+    // Overnight gaps — today's snapshot from ct-premarket-scan (13:15 UTC).
+    // We only pass moderate+ to Claude; the UI + full table stays on the db.
+    supabase.from('ct_premarket_gaps')
+      .select('ticker, prev_close, premarket_price, gap_pct, gap_direction, magnitude_tier, captured_at')
+      .eq('session_date', todayDate)
+      .in('magnitude_tier', ['moderate', 'significant', 'extreme'])
+      .order('gap_pct', { ascending: false }),
   ]);
 
   // Detect unreverted regime flips. An inversion is "carrying" if there's
@@ -229,6 +238,7 @@ async function gatherContext(supabase: SupabaseClient) {
     recent_bias_changes_7d: recentBiasChanges.data ?? [],
     friday_curiosity_findings: curiosity.data ?? [],
     open_theses: theses.data ?? [],
+    premarket_gaps_moderate_plus: premarketGaps.data ?? [],
   };
 }
 
@@ -283,17 +293,49 @@ function parseBriefJson(text: string): Record<string, unknown> | null {
   }
 }
 
-function buildSlackText(brief: Record<string, unknown>): string {
+interface PremarketGapRow {
+  ticker: string;
+  gap_pct: number | null;
+  gap_direction: 'up' | 'down' | 'flat' | null;
+  magnitude_tier: string | null;
+}
+
+/**
+ * Build a one-liner like "Gaps: NVDA +1.8% up, TSLA -2.1% down" for Slack.
+ * Only renders tier >= moderate (the caller already filtered to that set).
+ */
+function buildGapsBullet(gaps: PremarketGapRow[]): string {
+  if (!Array.isArray(gaps) || gaps.length === 0) return '';
+  // Order by |gap_pct| desc so the biggest move leads.
+  const sorted = gaps
+    .filter(g => typeof g.gap_pct === 'number')
+    .sort((a, b) => Math.abs((b.gap_pct ?? 0)) - Math.abs((a.gap_pct ?? 0)))
+    .slice(0, 5);
+  if (sorted.length === 0) return '';
+  const parts = sorted.map(g => {
+    const pct = g.gap_pct as number;
+    const sign = pct >= 0 ? '+' : '';
+    const dir = g.gap_direction ?? (pct >= 0 ? 'up' : 'down');
+    return `${g.ticker} ${sign}${pct.toFixed(1)}% ${dir}`;
+  });
+  return `:sunrise: Gaps: ${parts.join(', ')}`;
+}
+
+function buildSlackText(brief: Record<string, unknown>, gaps: PremarketGapRow[]): string {
   const posture = String(brief.fresh_posture ?? '').trim();
   const watching = Array.isArray(brief.pre_open_watching)
     ? (brief.pre_open_watching as unknown[]).map(s => String(s)).filter(Boolean).slice(0, 3)
     : [];
   const header = ':coffee: *Morning Brief* · ' + todayIsoDate();
   const postureLine = posture ? `\n${posture}` : '';
+  const gapsLine = (() => {
+    const line = buildGapsBullet(gaps);
+    return line ? `\n${line}` : '';
+  })();
   const watchLines = watching.length
     ? '\n\n*Pre-open watching:*\n' + watching.map(w => `• ${w}`).join('\n')
     : '';
-  return `${header}${postureLine}${watchLines}`;
+  return `${header}${postureLine}${gapsLine}${watchLines}`;
 }
 
 function buildRichText(brief: Record<string, unknown>, priorDate: string): string {
@@ -302,6 +344,7 @@ function buildRichText(brief: Record<string, unknown>, priorDate: string): strin
     `weekend_news: ${String(brief.weekend_news ?? '')}`,
     `carryover: ${String(brief.friday_structural_carryover ?? '')}`,
     `open_trades: ${String(brief.open_trades_check ?? '')}`,
+    `premarket_gaps: ${String(brief.premarket_gaps ?? '')}`,
     `fresh_posture: ${String(brief.fresh_posture ?? '')}`,
     `pre_open: ${Array.isArray(brief.pre_open_watching) ? (brief.pre_open_watching as unknown[]).join(' · ') : ''}`,
   ];
@@ -337,7 +380,8 @@ serve(async (req) => {
       (ctx.friday_late_sweeps.length === 0) &&
       (ctx.friday_late_dps.length === 0) &&
       (ctx.friday_regime_inversions_carrying.length === 0) &&
-      (ctx.overnight_open_trades.length === 0);
+      (ctx.overnight_open_trades.length === 0) &&
+      (ctx.premarket_gaps_moderate_plus.length === 0);
 
     // Resolve userId from profiles — single-user MVP
     const { data: users } = await supabase.from('profiles').select('id').limit(1);
@@ -402,6 +446,8 @@ serve(async (req) => {
         weekend_news: brief.weekend_news ?? null,
         friday_structural_carryover: brief.friday_structural_carryover ?? null,
         open_trades_check: brief.open_trades_check ?? null,
+        premarket_gaps: brief.premarket_gaps ?? null,
+        premarket_gaps_rows: ctx.premarket_gaps_moderate_plus ?? [],
         fresh_posture: brief.fresh_posture ?? null,
         pre_open_watching: brief.pre_open_watching ?? [],
         script,
@@ -415,6 +461,7 @@ serve(async (req) => {
           friday_regime_inversions_carrying: ctx.friday_regime_inversions_carrying.length,
           overnight_open_trades: ctx.overnight_open_trades.length,
           active_biases: ctx.active_biases.length,
+          premarket_gaps_moderate_plus: ctx.premarket_gaps_moderate_plus.length,
         },
       },
       rabbit_hole: '',
@@ -448,7 +495,12 @@ serve(async (req) => {
     // Slack push — dense summary (no dedupe, it's a scheduled digest)
     if (userId) {
       try {
-        await ctSlackPushDirect(supabase, userId, buildSlackText(brief), 'morning_brief');
+        await ctSlackPushDirect(
+          supabase,
+          userId,
+          buildSlackText(brief, ctx.premarket_gaps_moderate_plus as PremarketGapRow[]),
+          'morning_brief',
+        );
       } catch (e) {
         console.warn('[ct-morning-brief] slack push failed (non-blocking):', e instanceof Error ? e.message : e);
       }
@@ -533,6 +585,7 @@ serve(async (req) => {
         friday_regime_inversions_carrying: ctx.friday_regime_inversions_carrying.length,
         overnight_open_trades: ctx.overnight_open_trades.length,
         active_biases: ctx.active_biases.length,
+        premarket_gaps_moderate_plus: ctx.premarket_gaps_moderate_plus.length,
       },
       duration_ms: Date.now() - startedAt,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

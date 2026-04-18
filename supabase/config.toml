@@ -222,6 +222,9 @@ verify_jwt = false
 [functions.ct-spy-capture]
 verify_jwt = false
 
+[functions.ct-premarket-scan]
+verify_jwt = false
+
 [functions.ct-weekly-reflection]
 verify_jwt = false
 

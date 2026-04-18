@@ -29,6 +29,7 @@ import { checkConcentration } from '../_shared/concentration.ts';
 import { classifyThesis } from '../_shared/thesisClassifier.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { preTradeCheck, type Check } from '../_shared/preTradeGate.ts';
+import { firePreTradeQuality } from '../_shared/tradeQuality.ts';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -447,6 +448,53 @@ serve(async (req) => {
       //   - active biases + latest heartbeat snapshot + market regime,
       //   - MCP calls from this chat session in the preceding 15 min.
       if (out.trade_id) {
+        // Fire-and-forget pre-trade quality rating. Claude grades his own
+        // commit SETUP 1-10, outcome-blind. Chat commits are interesting
+        // because James is the author, not Claude — but Claude should still
+        // grade the setup the same way (sizing, R:R, thesis). Pairs with a
+        // post-rating fired by ct-book-manager at close. Wrapped in its own
+        // IIFE so the fetch that resolves trade fields never blocks the
+        // HTTP response.
+        const capturedTradeId = out.trade_id;
+        (async () => {
+          const { data: tr } = await supabase
+            .from('ct_trades')
+            .select('id, instrument, side, size_pct, entry_price, stop_price, target_price, thesis, conviction, contract_type')
+            .eq('id', capturedTradeId)
+            .maybeSingle();
+          if (!tr) return;
+          const row = tr as {
+            id: string;
+            instrument: string;
+            side: 'long' | 'short';
+            size_pct: number;
+            entry_price: number | null;
+            stop_price: number | null;
+            target_price: number | null;
+            thesis: string | null;
+            conviction: number | null;
+            contract_type: string | null;
+          };
+          firePreTradeQuality(supabase, {
+            tradeId:       row.id,
+            instrument:    row.instrument,
+            side:          row.side,
+            size_pct:      row.size_pct,
+            entry_price:   row.entry_price,
+            stop_price:    row.stop_price,
+            target_price:  row.target_price,
+            thesis:        row.thesis,
+            conviction:    row.conviction,
+            contract_type: row.contract_type,
+            source:        'chat',
+            context: {
+              chat_message: message,
+              pre_trade_checks: out.pre_trade_checks ?? [],
+              force: out.force ?? false,
+            },
+          });
+        })();
+
         (async () => {
           try {
             const [hbRes, biasRes, mcpRes] = await Promise.all([

@@ -194,6 +194,58 @@ P&L %, and duration — use specific numbers from that payload, not vague
 adjectives.`;
 
 // ----------------------------------------------------------------------------
+// PRE_TRADE_QUALITY — Haiku self-rating of the SETUP at commit (outcome-blind)
+// ----------------------------------------------------------------------------
+export const PRE_TRADE_QUALITY_SYSTEM = `${VOICE_CORE}
+
+Rate this trade SETUP 1-10 on its quality AS A SETUP (NOT outcome-dependent).
+10 = every signal aligned, clear stop, clean R:R, high conviction + evidence,
+    uncorrelated to existing positions, size appropriate, no active bias flagged.
+5  = mixed signals, adequate stop, OK R:R, medium conviction, some concern.
+1  = thin evidence, tight stop, poor R:R, anti-edge (bias flagged), forced.
+
+Consider: evidence axes cited, conviction vs sample history, concentration
+risk, active biases, session timing, band accuracy.
+
+Return ONLY this JSON:
+{ "quality": <integer 1-10>, "reasoning": "<1-2 sentences — specific, numbers first>" }
+
+Rules:
+- Outcome is UNKNOWN at rating time. Do not speculate on direction — grade the SETUP.
+- Specific > general. Cite the actual evidence / concern you see in the payload.
+- If this setup matches an active bias in the payload, that caps the rating at 4.
+- No hedging ("could be 6 or 7"). Pick one integer.`;
+
+// ----------------------------------------------------------------------------
+// POST_TRADE_QUALITY — Haiku re-rating of EXECUTION after close
+// ----------------------------------------------------------------------------
+export const POST_TRADE_QUALITY_SYSTEM = `${VOICE_CORE}
+
+Re-rate this closed trade 1-10 on EXECUTION quality (not just luck).
+Same 1-10 scale as pre-trade, but now you know the outcome.
+
+10 = setup held, stop was the right distance, timing was clean, no surprises.
+5  = OK execution but slippage / wider-than-expected move / mixed signals en route.
+1  = bad read throughout, stop should have been wider/tighter, exited poorly.
+
+Note the pre_trade_quality you set before. If post != pre, EXPLAIN THE DELTA
+in the reasoning — one sentence on what the outcome taught you (or failed
+to teach you).
+
+A winning trade can be a 4 if the stop was in the wrong place and you got
+bailed out by luck. A losing trade can be an 8 if the setup was sound and
+the thesis broke cleanly on new information.
+
+Return ONLY this JSON:
+{ "quality": <integer 1-10>, "reasoning": "<1-2 sentences — if delta != 0, the first clause MUST explain why>" }
+
+Rules:
+- Process over outcome. Did the SETUP play out as expected?
+- No hedging. Pick one integer.
+- If the trade was cancelled pre-fill (gap past stop/target), grade the SETUP
+  (not the non-fill) — was the planned entry defensible with what you knew?`;
+
+// ----------------------------------------------------------------------------
 // CURIOSITY — proactive Claude, self-directed investigation (ct-curiosity)
 // ----------------------------------------------------------------------------
 export const CURIOSITY_SYSTEM = `${VOICE_CORE}

@@ -18,6 +18,10 @@
  */
 import { ChartSafe } from '@/components/ChartSafe';
 import { useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
+import { Button } from '@/components/ui/button';
+import { Bug } from 'lucide-react';
 import {
   BarChart,
   Bar,
@@ -943,6 +947,99 @@ function WatcherObservabilitySection() {
 // Page
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Section: Recent UI crashes (ct_ui_errors)
+// ---------------------------------------------------------------------------
+
+interface UiErrorRow {
+  id: string;
+  created_at: string;
+  route: string;
+  error_name: string | null;
+  error_message: string | null;
+  resolved: boolean;
+}
+
+function useUiErrors() {
+  return useQuery<UiErrorRow[]>({
+    queryKey: ['ct_ui_errors_recent'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .from('ct_ui_errors' as any)
+        .select('id, created_at, route, error_name, error_message, resolved')
+        .eq('resolved', false)
+        .order('created_at', { ascending: false })
+        .limit(10);
+      if (error) throw error;
+      return (data ?? []) as unknown as UiErrorRow[];
+    },
+  });
+}
+
+function UiErrorsSection() {
+  const { data: rows, isLoading } = useUiErrors();
+  const qc = useQueryClient();
+
+  const resolve = async (id: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase.from('ct_ui_errors' as any) as any)
+      .update({ resolved: true })
+      .eq('id', id);
+    if (error) {
+      console.warn('[Health] resolve ct_ui_errors failed:', error);
+      return;
+    }
+    qc.invalidateQueries({ queryKey: ['ct_ui_errors_recent'] });
+    qc.invalidateQueries({ queryKey: ['ct_ui_errors_unresolved_24h'] });
+  };
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-4 py-3 border-b bg-muted/30 flex items-center gap-2">
+        <Bug className="w-4 h-4 text-primary" />
+        <span className="text-sm font-semibold">Recent UI crashes</span>
+        <span className="text-[11px] text-muted-foreground ml-2">last 10 unresolved</span>
+      </div>
+      {isLoading ? (
+        <div className="p-6 text-center text-xs text-muted-foreground">Loading…</div>
+      ) : !rows || rows.length === 0 ? (
+        <div className="p-6 text-center text-xs text-muted-foreground">
+          No unresolved UI crashes. Nice.
+        </div>
+      ) : (
+        <div className="divide-y divide-border max-h-[320px] overflow-y-auto">
+          {rows.map((r) => (
+            <div key={r.id} className="px-3 py-2 flex items-center gap-2 text-[11px]">
+              <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono shrink-0">
+                {r.route}
+              </Badge>
+              <span className="font-mono text-foreground/70 shrink-0">
+                {r.error_name ?? 'Error'}
+              </span>
+              <span className="text-muted-foreground truncate min-w-0 flex-1">
+                {r.error_message ?? '(no message)'}
+              </span>
+              <span className="text-muted-foreground text-[10px] shrink-0">
+                {timeAgo(r.created_at)}
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 px-2 text-[10px]"
+                onClick={() => resolve(r.id)}
+              >
+                Resolve
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 export default function Health() {
   const { data, isLoading, error, dataUpdatedAt } = useHealthData();
 
@@ -995,6 +1092,9 @@ export default function Health() {
               <AttentionSection buckets={data.attentionBuckets} total={data.attentionTotal} />
               <McpCallsSection calls={data.mcpCalls} />
             </div>
+
+            {/* Row 2.5: Recent UI crashes */}
+            <UiErrorsSection />
 
             {/* Row 3: Watcher v1.2 observability — full width */}
             <WatcherObservabilitySection />

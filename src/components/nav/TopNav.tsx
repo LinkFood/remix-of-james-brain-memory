@@ -28,6 +28,7 @@ import {
   ChevronDown, Menu,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useClock } from '@/hooks/useClock';
 import { useKillSwitch } from '@/hooks/useKillSwitch';
@@ -121,6 +122,31 @@ function isGroupActive(group: NavGroup, pathname: string): boolean {
   return group.items.some((i) => i.path === pathname);
 }
 
+/**
+ * Unresolved ct_ui_errors in the last 24h — drives the red dot on the
+ * Health link so a silent UI crash doesn't go unnoticed.
+ */
+function useUnresolvedUiErrors24h() {
+  return useQuery<number>({
+    queryKey: ['ct_ui_errors_unresolved_24h'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { count, error } = await supabase
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .from('ct_ui_errors' as any)
+        .select('id', { count: 'estimated', head: true })
+        .eq('resolved', false)
+        .gte('created_at', since);
+      if (error) {
+        console.warn('[TopNav] ct_ui_errors count failed:', error);
+        return 0;
+      }
+      return count ?? 0;
+    },
+  });
+}
+
 export function TopNav({ userId }: TopNavProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -132,6 +158,7 @@ export function TopNav({ userId }: TopNavProps) {
   const [lastHeartbeat, setLastHeartbeat] = useState<string | null>(null);
   const [healthAlerts, setHealthAlerts] = useState<{ id: string; title: string; body: string }[]>([]);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { data: uiErrorCount = 0 } = useUnresolvedUiErrors24h();
 
   // Last heartbeat insight
   useEffect(() => {
@@ -227,7 +254,15 @@ export function TopNav({ userId }: TopNavProps) {
                         onClick={() => setMobileOpen(false)}
                         className={itemClass}
                       >
-                        {item.label}
+                        <span className="inline-flex items-center gap-1.5">
+                          {item.label}
+                          {item.path === '/health' && uiErrorCount > 0 && (
+                            <span
+                              className="w-1.5 h-1.5 rounded-full bg-red-500"
+                              title={`${uiErrorCount} unresolved UI crash${uiErrorCount > 1 ? 'es' : ''}`}
+                            />
+                          )}
+                        </span>
                       </NavLink>
                     ))}
                   </div>
@@ -252,11 +287,14 @@ export function TopNav({ userId }: TopNavProps) {
         {NAV_GROUPS.map((group) => {
           const active = isGroupActive(group, location.pathname);
           const triggerLabel = group.label === 'More' ? 'More' : group.label;
+          // Red dot: System contains Health, so show group-level indicator
+          // when there are unresolved UI crashes in the last 24h.
+          const showCrashDot = group.label === 'System' && uiErrorCount > 0;
           return (
             <DropdownMenu key={group.label}>
               <DropdownMenuTrigger asChild>
                 <button
-                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                  className={`relative flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
                     active
                       ? 'bg-primary/10 text-primary'
                       : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
@@ -264,6 +302,12 @@ export function TopNav({ userId }: TopNavProps) {
                 >
                   <span>{triggerLabel}</span>
                   <ChevronDown className="w-3 h-3 opacity-60" />
+                  {showCrashDot && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500 ring-2 ring-card"
+                      title={`${uiErrorCount} unresolved UI crash${uiErrorCount > 1 ? 'es' : ''} in the last 24h`}
+                    />
+                  )}
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="w-40 p-1">
@@ -274,7 +318,15 @@ export function TopNav({ userId }: TopNavProps) {
                       end={item.path === '/'}
                       className={itemClass}
                     >
-                      {item.label}
+                      <span className="inline-flex items-center gap-1.5">
+                        {item.label}
+                        {item.path === '/health' && uiErrorCount > 0 && (
+                          <span
+                            className="w-1.5 h-1.5 rounded-full bg-red-500"
+                            title={`${uiErrorCount} unresolved UI crash${uiErrorCount > 1 ? 'es' : ''}`}
+                          />
+                        )}
+                      </span>
                     </NavLink>
                   </DropdownMenuItem>
                 ))}
