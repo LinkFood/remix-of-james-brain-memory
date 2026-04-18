@@ -311,3 +311,9 @@ verify_jwt = false
 
 [functions.ct-claude-book-exit-watcher]
 verify_jwt = false
+
+[functions.ct-claude-circuit-breaker]
+verify_jwt = false
+
+[functions.ct-claude-health-monitor]
+verify_jwt = false

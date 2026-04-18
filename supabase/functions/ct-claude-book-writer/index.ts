@@ -166,6 +166,35 @@ serve(async (req) => {
   );
   const startedAt = Date.now();
 
+  // Safety gate: if Claude is circuit-broken today, DO NOT fire any new
+  // trades. Existing positions are managed by ct-claude-book-exit-watcher
+  // (intentionally NOT gated — stops/targets must still close).
+  {
+    const { data: haltRows } = await supabase.rpc('is_claude_trading_halted');
+    const halt = Array.isArray(haltRows) ? haltRows[0] : null;
+    if (halt && halt.halted === true) {
+      const reason = `circuit breaker active: ${halt.breaker_type} — ${halt.reason}`;
+      await supabase.from('ct_claude_decisions').insert({
+        decision_type: 'no_trade',
+        model_tier:    'none',
+        reasoning:     reason,
+        outcome:       'skipped: circuit_breaker_active',
+        context_snapshot: {
+          source:       'ct-claude-book-writer',
+          breaker_type: halt.breaker_type,
+          tripped_at:   halt.tripped_at,
+        },
+      });
+      return new Response(JSON.stringify({
+        ok: true,
+        halted: true,
+        breaker_type: halt.breaker_type,
+        reason,
+        duration_ms: Date.now() - startedAt,
+      }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+  }
+
   const nowIso = new Date().toISOString();
 
   // 1) Expire stale ideas first.

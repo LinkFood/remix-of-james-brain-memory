@@ -236,6 +236,33 @@ serve(async (req) => {
   );
   const startedAt = Date.now();
 
+  // Safety gate: skip entirely if Claude is circuit-broken today.
+  {
+    const { data: haltRows } = await supabase.rpc('is_claude_trading_halted');
+    const halt = Array.isArray(haltRows) ? haltRows[0] : null;
+    if (halt && halt.halted === true) {
+      const reason = `circuit breaker active: ${halt.breaker_type} — ${halt.reason}`;
+      await supabase.from('ct_claude_decisions').insert({
+        decision_type: 'no_trade',
+        model_tier:    'none',
+        reasoning:     reason,
+        outcome:       'skipped: circuit_breaker_active',
+        context_snapshot: {
+          source:       'ct-trade-idea-generator',
+          breaker_type: halt.breaker_type,
+          tripped_at:   halt.tripped_at,
+        },
+      });
+      return new Response(JSON.stringify({
+        ok: true,
+        halted: true,
+        breaker_type: halt.breaker_type,
+        reason,
+        duration_ms: Date.now() - startedAt,
+      }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+  }
+
   // Config
   const minConfidence     = Number(await getConfig<number>('claude_min_hypothesis_confidence', 0.45));
   const maxSizePct        = Number(await getConfig<number>('claude_max_position_size_pct', 5));
