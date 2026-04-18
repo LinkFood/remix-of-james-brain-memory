@@ -31,6 +31,7 @@ import Scorecard from "./pages/Scorecard";
 import Replay from "./pages/Replay";
 import Book from "./pages/Book";
 import Health from "./pages/Health";
+import Preflight from "./pages/Preflight";
 import SessionTimeline from "./pages/SessionTimeline";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { useEffect, useState } from "react";
@@ -65,6 +66,7 @@ const TrackedRoutes = () => {
       <Route path="/scorecard" element={<AuthLayout sidebar={<ChatPanel />}><Scorecard /></AuthLayout>} />
       <Route path="/book" element={<AuthLayout sidebar={<ChatPanel />}><Book /></AuthLayout>} />
       <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><Health /></AuthLayout>} />
+      <Route path="/preflight" element={<AuthLayout sidebar={<ChatPanel />}><Preflight /></AuthLayout>} />
       <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><SessionTimeline /></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}

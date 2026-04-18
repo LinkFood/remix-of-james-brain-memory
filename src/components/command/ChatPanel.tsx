@@ -159,38 +159,34 @@ function MessageMetaLine({ meta }: { meta?: MessageMeta }) {
  * don't need an extra sanitizer.
  */
 function AssistantBody({ content }: { content: string }) {
+  // Pre-process: if the whole message is JSON (or wrapped in a ```json fence),
+  // render it as a collapsed <details> block directly. Avoids relying on
+  // react-markdown's `components.pre` override, which was triggering a runtime
+  // stack overflow when Claude returned deeply nested tool-use output.
+  const trimmed = content.trim();
+  const jsonFence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  const jsonBody = jsonFence ? jsonFence[1] : trimmed;
+  let isJson = false;
+  if (jsonBody && (jsonBody.startsWith('{') || jsonBody.startsWith('['))) {
+    try { JSON.parse(jsonBody); isJson = true; } catch { /* not json */ }
+  }
+
+  if (isJson) {
+    return (
+      <details className="my-1 rounded border border-border/60 bg-muted/40">
+        <summary className="cursor-pointer select-none px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground">
+          structured output (click to expand)
+        </summary>
+        <pre className="p-2 overflow-x-auto text-[11px] whitespace-pre-wrap break-all">{jsonBody}</pre>
+      </details>
+    );
+  }
+
   return (
     <div className="markdown-body text-xs leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_ul]:pl-4 [&_ol]:pl-4 [&_ul]:list-disc [&_ol]:list-decimal [&_li]:my-0.5 [&_h1]:text-sm [&_h1]:font-semibold [&_h1]:mt-2 [&_h1]:mb-1 [&_h2]:text-xs [&_h2]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 [&_h3]:text-xs [&_h3]:font-semibold [&_h3]:mt-1.5 [&_h3]:mb-1 [&_strong]:font-semibold [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_code]:bg-muted [&_code]:text-[11px] [&_pre]:p-2 [&_pre]:rounded [&_pre]:bg-muted/70 [&_pre]:overflow-x-auto [&_pre]:my-1.5 [&_pre>code]:bg-transparent [&_pre>code]:p-0">
       <ReactMarkdown
         components={{
-          pre: ({ node, children, ...props }) => {
-            // Detect a fenced code block whose language is "json" (or the body
-            // parses as JSON) and collapse it to keep the chat scannable.
-            const codeEl = (node?.children?.[0] ?? null) as
-              | { tagName?: string; properties?: { className?: string[] }; children?: Array<{ value?: string }> }
-              | null;
-            const className = codeEl?.properties?.className?.join(' ') ?? '';
-            const raw = codeEl?.children?.map((c) => c?.value ?? '').join('') ?? '';
-            const isJsonLang = /language-json/i.test(className);
-            let looksLikeJson = false;
-            const trimmed = raw.trim();
-            if (!isJsonLang && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
-              try { JSON.parse(trimmed); looksLikeJson = true; } catch { /* not json */ }
-            }
-            if (isJsonLang || looksLikeJson) {
-              return (
-                <details className="my-1.5 rounded border border-border/60 bg-muted/40">
-                  <summary className="cursor-pointer select-none px-2 py-1 text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground">
-                    structured output (click to expand)
-                  </summary>
-                  <pre className="p-2 overflow-x-auto text-[11px]" {...props}>{children}</pre>
-                </details>
-              );
-            }
-            return <pre {...props}>{children}</pre>;
-          },
-          // Links open in new tab to avoid nuking the chat.
-          a: ({ node: _node, ...props }) => (
+          a: (props) => (
             <a target="_blank" rel="noreferrer noopener" className="underline text-primary" {...props} />
           ),
         }}

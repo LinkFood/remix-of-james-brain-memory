@@ -18,8 +18,10 @@ import { EquityCurvePanel } from '@/components/command/EquityCurvePanel';
 import { RecallSearch } from '@/components/command/RecallSearch';
 import { JamesVsClaude } from '@/components/command/JamesVsClaude';
 import { CalibrationChart } from '@/components/scorecard/CalibrationChart';
+import { ClaudesSurprises } from '@/components/scorecard/ClaudesSurprises';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 import { useCalibration } from '@/hooks/useCalibration';
+import { useClaudesSurprises } from '@/hooks/useClaudesSurprises';
 
 interface Grade {
   subject_type: 'flag' | 'alert' | 'james_view';
@@ -156,6 +158,42 @@ export function Scorecard() {
   // Uses ct_flags.conviction/attention_score and ct_alerts.conviction/attention_score joined to ct_grades.
   const { data: calibrationCurves } = useCalibration();
 
+  // Surprise deltas — over/underconfidence counts drive the header bias stat.
+  const { data: surprises } = useClaudesSurprises();
+
+  /**
+   * Net calibration bias:
+   *   over = count of grades with calibration_delta <= -BIG (claimed high, missed)
+   *   under = count of grades with calibration_delta >= +BIG (claimed low, hit)
+   *   ratio = over / under (or inverse, whichever side is bigger)
+   * Copy:
+   *   over > under → "overconfident X times more than underconfident"
+   *   under > over → "underconfident X times more than overconfident"
+   *   tie / empty → skip the stat
+   */
+  const biasStat = useMemo(() => {
+    if (!surprises) return null;
+    const { overconfident_count: over, underconfident_count: under } = surprises;
+    if (over === 0 && under === 0) return null;
+    if (over === under) {
+      return { copy: `Net calibration bias: balanced (${over}:${under} in last 30d)`, tone: 'neutral' as const };
+    }
+    if (over > under) {
+      const ratio = under === 0 ? over : over / under;
+      const ratioStr = under === 0 ? `${over}x` : `${ratio.toFixed(1)}x`;
+      return {
+        copy: `Net calibration bias: Claude is overconfident ${ratioStr} more than underconfident (${over}:${under} in last 30d)`,
+        tone: 'over' as const,
+      };
+    }
+    const ratio = over === 0 ? under : under / over;
+    const ratioStr = over === 0 ? `${under}x` : `${ratio.toFixed(1)}x`;
+    return {
+      copy: `Net calibration bias: Claude is underconfident ${ratioStr} more than overconfident (${under}:${over} in last 30d)`,
+      tone: 'under' as const,
+    };
+  }, [surprises]);
+
   const stats = useMemo(() => {
     if (!grades) return null;
     const byType: Record<string, Tallies> = {};
@@ -217,6 +255,20 @@ export function Scorecard() {
           <p className="text-xs text-muted-foreground mt-1">
             Every FLAG / ALERT / james_view gets scored at horizon close. This is the referee — the source of trust.
           </p>
+          {biasStat && (
+            <p
+              className={`text-[11px] mt-1 font-mono ${
+                biasStat.tone === 'over'
+                  ? 'text-red-400'
+                  : biasStat.tone === 'under'
+                    ? 'text-green-400'
+                    : 'text-muted-foreground'
+              }`}
+              title="Counts of graded calls where |calibration_delta| >= 30pp in the last 30 days. Negative delta = overconfident. Positive delta = underconfident."
+            >
+              {biasStat.copy}
+            </p>
+          )}
         </header>
 
         {/* Memory recall search */}
@@ -358,6 +410,9 @@ export function Scorecard() {
             onto each flag/alert at write time — planned for v2.
           </div>
         </Card>
+
+        {/* Claude's Surprises — the furthest-from-reality calls. Most instructive grades. */}
+        <ClaudesSurprises />
 
         {/* Ghost Trade Tape — paper P&L of Claude's flagged calls. Hidden until
             there's at least one graded trade; zero-state would be pure noise. */}

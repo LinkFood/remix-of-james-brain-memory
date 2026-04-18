@@ -35,6 +35,8 @@ import { useTokenCounter } from '@/hooks/useTokenCounter';
 import { BookSparkline } from '@/components/BookSparkline';
 import { useTickerData } from '@/hooks/useTickerData';
 import { UwUsageBadge } from '@/components/command/UwUsageBadge';
+import { MarketClock } from '@/components/nav/MarketClock';
+import { PreflightChip } from '@/components/nav/PreflightChip';
 
 const AGENT_LABELS: Record<string, string> = {
   'jac-dispatcher': 'JAC',
@@ -75,6 +77,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'System',
     items: [
+      { path: '/preflight', label: 'Preflight' },
       { path: '/health', label: 'Health' },
       { path: '/crons', label: 'Crons' },
       { path: '/agents', label: 'Agents' },
@@ -281,6 +284,9 @@ export function TopNav({ userId }: TopNavProps) {
 
       {/* Right — System vitals */}
       <div className="ml-auto flex items-center gap-2">
+        {/* Preflight readiness — overall green/yellow/red at a glance */}
+        <PreflightChip />
+
         {/* Claude's book — sparkline of today's closed-trade P&L */}
         <BookSparkline />
 
@@ -406,6 +412,9 @@ export function TopNav({ userId }: TopNavProps) {
             </>
           )}
         </Button>
+
+        {/* Market clock — NYSE state + countdown */}
+        <MarketClock />
 
         {/* Settings */}
         <button
