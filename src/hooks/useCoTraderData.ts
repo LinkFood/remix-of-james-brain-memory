@@ -1225,8 +1225,13 @@ export interface GexTimeseriesRow {
 }
 
 export function useGexTimeseries(ticker: string, hours = 4) {
+  const { data: session } = useEffectiveSessionDate();
+  // When markets are closed, the last snapshot could be ~20-70 hours stale
+  // (weekend + holiday). Bump the window so the RPC still catches the most
+  // recent 30 snapshots. LIMIT p_snapshots keeps output size bounded.
+  const effectiveHours = session?.isLive === false ? 96 : hours;
   return useQuery<GexTimeseriesRow[]>({
-    queryKey: ['ct_gex_timeseries_rpc', ticker, hours],
+    queryKey: ['ct_gex_timeseries_rpc', ticker, effectiveHours],
     refetchInterval: 60_000,
     queryFn: async () => {
       // Server-side distinct via ct_gex_heatmap RPC. Pulls LATEST 30 distinct
@@ -1235,7 +1240,7 @@ export function useGexTimeseries(ticker: string, hours = 4) {
       // window returned only the earliest 14 snapshots.
       const { data, error } = await supabase.rpc('ct_gex_heatmap', {
         p_ticker: ticker,
-        p_hours: hours,
+        p_hours: effectiveHours,
         p_snapshots: 30,
         p_atm_only: true,
       });
