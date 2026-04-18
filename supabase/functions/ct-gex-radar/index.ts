@@ -305,10 +305,11 @@ async function buildTickerPayload(ticker: string, windowSize: number): Promise<T
   // shows the last session's levels instead of going blank.
   let fallback = false;
   let fallbackSessionDate: string | null = null;
-  // Spot is the load-bearing signal: without an underlying price, nothing on
-  // the panel is meaningful. UW returns skeleton strike rows on weekends but
-  // no price, so `spot === null` reliably catches the closed-market case.
-  const uwEmpty = spot === null;
+  // UW on weekends: sometimes returns a stale spot but ZERO strike rows, and
+  // sometimes returns nothing at all. Either case needs the DB fallback — the
+  // panel is useless without a strike ladder. So trigger fallback whenever
+  // the strike map is empty, regardless of whether spot came back.
+  const uwEmpty = gexMap.size === 0 || spot === null;
   if (uwEmpty) {
     try {
       const fb = await loadGexFallback(ticker);
