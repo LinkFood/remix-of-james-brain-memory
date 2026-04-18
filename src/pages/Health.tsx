@@ -4,16 +4,17 @@
  * Read-only visibility into:
  *   - ct_* cron status (green/red/grey by last_run_status)
  *   - UW API usage (today's count/limit + 7-day mini trend)
- *   - Claude cost (ct_chat_tokens today + 7-day rolling)
+ *   - Claude cost (ct_claude_usage — per-function breakdown + 7-day rolling)
  *   - Attention score histogram (last 24h, 10-pt buckets)
  *   - Last 20 MCP calls
  *   - Paper book snapshot (starting / current / today's realized / open count)
  *
  * No mutations. No action buttons. Just the truth.
  *
- * Cost-attribution limitation: v1 only shows ct_chat_tokens cost. Watcher /
- * curiosity / recap / brief don't persist per-call cost yet — surfaced as a
- * "not yet tracked" note. v2 would add per-function cost logging.
+ * Per-function Claude cost: every ct-* function that calls Claude now writes
+ * to ct_claude_usage via the shared logClaudeUsage() helper — watcher,
+ * curiosity, morning-brief, midday-recap, eod-recap, replay, news-ingester,
+ * lessons-curator, and chat all appear side-by-side in the Claude Cost card.
  */
 import { useMemo } from 'react';
 import {
@@ -36,6 +37,7 @@ import {
   Database,
   DollarSign,
   Gauge,
+  Shield,
   Timer,
   Wallet,
   XCircle,
@@ -54,11 +56,18 @@ import { cn } from '@/lib/utils';
 import {
   useHealthData,
   type AttentionBucket,
-  type ChatTokensDaily,
+  type ClaudeUsageBySource,
+  type ClaudeUsageDailyTotal,
   type HealthCronRow,
   type McpCallRow,
   type UwUsageDaily,
 } from '@/hooks/useHealthData';
+import {
+  useWatcherObservability,
+  type AlertDiversity,
+  type DemotionDailyRow,
+  type DiversityDailyRow,
+} from '@/hooks/useWatcherObservability';
 
 // ---------------------------------------------------------------------------
 // Format helpers
@@ -361,11 +370,13 @@ function UwSection({
 // ---------------------------------------------------------------------------
 
 function ClaudeCostSection({
-  today,
+  todayTotal,
+  todayBySource,
   daily,
 }: {
-  today: ChatTokensDaily | null;
-  daily: ChatTokensDaily[];
+  todayTotal: ClaudeUsageDailyTotal | null;
+  todayBySource: ClaudeUsageBySource[];
+  daily: ClaudeUsageDailyTotal[];
 }) {
   const chartData = daily.map((d) => ({
     date: d.session_date.slice(5),
@@ -380,15 +391,15 @@ function ClaudeCostSection({
       <div className="px-4 py-3 border-b bg-muted/30 flex items-center gap-2">
         <DollarSign className="w-4 h-4 text-primary" />
         <span className="text-sm font-semibold">Claude Cost</span>
-        <span className="text-[11px] text-muted-foreground ml-2">ct_chat_tokens only</span>
+        <span className="text-[11px] text-muted-foreground ml-2">ct_claude_usage · per function</span>
       </div>
       <div className="p-4 space-y-3">
         <div className="grid grid-cols-3 gap-3">
           <div>
             <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Today</div>
-            <div className="text-2xl font-bold tabular-nums">{fmtUsd(today?.cost_usd ?? 0, false, 3)}</div>
+            <div className="text-2xl font-bold tabular-nums">{fmtUsd(todayTotal?.cost_usd ?? 0, false, 3)}</div>
             <div className="text-[10px] text-muted-foreground">
-              {today ? `${fmtInt(today.turns)} turns · ${fmtInt((today.tokens_in ?? 0) + (today.tokens_out ?? 0))} tok` : 'no turns yet'}
+              {todayTotal ? `${fmtInt(todayTotal.turns)} turns · ${fmtInt((todayTotal.tokens_in ?? 0) + (todayTotal.tokens_out ?? 0))} tok` : 'no calls yet'}
             </div>
           </div>
           <div>
@@ -399,19 +410,68 @@ function ClaudeCostSection({
           <div>
             <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Avg latency today</div>
             <div className="text-2xl font-bold tabular-nums">
-              {today?.avg_ms ? `${(today.avg_ms / 1000).toFixed(1)}s` : '—'}
+              {todayTotal?.avg_ms ? `${(todayTotal.avg_ms / 1000).toFixed(1)}s` : '—'}
             </div>
             <div className="text-[10px] text-muted-foreground">
-              {today ? `${fmtInt(today.mcp_calls)} MCP calls` : '—'}
+              {todayTotal ? `${fmtInt(todayTotal.mcp_calls)} MCP calls` : '—'}
             </div>
           </div>
+        </div>
+
+        {/* Per-function breakdown — the v2 gap closed. */}
+        <div>
+          <div className="text-[11px] text-muted-foreground mb-1">Per function today</div>
+          {todayBySource.length === 0 ? (
+            <div className="h-[80px] flex items-center justify-center text-[11px] text-muted-foreground">
+              no Claude calls logged today yet
+            </div>
+          ) : (
+            <div className="rounded border overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="h-7 py-1 text-[10px] uppercase tracking-wider">Function</TableHead>
+                    <TableHead className="h-7 py-1 text-[10px] uppercase tracking-wider text-right">Turns</TableHead>
+                    <TableHead className="h-7 py-1 text-[10px] uppercase tracking-wider text-right">Tokens</TableHead>
+                    <TableHead className="h-7 py-1 text-[10px] uppercase tracking-wider text-right">Cost</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {todayBySource.map((r) => (
+                    <TableRow key={r.source}>
+                      <TableCell className="py-1.5 text-[11px] font-mono">{r.source}</TableCell>
+                      <TableCell className="py-1.5 text-[11px] text-right tabular-nums">{fmtInt(r.turns)}</TableCell>
+                      <TableCell className="py-1.5 text-[11px] text-right tabular-nums text-muted-foreground">
+                        {fmtInt((r.tokens_in ?? 0) + (r.tokens_out ?? 0))}
+                      </TableCell>
+                      <TableCell className="py-1.5 text-[11px] text-right tabular-nums font-medium">
+                        {fmtUsd(r.cost_usd, false, 4)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {todayTotal && (
+                    <TableRow className="bg-muted/40 font-semibold">
+                      <TableCell className="py-1.5 text-[11px] font-mono">total</TableCell>
+                      <TableCell className="py-1.5 text-[11px] text-right tabular-nums">{fmtInt(todayTotal.turns)}</TableCell>
+                      <TableCell className="py-1.5 text-[11px] text-right tabular-nums">
+                        {fmtInt((todayTotal.tokens_in ?? 0) + (todayTotal.tokens_out ?? 0))}
+                      </TableCell>
+                      <TableCell className="py-1.5 text-[11px] text-right tabular-nums">
+                        {fmtUsd(todayTotal.cost_usd, false, 4)}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </div>
 
         <div>
           <div className="text-[11px] text-muted-foreground mb-1">Cost per day (7d rolling)</div>
           {chartData.length === 0 ? (
             <div className="h-[100px] flex items-center justify-center text-[11px] text-muted-foreground">
-              no chat cost history yet
+              no Claude cost history yet
             </div>
           ) : (
             <div className="h-[100px]">
@@ -442,15 +502,6 @@ function ClaudeCostSection({
               </ResponsiveContainer>
             </div>
           )}
-        </div>
-
-        <div className="text-[10px] text-muted-foreground border-t pt-2 mt-1 flex items-start gap-1.5">
-          <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
-          <span>
-            v1 only tracks <span className="font-mono">ct_chat_tokens</span>.
-            Watcher, curiosity, recap, and brief don&apos;t persist per-call cost yet —
-            add per-function cost logging for v2.
-          </span>
         </div>
       </div>
     </Card>
@@ -618,6 +669,276 @@ function BookSection({
 }
 
 // ---------------------------------------------------------------------------
+// Section: Watcher v1.2 Observability
+// ---------------------------------------------------------------------------
+
+function fmtDiversity(v: number | null): string {
+  if (v == null) return '—';
+  return v.toFixed(2);
+}
+
+function fmtPct(v: number): string {
+  return `${v.toFixed(0)}%`;
+}
+
+function fmtAxes(axes: string[]): string {
+  if (!axes || axes.length === 0) return '—';
+  return axes.join(', ');
+}
+
+function diversityColor(v: number | null): string {
+  if (v == null) return 'text-muted-foreground';
+  if (v >= 0.5) return 'text-emerald-400';
+  if (v < 0.3) return 'text-red-400';
+  return 'text-yellow-300';
+}
+
+function DiversityTable({ daily }: { daily: DiversityDailyRow[] }) {
+  // Show newest 14 days on top.
+  const rows = daily.slice().sort((a, b) => b.date.localeCompare(a.date));
+  if (rows.length === 0) {
+    return (
+      <div className="p-4 text-center text-xs text-muted-foreground">
+        No v1.1+ alerts in the last 14 days.
+      </div>
+    );
+  }
+  return (
+    <div className="max-h-[260px] overflow-y-auto">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="h-8 py-1 text-[10px] uppercase tracking-wider">Date</TableHead>
+            <TableHead className="h-8 py-1 text-[10px] uppercase tracking-wider text-right">Alerts</TableHead>
+            <TableHead className="h-8 py-1 text-[10px] uppercase tracking-wider text-right">Scored</TableHead>
+            <TableHead className="h-8 py-1 text-[10px] uppercase tracking-wider text-right">Median Div</TableHead>
+            <TableHead className="h-8 py-1 text-[10px] uppercase tracking-wider text-right">% &gt; 0.5</TableHead>
+            <TableHead className="h-8 py-1 text-[10px] uppercase tracking-wider text-right">% &lt; 0.3</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((r) => (
+            <TableRow key={r.date}>
+              <TableCell className="py-2 text-[11px] font-mono">{r.date}</TableCell>
+              <TableCell className="py-2 text-[11px] tabular-nums text-right">{fmtInt(r.alerts)}</TableCell>
+              <TableCell className="py-2 text-[11px] tabular-nums text-right text-muted-foreground">
+                {fmtInt(r.scored)}
+              </TableCell>
+              <TableCell className={cn('py-2 text-[11px] tabular-nums text-right', diversityColor(r.median))}>
+                {fmtDiversity(r.median)}
+              </TableCell>
+              <TableCell className="py-2 text-[11px] tabular-nums text-right text-emerald-400">
+                {r.scored === 0 ? '—' : fmtPct(r.pct_good)}
+              </TableCell>
+              <TableCell className="py-2 text-[11px] tabular-nums text-right text-red-400">
+                {r.scored === 0 ? '—' : fmtPct(r.pct_echo)}
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+function DemotionChart({ rows, totals }: {
+  rows: DemotionDailyRow[];
+  totals: { demotions: number; alerts: number; rate: number };
+}) {
+  const chartData = rows.map((r) => ({
+    date: r.date.slice(5), // MM-DD
+    demotions: r.demotions,
+    alerts: r.alerts,
+  }));
+
+  const hasData = rows.some((r) => r.demotions > 0 || r.alerts > 0);
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Demotions (14d)</div>
+          <div className="text-xl font-bold tabular-nums text-amber-300">
+            {fmtInt(totals.demotions)}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Alerts Fired (14d)</div>
+          <div className="text-xl font-bold tabular-nums">{fmtInt(totals.alerts)}</div>
+        </div>
+        <div>
+          <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Demotion Rate</div>
+          <div className="text-xl font-bold tabular-nums text-amber-300">
+            {fmtPct(totals.rate)}
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            {totals.demotions} / ({totals.demotions} + {totals.alerts})
+          </div>
+        </div>
+      </div>
+      {!hasData ? (
+        <div className="h-[140px] flex items-center justify-center text-[11px] text-muted-foreground">
+          No alert or demotion activity in the last 14 days.
+        </div>
+      ) : (
+        <div className="h-[140px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="2 2" vertical={false} />
+              <XAxis
+                dataKey="date"
+                tick={{ fontSize: 9 }}
+                stroke="hsl(var(--muted-foreground))"
+                axisLine={false}
+                tickLine={false}
+              />
+              <YAxis
+                tick={{ fontSize: 9 }}
+                stroke="hsl(var(--muted-foreground))"
+                axisLine={false}
+                tickLine={false}
+                width={28}
+                allowDecimals={false}
+              />
+              <Tooltip
+                contentStyle={{ fontSize: 11, padding: '4px 8px' }}
+                labelStyle={{ fontSize: 10 }}
+              />
+              <Line
+                type="monotone"
+                dataKey="demotions"
+                name="demotions"
+                stroke={AMBER}
+                strokeWidth={2}
+                dot={{ r: 2, fill: AMBER }}
+              />
+              <Line
+                type="monotone"
+                dataKey="alerts"
+                name="alerts"
+                stroke={TEAL}
+                strokeWidth={2}
+                dot={{ r: 2, fill: TEAL }}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+      <div className="text-[10px] text-muted-foreground flex items-start gap-1.5">
+        <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+        <span>
+          Demotions come from <span className="font-mono">ct_heartbeats.status_line</span> matches
+          for <span className="font-mono">ALERT demoted to (FLAG|OBSERVATION) … cooldown</span>.
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function EchoCandidatesList({ rows }: { rows: AlertDiversity[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="p-4 text-center text-xs text-muted-foreground">
+        No low-diversity alerts in the last 7 days. The gate is holding.
+      </div>
+    );
+  }
+  return (
+    <div className="divide-y divide-border max-h-[320px] overflow-y-auto">
+      {rows.map((r) => (
+        <div key={r.id} className="px-3 py-2 space-y-1">
+          <div className="flex items-center gap-2 text-[11px]">
+            <span className={cn('font-mono tabular-nums font-semibold', diversityColor(r.diversity))}>
+              {fmtDiversity(r.diversity)}
+            </span>
+            <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono">
+              {r.direction}
+            </Badge>
+            <span className="font-mono text-[10px] truncate max-w-[180px]">
+              {(r.instruments ?? []).join(', ') || '—'}
+            </span>
+            <span className="ml-auto text-muted-foreground text-[10px] shrink-0">
+              {timeAgo(r.created_at)}
+            </span>
+          </div>
+          <div className="text-[10px] text-muted-foreground pl-0.5">
+            <span className="font-mono">axes:</span> {fmtAxes(r.axes)}
+            {r.prior_axes && r.prior_axes.length > 0 && (
+              <>
+                <span className="mx-1">·</span>
+                <span className="font-mono">prior:</span> {fmtAxes(r.prior_axes)}
+              </>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function WatcherObservabilitySection() {
+  const { data, isLoading, error } = useWatcherObservability();
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-4 py-3 border-b bg-muted/30 flex items-center gap-2">
+        <Shield className="w-4 h-4 text-primary" />
+        <span className="text-sm font-semibold">Watcher v1.2 Observability</span>
+        <span className="text-[11px] text-muted-foreground ml-2">
+          evidence diversity + cooldown demotion
+        </span>
+        {data && (
+          <span className="ml-auto text-[11px] text-muted-foreground tabular-nums">
+            {fmtInt(data.totals.alerts)} alert{data.totals.alerts === 1 ? '' : 's'} · {fmtInt(data.totals.demotions)} demo
+          </span>
+        )}
+      </div>
+      {error && (
+        <div className="p-4 text-xs text-red-400 flex items-center gap-2">
+          <AlertCircle className="w-3.5 h-3.5" />
+          Failed to load watcher observability: {(error as Error).message}
+        </div>
+      )}
+      {isLoading && !data ? (
+        <div className="p-6 text-center text-xs text-muted-foreground">
+          Scoring alert diversity…
+        </div>
+      ) : data ? (
+        <div className="p-4 space-y-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                Evidence Diversity by Day
+              </div>
+              <DiversityTable daily={data.daily} />
+            </div>
+            <div>
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                Cooldown Demotions vs Alerts (14d)
+              </div>
+              <DemotionChart rows={data.demotions} totals={data.totals} />
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+              Recent Echo-Chamber Candidates (last 7d, diversity &lt; 0.3)
+            </div>
+            <EchoCandidatesList rows={data.echoCandidates} />
+          </div>
+          <div className="text-[10px] text-muted-foreground border-t pt-2 flex items-start gap-1.5">
+            <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+            <span>
+              Diversity = 1 − |prev ∩ curr| / min(3, |curr|) against the most-recent prior ALERT on
+              the same instrument set within 60min. Rows with empty <span className="font-mono">evidence_axes</span> (pre-v1.2) are not scored.
+            </span>
+          </div>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -661,7 +982,11 @@ export default function Health() {
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <UwSection latest={data.uwLatest} daily={data.uwDaily} />
-              <ClaudeCostSection today={data.chatToday} daily={data.chatDaily} />
+              <ClaudeCostSection
+                todayTotal={data.claudeTodayTotal}
+                todayBySource={data.claudeTodayBySource}
+                daily={data.claudeDailyTotals}
+              />
             </div>
 
             {/* Row 2: Attention histogram + MCP calls */}
@@ -670,7 +995,10 @@ export default function Health() {
               <McpCallsSection calls={data.mcpCalls} />
             </div>
 
-            {/* Row 3: Crons table full width */}
+            {/* Row 3: Watcher v1.2 observability — full width */}
+            <WatcherObservabilitySection />
+
+            {/* Row 4: Crons table full width */}
             <CronsSection crons={data.crons} />
           </>
         ) : null}

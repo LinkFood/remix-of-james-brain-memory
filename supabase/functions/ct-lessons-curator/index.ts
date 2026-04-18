@@ -12,6 +12,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { LESSONS_CURATOR_SYSTEM } from '../_shared/ctPrompts.ts';
 import { embedCtItem } from '../_shared/ctEmbed.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
@@ -68,6 +69,7 @@ serve(async (req) => {
     const userMessage = JSON.stringify({ window: { start, end }, ...data });
 
     let claudeText = '';
+    const claudeCallStart = Date.now();
     try {
       const res = await callClaude({
         model: CLAUDE_MODELS.sonnet,
@@ -77,6 +79,13 @@ serve(async (req) => {
         temperature: 0.2,
       });
       claudeText = parseTextContent(res);
+      logClaudeUsage(supabase, {
+        source: 'ct-lessons-curator',
+        model: CLAUDE_MODELS.sonnet,
+        usage: res.usage,
+        duration_ms: Date.now() - claudeCallStart,
+        metadata: { user_id: userId, window: { start, end } },
+      });
     } catch (e) {
       console.error('[ct-lessons] Claude failed:', e instanceof ClaudeError ? e.message : e);
       return new Response(JSON.stringify({ error: 'Claude call failed' }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

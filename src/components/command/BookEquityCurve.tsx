@@ -13,7 +13,7 @@
  */
 import { Link } from 'react-router-dom';
 import { Card } from '@/components/ui/card';
-import { TrendingUp, TrendingDown, ArrowRight } from 'lucide-react';
+import { TrendingUp, TrendingDown, ArrowRight, AlertTriangle } from 'lucide-react';
 import {
   ComposedChart,
   Area,
@@ -25,6 +25,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { useBookEquityCurve } from '@/hooks/useBookEquityCurve';
+import { useDrawdownAlerts } from '@/hooks/useDrawdownAlerts';
 import { usePnlByTheme, formatBestWorstLine } from '@/components/command/PnLByTheme';
 
 const GREEN = '#00C853';
@@ -75,7 +76,20 @@ function Stat({
 export function BookEquityCurve() {
   const { data, isLoading } = useBookEquityCurve();
   const { data: themeRows } = usePnlByTheme('all');
+  const { data: drawdownAlerts } = useDrawdownAlerts();
   const bestWorstLine = formatBestWorstLine(themeRows);
+
+  // Worst tier wins for the chip display (urgent > warn). Alerts are today-only.
+  const urgentAlert = drawdownAlerts?.find(a => a.tier === 'urgent');
+  const warnAlert = drawdownAlerts?.find(a => a.tier === 'warn');
+  const activeAlert = urgentAlert ?? warnAlert ?? null;
+
+  const handleChipClick = () => {
+    // On /book the trades table has id="trades-table". On CommandStation
+    // there's no target — getElementById no-ops quietly.
+    const el = document.getElementById('trades-table');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   const points = data?.points ?? [];
   const stats = data?.stats;
@@ -128,6 +142,21 @@ export function BookEquityCurve() {
             Book Equity
           </h3>
           <span className="text-[10px] text-muted-foreground">$10k paper · all sessions</span>
+          {activeAlert && (
+            <button
+              type="button"
+              onClick={handleChipClick}
+              className={`text-[10px] font-mono px-1.5 py-0.5 rounded-sm border flex items-center gap-1 transition-colors hover:opacity-80 ${
+                activeAlert.tier === 'urgent'
+                  ? 'bg-red-500/10 border-red-500/40 text-red-500'
+                  : 'bg-yellow-500/10 border-yellow-500/40 text-yellow-500'
+              }`}
+              title="Jump to trades table"
+            >
+              <AlertTriangle className="w-3 h-3" />
+              drawdown alert triggered (tier: {activeAlert.tier}, at ${activeAlert.equity_at_trigger.toLocaleString('en-US', { maximumFractionDigits: 0 })}, {activeAlert.intraday_pnl_pct.toFixed(2)}%)
+            </button>
+          )}
           <Link
             to="/scorecard#calibration"
             className="ml-auto text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"

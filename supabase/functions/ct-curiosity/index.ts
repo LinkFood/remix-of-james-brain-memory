@@ -25,6 +25,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { CURIOSITY_SYSTEM } from '../_shared/ctPrompts.ts';
 import { logMcpCalls } from '../_shared/mcpLog.ts';
 import { embedCtItem } from '../_shared/ctEmbed.ts';
@@ -212,6 +213,7 @@ serve(async (req) => {
 
     let claudeRes: unknown;
     let responseText = '';
+    const claudeCallStart = Date.now();
     try {
       claudeRes = await callClaude({
         model: CLAUDE_MODELS.haiku, // Haiku only — self-queries don't warrant Sonnet cost
@@ -251,6 +253,18 @@ serve(async (req) => {
     const inTok = usage?.input_tokens ?? 0;
     const outTok = usage?.output_tokens ?? 0;
     const costUsd = Number(((inTok / 1_000_000) * HAIKU_IN_PER_MTOK + (outTok / 1_000_000) * HAIKU_OUT_PER_MTOK).toFixed(6));
+
+    // Unified Claude cost log — curiosity keeps its per-row tokens in
+    // ct_curiosity_findings for finding-level audit, but cost aggregation
+    // flows through ct_claude_usage.
+    logClaudeUsage(supabase, {
+      source: 'ct-curiosity',
+      model: CLAUDE_MODELS.haiku,
+      usage: usage ?? null,
+      duration_ms: Date.now() - claudeCallStart,
+      mcp_calls: actualMcpCalls,
+      metadata: { user_id: userId },
+    });
 
     const parsed = parseClaudeJson(responseText);
 

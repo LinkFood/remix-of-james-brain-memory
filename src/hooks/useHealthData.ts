@@ -4,17 +4,21 @@
  * Refresh: 60s. Read-only. No mutations.
  *
  * Sources:
- *   - get_cron_status RPC           → ct_* crons (filtered client-side)
- *   - ct_uw_usage_latest view       → today's UW count / limit / pct
- *   - ct_uw_usage table             → last 7 days mini-line
- *   - ct_chat_tokens_today view     → today's chat cost + 7-day rolling
- *   - ct_attention_stream table     → last 24h attention_score histogram
- *   - ct_mcp_calls table            → last 20 calls
- *   - ct_book / ct_trades tables    → today's session + open positions
+ *   - get_cron_status RPC             → ct_* crons (filtered client-side)
+ *   - ct_uw_usage_latest view         → today's UW count / limit / pct
+ *   - ct_uw_usage table               → last 7 days mini-line
+ *   - ct_claude_usage_today view      → today + 7-day per-function cost breakdown
+ *   - ct_attention_stream table       → last 24h attention_score histogram
+ *   - ct_mcp_calls table              → last 20 calls
+ *   - ct_book / ct_trades tables      → today's session + open positions
  *
- * Notes on cost attribution:
- *   v1 only tracks ct_chat_tokens cost. Watcher / curiosity / recap / brief
- *   don't persist per-call cost yet — surfaced as "not yet tracked" in UI.
+ * Cost attribution:
+ *   Every ct-* function that calls Claude now writes to ct_claude_usage via the
+ *   shared logClaudeUsage() helper. The ct_claude_usage_today view aggregates
+ *   by (session_date, source) — /health groups by source to show per-function
+ *   cost, and by session_date for the 7-day rolling trend. ct_chat_tokens
+ *   still exists (chat-specific audit trail) but is no longer the primary
+ *   source of cost telemetry.
  */
 
 import { useQuery } from '@tanstack/react-query';
@@ -49,7 +53,34 @@ export interface UwUsageDaily {
   daily_limit: number | null;
 }
 
-export interface ChatTokensDaily {
+/**
+ * Raw row from ct_claude_usage_today view — grouped by (session_date, source).
+ * One row per function per day.
+ */
+export interface ClaudeUsageRow {
+  session_date: string;
+  source: string;
+  turns: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  mcp_calls: number;
+  avg_ms: number;
+}
+
+/** Per-function breakdown for a single day — rendered in the table. */
+export interface ClaudeUsageBySource {
+  source: string;
+  turns: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+  mcp_calls: number;
+  avg_ms: number;
+}
+
+/** Totals for a single day — rendered in the top-line + footer. */
+export interface ClaudeUsageDailyTotal {
   session_date: string;
   turns: number;
   tokens_in: number;
@@ -86,8 +117,12 @@ export interface HealthData {
   crons: HealthCronRow[];
   uwLatest: UwUsageLatest | null;
   uwDaily: UwUsageDaily[];
-  chatToday: ChatTokensDaily | null;
-  chatDaily: ChatTokensDaily[];
+  /** Per-function rows for today, sorted by cost desc. */
+  claudeTodayBySource: ClaudeUsageBySource[];
+  /** Today's grand totals (sum across sources). */
+  claudeTodayTotal: ClaudeUsageDailyTotal | null;
+  /** Last 7 days of daily totals for the trend chart. */
+  claudeDailyTotals: ClaudeUsageDailyTotal[];
   attentionBuckets: AttentionBucket[];
   attentionTotal: number;
   mcpCalls: McpCallRow[];
@@ -152,22 +187,31 @@ async function fetchUwDaily(): Promise<UwUsageDaily[]> {
   return Array.from(byDay.values()).sort((a, b) => a.session_date.localeCompare(b.session_date));
 }
 
-async function fetchChatDaily(): Promise<ChatTokensDaily[]> {
-  // ct_chat_tokens_today is a view grouped by session_date. Limit 14 so we
-  // get at least 7 days even with gaps.
+/**
+ * Fetch ct_claude_usage_today (view grouped by session_date + source) and
+ * return the raw per-(day, source) rows. Roll-ups to daily totals and today's
+ * breakdown are computed in the hook aggregator.
+ */
+async function fetchClaudeUsage(): Promise<ClaudeUsageRow[]> {
+  const since = new Date(Date.now() - 8 * 86_400_000).toISOString().slice(0, 10);
   const { data, error } = await supabase
-    .from('ct_chat_tokens_today')
+    .from('ct_claude_usage_today')
     .select('*')
-    .order('session_date', { ascending: false })
-    .limit(14);
+    .gte('session_date', since)
+    .order('session_date', { ascending: false });
   if (error) {
-    console.warn('[useHealthData] ct_chat_tokens_today failed:', error.message);
+    console.warn('[useHealthData] ct_claude_usage_today failed:', error.message);
     return [];
   }
-  // Re-sort ascending for chart rendering.
-  return ((data ?? []) as ChatTokensDaily[]).slice().sort((a, b) =>
-    a.session_date.localeCompare(b.session_date),
-  );
+  return ((data ?? []) as ClaudeUsageRow[]).map((r) => ({
+    ...r,
+    turns: Number(r.turns ?? 0),
+    tokens_in: Number(r.tokens_in ?? 0),
+    tokens_out: Number(r.tokens_out ?? 0),
+    cost_usd: Number(r.cost_usd ?? 0),
+    mcp_calls: Number(r.mcp_calls ?? 0),
+    avg_ms: Number(r.avg_ms ?? 0),
+  }));
 }
 
 async function fetchAttentionHistogram(): Promise<{ buckets: AttentionBucket[]; total: number }> {
@@ -267,6 +311,49 @@ async function fetchBookSnapshot(): Promise<BookSnapshot> {
 }
 
 // ---------------------------------------------------------------------------
+// Aggregation helpers — roll per-(day, source) rows up to daily totals and
+// today's per-source breakdown.
+// ---------------------------------------------------------------------------
+
+function rollUpDailyTotals(rows: ClaudeUsageRow[]): ClaudeUsageDailyTotal[] {
+  const byDay = new Map<string, ClaudeUsageDailyTotal & { _ms_weighted: number }>();
+  for (const r of rows) {
+    const prev = byDay.get(r.session_date);
+    const weighted = r.avg_ms * r.turns; // weight avg_ms by turns to re-average properly
+    if (!prev) {
+      byDay.set(r.session_date, {
+        session_date: r.session_date,
+        turns: r.turns,
+        tokens_in: r.tokens_in,
+        tokens_out: r.tokens_out,
+        cost_usd: r.cost_usd,
+        mcp_calls: r.mcp_calls,
+        avg_ms: r.avg_ms,
+        _ms_weighted: weighted,
+      });
+    } else {
+      prev.turns += r.turns;
+      prev.tokens_in += r.tokens_in;
+      prev.tokens_out += r.tokens_out;
+      prev.cost_usd += r.cost_usd;
+      prev.mcp_calls += r.mcp_calls;
+      prev._ms_weighted += weighted;
+      prev.avg_ms = prev.turns > 0 ? Math.round(prev._ms_weighted / prev.turns) : 0;
+    }
+  }
+  return Array.from(byDay.values())
+    .map(({ _ms_weighted: _ms, ...rest }) => rest)
+    .sort((a, b) => a.session_date.localeCompare(b.session_date));
+}
+
+function pickTodaySources(rows: ClaudeUsageRow[], today: string): ClaudeUsageBySource[] {
+  return rows
+    .filter((r) => r.session_date === today)
+    .map(({ session_date: _sd, ...rest }) => rest)
+    .sort((a, b) => b.cost_usd - a.cost_usd);
+}
+
+// ---------------------------------------------------------------------------
 // Hook
 // ---------------------------------------------------------------------------
 
@@ -280,7 +367,7 @@ export function useHealthData() {
         crons,
         uwLatest,
         uwDaily,
-        chatDaily,
+        claudeUsage,
         attention,
         mcpCalls,
         book,
@@ -288,21 +375,25 @@ export function useHealthData() {
         fetchCtCrons(),
         fetchUwLatest(),
         fetchUwDaily(),
-        fetchChatDaily(),
+        fetchClaudeUsage(),
         fetchAttentionHistogram(),
         fetchMcpCalls(),
         fetchBookSnapshot(),
       ]);
 
       const today = new Date().toISOString().slice(0, 10);
-      const chatToday = chatDaily.find((d) => d.session_date === today) ?? null;
+      const claudeDailyTotals = rollUpDailyTotals(claudeUsage);
+      const claudeTodayBySource = pickTodaySources(claudeUsage, today);
+      const claudeTodayTotal =
+        claudeDailyTotals.find((d) => d.session_date === today) ?? null;
 
       return {
         crons,
         uwLatest,
         uwDaily,
-        chatToday,
-        chatDaily,
+        claudeTodayBySource,
+        claudeTodayTotal,
+        claudeDailyTotals,
         attentionBuckets: attention.buckets,
         attentionTotal: attention.total,
         mcpCalls,

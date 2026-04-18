@@ -12,6 +12,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getNewsHeadlines } from '../_shared/uwClient.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { NEWS_ANALYSIS_SYSTEM } from '../_shared/ctPrompts.ts';
 import { WATCHLIST } from '../_shared/uwClient.ts';
 import { embedCtItem } from '../_shared/ctEmbed.ts';
@@ -65,7 +66,7 @@ async function analyzeAndStore(
   supabase: SupabaseClient,
   userId: string | null,
   row: HeadlineRow
-): Promise<{ ok: boolean; id?: string; error?: string }> {
+): Promise<{ ok: boolean; id?: string; error?: string; tokens_in?: number; tokens_out?: number }> {
   const userMessage = JSON.stringify({
     ticker: row.ticker,
     headline: row.headline,
@@ -74,6 +75,8 @@ async function analyzeAndStore(
   });
 
   let claudeText = '';
+  let tokensIn = 0;
+  let tokensOut = 0;
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.haiku,
@@ -83,6 +86,8 @@ async function analyzeAndStore(
       temperature: 0.2,
     });
     claudeText = parseTextContent(res);
+    tokensIn = res.usage?.input_tokens ?? 0;
+    tokensOut = res.usage?.output_tokens ?? 0;
   } catch (e) {
     return { ok: false, error: e instanceof ClaudeError ? `Claude ${e.status}` : String(e) };
   }
@@ -94,7 +99,7 @@ async function analyzeAndStore(
     const m = cleaned.match(/\{[\s\S]*\}/);
     if (m) try { parsed = JSON.parse(m[0]); } catch { /* ignore */ }
   }
-  if (!parsed?.claude_take || !parsed.impact) return { ok: false, error: 'unparsable' };
+  if (!parsed?.claude_take || !parsed.impact) return { ok: false, error: 'unparsable', tokens_in: tokensIn, tokens_out: tokensOut };
 
   const impact = ['bullish', 'bearish', 'neutral', 'mixed'].includes(parsed.impact) ? parsed.impact : 'neutral';
   const significance = Math.max(1, Math.min(5, Number(parsed.significance) || 2));
@@ -112,7 +117,7 @@ async function analyzeAndStore(
     prompt_version: CT_PROMPT_VERSION,
   }).select('id').maybeSingle();
 
-  if (error || !data) return { ok: false, error: error?.message ?? 'insert failed' };
+  if (error || !data) return { ok: false, error: error?.message ?? 'insert failed', tokens_in: tokensIn, tokens_out: tokensOut };
 
   // Embed significant news only (sig ≥ 3) — keeps the corpus tight
   if (significance >= 3) {
@@ -128,7 +133,7 @@ async function analyzeAndStore(
       },
     });
   }
-  return { ok: true, id: data.id as string };
+  return { ok: true, id: data.id as string, tokens_in: tokensIn, tokens_out: tokensOut };
 }
 
 serve(async (req) => {
@@ -144,6 +149,7 @@ serve(async (req) => {
     const userId = (users?.[0]?.id as string | undefined) ?? null;
 
     let totalHeadlines = 0, analyzed = 0, skipped = 0, failed = 0;
+    let totalTokensIn = 0, totalTokensOut = 0, claudeCallsMade = 0;
     const perTickerStats: Record<string, { headlines: number; analyzed: number; skipped: number; failed: number }> = {};
 
     for (const ticker of WATCHLIST) {
@@ -159,6 +165,12 @@ serve(async (req) => {
         for (const row of headlines) {
           if (seen.has(row.headline)) { stats.skipped++; skipped++; continue; }
           const result = await analyzeAndStore(supabase, userId, row);
+          // Count tokens whenever Claude actually ran (tokens > 0 is the signal).
+          if ((result.tokens_in ?? 0) > 0 || (result.tokens_out ?? 0) > 0) {
+            totalTokensIn += result.tokens_in ?? 0;
+            totalTokensOut += result.tokens_out ?? 0;
+            claudeCallsMade++;
+          }
           if (result.ok) { stats.analyzed++; analyzed++; }
           else { stats.failed++; failed++; console.warn(`[ct-news] ${ticker} failed:`, result.error); }
         }
@@ -169,6 +181,21 @@ serve(async (req) => {
       }
       perTickerStats[ticker] = stats;
     }
+
+    // Unified Claude cost log — one row per ingester run, summed across all
+    // headlines analyzed. Per-headline logging would bloat ct_claude_usage.
+    logClaudeUsage(supabase, {
+      source: 'ct-news-ingester',
+      model: CLAUDE_MODELS.haiku,
+      usage: { input_tokens: totalTokensIn, output_tokens: totalTokensOut },
+      duration_ms: Date.now() - startedAt,
+      metadata: {
+        user_id: userId,
+        claude_calls: claudeCallsMade,
+        headlines_analyzed: analyzed,
+        headlines_seen: totalHeadlines,
+      },
+    });
 
     return new Response(JSON.stringify({
       success: true,

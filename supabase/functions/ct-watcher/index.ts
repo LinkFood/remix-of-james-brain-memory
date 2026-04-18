@@ -25,6 +25,7 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { pullWatcherState, WATCHLIST } from '../_shared/uwClient.ts';
 import { now as clockNow } from '../_shared/clock.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { CT_SYSTEM_PROMPT_V1, CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 import { buildMemoryBundle, getRecentSelfCorrections, getActiveBiases } from '../_shared/memoryRecall.ts';
 import { embedCtItem, buildCtRichText } from '../_shared/ctEmbed.ts';
@@ -979,6 +980,7 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
     let claudeError: string | null = null;
     let mcpCalls = 0;
     const uwKey = Deno.env.get('UW_API_KEY');
+    const claudeCallStart = Date.now();
     try {
       const response = await callClaude({
         model: CLAUDE_MODELS.haiku,
@@ -1005,6 +1007,16 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
       if (mcpCalls > WATCHER_MCP_BUDGET) {
         console.warn(`[ct-watcher] BUDGET EXCEEDED: claimed ${mcpCalls} MCP calls (max ${WATCHER_MCP_BUDGET})`);
       }
+
+      // Unified Claude cost log — every watcher tick now lands in ct_claude_usage.
+      logClaudeUsage(supabase, {
+        source: 'ct-watcher',
+        model: CLAUDE_MODELS.haiku,
+        usage: response.usage,
+        duration_ms: Date.now() - claudeCallStart,
+        mcp_calls: mcpCalls,
+        metadata: { user_id: userId },
+      });
     } catch (e) {
       claudeError = e instanceof ClaudeError ? `Claude ${e.status}: ${e.message}` : String(e);
       console.error('[ct-watcher] Claude call failed:', claudeError);

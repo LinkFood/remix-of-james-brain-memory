@@ -11,6 +11,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { EOD_RECAP_SYSTEM } from '../_shared/ctPrompts.ts';
 import { embedCtItem } from '../_shared/ctEmbed.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
@@ -192,6 +193,7 @@ serve(async (req) => {
     });
 
     let claudeText = '';
+    const claudeCallStart = Date.now();
     try {
       const res = await callClaude({
         model: CLAUDE_MODELS.sonnet,     // better recap quality than Haiku
@@ -201,6 +203,13 @@ serve(async (req) => {
         temperature: 0.3,
       });
       claudeText = parseTextContent(res);
+      logClaudeUsage(supabase, {
+        source: 'ct-eod-recap',
+        model: CLAUDE_MODELS.sonnet,
+        usage: res.usage,
+        duration_ms: Date.now() - claudeCallStart,
+        metadata: { user_id: userId, session_date: start.slice(0, 10) },
+      });
     } catch (e) {
       console.error('[ct-eod] Claude failed:', e instanceof ClaudeError ? e.message : e);
       return new Response(JSON.stringify({ error: 'Claude call failed' }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

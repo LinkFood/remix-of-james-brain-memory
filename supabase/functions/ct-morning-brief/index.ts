@@ -15,6 +15,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { MORNING_BRIEF_SYSTEM, PROMPT_VERSION } from '../_shared/morningBriefPrompt.ts';
 import { embedCtItem } from '../_shared/ctEmbed.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
@@ -328,6 +329,7 @@ serve(async (req) => {
 
     // Claude writes the structured brief
     let claudeText = '';
+    const claudeCallStart = Date.now();
     try {
       const res = await callClaude({
         model: CLAUDE_MODELS.sonnet,
@@ -345,6 +347,13 @@ serve(async (req) => {
         temperature: 0.3,
       });
       claudeText = parseTextContent(res).trim();
+      logClaudeUsage(supabase, {
+        source: 'ct-morning-brief',
+        model: CLAUDE_MODELS.sonnet,
+        usage: res.usage,
+        duration_ms: Date.now() - claudeCallStart,
+        metadata: { user_id: userId, for_date: forDate, corpus_empty: corpusEmpty },
+      });
     } catch (e) {
       console.error('[ct-morning-brief] Claude failed:', e instanceof ClaudeError ? e.message : e);
       return new Response(JSON.stringify({ error: 'Claude call failed' }), {

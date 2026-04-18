@@ -35,10 +35,15 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { extractUserIdWithServiceRole, isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, calculateCost, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { CT_SYSTEM_PROMPT_V1 } from '../_shared/systemPromptV1.ts';
 
-// Replay caps
-const MAX_TICKS = 40;
+// Replay caps. Default is conservative so we don't hit the 150s edge
+// function timeout — 40 Haiku calls × ~4s can overshoot. Body can set
+// `max_ticks` up to 40 for a full session when invoked from a context
+// that can wait (Replay page posts via fetch + long-poll).
+const DEFAULT_MAX_TICKS = 12;
+const MAX_TICKS_CEILING = 40;
 const HAIKU_MAX_TOKENS = 2000;
 const DEFAULT_MODULES = ['watcher_writes', 'cooldown', 'alert_book_commit'] as const;
 
@@ -383,6 +388,8 @@ serve(async (req) => {
   const modules = Array.isArray(body.modules) && body.modules.length > 0
     ? (body.modules as string[])
     : [...DEFAULT_MODULES];
+  const requestedMax = typeof body.max_ticks === 'number' ? Math.floor(body.max_ticks) : DEFAULT_MAX_TICKS;
+  const maxTicks = Math.max(1, Math.min(MAX_TICKS_CEILING, requestedMax));
 
   if (!sessionDate || !/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) {
     return new Response(JSON.stringify({ error: 'session_date (YYYY-MM-DD) required' }), {
@@ -416,7 +423,7 @@ serve(async (req) => {
     .not('current_reads', 'is', null)
     .neq('prompt_version', 'uw-probe')
     .order('created_at', { ascending: true })
-    .limit(MAX_TICKS);
+    .limit(maxTicks);
 
   if (hbErr) {
     return new Response(JSON.stringify({ error: `heartbeat query failed: ${hbErr.message}` }), {
@@ -494,6 +501,8 @@ serve(async (req) => {
 
   let replayObs = 0, replayFlags = 0, replayAlertsCount = 0, replayDemoted = 0;
   let totalIn = 0, totalOut = 0;
+  let claudeCallsOk = 0;
+  const claudeLoopStart = Date.now();
 
   for (const hb of heartbeats) {
     const tickIso = hb.created_at as string;
@@ -530,6 +539,7 @@ serve(async (req) => {
       outTok = response.usage?.output_tokens ?? 0;
       totalIn += inTok;
       totalOut += outTok;
+      if (claudeOk) claudeCallsOk++;
     } catch (e) {
       console.warn(`[ct-replay] claude call failed at tick ${tickIso}:`, e instanceof ClaudeError ? `${e.status} ${e.message}` : String(e));
     }
@@ -598,12 +608,31 @@ serve(async (req) => {
   // 5. Cost estimate
   const costUsd = calculateCost(CLAUDE_MODELS.haiku, { input_tokens: totalIn, output_tokens: totalOut });
 
+  // Unified Claude cost log — one row per replay run (NOT per tick). A 12-tick
+  // replay = 1 insert, not 12. totalIn/totalOut are already summed across the
+  // loop; we pass the pre-computed cost to match the loop's calculation exactly.
+  logClaudeUsage(supabase, {
+    source: 'ct-replay',
+    model: CLAUDE_MODELS.haiku,
+    usage: { input_tokens: totalIn, output_tokens: totalOut },
+    duration_ms: Date.now() - claudeLoopStart,
+    mcp_calls: 0,
+    cost_usd_override: costUsd,
+    metadata: {
+      user_id: auth.userId,
+      session_date: sessionDate,
+      ticks_replayed: heartbeats.length,
+      claude_calls_ok: claudeCallsOk,
+      dry_run: dryRun,
+    },
+  });
+
   return new Response(JSON.stringify({
     session_date: sessionDate,
     dry_run: dryRun,
     modules,
     ticks_replayed: heartbeats.length,
-    max_ticks: MAX_TICKS,
+    max_ticks: maxTicks,
     actual_writes: {
       observations: actualObs.length,
       flags: actualFlags.length,

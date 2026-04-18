@@ -19,6 +19,7 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { CT_CHAT_SYSTEM } from '../_shared/chatPromptV1.ts';
 import { logMcpCalls } from '../_shared/mcpLog.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { voyageEmbed } from '../_shared/ctEmbed.ts';
 
 interface ChatMessage {
@@ -397,6 +398,21 @@ serve(async (req) => {
           user_message: message.slice(0, 500),
           response_chars: responseText.length,
         }).then(() => { /* fire-and-forget */ });
+        // Dual-write to unified ct_claude_usage so /health shows ct-chat
+        // alongside every other ct-* Claude caller. ct_chat_tokens stays as
+        // a chat-specific table (has user_message + response_chars); this
+        // is the cross-function cost view.
+        logClaudeUsage(supabase, {
+          source: 'ct-chat',
+          model: CLAUDE_MODELS.sonnet,
+          usage: usage ?? null,
+          duration_ms: Date.now() - startedAt,
+          mcp_calls: mcpCount,
+          metadata: {
+            user_id: userId,
+            response_chars: responseText.length,
+          },
+        });
       } catch (_e) { /* ignore token logging errors */ }
     } catch (e) {
       const detail = e instanceof ClaudeError ? `Claude ${e.status}` : String(e);

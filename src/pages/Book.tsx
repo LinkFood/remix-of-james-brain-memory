@@ -185,7 +185,7 @@ function TradesTable() {
   const closedLosses = rows.filter(t => t.status === 'closed' && (t.realized_pnl_usd ?? 0) < 0).length;
 
   return (
-    <Card className="overflow-hidden">
+    <Card id="trades-table" className="overflow-hidden scroll-mt-20">
       <div className="px-4 py-2.5 border-b border-border bg-muted/20 flex items-center gap-2">
         <Target className="w-4 h-4 text-primary" />
         <h3 className="text-xs font-semibold uppercase tracking-wide text-foreground">Trades</h3>

@@ -215,3 +215,6 @@ verify_jwt = false
 
 [functions.ct-iv-shift-watch]
 verify_jwt = false
+
+[functions.ct-drawdown-watch]
+verify_jwt = false
