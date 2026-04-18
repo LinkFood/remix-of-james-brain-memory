@@ -16,6 +16,7 @@
  * curiosity, morning-brief, midday-recap, eod-recap, replay, news-ingester,
  * lessons-curator, and chat all appear side-by-side in the Claude Cost card.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useMemo } from 'react';
 import {
   BarChart,
@@ -334,7 +335,7 @@ function UwSection({
             </div>
           ) : (
             <div className="h-[80px]">
-              <ResponsiveContainer width="100%" height="100%">
+              <ChartSafe><ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                   <XAxis
                     dataKey="date"
@@ -356,7 +357,7 @@ function UwSection({
                     dot={{ r: 2, fill: TEAL }}
                   />
                 </LineChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartSafe>
             </div>
           )}
         </div>
@@ -475,7 +476,7 @@ function ClaudeCostSection({
             </div>
           ) : (
             <div className="h-[100px]">
-              <ResponsiveContainer width="100%" height="100%">
+              <ChartSafe><ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                   <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="2 2" vertical={false} />
                   <XAxis
@@ -499,7 +500,7 @@ function ClaudeCostSection({
                   />
                   <Bar dataKey="cost" fill={TEAL} radius={[2, 2, 0, 0]} />
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartSafe>
             </div>
           )}
         </div>
@@ -530,7 +531,7 @@ function AttentionSection({ buckets, total }: { buckets: AttentionBucket[]; tota
           </div>
         ) : (
           <div className="h-[180px]">
-            <ResponsiveContainer width="100%" height="100%">
+            <ChartSafe><ResponsiveContainer width="100%" height="100%">
               <BarChart data={buckets} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="2 2" vertical={false} />
                 <XAxis
@@ -560,7 +561,7 @@ function AttentionSection({ buckets, total }: { buckets: AttentionBucket[]; tota
                   fill={TEAL}
                 />
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartSafe>
           </div>
         )}
         <div className="mt-2 text-[10px] text-muted-foreground">
@@ -782,7 +783,7 @@ function DemotionChart({ rows, totals }: {
         </div>
       ) : (
         <div className="h-[140px]">
-          <ResponsiveContainer width="100%" height="100%">
+          <ChartSafe><ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="hsl(var(--border))" strokeDasharray="2 2" vertical={false} />
               <XAxis
@@ -821,7 +822,7 @@ function DemotionChart({ rows, totals }: {
                 dot={{ r: 2, fill: TEAL }}
               />
             </LineChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartSafe>
         </div>
       )}
       <div className="text-[10px] text-muted-foreground flex items-start gap-1.5">

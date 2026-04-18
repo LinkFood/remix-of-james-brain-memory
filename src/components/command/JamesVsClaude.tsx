@@ -5,6 +5,7 @@
  *
  * James = blue. Claude = teal. Winning side gets a highlight ring.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { useMemo } from 'react';
 import {
   useDisagreementsDetailed,
@@ -123,7 +124,7 @@ export function JamesVsClaude({ variant = 'command', daysBack = 7, onPostView }:
           </div>
           {chartData.some(d => d.value > 0) && (
             <div className="mt-2 h-12">
-              <ResponsiveContainer width="100%" height="100%">
+              <ChartSafe><ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} layout="vertical" margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
                   <XAxis type="number" hide />
                   <YAxis type="category" dataKey="name" hide />
@@ -136,7 +137,7 @@ export function JamesVsClaude({ variant = 'command', daysBack = 7, onPostView }:
                     {chartData.map((d, i) => <Cell key={i} fill={d.fill} />)}
                   </Bar>
                 </BarChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer></ChartSafe>
             </div>
           )}
         </div>

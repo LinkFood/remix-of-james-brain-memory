@@ -18,6 +18,7 @@
  * with empty placeholders — the page still works. No extra UW calls beyond
  * the two LinkGexDeep makes.
  */
+import { ChartSafe } from '@/components/ChartSafe';
 import { memo, useMemo } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
@@ -135,7 +136,7 @@ const PriceSparklineRow = memo(function PriceSparklineRow({
         </span>
       </div>
       <div className="h-[110px]">
-        <ResponsiveContainer width="100%" height="100%">
+        <ChartSafe><ResponsiveContainer width="100%" height="100%">
           <AreaChart data={series} margin={{ top: 4, right: 8, bottom: 0, left: 4 }}>
             <defs>
               <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
@@ -191,7 +192,7 @@ const PriceSparklineRow = memo(function PriceSparklineRow({
               isAnimationActive={false}
             />
           </AreaChart>
-        </ResponsiveContainer>
+        </ResponsiveContainer></ChartSafe>
       </div>
     </Card>
   );
@@ -230,7 +231,7 @@ const AttentionHistoryChart = memo(function AttentionHistoryChart({
         </div>
       ) : (
         <div className="h-[260px]">
-          <ResponsiveContainer width="100%" height="100%">
+          <ChartSafe><ResponsiveContainer width="100%" height="100%">
             <LineChart data={series} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
               <XAxis
                 dataKey="t"
@@ -267,7 +268,7 @@ const AttentionHistoryChart = memo(function AttentionHistoryChart({
                 isAnimationActive={false}
               />
             </LineChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer></ChartSafe>
         </div>
       )}
     </Card>
@@ -472,7 +473,7 @@ const GradedTimeline = memo(function GradedTimeline({ rows }: { rows: GradedEven
       ) : (
         <>
           <div className="h-[120px] px-2 pt-2">
-            <ResponsiveContainer width="100%" height="100%">
+            <ChartSafe><ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
                 <XAxis
                   dataKey="t"
@@ -508,7 +509,7 @@ const GradedTimeline = memo(function GradedTimeline({ rows }: { rows: GradedEven
                   ))}
                 </Bar>
               </BarChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer></ChartSafe>
           </div>
           <div className="flex-1 overflow-auto max-h-[240px] border-t border-white/5">
             <div className="divide-y divide-white/5 text-[11px] tabular-nums">
