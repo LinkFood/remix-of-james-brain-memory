@@ -309,6 +309,27 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
   // 48h window keeps yesterday's shift visible through the next session.
   const { data: ivShifts = [] } = useIvShifts(5, 48);
 
+  // Freshness anchor: max of the three feeds' most-recent event timestamps.
+  // MUST be declared BEFORE any early return so hooks order stays stable
+  // across renders (React error #310 otherwise).
+  const latestTs = useMemo(() => {
+    const candidates: number[] = [];
+    if (data?.generated_at) {
+      const t = Date.parse(data.generated_at);
+      if (Number.isFinite(t)) candidates.push(t);
+    }
+    for (const f of flips) {
+      const t = Date.parse(f.created_at);
+      if (Number.isFinite(t)) candidates.push(t);
+    }
+    for (const s of ivShifts) {
+      const t = Date.parse(s.created_at);
+      if (Number.isFinite(t)) candidates.push(t);
+    }
+    if (candidates.length === 0) return null;
+    return new Date(Math.max(...candidates)).toISOString();
+  }, [data?.generated_at, flips, ivShifts]);
+
   if (isLoading && !data) {
     return (
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-black/40 border border-white/5 text-[10px] text-muted-foreground">
@@ -329,27 +350,6 @@ export const AlwaysOnFlagStrip = memo(function AlwaysOnFlagStrip({
   const hasStructural = structural.length > 0;
   const hasFlips = flips.length > 0;
   const hasIvShifts = ivShifts.length > 0;
-
-  // Freshness anchor: max of the three feeds' most-recent event timestamps.
-  // Multi-source panel — show the most recent event rather than the oldest,
-  // since "the strip is live if ANY signal updated recently".
-  const latestTs = useMemo(() => {
-    const candidates: number[] = [];
-    if (data?.generated_at) {
-      const t = Date.parse(data.generated_at);
-      if (Number.isFinite(t)) candidates.push(t);
-    }
-    for (const f of flips) {
-      const t = Date.parse(f.created_at);
-      if (Number.isFinite(t)) candidates.push(t);
-    }
-    for (const s of ivShifts) {
-      const t = Date.parse(s.created_at);
-      if (Number.isFinite(t)) candidates.push(t);
-    }
-    if (candidates.length === 0) return null;
-    return new Date(Math.max(...candidates)).toISOString();
-  }, [data?.generated_at, flips, ivShifts]);
 
   // If every ticker came back LEAN/NEUTRAL AND there are no regime flips
   // AND no IV shifts: show the muted pill.
