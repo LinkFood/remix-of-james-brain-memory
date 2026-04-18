@@ -767,7 +767,26 @@ serve(async (req) => {
 
     // 2. Pull live UW state
     const rawState = await pullWatcherState();
-    const condensed = condenseWatcherState(rawState, clock.iso);
+
+    // 2a. Look up prior-session VIX close for change_pct. Defensive: missing
+    // table, no rows, or query error → prevClose = null and change_pct stays
+    // null in the condensed snapshot. Never crashes the cycle.
+    let vixPrevClose: number | null = null;
+    try {
+      const { data: priorVix } = await supabase
+        .from('ct_vix_history')
+        .select('level, date')
+        .order('date', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (priorVix?.level != null && Number.isFinite(Number(priorVix.level))) {
+        vixPrevClose = Number(priorVix.level);
+      }
+    } catch (e) {
+      console.warn('[ct-watcher] ct_vix_history lookup threw:', e instanceof Error ? e.message : e);
+    }
+
+    const condensed = condenseWatcherState(rawState, clock.iso, vixPrevClose);
 
     // 2b. Write full-strike gamma landscape to ct_gex_timeseries for heatmap
     // history. Uses greek-exposure raw data (wider strike range than spot).

@@ -37,6 +37,22 @@ export interface CondensedInstrumentState {
   near_atm_strikes: Array<{ strike: number; call_gex: number; put_gex: number; net: number }>;
 }
 
+/**
+ * VIX condensed shape. `level` is the raw index (or VIXY proxy price when
+ * source='VIXY' — the proxy scalar is NOT directly comparable to VIX levels,
+ * so consumers should lean on `change_pct` + `tier` over the raw number when
+ * source !== 'VIX'). Tier thresholds are canonical VIX regimes — for VIXY we
+ * bucket by change_pct against a notional VIX-equivalent anchor instead of
+ * the level. See condenseVix for details.
+ */
+export interface CondensedVix {
+  level: number;
+  change_pct: number | null;       // vs prior day close in ct_vix_history
+  tier: 'low' | 'mid' | 'elevated' | 'stressed';
+  source: 'VIX' | 'VIXY';
+  endpoint: string;
+}
+
 export interface CondensedState {
   timestamp_utc: string;
   per_ticker: Record<string, CondensedInstrumentState>;
@@ -47,7 +63,28 @@ export interface CondensedState {
     net_volume: number | null;
     timestamp: string | null;
   };
+  /** null when UW refused both VIX and VIXY for this cycle. */
+  vix: CondensedVix | null;
   errors: Array<{ ticker: string; endpoint: string; error: string }>;
+}
+
+// ── VIX tier thresholds. Canonical regime-vol mapping:
+//    <15        low        — vol-suppressed, mean-revert favored
+//    15..25     mid        — normal regime
+//    25..40     elevated   — risk-off tilt, convexity bid
+//    >40        stressed   — crisis-level fear, directional edge scarce
+//
+// NOTE on VIXY fallback: when source='VIXY' the level is an ETF price (~$20-$30
+// range, not comparable to VIX). We still run it through the same numeric
+// thresholds — the ordering is roughly preserved but the labels are imperfect.
+// Consumers that care about precision should gate on `source === 'VIX'`.
+export const VIX_TIER_THRESHOLDS = { low: 15, mid: 25, elevated: 40 } as const;
+
+function vixTierFromLevel(level: number): 'low' | 'mid' | 'elevated' | 'stressed' {
+  if (level < VIX_TIER_THRESHOLDS.low) return 'low';
+  if (level < VIX_TIER_THRESHOLDS.mid) return 'mid';
+  if (level < VIX_TIER_THRESHOLDS.elevated) return 'elevated';
+  return 'stressed';
 }
 
 // Near-ATM filter window (±10% default, clamped for low-vol instruments).
@@ -280,7 +317,45 @@ function condenseMarketTide(raw: unknown): CondensedState['market_tide'] {
 }
 
 /**
+ * Condense the raw VIX read from uwClient.getVixSpot() into a tiered object.
+ *
+ * prevClose is the most recent ct_vix_history row's level (typically yesterday's
+ * 21:05 UTC capture). When the history table is empty or prevClose is missing,
+ * change_pct resolves to null and tier is derived from level only.
+ *
+ * For VIXY-proxied reads we still bucket by the canonical VIX-level thresholds —
+ * this is imperfect (VIXY ≈ $20 in a low-VIX regime, >$30 in a stressed regime),
+ * but the ordering roughly preserves regime ranking. Consumers that care about
+ * precision should gate on `source === 'VIX'`.
+ */
+export function condenseVix(
+  raw: { level: number; source: 'VIX' | 'VIXY'; endpoint: string } | null,
+  prevClose: number | null,
+): CondensedVix | null {
+  if (!raw) return null;
+  const level = raw.level;
+  if (!Number.isFinite(level) || level <= 0) return null;
+
+  let change_pct: number | null = null;
+  if (prevClose !== null && Number.isFinite(prevClose) && prevClose > 0) {
+    change_pct = ((level - prevClose) / prevClose) * 100;
+  }
+
+  return {
+    level,
+    change_pct,
+    tier: vixTierFromLevel(level),
+    source: raw.source,
+    endpoint: raw.endpoint,
+  };
+}
+
+/**
  * Main entry: build a compact state object from pullWatcherState() output.
+ *
+ * `vixPrevClose` is optional — when provided (from ct_vix_history) it enables
+ * change_pct. Missing or null on first-run days is fine; change_pct just
+ * stays null and tier derives from level alone.
  */
 export function condenseWatcherState(input: {
   spot_gex: Record<string, unknown>;
@@ -289,8 +364,9 @@ export function condenseWatcherState(input: {
   spx_spot_gex: unknown | null;
   spx_greek_exposure: unknown | null;
   market_tide: unknown | null;
+  vix: { level: number; source: 'VIX' | 'VIXY'; endpoint: string } | null;
   errors: Array<{ ticker: string; endpoint: string; error: string }>;
-}, timestampUtc: string): CondensedState {
+}, timestampUtc: string, vixPrevClose: number | null = null): CondensedState {
   const per_ticker: Record<string, CondensedInstrumentState> = {};
   const tickers = new Set<string>([
     ...Object.keys(input.spot_gex),
@@ -314,6 +390,7 @@ export function condenseWatcherState(input: {
     per_ticker,
     spx_macro: spxCondensed,
     market_tide: condenseMarketTide(input.market_tide),
+    vix: condenseVix(input.vix, vixPrevClose),
     errors: input.errors,
   };
 }

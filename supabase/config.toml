@@ -171,6 +171,9 @@ verify_jwt = false
 [functions.ct-pre-bell-grader]
 verify_jwt = false
 
+[functions.ct-pre-bell-alert]
+verify_jwt = false
+
 [functions.ct-bias-booth]
 verify_jwt = false
 
@@ -229,6 +232,9 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ct-spy-capture]
+verify_jwt = false
+
+[functions.ct-vix-capture]
 verify_jwt = false
 
 [functions.ct-premarket-scan]

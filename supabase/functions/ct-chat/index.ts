@@ -360,6 +360,271 @@ interface ChatMessage {
   content: string;
 }
 
+// ============================================================================
+// /debate — Claude argues BOTH sides of a question with equal rigor.
+// Confirmation-bias antidote. Claude does NOT pick a winner — James decides.
+// Sonnet only (quality-critical; ~$0.02-0.03/debate expected). Ephemeral —
+// not persisted in v1 (handler is wrapped so adding a ct_debates write later
+// is a 3-line change; see persistDebate hook below).
+// ============================================================================
+
+const DEBATE_SYSTEM = `You must now present BOTH SIDES of the user's question with equal
+rigor. This is structured adversarial analysis — not a balanced
+"here are all sides" fluff piece.
+
+Output structure (JSON):
+  topic: restate the question
+  bull_case: {
+    headline: 1 sentence,
+    evidence: string[] (5-8 specific datapoints / conditions),
+    best_trade: "what you'd do if this side wins",
+    probability_estimate: 0-100,
+  }
+  bear_case: symmetric
+  your_prior_lean: "bullish" | "bearish" | "neutral" | "no prior",
+  recent_grade_on_this: if you've called this topic before, cite the grade (or null),
+  your_bias_risk: what's your confirmation-bias risk here?
+  synthesis: final 2-3 sentences — what weight to give each side. NOT a conclusion. NOT a recommendation. Just "given both cases, the edge is conditional on X."
+
+Rules:
+  - Each case MUST cite at least 3 specific datapoints from the payload (not general market wisdom).
+  - If one side is genuinely thin, SAY SO — don't fabricate evidence to balance.
+  - your_bias_risk MUST reference a specific logged bias if applicable.
+  - Numbers-first, no cheerleading.
+  - probability_estimate on each side is INDEPENDENT — they do NOT need to sum to 100.
+    If both cases are weak, BOTH estimates should be low (e.g. bull 30, bear 25 → "neither
+    case is strong"). If both are strong, both can be high. Never force balance.
+  - Do NOT pick a winner in the synthesis. James decides. Your job is to frame the trade-off,
+    not resolve it.
+
+Return ONLY a JSON object. No prose outside the JSON. No code fence.`;
+
+interface DebateSide {
+  headline: string;
+  evidence: string[];
+  best_trade: string;
+  probability_estimate: number | null;
+}
+
+interface DebateCard {
+  topic: string;
+  bull_case: DebateSide;
+  bear_case: DebateSide;
+  your_prior_lean: 'bullish' | 'bearish' | 'neutral' | 'no prior' | string;
+  recent_grade_on_this: string | null;
+  your_bias_risk: string;
+  synthesis: string;
+  /** Optional — the instrument parsed from the topic (if any). Powers "Propose from X side" pre-fill. */
+  instrument: string | null;
+}
+
+/**
+ * Build /debate context. Same base as /chat plus topic-specific focus:
+ *   - If an instrument was extracted, pull recent theses + ct_flags + ct_alerts
+ *     with Claude's latest direction on it (so "your_prior_lean" is grounded).
+ *   - Pull recent ct_grades on the instrument (so "recent_grade_on_this" can cite
+ *     a specific verdict rather than hand-wave).
+ *   - Pull active ct_biases so "your_bias_risk" is anchored to real logged biases.
+ */
+async function buildDebateContext(
+  supabase: ReturnType<typeof createClient>,
+  topic: string,
+  instrumentFilter: string | null,
+) {
+  const attentionCutoff = new Date(Date.now() - 8 * 60 * 60 * 1000).toISOString();
+  const filter = instrumentFilter?.toUpperCase() ?? null;
+
+  const [
+    heartbeat,
+    theses,
+    openTrades,
+    biases,
+    recentFlags,
+    recentAlerts,
+    recentGrades,
+    news,
+  ] = await Promise.all([
+    supabase.from('ct_heartbeats').select('status_line, current_reads, watching, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('ct_theses').select('instrument, direction, conviction, up_case, down_case, watching, rationale, updated_at'),
+    supabase.from('ct_trades').select('id, instrument, side, size_pct, entry_price, stop_price, target_price, thesis, conviction, status, opened_at').eq('status', 'open'),
+    supabase.from('ct_biases').select('id, pattern, instruments, severity, notes, created_at').eq('active', true),
+    supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, glance, created_at').gte('created_at', attentionCutoff).order('created_at', { ascending: false }).limit(10),
+    supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, alert_trigger, glance, created_at').gte('created_at', attentionCutoff).order('created_at', { ascending: false }).limit(10),
+    // Recent grades: if filtered by instrument, show Claude's track record on it.
+    // Otherwise skip (a general debate doesn't need every grade in the book).
+    filter
+      ? supabase.from('ct_grades').select('subject_type, instrument, claimed_direction, actual_direction, verdict, actual_return_pct, calibration_delta, graded_at').eq('instrument', filter).order('graded_at', { ascending: false }).limit(10)
+      : Promise.resolve({ data: [] }),
+    supabase.from('ct_news_analyses').select('instrument, news_headline, impact, significance, claude_take, created_at').gte('significance', 3).order('created_at', { ascending: false }).limit(8),
+  ]);
+
+  const hb = heartbeat.data as { status_line?: string; current_reads?: Record<string, unknown>; created_at?: string } | null;
+  const snapshot = hb?.current_reads?._snapshot ?? null;
+
+  const filterArr = <T extends { instrument?: string | null; instruments?: string[] | null }>(rows: T[] | null | undefined): T[] => {
+    if (!filter || !rows) return rows ?? [];
+    return rows.filter((r) => {
+      if (r.instrument && String(r.instrument).toUpperCase() === filter) return true;
+      if (Array.isArray(r.instruments) && r.instruments.map((x) => String(x).toUpperCase()).includes(filter)) return true;
+      return false;
+    });
+  };
+
+  // Claude's "most recent direction on the topic" — strongest signal when
+  // filtered by instrument. Pick the most recent thesis + most recent flag/alert.
+  const filteredTheses = filterArr(theses.data as Array<Record<string, unknown>> | null ?? []);
+  const filteredFlags = filterArr(recentFlags.data as Array<Record<string, unknown>> | null ?? []);
+  const filteredAlerts = filterArr(recentAlerts.data as Array<Record<string, unknown>> | null ?? []);
+  const mostRecentDirection = (() => {
+    const latestFlag = filteredFlags[0] as Record<string, unknown> | undefined;
+    const latestAlert = filteredAlerts[0] as Record<string, unknown> | undefined;
+    const pick = latestAlert?.created_at && latestFlag?.created_at
+      ? (String(latestAlert.created_at) > String(latestFlag.created_at) ? latestAlert : latestFlag)
+      : (latestAlert ?? latestFlag ?? null);
+    return pick
+      ? {
+          source: pick === latestAlert ? 'alert' : 'flag',
+          direction: pick.direction ?? null,
+          conviction: pick.conviction ?? null,
+          horizon: pick.horizon ?? null,
+          glance: pick.glance ?? null,
+          at: pick.created_at ?? null,
+        }
+      : null;
+  })();
+
+  return {
+    topic,
+    instrument_filter: filter,
+    latest_status: hb?.status_line ?? null,
+    latest_pulse_at: hb?.created_at ?? null,
+    market_state: snapshot,
+    // Claude's prior direction on THIS topic — grounds `your_prior_lean`.
+    claudes_latest_direction_on_topic: mostRecentDirection,
+    relevant_theses: filteredTheses,
+    open_positions_on_topic: filterArr(openTrades.data as Array<Record<string, unknown>> | null ?? []),
+    active_biases: biases.data ?? [],
+    recent_flags_on_topic: filteredFlags.slice(0, 5),
+    recent_alerts_on_topic: filteredAlerts.slice(0, 5),
+    // Claude's track record on this instrument (for `recent_grade_on_this`).
+    recent_grades_on_topic: recentGrades.data ?? [],
+    recent_significant_news: filterArr(news.data as Array<Record<string, unknown>> | null ?? []),
+  };
+}
+
+/**
+ * Handle /debate — build topic context, call Sonnet with DEBATE_SYSTEM,
+ * parse structured JSON, return a DebateCard. Ephemeral; see note atop
+ * this section re: v2 persistence.
+ */
+async function handleDebateCommand(
+  supabase: ReturnType<typeof createClient>,
+  topic: string,
+  instrumentFilter: string | null,
+): Promise<{
+  response: string;
+  debate_card: DebateCard | null;
+  model: string;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+}> {
+  if (!topic) {
+    return {
+      response: `/debate needs a topic. Try "/debate should I hold SPY" or "/debate long NVDA vs short NVDA here".`,
+      debate_card: null,
+      model: 'sonnet',
+      tokens_in: 0,
+      tokens_out: 0,
+      cost_usd: 0,
+    };
+  }
+
+  const context = await buildDebateContext(supabase, topic, instrumentFilter);
+  const userMsg = `[LIVE STATE + TOPIC CONTEXT]\n${JSON.stringify(context, null, 2)}\n\nDebate this topic with equal rigor on both sides: "${topic}"`;
+
+  let raw = '';
+  let tokensIn = 0;
+  let tokensOut = 0;
+  let costUsd = 0;
+  try {
+    const res = await callClaude({
+      model: CLAUDE_MODELS.sonnet,
+      system: DEBATE_SYSTEM,
+      messages: [{ role: 'user', content: userMsg }],
+      max_tokens: 2500,
+      temperature: 0.4,
+    });
+    raw = parseTextContent(res).trim();
+    const usage = (res as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+    tokensIn = usage?.input_tokens ?? 0;
+    tokensOut = usage?.output_tokens ?? 0;
+    costUsd = Number(((tokensIn / 1_000_000) * 3 + (tokensOut / 1_000_000) * 15).toFixed(6));
+  } catch (e) {
+    const detail = e instanceof ClaudeError ? `Claude ${e.status}` : String(e);
+    return {
+      response: `Debate failed — Claude error: ${detail}`,
+      debate_card: null,
+      model: 'sonnet',
+      tokens_in: 0,
+      tokens_out: 0,
+      cost_usd: 0,
+    };
+  }
+
+  let parsed: Record<string, unknown> | null = null;
+  try {
+    const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    parsed = JSON.parse(stripped);
+  } catch (_e) {
+    return {
+      response: `Debate returned malformed JSON — can't render card. Raw head: ${raw.slice(0, 200)}`,
+      debate_card: null,
+      model: 'sonnet',
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+      cost_usd: costUsd,
+    };
+  }
+
+  const sideShape = (side: unknown): DebateSide => {
+    const s = (side ?? {}) as Record<string, unknown>;
+    const prob = typeof s.probability_estimate === 'number'
+      ? Math.max(0, Math.min(100, s.probability_estimate))
+      : null;
+    return {
+      headline: typeof s.headline === 'string' ? s.headline : '',
+      evidence: Array.isArray(s.evidence) ? (s.evidence as unknown[]).map(String) : [],
+      best_trade: typeof s.best_trade === 'string' ? s.best_trade : '',
+      probability_estimate: prob,
+    };
+  };
+
+  const card: DebateCard = {
+    topic: typeof parsed?.topic === 'string' ? parsed.topic : topic,
+    bull_case: sideShape(parsed?.bull_case),
+    bear_case: sideShape(parsed?.bear_case),
+    your_prior_lean: typeof parsed?.your_prior_lean === 'string' ? parsed.your_prior_lean : 'no prior',
+    recent_grade_on_this: typeof parsed?.recent_grade_on_this === 'string' ? parsed.recent_grade_on_this : null,
+    your_bias_risk: typeof parsed?.your_bias_risk === 'string' ? parsed.your_bias_risk : '',
+    synthesis: typeof parsed?.synthesis === 'string' ? parsed.synthesis : '',
+    instrument: instrumentFilter ?? null,
+  };
+
+  // v2 hook: persistence. When we're ready to save, add a `ct_debates` insert
+  // here. Keeping it a single call-site so adding it later is mechanical.
+  // await persistDebate(supabase, { topic, card, tokens_in: tokensIn, tokens_out: tokensOut, cost_usd: costUsd });
+
+  return {
+    response: `Debate on "${card.topic}" — both sides below. Your call.`,
+    debate_card: card,
+    model: 'sonnet',
+    tokens_in: tokensIn,
+    tokens_out: tokensOut,
+    cost_usd: costUsd,
+  };
+}
+
 /**
  * Parse and execute a commit-trade command from chat.
  * Grammars accepted:
@@ -916,6 +1181,40 @@ serve(async (req) => {
         tokens_in: proposed.tokens_in,
         tokens_out: proposed.tokens_out,
         cost_usd: proposed.cost_usd,
+        mcp_calls: 0,
+        duration_ms: Date.now() - startedAt,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // /debate — force Claude to steel-man BOTH sides. Confirmation-bias
+    // antidote. Sonnet required for quality (~$0.02-0.03). Ephemeral; see the
+    // persistence hook comment in handleDebateCommand. Claude is explicitly
+    // instructed NOT to pick a winner — James decides.
+    // Match: "/debate <anything>" OR bare "debate <topic>" (no chip fallback
+    // since chips pre-fill the slash form).
+    const slashDebateMatch = message.match(/^\s*\/debate\s+(.+)$/i);
+    const bareDebateMatch = !slashDebateMatch && message.match(/^\s*debate\s+(.+)$/i);
+    const debateMatch = slashDebateMatch ?? bareDebateMatch;
+    if (debateMatch) {
+      const topic = debateMatch[1].trim();
+      // Extract first clean ticker from the topic (reuse chat's extractor so
+      // stopword handling stays consistent). If the topic is "should I hold
+      // my current position", there's no instrument → null, and the debate
+      // will use general context.
+      const tickers = extractInstruments(topic);
+      const instrumentFilter = tickers.length > 0 ? tickers[0] : null;
+      const debated = await handleDebateCommand(supabase, topic, instrumentFilter);
+      return new Response(JSON.stringify({
+        response: debated.response,
+        debate_card: debated.debate_card,
+        debate: true,
+        model: debated.model,
+        tokens_in: debated.tokens_in,
+        tokens_out: debated.tokens_out,
+        cost_usd: debated.cost_usd,
         mcp_calls: 0,
         duration_ms: Date.now() - startedAt,
       }), {

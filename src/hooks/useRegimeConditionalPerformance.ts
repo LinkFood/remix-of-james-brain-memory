@@ -54,7 +54,8 @@ export type RegimeDim =
   | 'session'
   | 'catalyst'
   | 'dow'
-  | 'opex';
+  | 'opex'
+  | 'vix_tier';
 
 export interface RegimeSlice {
   value: string;
@@ -128,6 +129,7 @@ interface ClaimRow {
 interface HeartbeatLite {
   created_at: string;
   regime: 'positive' | 'negative' | 'unknown' | null;
+  vixTier: 'low' | 'mid' | 'elevated' | 'stressed' | null;
 }
 
 interface IvRow {
@@ -227,6 +229,13 @@ function extractRegime(hb: { current_reads: unknown }): HeartbeatLite['regime'] 
   return snap?.spx_macro?.regime ?? null;
 }
 
+function extractVixTier(hb: { current_reads: unknown }): HeartbeatLite['vixTier'] {
+  const snap = (hb.current_reads as Record<string, unknown> | undefined)?._snapshot as
+    | { vix?: { tier?: 'low' | 'mid' | 'elevated' | 'stressed' } | null }
+    | undefined;
+  return snap?.vix?.tier ?? null;
+}
+
 function rMultipleOf(claim: ClaimRow, actualPct: number): number | null {
   const em = claim.expected_move;
   if (!em) return null;
@@ -250,6 +259,7 @@ interface TaggedGrade {
   catalyst: 'yes' | 'no';
   dow: 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'weekend';
   opex: 'opex_week' | 'normal';
+  vix_tier: 'low' | 'mid' | 'elevated' | 'stressed' | 'unknown';
 }
 
 export function useRegimeConditionalPerformance() {
@@ -322,13 +332,17 @@ export function useRegimeConditionalPerformance() {
       const alertMap = new Map<string, ClaimRow>();
       for (const a of alerts) alertMap.set(a.id, a);
 
-      // ─── heartbeats (sorted asc, with regime extracted once) ──────────────
+      // ─── heartbeats (sorted asc, with regime + vix tier extracted once) ──
+      // Keep a row if EITHER regime or vix tier is present — we bisect into
+      // the merged list for both lookups. A row with only vix_tier still
+      // contributes a vix sample even on the rare heartbeats missing spx_macro.
       const hbs: HeartbeatLite[] = rawHbs
         .map((h) => ({
           created_at: h.created_at,
           regime: extractRegime(h),
+          vixTier: extractVixTier(h),
         }))
-        .filter((h) => h.regime != null)
+        .filter((h) => h.regime != null || h.vixTier != null)
         .sort(
           (a, b) =>
             new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
@@ -341,7 +355,22 @@ export function useRegimeConditionalPerformance() {
         if (idx === 0) return 'unknown';
         const hit = hbs[idx - 1].regime;
         return hit ?? 'unknown';
-        // unused but left intentionally to silence linters tracking hbTimes
+      }
+
+      function vixTierAt(
+        tsMs: number,
+      ): 'low' | 'mid' | 'elevated' | 'stressed' | 'unknown' {
+        if (hbs.length === 0) return 'unknown';
+        // Walk backward from the nearest heartbeat until we find one whose
+        // _snapshot.vix was populated — older heartbeats predate the VIX
+        // capture rollout or the cycle failed both VIX and VIXY.
+        let idx = bisectRightByTime(hbs, (h) => new Date(h.created_at).getTime(), tsMs);
+        while (idx > 0) {
+          const hit = hbs[idx - 1].vixTier;
+          if (hit != null) return hit;
+          idx -= 1;
+        }
+        return 'unknown';
       }
       void hbTimes;
 
@@ -425,6 +454,7 @@ export function useRegimeConditionalPerformance() {
           catalyst: catalystAt(claim.instruments, createdMs),
           dow: dowBucket(claim.created_at),
           opex: isOpexWeek(claim.created_at) ? 'opex_week' : 'normal',
+          vix_tier: vixTierAt(createdMs),
         });
       }
 
@@ -526,6 +556,17 @@ export function useRegimeConditionalPerformance() {
           'weekend',
         ]),
         aggregate('opex', 'OPEX week', (t) => t.opex, ['opex_week', 'normal']),
+        // VIX tier — independent of per-ticker iv_rank. A mid-iv-rank ticker in
+        // a stressed-VIX tape often behaves differently than the same ticker
+        // in a low-VIX tape (correlation-to-index dominates). Complements,
+        // never replaces, `iv`.
+        aggregate('vix_tier', 'VIX regime', (t) => t.vix_tier, [
+          'low',
+          'mid',
+          'elevated',
+          'stressed',
+          'unknown',
+        ]),
       ];
 
       // ─── cross: gamma × session ──────────────────────────────────────────

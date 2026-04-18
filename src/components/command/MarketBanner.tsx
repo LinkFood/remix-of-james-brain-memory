@@ -102,6 +102,14 @@ interface CondensedTicker extends CondensedMacro {
   ticker: string;
 }
 
+interface SnapshotVix {
+  level: number;
+  change_pct: number | null;
+  tier: 'low' | 'mid' | 'elevated' | 'stressed';
+  source: 'VIX' | 'VIXY';
+  endpoint?: string;
+}
+
 type Snapshot = {
   per_ticker?: Record<string, CondensedTicker>;
   spx_macro?: CondensedMacro;
@@ -111,6 +119,7 @@ type Snapshot = {
     net_volume: number | null;
     timestamp: string | null;
   };
+  vix?: SnapshotVix | null;
 };
 
 // ──────── formatters ────────
@@ -194,6 +203,7 @@ export function MarketBanner() {
   const macro = snap?.spx_macro;
   const perTicker = snap?.per_ticker ?? {};
   const tide = snap?.market_tide;
+  const vix = snap?.vix ?? null;
 
   const netPremium = (tide?.net_call_premium ?? 0) - (tide?.net_put_premium ?? 0);
   const tideDirection: 'bull' | 'bear' | 'neutral' =
@@ -300,20 +310,58 @@ export function MarketBanner() {
               )}
             </div>
             {regime !== 'unknown' && flipDistPct !== null ? (
-              <div className={`flex items-center justify-between px-2 py-1 rounded-md text-xs font-semibold ${
-                regime === 'positive'
-                  ? 'bg-green-500/10 text-green-400 border border-green-500/20'
-                  : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-              }`}>
-                <span className="font-mono">
-                  {regime === 'positive' ? '+Γ · mean-revert' : '−Γ · momentum'}
-                </span>
-                <span className="text-foreground/70 font-mono tabular-nums text-[11px]">
-                  {fmtPct(flipDistPct)} vs flip
-                </span>
+              <div className="flex items-stretch gap-1.5">
+                <div className={`flex-1 flex items-center justify-between px-2 py-1 rounded-md text-xs font-semibold ${
+                  regime === 'positive'
+                    ? 'bg-green-500/10 text-green-400 border border-green-500/20'
+                    : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                }`}>
+                  <span className="font-mono">
+                    {regime === 'positive' ? '+Γ · mean-revert' : '−Γ · momentum'}
+                  </span>
+                  <span className="text-foreground/70 font-mono tabular-nums text-[11px]">
+                    {fmtPct(flipDistPct)} vs flip
+                  </span>
+                </div>
+                {vix && Number.isFinite(vix.level) && vix.level > 0 && (
+                  <span
+                    className={`inline-flex items-center gap-1 px-1.5 rounded-md text-[10px] font-mono tabular-nums font-semibold border shrink-0 ${
+                      vix.tier === 'low'
+                        ? 'bg-green-500/10 text-green-400 border-green-500/25'
+                        : vix.tier === 'mid'
+                        ? 'bg-amber-500/10 text-amber-400 border-amber-500/25'
+                        : vix.tier === 'elevated'
+                        ? 'bg-orange-500/10 text-orange-400 border-orange-500/25'
+                        : 'bg-red-500/10 text-red-400 border-red-500/25'
+                    }`}
+                    title={vix.source === 'VIXY' ? 'Proxied via VIXY — raw level not comparable to index VIX' : undefined}
+                  >
+                    VIX {vix.level.toFixed(1)}
+                    <span className="opacity-70 uppercase tracking-wider text-[9px]">{vix.tier}</span>
+                  </span>
+                )}
               </div>
             ) : (
-              <div className="text-xs text-muted-foreground px-2 py-1">regime unknown</div>
+              <div className="flex items-center justify-between gap-1.5">
+                <div className="text-xs text-muted-foreground px-2 py-1">regime unknown</div>
+                {vix && Number.isFinite(vix.level) && vix.level > 0 && (
+                  <span
+                    className={`inline-flex items-center gap-1 px-1.5 rounded-md text-[10px] font-mono tabular-nums font-semibold border ${
+                      vix.tier === 'low'
+                        ? 'bg-green-500/10 text-green-400 border-green-500/25'
+                        : vix.tier === 'mid'
+                        ? 'bg-amber-500/10 text-amber-400 border-amber-500/25'
+                        : vix.tier === 'elevated'
+                        ? 'bg-orange-500/10 text-orange-400 border-orange-500/25'
+                        : 'bg-red-500/10 text-red-400 border-red-500/25'
+                    }`}
+                    title={vix.source === 'VIXY' ? 'Proxied via VIXY — raw level not comparable to index VIX' : undefined}
+                  >
+                    VIX {vix.level.toFixed(1)}
+                    <span className="opacity-70 uppercase tracking-wider text-[9px]">{vix.tier}</span>
+                  </span>
+                )}
+              </div>
             )}
 
             <div className="grid grid-cols-3 gap-2 text-[10px] font-mono tabular-nums pt-1">

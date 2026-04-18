@@ -388,6 +388,85 @@ export const MARKET_BANNER_SYMBOL = 'SPX';
 
 export type WatchlistTicker = typeof WATCHLIST[number];
 
+// ============================================================================
+// VIX — volatility index
+// ============================================================================
+
+/**
+ * VIX spot read with ETF fallback.
+ *
+ * UW is options-centric and does not guarantee VIX (the CBOE index itself) is
+ * queryable via the standard stock endpoints — VIX options trade on VIX
+ * futures, not on the index, so spot-exposures may return empty. We try VIX
+ * first (cheap if it works), then fall back to VIXY (1x short-term VIX ETF,
+ * imperfect proxy but always available).
+ *
+ * Returns null if BOTH calls fail — watcher treats null as "VIX unavailable"
+ * and the _snapshot.vix field is omitted, not crashed.
+ *
+ * 1 additional UW call per watcher tick (2 only on fallback). At 120 req/min
+ * we have headroom.
+ */
+export async function getVixSpot(): Promise<{
+  level: number;
+  source: 'VIX' | 'VIXY';
+  endpoint: string;
+} | null> {
+  // Attempt 1: VIX direct. Use spot-exposures — it returns `price` at the top
+  // of the payload even when strike data is thin.
+  try {
+    const raw = await getSpotGexByStrike('VIX');
+    const level = extractSpotPrice(raw);
+    if (level !== null && level > 0) {
+      return { level, source: 'VIX', endpoint: 'spot-exposures/strike' };
+    }
+  } catch {
+    // fall through — UW may 4xx on VIX (no options chain under this path)
+  }
+
+  // Attempt 2: VIXY ETF fallback. Actual VIX level ≠ VIXY price, but VIXY's
+  // % change tracks short-term VIX futures; caller treats the proxy level as
+  // an advisory-only scalar and relies on change_pct for the real signal.
+  try {
+    const raw = await getSpotGexByStrike('VIXY');
+    const level = extractSpotPrice(raw);
+    if (level !== null && level > 0) {
+      return { level, source: 'VIXY', endpoint: 'spot-exposures/strike' };
+    }
+  } catch {
+    // fall through
+  }
+
+  return null;
+}
+
+/** Dig the underlying price out of a spot-exposures payload. Defensive. */
+function extractSpotPrice(raw: unknown): number | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  const candidates = ['price', 'spot', 'underlying_price', 'last_price', 'close'];
+  for (const k of candidates) {
+    const v = r[k];
+    if (v === undefined || v === null) continue;
+    const n = typeof v === 'number' ? v : Number(v);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  const data = (r as { data?: unknown }).data;
+  if (Array.isArray(data) && data.length > 0) {
+    const first = data[0] as Record<string, unknown>;
+    for (const k of candidates) {
+      const v = first[k];
+      if (v === undefined || v === null) continue;
+      const n = typeof v === 'number' ? v : Number(v);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+  }
+  if (data && typeof data === 'object' && !Array.isArray(data)) {
+    return extractSpotPrice(data);
+  }
+  return null;
+}
+
 /**
  * Pull a full watcher-cycle state bundle.
  *
@@ -412,6 +491,7 @@ export async function pullWatcherState(tickers: readonly string[] = WATCHLIST): 
   spx_spot_gex: unknown | null;
   spx_greek_exposure: unknown | null;
   market_tide: unknown | null;
+  vix: { level: number; source: 'VIX' | 'VIXY'; endpoint: string } | null;
   errors: Array<{ ticker: string; endpoint: string; error: string }>;
 }> {
   const spot_gex: Record<string, unknown> = {};
@@ -441,6 +521,18 @@ export async function pullWatcherState(tickers: readonly string[] = WATCHLIST): 
     errors.push({ ticker: 'MARKET', endpoint: 'market-tide', error: e instanceof Error ? e.message : String(e) });
   }
 
+  // Macro: VIX level (or VIXY fallback). Defensive — null on failure, never
+  // crashes the cycle.
+  let vix: { level: number; source: 'VIX' | 'VIXY'; endpoint: string } | null = null;
+  try {
+    vix = await getVixSpot();
+    if (vix === null) {
+      errors.push({ ticker: 'VIX', endpoint: 'spot-exposures/strike', error: 'VIX + VIXY both returned no usable price' });
+    }
+  } catch (e) {
+    errors.push({ ticker: 'VIX', endpoint: 'spot-exposures/strike', error: e instanceof Error ? e.message : String(e) });
+  }
+
   // Per-ticker loop
   for (const ticker of tickers) {
     try {
@@ -460,5 +552,5 @@ export async function pullWatcherState(tickers: readonly string[] = WATCHLIST): 
     }
   }
 
-  return { spot_gex, greek_exposure, options_volume, spx_spot_gex, spx_greek_exposure, market_tide, errors };
+  return { spot_gex, greek_exposure, options_volume, spx_spot_gex, spx_greek_exposure, market_tide, vix, errors };
 }

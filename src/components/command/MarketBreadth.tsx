@@ -85,12 +85,22 @@ export function MarketBreadth() {
             className={`ml-auto inline-flex items-center gap-1 px-1.5 py-0 rounded text-[9px] font-semibold uppercase tracking-wider border ${
               b.vix.tier === 'low'
                 ? 'bg-green-500/10 text-green-400 border-green-500/25'
-                : b.vix.tier === 'high'
-                ? 'bg-red-500/10 text-red-400 border-red-500/25'
-                : 'bg-amber-500/10 text-amber-400 border-amber-500/25'
+                : b.vix.tier === 'mid'
+                ? 'bg-amber-500/10 text-amber-400 border-amber-500/25'
+                : b.vix.tier === 'elevated'
+                ? 'bg-orange-500/10 text-orange-400 border-orange-500/25'
+                : 'bg-red-500/10 text-red-400 border-red-500/25'
             }`}
+            title={b.vix.source === 'VIXY' ? 'Proxied via VIXY — raw level not comparable to index VIX' : undefined}
           >
-            VIX {b.vix.level.toFixed(1)} · {b.vix.tier}
+            VIX {b.vix.level.toFixed(1)}
+            {b.vix.change_pct != null && Number.isFinite(b.vix.change_pct) && (
+              <span className="opacity-70 font-mono tabular-nums">
+                {b.vix.change_pct >= 0 ? '+' : ''}{b.vix.change_pct.toFixed(1)}%
+              </span>
+            )}
+            <span className="opacity-80">· {b.vix.tier}</span>
+            {b.vix.source === 'VIXY' && <span className="opacity-60">·proxy</span>}
           </span>
         )}
       </div>

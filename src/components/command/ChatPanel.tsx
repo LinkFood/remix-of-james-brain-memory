@@ -43,6 +43,24 @@ interface ProposalCard {
   commit_syntax: string;
 }
 
+interface DebateSide {
+  headline: string;
+  evidence: string[];
+  best_trade: string;
+  probability_estimate: number | null;
+}
+
+interface DebateCard {
+  topic: string;
+  bull_case: DebateSide;
+  bear_case: DebateSide;
+  your_prior_lean: string;
+  recent_grade_on_this: string | null;
+  your_bias_risk: string;
+  synthesis: string;
+  instrument: string | null;
+}
+
 interface MessageMeta {
   model?: string;
   tokens_in?: number;
@@ -56,6 +74,8 @@ interface MessageMeta {
   cross_facet_used?: boolean;
   /** /propose returned these — rendered as expanded review cards. */
   proposal_cards?: ProposalCard[];
+  /** /debate returned this — rendered as a structured two-column adversarial card. */
+  debate_card?: DebateCard;
 }
 
 interface Message {
@@ -75,6 +95,8 @@ const SUGGESTED_PROMPTS = [
   "How's the book?",
   "What's hot right now?",
   "Propose a trade",
+  "/debate hold my current position",
+  "/debate SPY direction",
   "Scan SPY for anomalies",
   "What did you flag in the last hour?",
   "Show me today's worst trade",
@@ -239,6 +261,182 @@ function AssistantBody({ content }: { content: string }) {
       >
         {content}
       </ReactMarkdown>
+    </div>
+  );
+}
+
+/**
+ * Renders a /debate result as a structured adversarial card. Two columns:
+ * bull (emerald) and bear (rose), each with its own probability bar.
+ * IMPORTANT: the two probabilities are INDEPENDENT and do NOT need to sum to
+ * 100. Both can be low (neither case is strong) or both high (genuinely hard
+ * call). This is deliberate — forcing them to sum to 100 collapses "no edge"
+ * into "it's a coin flip", which is a different (and less useful) statement.
+ *
+ * Claude is prompted NOT to pick a winner in the synthesis. James decides.
+ * The "Propose from X side" buttons pre-fill a /propose command so James can
+ * immediately convert the winning side into a concrete proposal — but the
+ * debate output itself stays neutral.
+ */
+function DebateCardView({
+  card,
+  onProposeFromSide,
+}: {
+  card: DebateCard;
+  onProposeFromSide: (side: 'bull' | 'bear') => void;
+}) {
+  const priorColor = card.your_prior_lean.toLowerCase().includes('bull')
+    ? 'text-emerald-600 dark:text-emerald-400'
+    : card.your_prior_lean.toLowerCase().includes('bear')
+      ? 'text-rose-600 dark:text-rose-400'
+      : 'text-muted-foreground';
+
+  return (
+    <div className="my-2 rounded-lg border border-border bg-background/70 overflow-hidden">
+      {/* Header — topic */}
+      <div className="px-3 py-2 border-b border-border/60 bg-muted/40">
+        <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-0.5">debate</div>
+        <div className="text-xs font-semibold">{card.topic}</div>
+      </div>
+
+      {/* Two-column cases */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-0 border-b border-border/60">
+        <DebateSideView
+          label="bull case"
+          side={card.bull_case}
+          color="emerald"
+          onPropose={() => onProposeFromSide('bull')}
+          canPropose={Boolean(card.instrument)}
+        />
+        <div className="border-t md:border-t-0 md:border-l border-border/60">
+          <DebateSideView
+            label="bear case"
+            side={card.bear_case}
+            color="rose"
+            onPropose={() => onProposeFromSide('bear')}
+            canPropose={Boolean(card.instrument)}
+          />
+        </div>
+      </div>
+
+      {/* Prior lean + recent grade */}
+      <div className="grid grid-cols-2 gap-2 px-3 py-2 text-[10.5px] border-b border-border/60">
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">your prior lean</div>
+          <div className={`font-semibold ${priorColor}`}>{card.your_prior_lean}</div>
+        </div>
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">recent grade on this</div>
+          <div className="text-muted-foreground">{card.recent_grade_on_this ?? '—'}</div>
+        </div>
+      </div>
+
+      {/* Bias risk — amber emphasis */}
+      {card.your_bias_risk && (
+        <div className="px-3 py-2 text-[10.5px] border-b border-border/60 bg-amber-500/5">
+          <div className="text-[9px] uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-0.5">
+            your bias risk
+          </div>
+          <div className="text-amber-700 dark:text-amber-300">{card.your_bias_risk}</div>
+        </div>
+      )}
+
+      {/* Synthesis — neutral framing, NOT a recommendation */}
+      {card.synthesis && (
+        <div className="px-3 py-2 text-[11px] leading-relaxed bg-muted/20">
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-1">
+            synthesis (not a recommendation)
+          </div>
+          <div className="italic">{card.synthesis}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * One side of a debate card. Color drives header + probability bar.
+ * Probability bar is per-side (0-100). The paired-side bar is NOT a
+ * complement — they're independent estimates (see DebateCardView note).
+ */
+function DebateSideView({
+  label,
+  side,
+  color,
+  onPropose,
+  canPropose,
+}: {
+  label: string;
+  side: DebateSide;
+  color: 'emerald' | 'rose';
+  onPropose: () => void;
+  canPropose: boolean;
+}) {
+  const colorClasses = color === 'emerald'
+    ? {
+        header: 'text-emerald-700 dark:text-emerald-400',
+        bar: 'bg-emerald-500',
+        btn: 'border-emerald-500/50 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10',
+        chip: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-400',
+      }
+    : {
+        header: 'text-rose-700 dark:text-rose-400',
+        bar: 'bg-rose-500',
+        btn: 'border-rose-500/50 text-rose-700 dark:text-rose-300 hover:bg-rose-500/10',
+        chip: 'bg-rose-500/10 text-rose-700 dark:text-rose-400',
+      };
+  const prob = side.probability_estimate;
+
+  return (
+    <div className="p-3 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <div className={`text-[9px] uppercase tracking-wider font-semibold ${colorClasses.header}`}>
+          {label}
+        </div>
+        {prob != null && (
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${colorClasses.chip}`}>
+            {prob}%
+          </span>
+        )}
+      </div>
+
+      {/* Probability bar — independent per side, not a complement */}
+      {prob != null && (
+        <div className="h-1 w-full bg-muted rounded-full overflow-hidden">
+          <div
+            className={`h-full ${colorClasses.bar}`}
+            style={{ width: `${Math.max(0, Math.min(100, prob))}%` }}
+          />
+        </div>
+      )}
+
+      <div className="text-[11px] font-semibold leading-snug">{side.headline || '—'}</div>
+
+      {side.evidence.length > 0 && (
+        <ul className="space-y-0.5 text-[10.5px] leading-snug">
+          {side.evidence.map((e, i) => (
+            <li key={i} className="text-foreground/85">• {e}</li>
+          ))}
+        </ul>
+      )}
+
+      {side.best_trade && (
+        <div className="text-[10.5px] mt-1 pt-2 border-t border-border/40">
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">best trade if this wins</div>
+          <div className="text-foreground/90">{side.best_trade}</div>
+        </div>
+      )}
+
+      <button
+        onClick={onPropose}
+        disabled={!canPropose}
+        className={`mt-auto text-[10.5px] px-2 py-1 rounded border ${colorClasses.btn} transition-colors disabled:opacity-40 disabled:cursor-not-allowed`}
+        title={canPropose
+          ? `Pre-fill /propose for the ${color === 'emerald' ? 'bull' : 'bear'} side`
+          : 'Instrument unknown — /debate didn\'t parse a ticker from the topic'}
+      >
+        Propose trade from {color === 'emerald' ? 'bull' : 'bear'} side →
+      </button>
     </div>
   );
 }
@@ -430,6 +628,9 @@ export function ChatPanel() {
         cross_facet_hits: typeof body.cross_facet_hits === 'number' ? body.cross_facet_hits : undefined,
         cross_facet_used: typeof body.cross_facet_used === 'boolean' ? body.cross_facet_used : undefined,
         proposal_cards: Array.isArray(body.proposal_cards) ? (body.proposal_cards as ProposalCard[]) : undefined,
+        debate_card: body.debate_card && typeof body.debate_card === 'object'
+          ? (body.debate_card as DebateCard)
+          : undefined,
       };
       setMessages([...next, {
         role: 'assistant',
@@ -516,6 +717,31 @@ export function ChatPanel() {
                               }}
                             />
                           ))}
+                        </div>
+                      )}
+                      {m.meta?.debate_card && (
+                        <div className="mt-1">
+                          <DebateCardView
+                            card={m.meta.debate_card}
+                            onProposeFromSide={(side) => {
+                              // Pre-fill /propose with the instrument. If Claude's
+                              // debate had no instrument (e.g. "hold my current
+                              // position"), we fall back to a bare /propose — the
+                              // button is disabled in that case anyway.
+                              const card = m.meta!.debate_card!;
+                              const instrument = card.instrument ?? '';
+                              // Include a brief comment tail so James sees WHICH
+                              // side the propose came from when he reviews. ct-chat's
+                              // /propose regex ignores trailing tokens after the
+                              // ticker — this is display-only context for James.
+                              const dir = side === 'bull' ? 'bull' : 'bear';
+                              const cmd = instrument
+                                ? `/propose ${instrument}  # from ${dir} side: ${side === 'bull' ? card.bull_case.headline : card.bear_case.headline}`
+                                : '/propose';
+                              setInput(cmd);
+                              textareaRef.current?.focus();
+                            }}
+                          />
                         </div>
                       )}
                       <CrossFacetChip meta={m.meta} />

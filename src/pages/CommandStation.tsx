@@ -30,8 +30,10 @@ import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
 import { BookEquityCurve } from '@/components/command/BookEquityCurve';
 import { ClaudesRead } from '@/components/command/ClaudesRead';
 import { ColdOpen } from '@/components/command/ColdOpen';
+import { PreBellChecklist } from '@/components/command/PreBellChecklist';
 import { HistoricalAnalogsCard } from '@/components/command/HistoricalAnalogsCard';
 import { PremarketGapsCard } from '@/components/command/PremarketGapsCard';
+import { isPreMarket } from '@/lib/etMarketClock';
 import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
 import { McpCallsPanel } from '@/components/command/McpCallsPanel';
@@ -40,7 +42,7 @@ import { SizingCalculatorButton } from '@/components/command/SizingCalculator';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { RefreshCw, Zap, Flag } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -50,6 +52,15 @@ export default function CommandStation() {
   // Shared drill-down sheet — AlwaysOnFlagStrip and GexRadar both trigger it.
   const [deepTicker, setDeepTicker] = useState<string | null>(null);
   const deepOpen = deepTicker !== null;
+
+  // Pre-bell mode swaps ColdOpen → PreBellChecklist during 04:00–09:31 ET on
+  // trading days. Polled every 30s (not every render) so the swap happens at
+  // the minute boundary without re-rendering on every second tick.
+  const [preBell, setPreBell] = useState(() => isPreMarket());
+  useEffect(() => {
+    const id = setInterval(() => setPreBell(isPreMarket()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   async function fireWatcher() {
     setFiring(true);
@@ -114,9 +125,12 @@ export default function CommandStation() {
             orchestrate visibility here. */}
         <PremarketGapsCard />
 
-        {/* Cold Open — "what matters right now?" digest. Literal first block.
-            Scrolls to or opens the right panel for each bullet. */}
-        <ColdOpen onOpenDeep={setDeepTicker} />
+        {/* Pre-bell mode: glance-able readiness checklist replaces ColdOpen
+            from 04:00 → 09:30 ET (weekdays, skips NYSE holidays). Once the
+            bell rings at 09:31 ET, ColdOpen returns and the checklist
+            self-unmounts. PreBellChecklist also returns null on non-trading
+            days, so ColdOpen is always the fallback. */}
+        {preBell ? <PreBellChecklist /> : <ColdOpen onOpenDeep={setDeepTicker} />}
 
         {/* Historical Analogs — "today's tape matches these past sessions".
             Directional forecast (avg EOD return of top-N analogs) + link to

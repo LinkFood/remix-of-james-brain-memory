@@ -10,9 +10,10 @@
  *   - per-sector averages (Indexes / Mag7 / Commodities)
  *   - correlation-to-SPY = share of tickers moving the same sign as SPY
  *
- * VIX: not captured as a structured field in heartbeats today (_snapshot has
- * per_ticker + spx_macro + market_tide only — VIX appears only in prompt text).
- * `vix` returns null until ct-watcher starts storing it.
+ * VIX: captured in _snapshot.vix as { level, change_pct, tier, source } by
+ * ct-watcher (see _shared/ctStateCondense.ts). `vix` returns null on
+ * heartbeats older than the VIX-capture rollout or when UW refused both
+ * VIX and VIXY for the cycle.
  *
  * "Warming up" is handled by the consumer — we return null on leader/laggard
  * and 0 on the counts when there's no anchor yet. The component shows the
@@ -64,7 +65,12 @@ export interface MarketBreadth {
     pct: number | null;                         // % of tickers moving same sign as SPY
     label: 'high' | 'mixed' | 'divergent' | 'n/a';
   };
-  vix: { level: number; tier: 'low' | 'mid' | 'high' } | null;
+  vix: {
+    level: number;
+    change_pct: number | null;
+    tier: 'low' | 'mid' | 'elevated' | 'stressed';
+    source: 'VIX' | 'VIXY';
+  } | null;
   /** Cumulative (advances − declines) per heartbeat across today's session. */
   breadth_trend: Array<{ t: string; net: number }>;
   has_data: boolean;
@@ -75,9 +81,17 @@ export interface MarketBreadth {
 // ─── snapshot shape (local-only, matches MarketBanner) ──────────────────────
 
 interface SnapshotTicker { price: number | null }
+interface SnapshotVix {
+  level: number;
+  change_pct: number | null;
+  tier: 'low' | 'mid' | 'elevated' | 'stressed';
+  source: 'VIX' | 'VIXY';
+  endpoint?: string;
+}
 interface Snapshot {
   per_ticker?: Record<string, SnapshotTicker>;
   spx_macro?: { price: number | null };
+  vix?: SnapshotVix | null;
 }
 
 function snapOf(hb: Heartbeat | null | undefined): Snapshot | undefined {
@@ -197,6 +211,20 @@ export function useMarketBreadth(): MarketBreadth {
 
     const has_data = counted > 0;
 
+    // 7) VIX pull-through from latest heartbeat's _snapshot.vix.
+    //    null when UW refused both VIX and VIXY for the cycle or the heartbeat
+    //    predates the capture rollout. Shape mirrors CondensedVix from
+    //    _shared/ctStateCondense.ts.
+    const rawVix = latestSnap?.vix ?? null;
+    const vix = rawVix && Number.isFinite(rawVix.level) && rawVix.level > 0
+      ? {
+          level: rawVix.level,
+          change_pct: rawVix.change_pct,
+          tier: rawVix.tier,
+          source: rawVix.source,
+        }
+      : null;
+
     return {
       advances,
       declines,
@@ -206,7 +234,7 @@ export function useMarketBreadth(): MarketBreadth {
       laggard,
       sectors,
       correlation_to_spy: { pct: correlation_pct, label: corrLabel },
-      vix: null, // not captured in ct_heartbeats today
+      vix,
       breadth_trend,
       has_data,
       ticker_count: counted,
