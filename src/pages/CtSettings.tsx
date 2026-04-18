@@ -33,6 +33,15 @@ import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
 import { Slider } from '@/components/ui/slider';
 import { Separator } from '@/components/ui/separator';
+import { Badge } from '@/components/ui/badge';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import {
   Tooltip,
   TooltipContent,
@@ -52,6 +61,11 @@ import {
   Wallet,
   Radar,
   Scale,
+  Shield,
+  Zap,
+  AlertTriangle,
+  Sliders,
+  History,
 } from 'lucide-react';
 
 type ConfigValue = number | boolean | string | null;
@@ -151,11 +165,114 @@ function sliderStep(min: number, max: number): number {
   return 10_000;
 }
 
+// ---------------------------------------------------------------------------
+// Preset types + constants — wired to the apply_config_preset RPC and the
+// ct-preset-apply edge function.
+// ---------------------------------------------------------------------------
+
+type PresetName = 'conservative' | 'moderate' | 'aggressive' | 'paranoid';
+
+interface PresetMeta {
+  label: string;
+  blurb: string;
+  icon: React.ComponentType<{ className?: string }>;
+  tone: string; // tailwind color class fragment
+}
+
+const PRESETS: { name: PresetName; meta: PresetMeta }[] = [
+  {
+    name: 'conservative',
+    meta: {
+      label: 'Conservative',
+      blurb: 'Tight cooldowns, small size, few trades. Fewer, higher-conviction.',
+      icon: Shield,
+      tone: 'text-sky-400 border-sky-400/40 hover:bg-sky-400/10',
+    },
+  },
+  {
+    name: 'moderate',
+    meta: {
+      label: 'Moderate',
+      blurb: 'Restore the seeded defaults. Balanced posture.',
+      icon: Sliders,
+      tone: 'text-emerald-400 border-emerald-400/40 hover:bg-emerald-400/10',
+    },
+  },
+  {
+    name: 'aggressive',
+    meta: {
+      label: 'Aggressive',
+      blurb: 'More trades, tighter latency. Opens the book up.',
+      icon: Zap,
+      tone: 'text-amber-400 border-amber-400/40 hover:bg-amber-400/10',
+    },
+  },
+  {
+    name: 'paranoid',
+    meta: {
+      label: 'Paranoid',
+      blurb: 'Defensive. For volatile days. Very few entries.',
+      icon: AlertTriangle,
+      tone: 'text-rose-400 border-rose-400/40 hover:bg-rose-400/10',
+    },
+  },
+];
+
+interface PresetDiffEntry {
+  key: string;
+  current: ConfigValue | null;
+  next: ConfigValue;
+  action: 'change' | 'skip' | 'noop';
+}
+
+interface PresetPreview {
+  preset: string;
+  entries: PresetDiffEntry[];
+}
+
+interface PresetLogRow {
+  id: string;
+  preset: string;
+  applied_at: string;
+  applied_by: string | null;
+  keys_changed: number;
+  keys_skipped: number;
+  diff_summary: Array<{ key: string; old: unknown; new: unknown }>;
+}
+
+interface CurrentPreset {
+  preset: string;
+  applied_at: string;
+  applied_by: string | null;
+  keys_changed: number;
+  keys_skipped: number;
+  log_id: string;
+}
+
+function formatRelativeTime(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const sec = Math.max(0, Math.floor(diffMs / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const days = Math.floor(hr / 24);
+  return `${days}d ago`;
+}
+
 export default function CtSettings() {
   const [rows, setRows] = useState<ConfigRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [drafts, setDrafts] = useState<Record<string, ConfigValue>>({});
   const [saving, setSaving] = useState<Record<string, boolean>>({});
+
+  // Preset state
+  const [currentPreset, setCurrentPreset] = useState<CurrentPreset | null>(null);
+  const [history, setHistory] = useState<PresetLogRow[]>([]);
+  const [preview, setPreview] = useState<PresetPreview | null>(null);
+  const [previewLoading, setPreviewLoading] = useState<PresetName | null>(null);
+  const [applying, setApplying] = useState(false);
 
   const fetchRows = useCallback(async () => {
     setLoading(true);
@@ -186,9 +303,84 @@ export default function CtSettings() {
     setLoading(false);
   }, []);
 
+  const fetchPresetState = useCallback(async () => {
+    // Current preset (most recent log row).
+    const currentRes = await supabase.rpc('current_config_preset');
+    if (!currentRes.error && currentRes.data) {
+      setCurrentPreset(currentRes.data as unknown as CurrentPreset);
+    } else {
+      setCurrentPreset(null);
+    }
+
+    // Last 5 preset changes.
+    const histRes = await supabase
+      .from('ct_config_preset_log')
+      .select('*')
+      .order('applied_at', { ascending: false })
+      .limit(5);
+    if (!histRes.error) {
+      setHistory((histRes.data ?? []) as unknown as PresetLogRow[]);
+    }
+  }, []);
+
   useEffect(() => {
     fetchRows();
-  }, [fetchRows]);
+    fetchPresetState();
+  }, [fetchRows, fetchPresetState]);
+
+  const openPreview = async (name: PresetName) => {
+    setPreviewLoading(name);
+    const { data, error } = await supabase.rpc('preview_config_preset', { p_preset: name });
+    setPreviewLoading(null);
+    if (error) {
+      toast.error(`Preview failed: ${error.message}`);
+      return;
+    }
+    setPreview(data as unknown as PresetPreview);
+  };
+
+  const confirmApplyPreset = async () => {
+    if (!preview) return;
+    setApplying(true);
+    const { data, error } = await supabase.functions.invoke('ct-preset-apply', {
+      body: { preset: preview.preset },
+    });
+    setApplying(false);
+
+    if (error) {
+      toast.error(`Apply failed: ${error.message}`);
+      return;
+    }
+    const res = data as { keys_changed?: number; keys_skipped?: number; preset?: string };
+    toast.success(
+      `Preset applied: ${res.preset} · ${res.keys_changed ?? 0} changed`
+        + (res.keys_skipped ? ` · ${res.keys_skipped} skipped` : ''),
+    );
+    setPreview(null);
+    await Promise.all([fetchRows(), fetchPresetState()]);
+  };
+
+  // Drift = count of keys that currently differ from the last-applied preset's
+  // target values. A preset with 0 changes right now but 3 keys touched since
+  // = "custom (drifted from moderate)".
+  const presetDrift = useMemo(() => {
+    if (!currentPreset) return 0;
+    // Without re-fetching the map, we use a proxy: if any row.value differs
+    // from row.default_value AND the applied preset was 'moderate', it's drift.
+    // For non-moderate presets, we cannot compute drift client-side without
+    // the map — show 0 and rely on a preview click to surface it.
+    if (currentPreset.preset === 'moderate' || currentPreset.preset === 'default') {
+      return rows.filter((r) => {
+        const a = r.value;
+        const b = r.default_value;
+        if (typeof a === 'number' && typeof b === 'number') {
+          return Math.abs(a - b) > 1e-9;
+        }
+        return a !== b;
+      }).length;
+    }
+    return 0;
+  }, [rows, currentPreset]);
 
   const byCategory = useMemo(() => {
     const map: Record<string, ConfigRow[]> = {};
@@ -307,6 +499,92 @@ export default function CtSettings() {
             </div>
           </Card>
 
+          {/* Preset bar */}
+          <Card className="p-5 bg-card border-border">
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <h2 className="text-base font-semibold">Risk preset</h2>
+                  {currentPreset ? (
+                    <Badge variant="outline" className="text-xs font-mono">
+                      {presetDrift > 0 ? `custom · drifted from ${currentPreset.preset}` : currentPreset.preset}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-xs font-mono">custom</Badge>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {currentPreset ? (
+                    <>
+                      Last applied: <span className="font-mono">{currentPreset.preset}</span>{' · '}
+                      {formatRelativeTime(currentPreset.applied_at)}
+                      {' · '}{currentPreset.keys_changed} keys changed
+                    </>
+                  ) : (
+                    'No preset has been applied yet — values are whatever was seeded.'
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+              {PRESETS.map(({ name, meta }) => {
+                const Icon = meta.icon;
+                const isCurrent = currentPreset?.preset === name && presetDrift === 0;
+                return (
+                  <Tooltip key={name}>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className={`h-auto py-3 flex flex-col items-center gap-1 ${meta.tone} ${isCurrent ? 'ring-1 ring-current' : ''}`}
+                        disabled={previewLoading !== null}
+                        onClick={() => openPreview(name)}
+                      >
+                        <Icon className="w-4 h-4" />
+                        <span className="text-sm font-semibold">{meta.label}</span>
+                        {previewLoading === name && (
+                          <span className="text-[10px] text-muted-foreground">loading…</span>
+                        )}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" className="max-w-xs text-xs">
+                      {meta.blurb}
+                    </TooltipContent>
+                  </Tooltip>
+                );
+              })}
+            </div>
+          </Card>
+
+          {/* Preset history */}
+          {history.length > 0 && (
+            <Card className="p-5 bg-card border-border">
+              <div className="flex items-center gap-2 mb-3">
+                <History className="w-4 h-4 text-muted-foreground" />
+                <h2 className="text-base font-semibold">Recent preset changes</h2>
+              </div>
+              <div className="space-y-2">
+                {history.map((row) => (
+                  <div
+                    key={row.id}
+                    className="flex items-center justify-between text-xs py-1.5 px-2 rounded-md bg-muted/30"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Badge variant="outline" className="font-mono">{row.preset}</Badge>
+                      <span className="text-muted-foreground">
+                        {row.keys_changed} changed
+                        {row.keys_skipped > 0 ? ` · ${row.keys_skipped} skipped` : ''}
+                      </span>
+                    </div>
+                    <div className="text-muted-foreground font-mono text-[11px] shrink-0">
+                      {new Date(row.applied_at).toLocaleString()} · {formatRelativeTime(row.applied_at)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
           {loading && (
             <Card className="p-4 text-sm text-muted-foreground">Loading config…</Card>
           )}
@@ -366,6 +644,78 @@ export default function CtSettings() {
               );
             })}
         </div>
+
+        {/* Preset preview dialog */}
+        <Dialog open={!!preview} onOpenChange={(o) => { if (!o) setPreview(null); }}>
+          <DialogContent className="max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>
+                Apply preset: <span className="font-mono">{preview?.preset}</span>
+              </DialogTitle>
+              <DialogDescription>
+                Review the diff below. Click Confirm to apply atomically. Keys already at the
+                target value are hidden; keys not present in the current config are marked
+                <span className="font-mono mx-1">skip</span>.
+              </DialogDescription>
+            </DialogHeader>
+
+            {preview && (() => {
+              const changes = preview.entries.filter((e) => e.action === 'change');
+              const skips = preview.entries.filter((e) => e.action === 'skip');
+              const noops = preview.entries.filter((e) => e.action === 'noop').length;
+              return (
+                <div className="space-y-3 max-h-[50vh] overflow-auto">
+                  <div className="text-xs text-muted-foreground flex gap-3">
+                    <span><span className="font-mono text-emerald-400">{changes.length}</span> change{changes.length === 1 ? '' : 's'}</span>
+                    <span><span className="font-mono">{noops}</span> already match</span>
+                    {skips.length > 0 && (
+                      <span><span className="font-mono text-amber-400">{skips.length}</span> skip (not seeded)</span>
+                    )}
+                  </div>
+
+                  {changes.length === 0 && skips.length === 0 && (
+                    <div className="text-sm text-muted-foreground py-4 text-center">
+                      No changes — config already matches this preset.
+                    </div>
+                  )}
+
+                  {changes.map((e) => (
+                    <div key={e.key} className="text-xs flex items-center gap-2 py-1 border-b border-border/50">
+                      <code className="font-mono flex-1 truncate">{e.key}</code>
+                      <span className="font-mono text-muted-foreground">{JSON.stringify(e.current)}</span>
+                      <span className="text-muted-foreground">→</span>
+                      <span className="font-mono text-emerald-400">{JSON.stringify(e.next)}</span>
+                    </div>
+                  ))}
+
+                  {skips.length > 0 && (
+                    <div className="pt-2">
+                      <div className="text-xs font-semibold text-amber-400 mb-1">Skipped (key not in ct_config)</div>
+                      {skips.map((e) => (
+                        <div key={e.key} className="text-xs flex items-center gap-2 py-0.5">
+                          <code className="font-mono flex-1 truncate text-muted-foreground">{e.key}</code>
+                          <span className="font-mono text-muted-foreground">would-be: {JSON.stringify(e.next)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setPreview(null)} disabled={applying}>
+                Cancel
+              </Button>
+              <Button
+                onClick={confirmApplyPreset}
+                disabled={applying || !preview || preview.entries.filter((e) => e.action === 'change').length === 0}
+              >
+                {applying ? 'Applying…' : 'Confirm apply'}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </TooltipProvider>
   );

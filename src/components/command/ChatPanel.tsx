@@ -29,6 +29,10 @@ interface MessageMeta {
   cost_usd?: number;
   duration_ms?: number;
   mcp_calls?: number;
+  /** How many DCD narrative hits were injected into the context for this turn. */
+  cross_facet_hits?: number;
+  /** True iff Claude's response actually cited the DCD brain. Drives the chip. */
+  cross_facet_used?: boolean;
 }
 
 interface Message {
@@ -125,6 +129,24 @@ function CopyButton({ text }: { text: string }) {
     >
       {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
     </button>
+  );
+}
+
+/**
+ * Tiny chip surfaced above the metadata line when Claude drew from the
+ * shared OS memory (DCD's 7M-entry narrative brain) on this turn. Only
+ * shows when cross_facet_used === true — mere *presence* of hits without
+ * a citation in the reply is silent. This is our first cross-facet
+ * visible signal; keep it quiet but distinct.
+ */
+function CrossFacetChip({ meta }: { meta?: MessageMeta }) {
+  if (!meta?.cross_facet_used) return null;
+  const count = meta.cross_facet_hits ?? 0;
+  return (
+    <div className="inline-flex items-center gap-1 px-1.5 py-0.5 mt-1 rounded-full border border-cyan-500/40 bg-cyan-500/10 text-[9px] text-cyan-600 dark:text-cyan-400 tracking-wide">
+      <span aria-hidden>🧠</span>
+      <span>drew from DCD brain{count > 0 ? ` (${count} ${count === 1 ? 'entry' : 'entries'})` : ''}</span>
+    </div>
   );
 }
 
@@ -276,6 +298,8 @@ export function ChatPanel() {
         cost_usd: typeof body.cost_usd === 'number' ? body.cost_usd : undefined,
         duration_ms: typeof body.duration_ms === 'number' ? body.duration_ms : undefined,
         mcp_calls: typeof body.mcp_calls === 'number' ? body.mcp_calls : undefined,
+        cross_facet_hits: typeof body.cross_facet_hits === 'number' ? body.cross_facet_hits : undefined,
+        cross_facet_used: typeof body.cross_facet_used === 'boolean' ? body.cross_facet_used : undefined,
       };
       setMessages([...next, {
         role: 'assistant',
@@ -350,6 +374,7 @@ export function ChatPanel() {
                   {m.role === 'assistant' ? (
                     <>
                       <AssistantBody content={m.content} />
+                      <CrossFacetChip meta={m.meta} />
                       <div className="flex items-center justify-between gap-2 mt-1">
                         <MessageMetaLine meta={m.meta} />
                         <CopyButton text={m.content} />

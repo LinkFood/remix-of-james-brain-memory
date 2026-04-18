@@ -22,6 +22,7 @@ import { CT_CHAT_SYSTEM } from '../_shared/chatPromptV1.ts';
 import { logMcpCalls } from '../_shared/mcpLog.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { voyageEmbed } from '../_shared/ctEmbed.ts';
+import { queryDcdBrain, shouldQueryDcdBrain, type CrossFacetHit } from '../_shared/crossFacetMemory.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 import { writeTradeAudit, deriveMarketRegime, shapeMcpCalls } from '../_shared/tradeAudit.ts';
 import { checkConcentration } from '../_shared/concentration.ts';
@@ -518,15 +519,34 @@ serve(async (req) => {
       });
     }
 
-    const [context, recall] = await Promise.all([
+    // Cross-facet gate: only pay for the DCD brain query when the question
+    // reads like it's asking for historical depth outside Co-Trader's own
+    // corpus ("precedent", "years ago", "regime analogs"...). Heuristic
+    // keyword match, no extra LLM call.
+    const crossFacetTriggered = shouldQueryDcdBrain(message);
+
+    const [context, recall, crossFacet] = await Promise.all([
       buildContext(supabase),
       recentSemanticHits(supabase, message),
+      crossFacetTriggered
+        ? queryDcdBrain(supabase, message, { limit: 5 })
+        : Promise.resolve({ hits: [] as CrossFacetHit[], reachable: true, reason: 'not_triggered' as string | null, duration_ms: 0 }),
     ]);
     (context as Record<string, unknown>).recent_semantic_hits = recall.hits;
+    // Only attach cross_facet_hits to the context when we actually have
+    // something — empty arrays invite Claude to comment on their emptiness.
+    if (crossFacet.hits.length > 0) {
+      (context as Record<string, unknown>).cross_facet_hits = crossFacet.hits;
+    }
     const recallDebug = {
       query: message.slice(0, 200),
       semantic_hit_count: recall.hits.length,
       time_floor_applied: recall.timeFloorApplied,
+      cross_facet_triggered: crossFacetTriggered,
+      cross_facet_reachable: crossFacet.reachable,
+      cross_facet_hit_count: crossFacet.hits.length,
+      cross_facet_reason: crossFacet.reason,
+      cross_facet_ms: crossFacet.duration_ms,
     };
 
     // Prepend a context block as the first user turn so Claude sees live state
@@ -596,6 +616,7 @@ serve(async (req) => {
           mcp_calls: mcpCount,
           user_message: message.slice(0, 500),
           response_chars: responseText.length,
+          cross_facet_hits: crossFacet.hits.length,
         }).then(() => { /* fire-and-forget */ });
         // Dual-write to unified ct_claude_usage so /health shows ct-chat
         // alongside every other ct-* Claude caller. ct_chat_tokens stays as
@@ -610,6 +631,14 @@ serve(async (req) => {
           metadata: {
             user_id: userId,
             response_chars: responseText.length,
+            // Cross-facet usage so /health and cost audits can see when
+            // Co-Trader reached into DCD's brain. Only set when triggered.
+            cross_facet: crossFacetTriggered ? {
+              reachable: crossFacet.reachable,
+              hits: crossFacet.hits.length,
+              reason: crossFacet.reason,
+              ms: crossFacet.duration_ms,
+            } : null,
           },
         });
       } catch (_e) { /* ignore token logging errors */ }
@@ -622,6 +651,13 @@ serve(async (req) => {
       });
     }
 
+    // Cross-facet chip signal: surface a "drew from DCD brain (N)" chip only
+    // when (a) we actually injected hits, AND (b) Claude's response shows
+    // evidence it used them. Cheap regex — the prompt explicitly coaches
+    // "DCD brain" as the cite phrase, so the signal is clean.
+    const crossFacetUsed = crossFacet.hits.length > 0 &&
+      /\bDCD\s+brain\b|\bDuck\s+Countdown\b|\bcross[-\s]?facet\b|\bhistorical\s+brain\b/i.test(responseText);
+
     return new Response(JSON.stringify({
       response: responseText || '(empty response)',
       duration_ms: Date.now() - startedAt,
@@ -632,6 +668,10 @@ serve(async (req) => {
       tokens_out: tokensOut,
       cost_usd: costUsd,
       mcp_calls: mcpCalls,
+      // Cross-facet: number of DCD hits injected, and whether the response
+      // actually used them. The UI only shows the chip when used === true.
+      cross_facet_hits: crossFacet.hits.length,
+      cross_facet_used: crossFacetUsed,
     }), {
       status: 200,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

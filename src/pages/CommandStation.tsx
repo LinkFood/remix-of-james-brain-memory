@@ -1,4 +1,5 @@
 import { MarketBanner } from '@/components/command/MarketBanner';
+import { MarketBreadth } from '@/components/command/MarketBreadth';
 import { TickerGrid } from '@/components/command/TickerGrid';
 import { EventFeed } from '@/components/command/EventFeed';
 import { CuriosityFeed } from '@/components/command/CuriosityFeed';
@@ -138,6 +139,12 @@ export default function CommandStation() {
 
         <div id="co-market-banner">
           <MarketBanner />
+        </div>
+
+        {/* Watchlist breadth — narrow vs broad tape at a glance. Zero new UW
+            calls, aggregates ct_heartbeats._snapshot.per_ticker prices. */}
+        <div id="co-market-breadth">
+          <MarketBreadth />
         </div>
 
         <GexRadar tickers={['SPY', 'QQQ', 'IWM']} onDrillDown={setDeepTicker} />
