@@ -17,6 +17,7 @@ import { NetPremiumCumulative } from '@/components/command/NetPremiumCumulative'
 import { HiroPanel } from '@/components/command/HiroPanel';
 import { MarketMovers } from '@/components/command/MarketMovers';
 import { EventsPanel } from '@/components/command/EventsPanel';
+import { MacroCalendar } from '@/components/command/MacroCalendar';
 import { PositioningPanel } from '@/components/command/PositioningPanel';
 import { GexHeatmap } from '@/components/command/GexHeatmap';
 import { GexRadar } from '@/components/command/GexRadar';
@@ -175,6 +176,11 @@ export default function CommandStation() {
         <div id="co-market-breadth">
           <MarketBreadth />
         </div>
+
+        {/* Macro calendar — 14d timeline of FOMC/CPI/PPI/jobs/employment/GDP/
+            fed_speak/retail_sales with pre-event posture for high-impact
+            events inside 48h. Zero new UW calls (reads ct_events). */}
+        <MacroCalendar />
 
         <GexRadar tickers={['SPY', 'QQQ', 'IWM']} onDrillDown={setDeepTicker} />
 

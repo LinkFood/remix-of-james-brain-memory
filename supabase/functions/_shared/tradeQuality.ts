@@ -18,6 +18,8 @@
 import { callClaude, CLAUDE_MODELS, parseTextContent } from './anthropic.ts';
 import { logClaudeUsage } from './claudeUsageLog.ts';
 import { PRE_TRADE_QUALITY_SYSTEM, POST_TRADE_QUALITY_SYSTEM } from './ctPrompts.ts';
+import { readTiltSnapshot } from './streakRead.ts';
+import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 
 // Loose Supabase client shape — avoids pulling @supabase/supabase-js types here.
 interface SupabaseLike {
@@ -94,6 +96,26 @@ function parseQualityJson(raw: string): { quality: number; reasoning: string } |
 export function firePreTradeQuality(supabase: SupabaseLike, input: PreTradeQualityInput): void {
   (async () => {
     try {
+      // Pull current tilt snapshot so Haiku can see the psych state. The
+      // system prompt (ctPrompts.PRE_TRADE_QUALITY_SYSTEM) has a rule:
+      // "If tilt_risk=true, CAP at 6 and mention the tilt context in
+      // reasoning." Non-blocking — if the read fails, we just omit it.
+      let tiltContext: Record<string, unknown> = {};
+      try {
+        const snap = await readTiltSnapshot(supabase as unknown as SupabaseClient);
+        if (snap.total_30d > 0) {
+          tiltContext = {
+            tilt_risk: snap.tilt_risk,
+            current_wrong_streak: snap.current_wrong_streak,
+            current_right_streak: snap.current_right_streak,
+            last_5_right_rate: snap.last_5_right_rate,
+            tilt_reasons: snap.tilt_reasons,
+          };
+        }
+      } catch (e) {
+        console.warn('[tradeQuality:pre] tilt snapshot failed:', e instanceof Error ? e.message : e);
+      }
+
       const userMessage = JSON.stringify({
         instrument: input.instrument,
         side: input.side,
@@ -104,6 +126,7 @@ export function firePreTradeQuality(supabase: SupabaseLike, input: PreTradeQuali
         thesis: input.thesis,
         conviction: input.conviction,
         contract_type: input.contract_type ?? 'underlying',
+        ...tiltContext,
         ...(input.context ?? {}),
         note: 'Rate the SETUP per the system prompt. Return ONLY the JSON.',
       });

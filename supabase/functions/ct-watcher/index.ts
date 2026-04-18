@@ -301,6 +301,19 @@ interface TriggerInfo {
     threshold_hours: number;
     hours_remaining: number;
   } | null;
+  /**
+   * Populated only when source='macro_event_approach' — surfaced to the model
+   * via a macro addendum (FOMC/CPI/etc. pre-event positioning advice).
+   */
+  macro?: {
+    macro_type: string;
+    macro_label: string;
+    event_date: string;
+    event_time: string | null;
+    threshold_hours: number;
+    hours_remaining: number;
+    title: string;
+  } | null;
 }
 
 function triggerTag(info: TriggerInfo | null): string {
@@ -808,6 +821,23 @@ serve(async (req) => {
           hours_remaining: body.earnings_hours_remaining,
         };
       }
+      if (
+        src === 'macro_event_approach' &&
+        typeof body.macro_type === 'string' &&
+        typeof body.macro_event_date === 'string' &&
+        typeof body.macro_threshold_hours === 'number' &&
+        typeof body.macro_hours_remaining === 'number'
+      ) {
+        triggerInfo.macro = {
+          macro_type: body.macro_type,
+          macro_label: typeof body.macro_label === 'string' ? body.macro_label : body.macro_type,
+          event_date: body.macro_event_date,
+          event_time: typeof body.macro_event_time === 'string' ? body.macro_event_time : null,
+          threshold_hours: body.macro_threshold_hours,
+          hours_remaining: body.macro_hours_remaining,
+          title: typeof body.macro_title === 'string' ? body.macro_title : '',
+        };
+      }
       console.log(`[ct-watcher] event-driven fire: source=${triggerInfo.source} priority=${triggerInfo.priority} reason=${triggerInfo.reason.slice(0, 200)}`);
     }
   } catch {
@@ -1201,10 +1231,26 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
 Earnings in ${triggerInfo.earnings.hours_remaining.toFixed(1)}h for ${triggerInfo.earnings.ticker} (${triggerInfo.earnings.report_date}${triggerInfo.earnings.report_time ? ` ${triggerInfo.earnings.report_time.toUpperCase()}` : ''}). IV typically expands 20–40% leading in; vol is priced to the known event, so long-premium setups into the print are expensive and directional conviction should be LOWER than flow alone suggests. Size trades on ${triggerInfo.earnings.ticker} smaller, tighter stops, consider shorter horizons or explicit defined-risk structures. Advisory only — do NOT auto-close anything. When surfacing reads on ${triggerInfo.earnings.ticker} in this tick, cite the earnings proximity in the glance.`
       : '';
 
+    // Macro addendum — FOMC / CPI / PPI / NFP / GDP / retail sales within
+    // 48h. Two tones: the 24h+ window (posture/positioning guidance) and
+    // the 1h window (decision-imminent, be ready to pivot). Advisory only.
+    let macroAddendum = '';
+    if (triggerInfo?.source === 'macro_event_approach' && triggerInfo.macro) {
+      const m = triggerInfo.macro;
+      if (m.threshold_hours === 1) {
+        macroAddendum = `\n\n--- MACRO ADDENDUM (event-driven fire — 1h window) ---
+${m.macro_label} in ~${m.hours_remaining.toFixed(1)}h (${m.event_date}${m.event_time ? ` ${m.event_time}` : ''}). Decision-imminent. Flows become noise around the release window — any big prints printed in the last 15min may be positioning hedges, not conviction bets. If there's a standing SPY/QQQ thesis, name the direction in the glance and flag that it's likely to need re-validation immediately after the print. Be ready to pivot on the decision: the right move pre-event is LOWER conviction and SMALLER size, not a directional press. Advisory only — do NOT auto-close or flip anything.`;
+      } else {
+        macroAddendum = `\n\n--- MACRO ADDENDUM (event-driven fire — ${m.threshold_hours}h window) ---
+${m.macro_label} in ~${m.hours_remaining.toFixed(1)}h (${m.event_date}${m.event_time ? ` ${m.event_time}` : ''}). Pre-event positioning: flows become noise signal around Fed / macro-release windows. Tighter stops, shorter horizons, smaller size. Dealer gamma often compresses into the print then releases violently. If a glance mentions SPY/QQQ/IWM direction, tag it with "${m.macro_label} ${m.threshold_hours}h" so downstream grading knows the window. Advisory only — no auto-close.`;
+      }
+    }
+    const promptAddendum = earningsAddendum + macroAddendum;
+
     try {
       const response = await callClaude({
         model: CLAUDE_MODELS.haiku,
-        system: earningsAddendum ? CT_SYSTEM_PROMPT_V1 + earningsAddendum : CT_SYSTEM_PROMPT_V1,
+        system: promptAddendum ? CT_SYSTEM_PROMPT_V1 + promptAddendum : CT_SYSTEM_PROMPT_V1,
         messages: [{ role: 'user', content: userMessage }],
         max_tokens: 3000,
         temperature: 0.2,

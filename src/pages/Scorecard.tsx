@@ -19,6 +19,7 @@ import { RecallSearch } from '@/components/command/RecallSearch';
 import { JamesVsClaude } from '@/components/command/JamesVsClaude';
 import { WeeklyReflectionPanel } from '@/components/command/WeeklyReflectionPanel';
 import { CalibrationChart } from '@/components/scorecard/CalibrationChart';
+import { StreakPanel } from '@/components/scorecard/StreakPanel';
 import { ClaudesSurprises } from '@/components/scorecard/ClaudesSurprises';
 import { BandCalibrationPanel } from '@/components/scorecard/BandCalibrationPanel';
 import { AxisAttributionPanel } from '@/components/scorecard/AxisAttributionPanel';
@@ -423,6 +424,11 @@ export function Scorecard() {
             calibrated reasoning = accuracy rises with stated confidence. flat or inverted line = miscalibrated.
           </div>
         </Card>
+
+        {/* Streaks & Tilt — psychology surface. 3 wrong in a row OR <=40% over
+            last 5 → tilt_risk banner. Sits above calibration so it's the first
+            thing James sees when the TopNav pill goes red. */}
+        <StreakPanel />
 
         {/* Calibration curves — per-axis is v2 (axis scores are computed on-the-fly
             from UW, not captured at claim time). v1 uses CONVICTION as an overall-score

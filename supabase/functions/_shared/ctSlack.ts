@@ -184,6 +184,95 @@ export async function ctSlackPush(
 }
 
 /**
+ * Tilt transition push — fires ONCE when Claude's wrong streak crosses
+ * into tilt territory (3+ in a row). Dedupe rule: never push another
+ * tilt message in the same 30d window until the streak resets below 3
+ * (i.e. a right/partial verdict lands). The caller in ct-grader is
+ * responsible for passing the PRIOR wrong-streak count from before the
+ * batch so we only fire on a true transition.
+ *
+ * Payload shape:
+ *   { wrongStreak, priorWrongStreak, recoveryRate, recoveryHits,
+ *     recoveryN, tickers[] }
+ *
+ * Copy: "⚠️ 3-wrong streak on {tickers}. Historical next-trade win
+ * rate after 3L: X% (Y/Z). Consider pause or tighter setups only."
+ *
+ * Logs to ct_slack_log with source='tilt' so the cross-function dedupe
+ * check below can spot a recent push regardless of who sent it.
+ */
+export async function ctSlackPushTiltTransition(
+  supabase: SupabaseClient,
+  userId: string,
+  payload: {
+    wrongStreak: number;
+    priorWrongStreak: number;
+    recoveryRate: number | null;
+    recoveryHits: number;
+    recoveryN: number;
+    tickers: string[];
+  },
+): Promise<void> {
+  // Transition guard: only push when we CROSS from <3 to >=3. The caller
+  // provides priorWrongStreak — if it was already 3+, we've pushed before.
+  if (payload.wrongStreak < 3) return;
+  if (payload.priorWrongStreak >= 3) return;
+
+  // Extra dedupe: within 24h, never fire another tilt push even if the
+  // state oscillates. `ct_slack_log` is already the shared log table.
+  try {
+    const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: recent } = await supabase
+      .from('ct_slack_log')
+      .select('created_at')
+      .eq('source', 'tilt')
+      .eq('pushed', true)
+      .gte('created_at', cutoff)
+      .limit(1);
+    if (recent && recent.length > 0) return;
+  } catch {
+    // non-fatal — fall through to the push
+  }
+
+  const tickerStr = payload.tickers.length > 0
+    ? payload.tickers.slice(0, 4).join(', ')
+    : 'mixed';
+
+  const rateStr = payload.recoveryRate != null && payload.recoveryHits >= 2
+    ? `${Math.round(payload.recoveryRate * 100)}% (${payload.recoveryN} cases)`
+    : 'insufficient history';
+
+  const text =
+    `:warning: *${payload.wrongStreak}-wrong streak* on ${tickerStr}. ` +
+    `Historical recovery win rate after ${payload.wrongStreak}L: ${rateStr}. ` +
+    `Consider pause or tighter setups only.`;
+
+  try {
+    const botToken = Deno.env.get('SLACK_BOT_TOKEN');
+    if (!botToken) return;
+    const { data: settings } = await supabase
+      .from('user_settings').select('settings').eq('user_id', userId).maybeSingle();
+    const channelId = (settings?.settings as Record<string, unknown> | null)?.slack_channel_id as string | undefined;
+    if (!channelId) return;
+
+    const res = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${botToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ channel: channelId, text, mrkdwn: true }),
+    });
+    const json = res.ok ? await res.json().catch(() => ({})) : {};
+    await supabase.from('ct_slack_log').insert({
+      source: 'tilt',
+      summary: text.slice(0, 300),
+      pushed: res.ok && (json.ok !== false),
+      skip_reason: res.ok ? null : `http_${res.status}`,
+    });
+  } catch (e) {
+    console.warn('[ctSlack:tilt] push failed:', e instanceof Error ? e.message : e);
+  }
+}
+
+/**
  * Direct Slack push with no dedupe — for scheduled digests that MUST go
  * through regardless. Still logs to ct_slack_log.
  *

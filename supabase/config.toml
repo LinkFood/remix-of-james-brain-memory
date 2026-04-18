@@ -264,6 +264,12 @@ verify_jwt = false
 [functions.ct-earnings-pre-event-check]
 verify_jwt = false
 
+[functions.ct-macro-pre-event-check]
+verify_jwt = false
+
+[functions.ct-macro-event-slack]
+verify_jwt = false
+
 [functions.ct-price-tick-capture]
 verify_jwt = false
 

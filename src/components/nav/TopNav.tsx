@@ -38,6 +38,7 @@ import { useTickerData } from '@/hooks/useTickerData';
 import { UwUsageBadge } from '@/components/command/UwUsageBadge';
 import { MarketClock } from '@/components/nav/MarketClock';
 import { PreflightChip } from '@/components/nav/PreflightChip';
+import { StreakPill } from '@/components/nav/StreakPill';
 import { KillSwitchButton } from '@/components/nav/KillSwitchButton';
 
 const AGENT_LABELS: Record<string, string> = {
@@ -348,6 +349,10 @@ export function TopNav({ userId }: TopNavProps) {
 
         {/* Preflight readiness — overall green/yellow/red at a glance */}
         <PreflightChip />
+
+        {/* Streak / tilt indicator — silent when N < 2, green N r when
+            2+ right, amber/red N w when 2+ wrong. Click → /scorecard#streaks. */}
+        <StreakPill />
 
         {/* Claude's book — sparkline of today's closed-trade P&L */}
         <BookSparkline />

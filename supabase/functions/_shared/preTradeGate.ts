@@ -9,7 +9,7 @@
  * Contract:
  *   - Returns { passed, checks[], blockers[] }. `passed` = no block-level checks.
  *     Warns never fail passage. Blockers are always a subset of checks.
- *   - 7 checks, stable order so UIs can render a consistent row list:
+ *   - 8 checks, stable order so UIs can render a consistent row list:
  *       1. kill_switch     (block)
  *       2. drawdown_tier   (block)
  *       3. concentration   (block)
@@ -17,6 +17,7 @@
  *       5. uw_usage        (warn only)
  *       6. cooldown        (block, alert-sourced only)
  *       7. session_context (warn only)
+ *       8. tilt            (warn only — 3+ wrong streak OR <=40% last 5)
  *   - FAIL-SAFE: any check that throws is coerced to status='warn' with a
  *     detail noting the helper error. Never silently blocks. Never silently
  *     passes without a trace.
@@ -31,6 +32,7 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0
 import { isKillSwitchActive } from './killSwitch.ts';
 import { getConfig } from './configCache.ts';
 import { checkConcentration, type ProposedTrade } from './concentration.ts';
+import { readTiltSnapshot } from './streakRead.ts';
 
 // ============================================================================
 // Types
@@ -44,7 +46,8 @@ export type CheckName =
   | 'bias_alignment'
   | 'uw_usage'
   | 'cooldown'
-  | 'session_context';
+  | 'session_context'
+  | 'tilt';
 
 export interface Check {
   name: CheckName;
@@ -110,6 +113,7 @@ export async function preTradeCheck(
   checks.push(await safeRun('uw_usage',        () => checkUwUsage(supabase)));
   checks.push(await safeRun('cooldown',        () => checkCooldown(supabase, trade, sessionDate)));
   checks.push(await safeRun('session_context', () => checkSessionContext()));
+  checks.push(await safeRun('tilt',            () => checkTilt(supabase)));
 
   const blockers = checks.filter(c => c.status === 'block');
   const passed = blockers.length === 0;
@@ -416,6 +420,34 @@ async function checkSessionContext(): Promise<Omit<Check, 'name'>> {
     };
   }
   return { status: 'pass', detail: `session mid-window (${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')} ET)` };
+}
+
+// ============================================================================
+// (h) Tilt — warn only (wave 20 psychology gate)
+//   Surfaces a 3+ wrong-streak or a last-5 graded hit-rate <= 40%. Never
+//   blocks — behavioral discipline is a nudge, not a halt. Auto-halt on
+//   tilt is explicitly OUT OF SCOPE per the wave 20 plan.
+// ============================================================================
+
+async function checkTilt(supabase: SupabaseClient): Promise<Omit<Check, 'name'>> {
+  const snap = await readTiltSnapshot(supabase);
+  if (!snap.tilt_risk) {
+    return {
+      status: 'pass',
+      detail: `no tilt (wrong streak ${snap.current_wrong_streak}, last-5 right rate ${
+        snap.last_5_right_rate != null ? Math.round(snap.last_5_right_rate * 100) + '%' : '—'
+      })`,
+    };
+  }
+  return {
+    status: 'warn',
+    detail: `TILT RISK: ${snap.tilt_reasons.join(' · ')}${
+      snap.wrong_streak_tickers.length > 0
+        ? ` · tickers: ${snap.wrong_streak_tickers.slice(0, 5).join(', ')}`
+        : ''
+    }`,
+    threshold_key: 'gate.tilt_wrong_streak_min',
+  };
 }
 
 // ============================================================================

@@ -372,6 +372,10 @@ Rules:
 - Outcome is UNKNOWN at rating time. Do not speculate on direction — grade the SETUP.
 - Specific > general. Cite the actual evidence / concern you see in the payload.
 - If this setup matches an active bias in the payload, that caps the rating at 4.
+- If the payload contains "tilt_risk": true, the rating is CAPPED AT 6.
+  Behavioral discipline: recent graded outcomes show a wrong-streak or
+  sub-40% last-5 right rate. Even a good-looking setup in that state
+  deserves humility. Reasoning MUST mention the tilt context.
 - No hedging ("could be 6 or 7"). Pick one integer.`;
 
 // ----------------------------------------------------------------------------

@@ -19,8 +19,10 @@
  * the two LinkGexDeep makes.
  */
 import { ChartSafe } from '@/components/ChartSafe';
-import { memo, useMemo } from 'react';
+import { memo, useMemo, useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
 import {
   Line,
   LineChart,
@@ -40,6 +42,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { LinkGexDeep } from '@/components/command/LinkGexDeep';
 import { TickerChartWithAlerts } from '@/components/command/TickerChartWithAlerts';
+import { TickerCandleChart } from '@/components/command/TickerCandleChart';
 import { FundamentalsTile } from '@/components/command/FundamentalsTile';
 import {
   useTickerTerminal,
@@ -827,6 +830,97 @@ const EarningsCountdownCard = memo(function EarningsCountdownCard({
   );
 });
 
+// ─── Chart mode toggle (line vs candle) ────────────────────────────────
+//
+// Auto-selection: Candle if ct_price_ticks has >20 ticks for today; else Line.
+// User can override via the toggle — override is remembered for the session
+// via component state (not persisted across reloads on purpose; auto-select
+// should take over again next session once ticks accumulate).
+
+type ChartMode = 'auto' | 'line' | 'candle';
+
+function useTodayTickCount(ticker: string): number {
+  const startIso = useMemo(() => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0)).toISOString();
+  }, []);
+  const endIso = useMemo(() => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999)).toISOString();
+  }, []);
+
+  const { data } = useQuery<number>({
+    queryKey: ['ct_price_ticks_count_today', ticker, startIso],
+    enabled: !!ticker,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from('ct_price_ticks')
+        .select('ticker', { count: 'estimated', head: true })
+        .eq('ticker', ticker)
+        .gte('tick_time', startIso)
+        .lte('tick_time', endIso);
+      if (error) return 0;
+      return count ?? 0;
+    },
+  });
+  return data ?? 0;
+}
+
+const SessionChartSection = memo(function SessionChartSection({ ticker }: { ticker: string }) {
+  const [mode, setMode] = useState<ChartMode>('auto');
+  const tickCount = useTodayTickCount(ticker);
+
+  // Effective mode = user override (if any), else auto-select by tick count.
+  const resolved: 'line' | 'candle' = mode === 'auto' ? (tickCount > 20 ? 'candle' : 'line') : mode;
+
+  // If user picks 'auto' explicitly after an override, resolved updates on
+  // next render — nothing else needed.
+  useEffect(() => {
+    // noop — placeholder if we later want to reset on ticker change
+  }, [ticker]);
+
+  const btn = (label: string, value: ChartMode, active: boolean) => (
+    <button
+      key={value}
+      type="button"
+      onClick={() => setMode(value)}
+      className={
+        'px-2 py-0.5 text-[10px] uppercase tracking-wider rounded border transition-colors ' +
+        (active
+          ? 'bg-white/10 border-white/30 text-foreground'
+          : 'border-white/10 text-muted-foreground hover:text-foreground hover:border-white/20')
+      }
+    >
+      {label}
+    </button>
+  );
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-2 px-0.5">
+        <span className="text-[9px] uppercase tracking-wider text-muted-foreground/70">
+          chart mode
+        </span>
+        <div className="flex items-center gap-1">
+          {btn('auto', 'auto', mode === 'auto')}
+          {btn('line', 'line', mode === 'line')}
+          {btn('candle', 'candle', mode === 'candle')}
+        </div>
+        <span className="text-[9px] text-muted-foreground/60">
+          · auto picks {tickCount > 20 ? 'candle' : 'line'} ({tickCount} ticks today)
+        </span>
+      </div>
+      {resolved === 'candle' ? (
+        <TickerCandleChart ticker={ticker} />
+      ) : (
+        <TickerChartWithAlerts ticker={ticker} />
+      )}
+    </div>
+  );
+});
+
 // ─── Page ──────────────────────────────────────────────────────────────
 
 export default function TickerTerminal() {
@@ -922,7 +1016,7 @@ export default function TickerTerminal() {
         <EarningsCountdownCard ticker={ticker} row={nextEarnings?.[ticker]} />
 
         {/* ─── Row 1: session chart with Claude's alerts overlaid ── */}
-        <TickerChartWithAlerts ticker={ticker} />
+        <SessionChartSection ticker={ticker} />
 
         {/* ─── Fundamentals tile (weekly-cached, compact) ────────── */}
         <FundamentalsTile ticker={ticker} />

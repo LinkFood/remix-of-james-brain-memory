@@ -999,6 +999,140 @@ export function useEventsForTicker(ticker: string | null | undefined) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Macro calendar — next 14 days of FOMC / CPI / PPI / jobs / employment /
+// GDP / fed_speak / retail_sales. ct_events stores these under
+// event_type='econ' with the release name in `title` — the client-side
+// classifier in src/lib/macroEvents.ts maps title → canonical key.
+// ---------------------------------------------------------------------------
+
+import { classifyMacroEvent, macroImpact, type MacroEventType, type MacroImpact } from '@/lib/macroEvents';
+
+export interface MacroEventRow extends CtEventRow {
+  /** Canonical macro bucket derived from title. Never null (rows without a
+   *  classification are dropped before being returned). */
+  macro_type: MacroEventType;
+  /** Impact tier for color-coding. */
+  impact: MacroImpact;
+}
+
+/**
+ * Pre-event posture signal — latest ct_alert or ct_flag on market-wide
+ * instruments (SPY/QQQ/IWM/SPX) within the lookback window. Used to
+ * answer "what does Claude think going in".
+ */
+export interface PreEventPosture {
+  kind: 'alert' | 'flag';
+  id: string;
+  created_at: string;
+  instruments: string[];
+  direction: string;
+  conviction: number;
+  horizon: string;
+  glance: string[];
+  summary: string;  // First glance line, for compact display
+}
+
+/** Macro events in the next 14 days, filtered to 7 canonical types. */
+export function useMacroEvents() {
+  return useQuery<MacroEventRow[]>({
+    queryKey: ['ct_events_macro_14d'],
+    refetchInterval: 15 * 60_000,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const now = new Date();
+      const todayStr = now.toISOString().slice(0, 10);
+      const end = new Date(now.getTime() + 14 * 24 * 3600_000).toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_events')
+        .select('id, event_type, ticker, event_date, event_time, title, importance, fetched_at')
+        .eq('event_type', 'econ')
+        .gte('event_date', todayStr)
+        .lte('event_date', end)
+        .order('event_date', { ascending: true })
+        .order('event_time', { ascending: true, nullsFirst: false })
+        .limit(400);
+      if (error) throw error;
+
+      const rows: MacroEventRow[] = [];
+      for (const r of (data ?? []) as CtEventRow[]) {
+        const macro_type = classifyMacroEvent(r.title);
+        if (!macro_type) continue;
+        rows.push({
+          ...r,
+          macro_type,
+          impact: macroImpact(macro_type, r.importance),
+        });
+      }
+      return rows;
+    },
+  });
+}
+
+/**
+ * Pre-event posture lookback — latest market-wide ct_alert or ct_flag in
+ * the last `hoursBack` hours. Returns null if Claude hasn't spoken on the
+ * indexes in the window. Best-effort: we take the most recent row across
+ * both tables, preferring alerts over flags at the same timestamp.
+ */
+export function usePreEventPosture(hoursBack = 24) {
+  return useQuery<PreEventPosture | null>({
+    queryKey: ['ct_pre_event_posture', hoursBack],
+    refetchInterval: 2 * 60_000,
+    staleTime: 60_000,
+    queryFn: async () => {
+      const since = new Date(Date.now() - hoursBack * 3600_000).toISOString();
+      const indexInstruments = ['SPY', 'QQQ', 'IWM', 'SPX'];
+
+      const [alerts, flags] = await Promise.all([
+        supabase
+          .from('ct_alerts')
+          .select('id, created_at, instruments, direction, conviction, horizon, glance')
+          .gte('created_at', since)
+          .order('created_at', { ascending: false })
+          .limit(10),
+        supabase
+          .from('ct_flags')
+          .select('id, created_at, instruments, direction, conviction, horizon, glance')
+          .gte('created_at', since)
+          .order('created_at', { ascending: false })
+          .limit(10),
+      ]);
+
+      type Row = { id: string; created_at: string; instruments: string[]; direction: string; conviction: number; horizon: string; glance: string[] | null };
+      const alertRows = ((alerts.data ?? []) as Row[])
+        .filter(r => (r.instruments ?? []).some(t => indexInstruments.includes(t)))
+        .map(r => ({ ...r, kind: 'alert' as const }));
+      const flagRows = ((flags.data ?? []) as Row[])
+        .filter(r => (r.instruments ?? []).some(t => indexInstruments.includes(t)))
+        .map(r => ({ ...r, kind: 'flag' as const }));
+
+      const all = [...alertRows, ...flagRows].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+      );
+      if (all.length === 0) return null;
+      // Alert at same second wins over flag — sort is stable so check first
+      // entry and, if tied, bump an alert from further in the list up.
+      const top = all[0];
+      const tiedAlert = all.find(r => r.kind === 'alert' && r.created_at === top.created_at);
+      const pick = tiedAlert ?? top;
+
+      const glance = (pick.glance ?? []).filter((g): g is string => typeof g === 'string');
+      return {
+        kind: pick.kind,
+        id: pick.id,
+        created_at: pick.created_at,
+        instruments: pick.instruments,
+        direction: pick.direction,
+        conviction: pick.conviction,
+        horizon: pick.horizon,
+        glance,
+        summary: glance[0] ?? `${pick.direction} ${pick.instruments.join('/')} conv ${pick.conviction}`,
+      };
+    },
+  });
+}
+
 export interface NetPremiumTick {
   ticker: string;
   tick_timestamp: string;
