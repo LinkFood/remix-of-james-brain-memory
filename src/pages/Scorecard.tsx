@@ -26,6 +26,7 @@ import { AxisAttributionPanel } from '@/components/scorecard/AxisAttributionPane
 import { AlertPostMortemsPanel } from '@/components/scorecard/AlertPostMortemsPanel';
 import { RegimeConditionalPanel } from '@/components/scorecard/RegimeConditionalPanel';
 import { HourlyPerformancePanel } from '@/components/scorecard/HourlyPerformancePanel';
+import { PerThesisPanel } from '@/components/scorecard/PerThesisPanel';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 import { useCalibration } from '@/hooks/useCalibration';
 import { useQueryFreshness } from '@/hooks/useFreshness';
@@ -412,6 +413,11 @@ export function Scorecard() {
             </div>
           </Card>
         </div>
+
+        {/* Per-Thesis Scorecard — wave 4 of the hypothesis engine. Sits in its
+            own row, directly below the hero tiles so it's the first governance
+            breakdown the reader sees. */}
+        <PerThesisPanel />
 
         {/* Self-confidence calibration — does high self-rated confidence correlate with being right? */}
         <Card className="p-4">
