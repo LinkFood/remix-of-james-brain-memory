@@ -2,8 +2,19 @@
  * ct-news-ingester — pull UW headlines for the watchlist, Claude-analyze,
  * store in ct_news_analyses, embed for corpus.
  *
- * Cron: every 15 min during market hours + once at 8am/8pm ET for catch-up.
- * Dedupe: (instrument, news_headline) combined to avoid re-analyzing.
+ * Modes:
+ *   - weekday (default): every 20 min, 11:00-22:00 UTC, full Claude analysis
+ *     on every unseen headline. Fetches 10 per ticker.
+ *   - weekend: hourly Sat + Sun. Widens per-ticker fetch to 20 so we don't
+ *     miss news between the sparser pulls. Pre-filters headlines via a
+ *     cheap heuristic — obvious low-signal items (promotional/boilerplate)
+ *     are inserted with a [weekend-skipped] sentinel to preserve dedupe
+ *     but skip the Claude call. Significant-looking headlines still get
+ *     full Claude analysis.
+ *
+ * Dedupe: TTL'd on (instrument, news_headline) over the last 48 hours of
+ * ct_news_analyses.created_at. Spans the weekday/weekend boundary — any
+ * row inserted on Friday 21:40 is still in the window at Saturday 00:00.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -53,6 +64,7 @@ async function getSeenHeadlines(
   // TTL-based dedup: only consider headlines from the last 48 hours.
   // UW's news feed rotates older items back in eventually — letting those
   // re-enter after 48h is fine and gives us fresh Claude takes.
+  // The 48h window also covers the weekday/weekend cron boundary cleanly.
   const cutoff = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
   const { data } = await supabase
     .from('ct_news_analyses')
@@ -62,11 +74,39 @@ async function getSeenHeadlines(
   return new Set((data ?? []).map((r: { news_headline: string }) => r.news_headline));
 }
 
+/**
+ * Cheap pre-filter for weekend mode: flags headlines that look promotional
+ * or boilerplate so we can skip the Claude call. Errs on the side of keeping
+ * anything ambiguous — better to spend a few extra Haiku calls than miss a
+ * Sunday Fed leak.
+ */
+const LOW_SIG_PATTERNS: RegExp[] = [
+  /\b(?:analyst|analysts)\s+(?:maintains?|reiterates?|reaffirms?)\b/i,
+  /\bprice target (?:raised|lowered|cut|trimmed|bumped)\b/i,
+  /\bshares? (?:up|down|gain|slip|fall|rise) \d/i,
+  /\bshould you (?:buy|sell|hold)\b/i,
+  /\bis this (?:stock|a) (?:buy|sell)\b/i,
+  /\b\d+\s+(?:reasons|stocks|things)\b/i,
+  /\btop \d+\s+(?:stocks|picks|reasons)\b/i,
+  /\bmotley fool\b/i,
+  /\binsider (?:buying|selling) activity\b/i,
+  /\b(?:13f|form 4) filing\b/i,
+  /\bdividend (?:announcement|declared)\b/i,
+  /\btechnical (?:analysis|setup|pattern)\b/i,
+];
+function looksLowSignal(row: HeadlineRow): boolean {
+  const h = row.headline;
+  if (h.length < 25) return true; // stubby headlines rarely carry substance
+  for (const re of LOW_SIG_PATTERNS) if (re.test(h)) return true;
+  return false;
+}
+
 async function analyzeAndStore(
   supabase: SupabaseClient,
   userId: string | null,
-  row: HeadlineRow
-): Promise<{ ok: boolean; id?: string; error?: string; tokens_in?: number; tokens_out?: number }> {
+  row: HeadlineRow,
+  runMode: 'weekday' | 'weekend',
+): Promise<{ ok: boolean; id?: string; error?: string; tokens_in?: number; tokens_out?: number; skipped_claude?: boolean }> {
   const userMessage = JSON.stringify({
     ticker: row.ticker,
     headline: row.headline,
@@ -114,12 +154,12 @@ async function analyzeAndStore(
     claude_take: parsed.claude_take,
     impact,
     significance,
-    prompt_version: CT_PROMPT_VERSION,
+    prompt_version: runMode === 'weekend' ? `${CT_PROMPT_VERSION}+weekend` : CT_PROMPT_VERSION,
   }).select('id').maybeSingle();
 
   if (error || !data) return { ok: false, error: error?.message ?? 'insert failed', tokens_in: tokensIn, tokens_out: tokensOut };
 
-  // Embed significant news only (sig ≥ 3) — keeps the corpus tight
+  // Embed significant news only (sig >= 3) — keeps the corpus tight
   if (significance >= 3) {
     await embedCtItem(supabase, {
       item_type: 'news',
@@ -129,6 +169,7 @@ async function analyzeAndStore(
         instrument: row.ticker,
         impact,
         significance,
+        run_mode: runMode,
         created_at: new Date().toISOString(),
       },
     });
@@ -136,10 +177,52 @@ async function analyzeAndStore(
   return { ok: true, id: data.id as string, tokens_in: tokensIn, tokens_out: tokensOut };
 }
 
+/**
+ * Raw-capture insert for weekend low-signal headlines. Skips the Claude
+ * call but still writes a row so dedupe holds. Marked with a sentinel
+ * claude_take so it's trivially greppable and excluded from the morning
+ * brief (which filters significance >= 3).
+ */
+async function storeRawSkipped(
+  supabase: SupabaseClient,
+  userId: string | null,
+  row: HeadlineRow,
+): Promise<{ ok: boolean; error?: string; id?: string }> {
+  const { data, error } = await supabase.from('ct_news_analyses').insert({
+    user_id: userId,
+    instrument: row.ticker,
+    news_headline: row.headline,
+    news_source: row.source,
+    news_url: row.url,
+    news_timestamp: row.published_at,
+    claude_take: '[weekend-skipped: low-signal pre-filter]',
+    impact: 'neutral',
+    significance: 1,
+    prompt_version: `${CT_PROMPT_VERSION}+weekend-raw`,
+  }).select('id').maybeSingle();
+  if (error || !data) return { ok: false, error: error?.message ?? 'insert failed' };
+  return { ok: true, id: data.id as string };
+}
+
 serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   const corsHeaders = getCorsHeaders(req);
   if (!isServiceRoleRequest(req)) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+  // Parse body for explicit is_weekend flag; fall back to UTC day-of-week.
+  // Using UTC day matches the cron's schedule timezone so manual invocations
+  // behave the same as scheduled ones.
+  let bodyIsWeekend: boolean | null = null;
+  try {
+    const body = await req.json();
+    if (typeof body?.is_weekend === 'boolean') bodyIsWeekend = body.is_weekend;
+  } catch {
+    /* empty body is fine */
+  }
+  const utcDow = new Date().getUTCDay(); // 0 Sun, 6 Sat
+  const runMode: 'weekday' | 'weekend' =
+    bodyIsWeekend ?? (utcDow === 0 || utcDow === 6) ? 'weekend' : 'weekday';
+  const perTickerLimit = runMode === 'weekend' ? 20 : 10;
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   const startedAt = Date.now();
@@ -148,14 +231,14 @@ serve(async (req) => {
     const { data: users } = await supabase.from('profiles').select('id').limit(1);
     const userId = (users?.[0]?.id as string | undefined) ?? null;
 
-    let totalHeadlines = 0, analyzed = 0, skipped = 0, failed = 0;
+    let totalHeadlines = 0, analyzed = 0, skipped = 0, failed = 0, rawSkipped = 0;
     let totalTokensIn = 0, totalTokensOut = 0, claudeCallsMade = 0;
-    const perTickerStats: Record<string, { headlines: number; analyzed: number; skipped: number; failed: number }> = {};
+    const perTickerStats: Record<string, { headlines: number; analyzed: number; skipped: number; failed: number; raw_skipped: number }> = {};
 
     for (const ticker of WATCHLIST) {
-      const stats = { headlines: 0, analyzed: 0, skipped: 0, failed: 0 };
+      const stats = { headlines: 0, analyzed: 0, skipped: 0, failed: 0, raw_skipped: 0 };
       try {
-        const raw = await getNewsHeadlines({ ticker, limit: 10 });
+        const raw = await getNewsHeadlines({ ticker, limit: perTickerLimit });
         const headlines = extractHeadlines(raw, ticker);
         stats.headlines = headlines.length;
         totalHeadlines += headlines.length;
@@ -164,7 +247,16 @@ serve(async (req) => {
 
         for (const row of headlines) {
           if (seen.has(row.headline)) { stats.skipped++; skipped++; continue; }
-          const result = await analyzeAndStore(supabase, userId, row);
+
+          // Weekend-only low-signal pre-filter: insert raw, skip Claude.
+          if (runMode === 'weekend' && looksLowSignal(row)) {
+            const rawRes = await storeRawSkipped(supabase, userId, row);
+            if (rawRes.ok) { stats.raw_skipped++; rawSkipped++; }
+            else { stats.failed++; failed++; console.warn(`[ct-news] ${ticker} raw-skip failed:`, rawRes.error); }
+            continue;
+          }
+
+          const result = await analyzeAndStore(supabase, userId, row, runMode);
           // Count tokens whenever Claude actually ran (tokens > 0 is the signal).
           if ((result.tokens_in ?? 0) > 0 || (result.tokens_out ?? 0) > 0) {
             totalTokensIn += result.tokens_in ?? 0;
@@ -191,17 +283,22 @@ serve(async (req) => {
       duration_ms: Date.now() - startedAt,
       metadata: {
         user_id: userId,
+        run_mode: runMode,
         claude_calls: claudeCallsMade,
         headlines_analyzed: analyzed,
         headlines_seen: totalHeadlines,
+        raw_skipped: rawSkipped,
       },
     });
 
     return new Response(JSON.stringify({
       success: true,
+      run_mode: runMode,
+      per_ticker_limit: perTickerLimit,
       total_headlines_seen: totalHeadlines,
       analyzed,
       skipped,
+      raw_skipped: rawSkipped,
       failed,
       per_ticker: perTickerStats,
       duration_ms: Date.now() - startedAt,

@@ -74,6 +74,7 @@ async function gatherContext(supabase: SupabaseClient) {
     yTrades,
     yBook,
     weekendNews,
+    lastNewsIngest,
     lateSweeps,
     lateDps,
     regimeInversions,
@@ -118,6 +119,13 @@ async function gatherContext(supabase: SupabaseClient) {
       .order('significance', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(15),
+
+    // Last ingest marker — newest ct_news_analyses row regardless of sig.
+    // Tells James how fresh the news pipeline is at brief time.
+    supabase.from('ct_news_analyses')
+      .select('created_at, instrument, news_headline')
+      .order('created_at', { ascending: false })
+      .limit(1).maybeSingle(),
 
     // Last 4 hours of Friday session sweep clusters
     supabase.from('ct_sweep_clusters')
@@ -211,6 +219,7 @@ async function gatherContext(supabase: SupabaseClient) {
     friday_trades_by_status: tradesByStatus,
     friday_book: yBook.data ?? null,
     weekend_news_sig3plus: weekendNews.data ?? [],
+    last_news_ingest: lastNewsIngest.data ?? null,
     friday_late_sweeps: lateSweeps.data ?? [],
     friday_late_dps: lateDps.data ?? [],
     friday_regime_inversions_carrying: carryingInversions,
@@ -391,6 +400,7 @@ serve(async (req) => {
         script,
         corpus_empty: corpusEmpty,
         prior_session_date: ctx.prior_session_date,
+        last_news_ingest_at: ctx.last_news_ingest?.created_at ?? null,
         counts: {
           weekend_news: ctx.weekend_news_sig3plus.length,
           friday_late_sweeps: ctx.friday_late_sweeps.length,
@@ -502,6 +512,7 @@ serve(async (req) => {
       for_date: forDate,
       prior_session_date: ctx.prior_session_date,
       corpus_empty: corpusEmpty,
+      last_news_ingest_at: ctx.last_news_ingest?.created_at ?? null,
       audio_url: audioUrl,
       tts_status: ttsStatus,
       tts_error: ttsError,

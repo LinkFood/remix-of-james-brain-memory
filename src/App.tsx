@@ -11,6 +11,7 @@ import { Ticker } from "./components/jac/Ticker";
 import { AuthLayout } from "./layouts/AuthLayout";
 import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
+import CtSettings from "./pages/CtSettings";
 import Auth from "./pages/Auth";
 import Terms from "./pages/Terms";
 import Privacy from "./pages/Privacy";
@@ -71,6 +72,7 @@ const TrackedRoutes = () => {
       <Route path="/code" element={<AuthLayout><CodeWorkspace /></AuthLayout>} />
       <Route path="/jac" element={<AuthLayout><Jac /></AuthLayout>} />
       <Route path="/settings" element={<AuthLayout><Settings /></AuthLayout>} />
+      <Route path="/ct-settings" element={<AuthLayout><CtSettings /></AuthLayout>} />
       <Route path="/calendar" element={<AuthLayout><Calendar /></AuthLayout>} />
       <Route path="/search" element={<AuthLayout><Search /></AuthLayout>} />
       <Route path="/activity" element={<AuthLayout><ActivityLog /></AuthLayout>} />

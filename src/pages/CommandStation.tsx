@@ -22,6 +22,7 @@ import { GexRadar } from '@/components/command/GexRadar';
 import { AlwaysOnFlagStrip } from '@/components/command/AlwaysOnFlagStrip';
 import { SweepClusterStrip } from '@/components/command/SweepClusterStrip';
 import { DpClusterStrip } from '@/components/command/DpClusterStrip';
+import { AttentionLeaderboard } from '@/components/command/AttentionLeaderboard';
 import { LinkGexDeep } from '@/components/command/LinkGexDeep';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
 import { MorningBriefPanel } from '@/components/command/MorningBriefPanel';
@@ -124,6 +125,11 @@ export default function CommandStation() {
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
           <div className="lg:col-span-8 space-y-4">
+            {/* Per-ticker attention leaderboard — aggregate of obs/flags/alerts
+                over the last 30 min. Hidden when every ticker scores <20.
+                Click pill → opens shared LinkGexDeep sheet (same surface as
+                AlwaysOnFlagStrip / GexRadar). */}
+            <AttentionLeaderboard onOpenDeep={setDeepTicker} />
             <TickerGrid onOpenDeep={setDeepTicker} />
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
               <NetPremiumLine />

@@ -1,0 +1,494 @@
+/**
+ * CtSettings — Tunable configuration for Co-Trader.
+ *
+ * Reads and writes the `ct_config` table. Each row represents a threshold
+ * that's currently hard-coded in an edge function somewhere. Editing a
+ * value writes it to the DB; the value does NOT take effect until the
+ * relevant edge function is refactored to call `getConfig()` from
+ * `supabase/functions/_shared/configCache.ts`.
+ *
+ * INTEGRATION NOTE: Settings are read by edge functions on each invocation.
+ * Changes apply on the next cron tick — no redeploy needed. Values are
+ * cached for 60s in edge functions (via configCache.ts) to avoid per-tick
+ * DB hits. Today no production function imports the helper yet — this
+ * page is infrastructure waiting on opt-in.
+ *
+ * UI:
+ *   - Grouped by category (cooldown / scoring / clusters / slack / usage /
+ *     book / watcher).
+ *   - Booleans render as a Switch; numbers as number input + slider;
+ *     strings as Input. Save is explicit (button) per row.
+ *   - Per-category "Reset to defaults" button.
+ *   - Tooltip per row with description, default, and range.
+ *   - Values outside min/max are refused with a toast.
+ */
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { supabase } from '@/integrations/supabase/client';
+import { toast } from 'sonner';
+import { Card } from '@/components/ui/card';
+import { Label } from '@/components/ui/label';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import { Slider } from '@/components/ui/slider';
+import { Separator } from '@/components/ui/separator';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import {
+  Settings2,
+  Info,
+  RotateCcw,
+  Save,
+  Timer,
+  Gauge,
+  Layers,
+  Send,
+  Activity,
+  Wallet,
+  Radar,
+} from 'lucide-react';
+
+type ConfigValue = number | boolean | string | null;
+
+interface ConfigRow {
+  id: string;
+  key: string;
+  value: ConfigValue;
+  description: string | null;
+  category: string;
+  min_value: number | null;
+  max_value: number | null;
+  default_value: ConfigValue;
+  updated_at: string;
+}
+
+interface CategoryMeta {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  blurb: string;
+}
+
+const CATEGORY_ORDER: string[] = [
+  'cooldown',
+  'scoring',
+  'clusters',
+  'slack',
+  'usage',
+  'book',
+  'watcher',
+];
+
+const CATEGORIES: Record<string, CategoryMeta> = {
+  cooldown: {
+    label: 'Cooldown',
+    icon: Timer,
+    blurb: 'Signal suppression and paper-book commit gating.',
+  },
+  scoring: {
+    label: 'Scoring',
+    icon: Gauge,
+    blurb: 'Attention score thresholds for urgency, alerts, and flagging.',
+  },
+  clusters: {
+    label: 'Clusters',
+    icon: Layers,
+    blurb: 'Sweep and dark-pool cluster triggers.',
+  },
+  slack: {
+    label: 'Slack',
+    icon: Send,
+    blurb: 'Digest verbosity and live-push gating.',
+  },
+  usage: {
+    label: 'UW Usage',
+    icon: Activity,
+    blurb: 'Unusual Whales API usage tier breakpoints.',
+  },
+  book: {
+    label: 'Book',
+    icon: Wallet,
+    blurb: 'Intraday drawdown alert thresholds.',
+  },
+  watcher: {
+    label: 'Watcher',
+    icon: Radar,
+    blurb: 'Watcher budget limits.',
+  },
+};
+
+function detectType(value: ConfigValue): 'boolean' | 'number' | 'string' {
+  if (typeof value === 'boolean') return 'boolean';
+  if (typeof value === 'number') return 'number';
+  return 'string';
+}
+
+function formatDisplay(value: ConfigValue): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'boolean') return value ? 'on' : 'off';
+  return String(value);
+}
+
+/** Find a sensible slider step given the min/max range. */
+function sliderStep(min: number, max: number): number {
+  const span = Math.abs(max - min);
+  if (span <= 5) return 0.1;
+  if (span <= 50) return 1;
+  if (span <= 500) return 5;
+  if (span <= 5_000) return 50;
+  if (span <= 500_000) return 1_000;
+  return 10_000;
+}
+
+export default function CtSettings() {
+  const [rows, setRows] = useState<ConfigRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [drafts, setDrafts] = useState<Record<string, ConfigValue>>({});
+  const [saving, setSaving] = useState<Record<string, boolean>>({});
+
+  const fetchRows = useCallback(async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('ct_config')
+      .select('*')
+      .order('category', { ascending: true })
+      .order('key', { ascending: true });
+
+    if (error) {
+      toast.error(`Failed to load config: ${error.message}`);
+      setLoading(false);
+      return;
+    }
+
+    const parsed = (data || []).map((r) => ({
+      ...r,
+      value: r.value as ConfigValue,
+      default_value: r.default_value as ConfigValue,
+    })) as ConfigRow[];
+
+    setRows(parsed);
+    const next: Record<string, ConfigValue> = {};
+    parsed.forEach((r) => {
+      next[r.key] = r.value;
+    });
+    setDrafts(next);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchRows();
+  }, [fetchRows]);
+
+  const byCategory = useMemo(() => {
+    const map: Record<string, ConfigRow[]> = {};
+    rows.forEach((r) => {
+      (map[r.category] ||= []).push(r);
+    });
+    return map;
+  }, [rows]);
+
+  const setDraft = (key: string, v: ConfigValue) => {
+    setDrafts((d) => ({ ...d, [key]: v }));
+  };
+
+  const isDirty = (row: ConfigRow) => {
+    const draft = drafts[row.key];
+    if (typeof draft === 'number' && typeof row.value === 'number') {
+      return Math.abs(draft - row.value) > 1e-9;
+    }
+    return draft !== row.value;
+  };
+
+  const validate = (row: ConfigRow, draft: ConfigValue): string | null => {
+    const kind = detectType(row.default_value);
+    if (kind === 'number') {
+      const n = typeof draft === 'number' ? draft : Number(draft);
+      if (Number.isNaN(n)) return 'Not a number';
+      if (row.min_value !== null && n < row.min_value) {
+        return `Below min (${row.min_value})`;
+      }
+      if (row.max_value !== null && n > row.max_value) {
+        return `Above max (${row.max_value})`;
+      }
+    }
+    return null;
+  };
+
+  const saveRow = async (row: ConfigRow) => {
+    const draft = drafts[row.key];
+    const err = validate(row, draft);
+    if (err) {
+      toast.error(`${row.key}: ${err}`);
+      return;
+    }
+
+    setSaving((s) => ({ ...s, [row.key]: true }));
+    const { error } = await supabase
+      .from('ct_config')
+      .update({ value: draft as unknown as object })
+      .eq('key', row.key);
+    setSaving((s) => ({ ...s, [row.key]: false }));
+
+    if (error) {
+      toast.error(`Save failed: ${error.message}`);
+      return;
+    }
+    toast.success(`${row.key} saved`);
+    setRows((prev) => prev.map((r) => (r.key === row.key ? { ...r, value: draft } : r)));
+  };
+
+  const resetRowToDefault = (row: ConfigRow) => {
+    setDraft(row.key, row.default_value);
+  };
+
+  const resetCategoryToDefaults = async (category: string) => {
+    const inCat = rows.filter((r) => r.category === category);
+    if (inCat.length === 0) return;
+
+    setSaving((s) => {
+      const next = { ...s };
+      inCat.forEach((r) => (next[r.key] = true));
+      return next;
+    });
+
+    const results = await Promise.all(
+      inCat.map((r) =>
+        supabase
+          .from('ct_config')
+          .update({ value: r.default_value as unknown as object })
+          .eq('key', r.key),
+      ),
+    );
+
+    setSaving((s) => {
+      const next = { ...s };
+      inCat.forEach((r) => (next[r.key] = false));
+      return next;
+    });
+
+    const failed = results.filter((r) => r.error);
+    if (failed.length) {
+      toast.error(`${failed.length} reset(s) failed`);
+    } else {
+      toast.success(`${CATEGORIES[category]?.label ?? category} reset to defaults`);
+    }
+    fetchRows();
+  };
+
+  return (
+    <TooltipProvider>
+      <div className="h-full overflow-auto p-4">
+        <div className="max-w-4xl mx-auto space-y-4">
+          {/* Header */}
+          <Card className="p-5 bg-card border-border">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center">
+                <Settings2 className="w-5 h-5 text-primary" />
+              </div>
+              <div className="flex-1">
+                <h1 className="text-xl font-bold">Co-Trader Config</h1>
+                <p className="text-xs text-muted-foreground">
+                  Tunable thresholds. Changes apply on the next cron tick — no redeploy. Values are
+                  cached for 60s in edge functions via{' '}
+                  <code className="px-1 rounded bg-muted/60">_shared/configCache.ts</code>.
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          {loading && (
+            <Card className="p-4 text-sm text-muted-foreground">Loading config…</Card>
+          )}
+
+          {!loading && rows.length === 0 && (
+            <Card className="p-4 text-sm text-muted-foreground">
+              No config rows — run the latest migration to seed defaults.
+            </Card>
+          )}
+
+          {!loading &&
+            CATEGORY_ORDER.filter((c) => byCategory[c]?.length).map((category) => {
+              const meta = CATEGORIES[category];
+              const Icon = meta?.icon ?? Settings2;
+              const catRows = byCategory[category] ?? [];
+
+              return (
+                <Card key={category} className="p-5 bg-card border-border">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center">
+                        <Icon className="w-4 h-4 text-primary" />
+                      </div>
+                      <div>
+                        <h2 className="text-base font-semibold">{meta?.label ?? category}</h2>
+                        <p className="text-xs text-muted-foreground">{meta?.blurb}</p>
+                      </div>
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="text-xs"
+                      onClick={() => resetCategoryToDefaults(category)}
+                    >
+                      <RotateCcw className="w-3 h-3 mr-1" />
+                      Reset category
+                    </Button>
+                  </div>
+
+                  <div className="space-y-3">
+                    {catRows.map((row, idx) => (
+                      <div key={row.key}>
+                        {idx > 0 && <Separator className="my-2 opacity-50" />}
+                        <ConfigRowEditor
+                          row={row}
+                          draft={drafts[row.key]}
+                          dirty={isDirty(row)}
+                          saving={!!saving[row.key]}
+                          onChange={(v) => setDraft(row.key, v)}
+                          onSave={() => saveRow(row)}
+                          onResetToDefault={() => resetRowToDefault(row)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </Card>
+              );
+            })}
+        </div>
+      </div>
+    </TooltipProvider>
+  );
+}
+
+interface EditorProps {
+  row: ConfigRow;
+  draft: ConfigValue;
+  dirty: boolean;
+  saving: boolean;
+  onChange: (v: ConfigValue) => void;
+  onSave: () => void;
+  onResetToDefault: () => void;
+}
+
+function ConfigRowEditor({ row, draft, dirty, saving, onChange, onSave, onResetToDefault }: EditorProps) {
+  const kind = detectType(row.default_value);
+  const canSlide =
+    kind === 'number' && row.min_value !== null && row.max_value !== null;
+
+  return (
+    <div className="flex items-start gap-4">
+      {/* Label + tooltip */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <Label className="text-sm font-medium font-mono">{row.key}</Label>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                className="text-muted-foreground/60 hover:text-muted-foreground"
+                aria-label={`About ${row.key}`}
+              >
+                <Info className="w-3 h-3" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-xs text-xs">
+              <div className="space-y-1">
+                {row.description && <div>{row.description}</div>}
+                <div className="text-muted-foreground">
+                  default: <span className="font-mono">{formatDisplay(row.default_value)}</span>
+                  {row.min_value !== null && row.max_value !== null && (
+                    <>
+                      {' · '}range: <span className="font-mono">{row.min_value}</span>–
+                      <span className="font-mono">{row.max_value}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        </div>
+        <p className="text-xs text-muted-foreground mt-0.5">
+          current: <span className="font-mono">{formatDisplay(row.value)}</span>
+        </p>
+      </div>
+
+      {/* Editor */}
+      <div className="flex items-center gap-2 w-[320px] shrink-0">
+        {kind === 'boolean' && (
+          <div className="flex-1 flex items-center justify-end">
+            <Switch
+              checked={!!(draft ?? false)}
+              onCheckedChange={(v) => onChange(v)}
+              disabled={saving}
+            />
+          </div>
+        )}
+
+        {kind === 'number' && (
+          <>
+            {canSlide && (
+              <Slider
+                className="flex-1"
+                min={row.min_value as number}
+                max={row.max_value as number}
+                step={sliderStep(row.min_value as number, row.max_value as number)}
+                value={[typeof draft === 'number' ? draft : Number(draft ?? 0)]}
+                onValueChange={([v]) => onChange(v)}
+                disabled={saving}
+              />
+            )}
+            <Input
+              type="number"
+              className="w-24 h-8 text-sm font-mono"
+              value={draft === null || draft === undefined ? '' : String(draft)}
+              min={row.min_value ?? undefined}
+              max={row.max_value ?? undefined}
+              onChange={(e) => {
+                const v = e.target.value;
+                onChange(v === '' ? null : Number(v));
+              }}
+              disabled={saving}
+            />
+          </>
+        )}
+
+        {kind === 'string' && (
+          <Input
+            type="text"
+            className="flex-1 h-8 text-sm font-mono"
+            value={(draft as string) ?? ''}
+            onChange={(e) => onChange(e.target.value)}
+            disabled={saving}
+          />
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-1 shrink-0">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="h-8 px-2 text-xs"
+          onClick={onResetToDefault}
+          disabled={saving || draft === row.default_value}
+          title="Reset to default"
+        >
+          <RotateCcw className="w-3 h-3" />
+        </Button>
+        <Button
+          size="sm"
+          className="h-8 px-3 text-xs"
+          onClick={onSave}
+          disabled={saving || !dirty}
+        >
+          <Save className="w-3 h-3 mr-1" />
+          {saving ? 'Saving…' : 'Save'}
+        </Button>
+      </div>
+    </div>
+  );
+}

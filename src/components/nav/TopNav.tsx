@@ -91,6 +91,7 @@ const NAV_GROUPS: NavGroup[] = [
       { path: '/reports', label: 'Reports' },
       { path: '/search', label: 'Search' },
       { path: '/code', label: 'Code' },
+      { path: '/ct-settings', label: 'CT Config' },
     ],
   },
 ];
