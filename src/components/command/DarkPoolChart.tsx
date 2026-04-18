@@ -29,6 +29,7 @@ import {
   Cell,
 } from 'recharts';
 import { useDarkPoolChart, type DarkPoolChartGroup, type DarkPoolPrintLite } from '@/hooks/useDarkPoolChart';
+import { finite, finiteDomain } from '@/lib/chartSanitize';
 
 const DP_LINE = '#60A5FA';   // muted blue — institutional
 const DP_DOT = '#94A3B8';    // slate-400
@@ -84,29 +85,36 @@ function TickerCell({ group }: { group: DarkPoolChartGroup }) {
 
   const { rows, xDomain, cumMax, sizeMax } = useMemo(() => {
     const sorted = prints
-      .filter(p => p.executed_at)
+      .filter(p => p.executed_at && Number.isFinite(epochMs(p.executed_at)))
       .sort((a, b) => epochMs(a.executed_at) - epochMs(b.executed_at));
 
     let running = 0;
-    const out: CellRow[] = sorted.map((p: DarkPoolPrintLite) => {
-      running += p.notional_value || 0;
-      return {
+    const out: CellRow[] = [];
+    for (const p of sorted as DarkPoolPrintLite[]) {
+      const notional = finite(p.notional_value) ?? 0;
+      const size = finite(p.size) ?? 0;
+      const price = finite(p.price) ?? 0;
+      running += notional;
+      if (!Number.isFinite(running)) continue;
+      out.push({
         t: epochMs(p.executed_at),
         label: fmtTime(p.executed_at),
         cum: running,
-        size: p.size,
-        price: p.price,
-        notional: p.notional_value || 0,
-        isBlock: (p.notional_value || 0) >= BLOCK_THRESHOLD,
-      };
-    });
+        size,
+        price,
+        notional,
+        isBlock: notional >= BLOCK_THRESHOLD,
+      });
+    }
 
     const xs = out.map(r => r.t);
+    // finiteDomain guards against empty arrays (Math.min(...[])=Infinity)
+    // and zero-width ranges (min===max) that crash decimal.js.
     const domain: [number, number] | undefined = xs.length > 0
-      ? [Math.min(...xs), Math.max(...xs)]
+      ? finiteDomain(Math.min(...xs), Math.max(...xs), [0, 1], 1_000)
       : undefined;
-    const cm = out.length > 0 ? out[out.length - 1].cum : 0;
-    const sm = out.reduce((m, r) => Math.max(m, r.size), 0);
+    const cm = out.length > 0 ? (finite(out[out.length - 1].cum) ?? 0) : 0;
+    const sm = out.reduce((m, r) => Math.max(m, finite(r.size) ?? 0), 0);
 
     return { rows: out, xDomain: domain, cumMax: cm, sizeMax: sm };
   }, [prints]);
@@ -176,7 +184,7 @@ function TickerCell({ group }: { group: DarkPoolChartGroup }) {
                   tickLine={false}
                   axisLine={false}
                   tickCount={2}
-                  domain={[0, cumMax || 'auto']}
+                  domain={[0, cumMax > 0 ? cumMax : 'auto']}
                 />
                 <Tooltip
                   contentStyle={{
@@ -230,7 +238,7 @@ function TickerCell({ group }: { group: DarkPoolChartGroup }) {
                   tickLine={false}
                   axisLine={false}
                   tickCount={2}
-                  domain={[0, sizeMax || 'auto']}
+                  domain={[0, sizeMax > 0 ? sizeMax : 'auto']}
                 />
                 <ZAxis range={[20, 20]} />
                 <Tooltip

@@ -18,6 +18,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { WATCHLIST } from '../_shared/uwClient.ts';
+import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 
 const COOLDOWN_MS = 3 * 60 * 1000;
 const WINDOW_MS = 90 * 1000;
@@ -181,7 +182,7 @@ serve(async (req) => {
       status_line: `[event] triggering watcher on ${signals.length} signals: ${triggerNote.slice(0, 300)}`,
       watching: [...new Set(signals.map(s => s.ticker))],
       current_reads: { _event_trigger: signals },
-      prompt_version: 'v1',
+      prompt_version: CT_PROMPT_VERSION,
     });
 
     // Fire the main watcher

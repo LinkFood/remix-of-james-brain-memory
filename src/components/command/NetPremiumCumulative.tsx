@@ -25,6 +25,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { useNetPremiumCumulative, type NetPremCumTicker } from '@/hooks/useNetPremiumCumulative';
+import { finite } from '@/lib/chartSanitize';
 
 const CALL_COLOR = '#00C853';
 const PUT_COLOR = '#FF1744';
@@ -65,15 +66,23 @@ function MiniChart({ data }: MiniProps) {
       t: string; label: string; mins: number; call: number; put: number;
     }>;
     const startISO = points[0].t;
-    return points.map(p => ({
-      t: p.t,
-      mins: minsSinceStart(p.t, startISO),
-      call: p.cum_call_prem,
-      put: p.cum_put_prem,
-      label: new Date(p.t).toLocaleTimeString('en-US', {
-        hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York',
-      }),
-    }));
+    // Filter out rows where a NaN/Infinity would poison Recharts' axis math
+    // (LN10 precision crash). Non-finite call/put values are the usual
+    // culprit — drop the row rather than coerce to 0, which would create
+    // visually misleading flat segments.
+    return points
+      .map(p => ({
+        t: p.t,
+        mins: minsSinceStart(p.t, startISO),
+        call: finite(p.cum_call_prem),
+        put: finite(p.cum_put_prem),
+        label: new Date(p.t).toLocaleTimeString('en-US', {
+          hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York',
+        }),
+      }))
+      .filter((r): r is { t: string; mins: number; call: number; put: number; label: string } =>
+        r.call !== null && r.put !== null && Number.isFinite(r.mins)
+      );
   }, [points]);
 
   const latestCall = series[series.length - 1]?.call ?? 0;

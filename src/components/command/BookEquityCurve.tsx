@@ -29,6 +29,7 @@ import { useBookEquityCurve } from '@/hooks/useBookEquityCurve';
 import { useDrawdownAlerts } from '@/hooks/useDrawdownAlerts';
 import { usePnlByTheme, formatBestWorstLine } from '@/components/command/PnLByTheme';
 import { FreshnessChip } from '@/components/FreshnessChip';
+import { finiteDomain } from '@/lib/chartSanitize';
 import { useMemo } from 'react';
 
 const GREEN = '#00C853';
@@ -160,8 +161,9 @@ export function BookEquityCurve() {
   allVals.push(10_000); // always anchor the seed level
   const minY = Math.min(...allVals);
   const maxY = Math.max(...allVals);
-  const safeMin = Number.isFinite(minY) ? minY : 9_800;
-  const safeMax = Number.isFinite(maxY) ? maxY : 10_200;
+  // finiteDomain guarantees min < max and finite on both ends — otherwise
+  // Recharts' decimal.js throws LN10 precision on axis tick computation.
+  const [safeMin, safeMax] = finiteDomain(minY, maxY, [9_800, 10_200], 100);
   const pad = Math.max((safeMax - safeMin) * 0.1, 50);
   const yDomain: [number, number] = [Math.floor(safeMin - pad), Math.ceil(safeMax + pad)];
 

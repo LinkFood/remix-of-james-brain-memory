@@ -12,6 +12,7 @@ import { useMemo, useState } from 'react';
 import { useGreekFlow } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Line, LineChart, ResponsiveContainer, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
+import { finite } from '@/lib/chartSanitize';
 
 type IndexTicker = 'SPY' | 'QQQ' | 'IWM';
 const TICKERS: IndexTicker[] = ['SPY', 'QQQ', 'IWM'];
@@ -34,10 +35,12 @@ export function HiroPanel() {
     let cum = 0;
     const out: Array<{ t: number; hiro: number; label: string }> = [];
     for (const r of rows) {
-      const flow = r.total_delta_flow ?? 0;
+      const flow = finite(r.total_delta_flow) ?? 0;
       cum += flow;
       const t = Date.parse(r.tick_timestamp);
-      if (!Number.isFinite(t)) continue;
+      // Skip anything that would poison the axis — NaN timestamps or a cum
+      // that went non-finite after a bad row.
+      if (!Number.isFinite(t) || !Number.isFinite(cum)) continue;
       out.push({
         t,
         hiro: cum,

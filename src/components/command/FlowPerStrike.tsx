@@ -16,6 +16,7 @@ import { useMemo, useState } from 'react';
 import { useFlowAlerts, type FlowAlert } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Bar, BarChart, Cell, ResponsiveContainer, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
+import { finite } from '@/lib/chartSanitize';
 
 function fmtMoney(n: number): string {
   const abs = Math.abs(n);
@@ -50,14 +51,18 @@ export function FlowPerStrike() {
     const map = new Map<number, Bucket>();
     for (const a of alerts) {
       if (a.ticker !== active) continue;
-      if (a.strike == null || a.premium == null) continue;
-      const b = map.get(a.strike) ?? { strike: a.strike, call_prem: 0, put_prem: 0, net: 0, prints: 0, notional: 0 };
-      if ((a.side ?? '').toLowerCase().startsWith('c')) b.call_prem += a.premium;
-      else b.put_prem -= a.premium;  // puts displayed negative (leftward)
+      // Guard against non-finite strike/premium — a single NaN in a bar
+      // chart's data array collapses the axis domain and trips LN10.
+      const strike = finite(a.strike);
+      const premium = finite(a.premium);
+      if (strike === null || premium === null) continue;
+      const b = map.get(strike) ?? { strike, call_prem: 0, put_prem: 0, net: 0, prints: 0, notional: 0 };
+      if ((a.side ?? '').toLowerCase().startsWith('c')) b.call_prem += premium;
+      else b.put_prem -= premium;  // puts displayed negative (leftward)
       b.net = b.call_prem + b.put_prem;
       b.prints += 1;
-      b.notional += a.premium;
-      map.set(a.strike, b);
+      b.notional += premium;
+      map.set(strike, b);
     }
     return Array.from(map.values()).sort((x, y) => x.strike - y.strike);
   }, [alerts, active]);
@@ -75,7 +80,7 @@ export function FlowPerStrike() {
   const latestUnderlying = useMemo(() => {
     if (!alerts || !active) return null;
     const first = alerts.find(a => a.ticker === active && a.underlying_price != null);
-    return first?.underlying_price ?? null;
+    return finite(first?.underlying_price);
   }, [alerts, active]);
 
   return (

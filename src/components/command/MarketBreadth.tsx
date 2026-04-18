@@ -26,6 +26,7 @@ import { LineChart, Line, ResponsiveContainer, YAxis } from 'recharts';
 import { ChartSafe } from '@/components/ChartSafe';
 import { useMarketBreadth } from '@/hooks/useMarketBreadth';
 import { useLatestHeartbeat } from '@/hooks/useCoTraderData';
+import { finite } from '@/lib/chartSanitize';
 
 // ─── formatters ─────────────────────────────────────────────────────────────
 
@@ -64,15 +65,21 @@ export function MarketBreadth() {
   const warmingUp = !b.loading && !b.has_data;
 
   // Sparkline data — flatten to (idx, net) and compute a symmetric Y domain.
+  // Drop non-finite nets; a single NaN reaching Recharts YAxis triggers LN10.
   const sparkData = useMemo(() => {
-    if (b.breadth_trend.length < 2) return [];
-    return b.breadth_trend.map((p, i) => ({ i, net: p.net }));
+    if (b.breadth_trend.length < 2) return [] as Array<{ i: number; net: number }>;
+    return b.breadth_trend
+      .map((p, i) => {
+        const net = finite(p.net);
+        return net !== null ? { i, net } : null;
+      })
+      .filter((r): r is { i: number; net: number } => r !== null);
   }, [b.breadth_trend]);
 
   const sparkDomain = useMemo<[number, number]>(() => {
     if (sparkData.length === 0) return [-1, 1];
     const abs = Math.max(1, ...sparkData.map(d => Math.abs(d.net)));
-    return [-abs, abs];
+    return Number.isFinite(abs) ? [-abs, abs] : [-1, 1];
   }, [sparkData]);
 
   return (

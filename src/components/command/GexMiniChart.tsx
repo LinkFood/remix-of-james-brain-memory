@@ -10,6 +10,7 @@
  */
 import { ChartSafe } from '@/components/ChartSafe';
 import { Bar, BarChart, Cell, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { finite, finiteOr } from '@/lib/chartSanitize';
 
 interface Strike {
   strike: number;
@@ -36,18 +37,32 @@ export function GexMiniChart({ strikes, price, flip }: Props) {
   if (!strikes || strikes.length === 0) {
     return <div className="h-[72px] flex items-center justify-center text-[10px] text-muted-foreground/50">no strike data</div>;
   }
-  // Recharts stacked bars need positive/negative sections rendered as signed values
-  const data = strikes.map(s => ({
-    strike: s.strike,
-    call_gex: s.call_gex,                         // positive — orange up
-    put_gex: s.put_gex,                           // negative — blue down
-    label: `$${s.strike}`,
-  }));
+  // Recharts stacked bars need positive/negative sections rendered as signed
+  // values. Any NaN in strike/call_gex/put_gex triggers the LN10 crash on the
+  // axis domain resolver — drop those rows rather than render them as zeros.
+  const data = strikes
+    .map(s => {
+      const strike = finite(s.strike);
+      if (strike === null) return null;
+      return {
+        strike,
+        call_gex: finiteOr(s.call_gex, 0),
+        put_gex: finiteOr(s.put_gex, 0),
+        label: `$${strike}`,
+      };
+    })
+    .filter((r): r is { strike: number; call_gex: number; put_gex: number; label: string } => r !== null);
 
-  const priceLabel = price != null ? `$${price.toFixed(0)}` : null;
-  const flipLabel = flip != null ? `$${flip.toFixed(0)}` : null;
-  const priceStr = price != null ? String(price) : undefined;
-  const flipStr = flip != null ? String(flip) : undefined;
+  if (data.length === 0) {
+    return <div className="h-[72px] flex items-center justify-center text-[10px] text-muted-foreground/50">no strike data</div>;
+  }
+
+  const safePrice = finite(price);
+  const safeFlip = finite(flip);
+  const priceLabel = safePrice != null ? `$${safePrice.toFixed(0)}` : null;
+  const flipLabel = safeFlip != null ? `$${safeFlip.toFixed(0)}` : null;
+  const priceStr = safePrice != null ? String(safePrice) : undefined;
+  const flipStr = safeFlip != null ? String(safeFlip) : undefined;
 
   return (
     <div className="h-[72px] -mx-1">
@@ -78,7 +93,7 @@ export function GexMiniChart({ strikes, price, flip }: Props) {
               label={{ value: priceLabel, position: 'top', fontSize: 9, fill: 'hsl(var(--primary))' }}
             />
           )}
-          {flipStr && flip != null && price != null && Math.abs(flip - price) / price < 0.25 && (
+          {flipStr && safeFlip != null && safePrice != null && safePrice !== 0 && Math.abs(safeFlip - safePrice) / safePrice < 0.25 && (
             <ReferenceLine
               x={flipStr}
               stroke="hsl(var(--muted-foreground))"

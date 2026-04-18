@@ -18,6 +18,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Swords, Trophy, Minus, Clock, AlertTriangle } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, Tooltip } from 'recharts';
+import { finiteOr } from '@/lib/chartSanitize';
 
 function fmtAgo(iso: string): string {
   const s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
@@ -68,10 +69,12 @@ export function JamesVsClaude({ variant = 'command', daysBack = 7, onPostView }:
 
   const chartData = useMemo(() => {
     if (!scoreboard) return [];
+    // Coerce each to a finite number — a NaN in a BarChart value field
+    // collapses the axis domain and trips decimal.js LN10.
     return [
-      { name: 'James', value: scoreboard.james_wins, fill: '#60a5fa' },
-      { name: 'Claude', value: scoreboard.claude_wins, fill: '#2dd4bf' },
-      { name: 'Ties', value: scoreboard.ties, fill: '#a3a3a3' },
+      { name: 'James', value: finiteOr(scoreboard.james_wins, 0), fill: '#60a5fa' },
+      { name: 'Claude', value: finiteOr(scoreboard.claude_wins, 0), fill: '#2dd4bf' },
+      { name: 'Ties', value: finiteOr(scoreboard.ties, 0), fill: '#a3a3a3' },
     ];
   }, [scoreboard]);
 

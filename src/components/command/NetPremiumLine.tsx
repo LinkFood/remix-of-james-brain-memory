@@ -11,6 +11,7 @@ import { useMemo, useState } from 'react';
 import { useNetPremiumTicks, useNetPremiumTickers } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Line, LineChart, ResponsiveContainer, XAxis, YAxis, Tooltip, ReferenceLine } from 'recharts';
+import { finite } from '@/lib/chartSanitize';
 
 function fmtMoney(n: number): string {
   const abs = Math.abs(n);
@@ -28,19 +29,23 @@ export function NetPremiumLine() {
   const series = useMemo(() => {
     if (!ticks || ticks.length === 0) return [] as Array<{ t: number; cum: number; label: string }>;
     let cum = 0;
-    return ticks.map(row => {
-      const call = Number(row.net_call_premium ?? 0);
-      const put = Number(row.net_put_premium ?? 0);
+    const out: Array<{ t: number; cum: number; label: string }> = [];
+    for (const row of ticks) {
+      const call = finite(Number(row.net_call_premium ?? 0)) ?? 0;
+      const put = finite(Number(row.net_put_premium ?? 0)) ?? 0;
       // Each tick is a snapshot of UW-side net premium; we sum deltas across the
-      // session so the line shows cumulative directional conviction.
+      // session so the line shows cumulative directional conviction. Skip rows
+      // whose timestamp can't be parsed — a NaN x-value trips the LN10 crash.
       cum += (call - put);
       const t = Date.parse(row.tick_timestamp);
-      return {
+      if (!Number.isFinite(t) || !Number.isFinite(cum)) continue;
+      out.push({
         t,
         cum,
         label: new Date(t).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-      };
-    });
+      });
+    }
+    return out;
   }, [ticks]);
 
   const latest = series[series.length - 1]?.cum ?? 0;
