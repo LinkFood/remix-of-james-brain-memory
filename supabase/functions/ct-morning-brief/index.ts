@@ -85,6 +85,7 @@ async function gatherContext(supabase: SupabaseClient) {
     curiosity,
     theses,
     premarketGaps,
+    lastDream,
   ] = await Promise.all([
     // Latest watcher state — carries current_reads (gamma, regime, walls)
     supabase.from('ct_heartbeats')
@@ -192,6 +193,16 @@ async function gatherContext(supabase: SupabaseClient) {
       .eq('session_date', todayDate)
       .in('magnitude_tier', ['moderate', 'significant', 'extreme'])
       .order('gap_pct', { ascending: false }),
+
+    // Last night's dream — the overnight reflection. Newest row reflecting
+    // on the prior session. Feeds `tomorrow_hypotheses` into Claude's
+    // fresh_posture so the tape gets weighed against the overnight priors.
+    supabase.from('ct_dreams')
+      .select('id, session_date, reflection, tomorrow_hypotheses, patterns_noticed, created_at')
+      .eq('session_date', priorDate)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle(),
   ]);
 
   // Detect unreverted regime flips. An inversion is "carrying" if there's
@@ -239,6 +250,7 @@ async function gatherContext(supabase: SupabaseClient) {
     friday_curiosity_findings: curiosity.data ?? [],
     open_theses: theses.data ?? [],
     premarket_gaps_moderate_plus: premarketGaps.data ?? [],
+    last_night_dream: lastDream.data ?? null,
   };
 }
 
@@ -454,6 +466,10 @@ serve(async (req) => {
         corpus_empty: corpusEmpty,
         prior_session_date: ctx.prior_session_date,
         last_news_ingest_at: ctx.last_news_ingest?.created_at ?? null,
+        // Dream priors that fed this brief — pinned for later audit so we
+        // can compare "hypothesis Claude wrote at 1am" vs "tape this morning".
+        last_night_dream_id: ctx.last_night_dream?.id ?? null,
+        last_night_dream_hypotheses: ctx.last_night_dream?.tomorrow_hypotheses ?? null,
         counts: {
           weekend_news: ctx.weekend_news_sig3plus.length,
           friday_late_sweeps: ctx.friday_late_sweeps.length,
@@ -462,6 +478,9 @@ serve(async (req) => {
           overnight_open_trades: ctx.overnight_open_trades.length,
           active_biases: ctx.active_biases.length,
           premarket_gaps_moderate_plus: ctx.premarket_gaps_moderate_plus.length,
+          dream_hypotheses: Array.isArray(ctx.last_night_dream?.tomorrow_hypotheses)
+            ? (ctx.last_night_dream!.tomorrow_hypotheses as unknown[]).length
+            : 0,
         },
       },
       rabbit_hole: '',

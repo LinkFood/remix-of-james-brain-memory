@@ -40,6 +40,7 @@ import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
 import { McpCallsPanel } from '@/components/command/McpCallsPanel';
 import { BiasesPanel } from '@/components/command/BiasesPanel';
+import { DreamLog } from '@/components/command/DreamLog';
 import { SizingCalculatorButton } from '@/components/command/SizingCalculator';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
@@ -243,8 +244,15 @@ export default function CommandStation() {
           <JamesViewForm />
         </div>
 
+        {/* Dream Log — overnight Claude reflection, 1am ET weekdays. Placed
+            at the very bottom because it's a post-market artifact: you read
+            it in the morning, after the brief, as a loose "what was Claude
+            turning over in the silence?" read. Bottom of CommandStation
+            keeps it out of the live-tape flow while market hours are active. */}
+        <DreamLog />
+
         <footer className="pt-4 text-[10px] text-muted-foreground/60 text-center">
-          Watcher: 30min · Curiosity: 30min (offset :07/:37) · Grader: 15min · News: 20min · EOD: 21:30 UTC weekdays · Lessons: Sunday 23:00 UTC
+          Watcher: 30min · Curiosity: 30min (offset :07/:37) · Grader: 15min · News: 20min · EOD: 21:30 UTC weekdays · Dream: 06:00 UTC weekdays · Lessons: Sunday 23:00 UTC
         </footer>
       </div>
 

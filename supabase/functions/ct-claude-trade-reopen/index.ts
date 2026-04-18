@@ -25,6 +25,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA', 'GLD', 'USO'] as const;
@@ -166,6 +167,7 @@ serve(async (req) => {
   });
 
   let claudeText = '';
+  const claudeCallStart = Date.now();
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.sonnet,
@@ -175,6 +177,13 @@ serve(async (req) => {
       temperature: 0.2,
     });
     claudeText = parseTextContent(res);
+    logClaudeUsage(supabase, {
+      source: 'ct-claude-trade-reopen',
+      model: CLAUDE_MODELS.sonnet,
+      usage: res.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      metadata: { session_date: sessionDate, morning_cancelled_count: morningCancelled },
+    });
   } catch (e) {
     return new Response(JSON.stringify({ error: e instanceof ClaudeError ? `Claude ${e.status}: ${e.message}` : String(e) }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }

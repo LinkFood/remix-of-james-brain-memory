@@ -23,6 +23,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
 import { classifyThesis } from '../_shared/thesisClassifier.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
@@ -203,6 +204,7 @@ serve(async (req) => {
   });
 
   let claudeText = '';
+  const claudeCallStart = Date.now();
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.sonnet,
@@ -212,6 +214,13 @@ serve(async (req) => {
       temperature: 0.2,
     });
     claudeText = parseTextContent(res);
+    logClaudeUsage(supabase, {
+      source: 'ct-claude-trade-open',
+      model: CLAUDE_MODELS.sonnet,
+      usage: res.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      metadata: { session_date: sessionDate },
+    });
   } catch (e) {
     const msg = e instanceof ClaudeError ? `Claude ${e.status}: ${e.message}` : String(e);
     return new Response(JSON.stringify({ error: msg }), {

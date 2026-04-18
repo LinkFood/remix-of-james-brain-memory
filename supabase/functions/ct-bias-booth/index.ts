@@ -18,6 +18,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 
 const SYSTEM_PROMPT = `You are the bias booth. Your job: extract 3-5 STRUCTURAL patterns where Claude (you, last week) was systematically wrong. Not tactical rules — identity-level blindspots.
 
@@ -100,6 +101,7 @@ serve(async (req) => {
   const userMessage = JSON.stringify({ ...data, note: 'Extract 3-5 structural biases per the system schema. Return ONLY the JSON.' });
 
   let claudeText = '';
+  const claudeCallStart = Date.now();
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.sonnet,
@@ -109,6 +111,17 @@ serve(async (req) => {
       temperature: 0.3,
     });
     claudeText = parseTextContent(res);
+    logClaudeUsage(supabase, {
+      source: 'ct-bias-booth',
+      model: CLAUDE_MODELS.sonnet,
+      usage: res.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      metadata: {
+        grades_30d_count: data.grades_30d.length,
+        self_regrades_30d_count: data.self_regrades_30d.length,
+        active_biases_count: data.active_biases.length,
+      },
+    });
   } catch (e) {
     const msg = e instanceof ClaudeError ? `Claude ${e.status}: ${e.message}` : String(e);
     return new Response(JSON.stringify({ error: msg }), {

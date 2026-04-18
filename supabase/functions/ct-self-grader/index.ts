@@ -19,6 +19,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { CT_SELF_GRADER_SYSTEM_PROMPT, CT_SELF_GRADER_PROMPT_VERSION } from '../_shared/selfGraderPrompt.ts';
 
 type SubjectType = 'observation' | 'flag' | 'alert';
@@ -278,6 +279,7 @@ async function regradeSubject(supabase: SupabaseClient, subject: Subject): Promi
   const userMessage = JSON.stringify(ctx);
 
   let claudeText = '';
+  const claudeCallStart = Date.now();
   try {
     const response = await callClaude({
       model: CLAUDE_MODELS.sonnet,
@@ -287,6 +289,17 @@ async function regradeSubject(supabase: SupabaseClient, subject: Subject): Promi
       temperature: 0.3,
     });
     claudeText = parseTextContent(response);
+    logClaudeUsage(supabase, {
+      source: 'ct-self-grader',
+      model: CLAUDE_MODELS.sonnet,
+      usage: response.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      metadata: {
+        subject_id: subject.subject_id,
+        subject_type: subject.subject_type,
+        prompt_version: CT_SELF_GRADER_PROMPT_VERSION,
+      },
+    });
   } catch (e) {
     const msg = e instanceof ClaudeError ? `Claude ${e.status}: ${e.message}` : String(e);
     return { ok: false, error: msg };

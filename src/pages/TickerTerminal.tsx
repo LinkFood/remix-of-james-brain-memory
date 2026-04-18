@@ -45,6 +45,7 @@ import { LinkGexDeep } from '@/components/command/LinkGexDeep';
 import { TickerChartWithAlerts } from '@/components/command/TickerChartWithAlerts';
 import { TickerCandleChart } from '@/components/command/TickerCandleChart';
 import { FundamentalsTile } from '@/components/command/FundamentalsTile';
+import { EarningsMovesTile } from '@/components/command/EarningsMovesTile';
 import {
   useTickerTerminal,
   type TickerHeartbeatPoint,
@@ -1022,6 +1023,9 @@ export default function TickerTerminal() {
 
         {/* ─── Fundamentals tile (weekly-cached, compact) ────────── */}
         <FundamentalsTile ticker={ticker} />
+
+        {/* ─── Historical earnings moves (weekly-cached) ─────────── */}
+        <EarningsMovesTile ticker={ticker} />
 
         {/* ─── Row 2: attention history + option chain ───────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">

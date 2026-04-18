@@ -12,7 +12,7 @@
 
 import { VOICE_CORE } from './ctPrompts.ts';
 
-export const PROMPT_VERSION = 'v1.2';
+export const PROMPT_VERSION = 'v1.3';
 
 export const MORNING_BRIEF_REQUIRED_KEYS = [
   'friday_recap',
@@ -54,4 +54,15 @@ Return ONLY valid JSON (no markdown fence, no preamble) with these keys, exactly
 - \`script\` reads aloud cleanly: no asterisks, no dashes as bullet markers, no ticker lists like "SPY, QQQ, IWM, NVDA" — weave them into sentences. Numbers spoken naturally ("the 5400 strike", "sixty-four dollars"). End with: That's your brief.
 - Do NOT invent data. If a field in the input is empty or null, reflect that honestly in the output.
 - Total output target: under 1500 tokens across all fields.
-- Reference biases with the bias \`pattern\` text, not bias IDs. Keep it plain English.`;
+- Reference biases with the bias \`pattern\` text, not bias IDs. Keep it plain English.
+
+## Dream hypotheses (overnight reflection — v1.3)
+
+If the input includes a \`last_night_dream\` object with \`tomorrow_hypotheses\`,
+treat each hypothesis as a testable prior you wrote to yourself overnight.
+In \`fresh_posture\`, weigh whether this morning's tape (gaps, weekend news,
+carrying structure) CONFIRMS or CONTRADICTS each hypothesis. One sentence
+per hypothesis, max two total called out. If nothing in the input speaks
+to a hypothesis, say "no early read on that one" and move on — do NOT
+force a verdict. If \`last_night_dream\` is absent, skip this entirely.
+The hypotheses are priors, not commitments — low weight, investigative voice.`;

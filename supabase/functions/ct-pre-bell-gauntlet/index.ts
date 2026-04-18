@@ -19,6 +19,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
 
 const SYSTEM_PROMPT = `You are the pre-bell gauntlet. 9:25 AM ET on a trading day. Your job: three committed predictions for today's session. No hedging. No "could go either way." Commit.
@@ -124,6 +125,7 @@ serve(async (req) => {
   });
 
   let claudeText = '';
+  const claudeCallStart = Date.now();
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.sonnet,
@@ -133,6 +135,13 @@ serve(async (req) => {
       temperature: 0.3,
     });
     claudeText = parseTextContent(res);
+    logClaudeUsage(supabase, {
+      source: 'ct-pre-bell-gauntlet',
+      model: CLAUDE_MODELS.sonnet,
+      usage: res.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      metadata: { session_date: sessionDate },
+    });
   } catch (e) {
     const msg = e instanceof ClaudeError ? `Claude ${e.status}: ${e.message}` : String(e);
     return new Response(JSON.stringify({ error: msg }), {

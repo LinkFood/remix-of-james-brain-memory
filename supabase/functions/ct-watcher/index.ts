@@ -281,6 +281,73 @@ function condensedWatching(condensed: CondensedState): string[] {
 // State writers
 // ============================================================================
 
+/**
+ * Historical day-after earnings move stats pulled from ct_earnings_moves at
+ * watcher fire-time. Attached to the earnings trigger so the system-prompt
+ * addendum can give Claude a calibrated expected_move range instead of a
+ * guess. All fields null when no priced quarters are available.
+ */
+interface EarningsMovesHistory {
+  quarters_priced: number;   // # rows with move_pct (N)
+  quarters_total: number;    // # rows in cache (priced or not)
+  avg_mag_pct: number | null;
+  std_pct: number | null;
+  max_up_pct: number | null;
+  max_down_pct: number | null;
+  beats: number;
+  misses: number;
+  inline_count: number;
+}
+
+async function loadEarningsMovesHistory(
+  supabase: SupabaseClient,
+  ticker: string,
+): Promise<EarningsMovesHistory | null> {
+  try {
+    const { data, error } = await supabase
+      .from('ct_earnings_moves')
+      .select('move_pct, beat_miss')
+      .eq('ticker', ticker)
+      .order('report_date', { ascending: false })
+      .limit(8);
+    if (error || !data) return null;
+    const rows = data as Array<{ move_pct: number | null; beat_miss: string | null }>;
+    if (rows.length === 0) return null;
+    const priced = rows.filter((r) => typeof r.move_pct === 'number' && Number.isFinite(r.move_pct)) as Array<{ move_pct: number; beat_miss: string | null }>;
+    const beats  = rows.filter((r) => r.beat_miss === 'beat').length;
+    const misses = rows.filter((r) => r.beat_miss === 'miss').length;
+    const inline_count = rows.filter((r) => r.beat_miss === 'inline').length;
+    if (priced.length === 0) {
+      return {
+        quarters_priced: 0,
+        quarters_total: rows.length,
+        avg_mag_pct: null, std_pct: null,
+        max_up_pct: null, max_down_pct: null,
+        beats, misses, inline_count,
+      };
+    }
+    const mags = priced.map((r) => Math.abs(r.move_pct));
+    const avgMag = mags.reduce((a, b) => a + b, 0) / priced.length;
+    const mean   = priced.reduce((a, b) => a + b.move_pct, 0) / priced.length;
+    const variance = priced.reduce((acc, r) => acc + (r.move_pct - mean) ** 2, 0) / priced.length;
+    const std = Math.sqrt(variance);
+    const max = Math.max(...priced.map((r) => r.move_pct));
+    const min = Math.min(...priced.map((r) => r.move_pct));
+    return {
+      quarters_priced: priced.length,
+      quarters_total: rows.length,
+      avg_mag_pct: avgMag,
+      std_pct: std,
+      max_up_pct: max,
+      max_down_pct: min,
+      beats, misses, inline_count,
+    };
+  } catch (e) {
+    console.warn('[ct-watcher] loadEarningsMovesHistory failed:', e instanceof Error ? e.message : String(e));
+    return null;
+  }
+}
+
 // Event-trigger metadata threaded from the request body down into every write.
 // When present, every row the watcher produces during this tick carries a
 // pointer back to ct_watcher_event_triggers, and the heartbeat status_line is
@@ -293,6 +360,11 @@ interface TriggerInfo {
   /**
    * Populated only when source='earnings_approach' — surfaced to the model via
    * a system-prompt addendum so Haiku tilts sizing/stops/horizon accordingly.
+   *
+   * `history` is filled in-handler from ct_earnings_moves (not passed through
+   * the trigger body) — gives Haiku a calibrated expected_move window vs
+   * guessing. All fields null when ct_earnings_moves is empty or prices were
+   * too thin to compute stats.
    */
   earnings?: {
     ticker: string;
@@ -300,6 +372,7 @@ interface TriggerInfo {
     report_time: string | null;
     threshold_hours: number;
     hours_remaining: number;
+    history?: EarningsMovesHistory | null;
   } | null;
   /**
    * Populated only when source='macro_event_approach' — surfaced to the model
@@ -844,6 +917,13 @@ serve(async (req) => {
     /* empty body is fine */
   }
 
+  // Earnings triggers get a history lookup so the addendum can hand Haiku a
+  // calibrated expected_move range. One pg read per fire. Failure → null
+  // history, addendum degrades to the pre-v2 wording.
+  if (triggerInfo?.earnings) {
+    triggerInfo.earnings.history = await loadEarningsMovesHistory(supabase, triggerInfo.earnings.ticker);
+  }
+
   // Kill switch — skip entire watcher tick if engaged. <15s stale-cache lag
   // tolerated; the next isolate to cold-start reads fresh.
   if (await isKillSwitchActive(supabase)) {
@@ -1226,9 +1306,30 @@ Decide ONE state for this cycle and emit the JSON per the schema in the system p
     // If this tick was fired by an approaching earnings report, tack an
     // addendum onto the system prompt — Haiku should tilt sizing smaller,
     // stops tighter, and favor shorter-horizon framing in the narrative.
+    // Build an optional calibrated-history line when ct_earnings_moves has
+    // priced data. Without history, we say nothing about expected move.
+    let historyLine = '';
+    if (triggerInfo?.earnings?.history) {
+      const h = triggerInfo.earnings.history;
+      if (h.quarters_priced > 0 && h.avg_mag_pct !== null) {
+        const pieces: string[] = [];
+        pieces.push(`${triggerInfo.earnings.ticker} historical day-after moves (last ${h.quarters_priced} priced of ${h.quarters_total} reports)`);
+        pieces.push(`±${h.avg_mag_pct.toFixed(1)}% avg`);
+        if (h.std_pct !== null)     pieces.push(`±${h.std_pct.toFixed(1)}% std`);
+        if (h.max_up_pct !== null && h.max_down_pct !== null) {
+          const biggest = Math.abs(h.max_up_pct) >= Math.abs(h.max_down_pct) ? h.max_up_pct : h.max_down_pct;
+          pieces.push(`max ${biggest >= 0 ? '+' : ''}${biggest.toFixed(1)}%`);
+        }
+        pieces.push(`${h.beats} beats / ${h.misses} misses${h.inline_count ? ` / ${h.inline_count} inline` : ''}`);
+        historyLine = ` ${pieces.join(', ')}. Upcoming print is expected to move within a similar distribution — use this as the calibrated expected_move range rather than guessing.`;
+      } else {
+        historyLine = ` (Historical day-after move history is cached but too price-thin to stat — expected_move range unknown, err LOWER on conviction.)`;
+      }
+    }
+
     const earningsAddendum = (triggerInfo?.source === 'earnings_approach' && triggerInfo.earnings)
       ? `\n\n--- EARNINGS ADDENDUM (event-driven fire) ---
-Earnings in ${triggerInfo.earnings.hours_remaining.toFixed(1)}h for ${triggerInfo.earnings.ticker} (${triggerInfo.earnings.report_date}${triggerInfo.earnings.report_time ? ` ${triggerInfo.earnings.report_time.toUpperCase()}` : ''}). IV typically expands 20–40% leading in; vol is priced to the known event, so long-premium setups into the print are expensive and directional conviction should be LOWER than flow alone suggests. Size trades on ${triggerInfo.earnings.ticker} smaller, tighter stops, consider shorter horizons or explicit defined-risk structures. Advisory only — do NOT auto-close anything. When surfacing reads on ${triggerInfo.earnings.ticker} in this tick, cite the earnings proximity in the glance.`
+Earnings in ${triggerInfo.earnings.hours_remaining.toFixed(1)}h for ${triggerInfo.earnings.ticker} (${triggerInfo.earnings.report_date}${triggerInfo.earnings.report_time ? ` ${triggerInfo.earnings.report_time.toUpperCase()}` : ''}).${historyLine} IV typically expands 20–40% leading in; vol is priced to the known event, so long-premium setups into the print are expensive and directional conviction should be LOWER than flow alone suggests. Size trades on ${triggerInfo.earnings.ticker} smaller, tighter stops, consider shorter horizons or explicit defined-risk structures. Advisory only — do NOT auto-close anything. When surfacing reads on ${triggerInfo.earnings.ticker} in this tick, cite the earnings proximity in the glance.`
       : '';
 
     // Macro addendum — FOMC / CPI / PPI / NFP / GDP / retail sales within

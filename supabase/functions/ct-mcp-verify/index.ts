@@ -11,6 +11,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { CLAUDE_MODELS } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 
 serve(async (req) => {
   const corsResponse = handleCors(req);
@@ -45,6 +47,7 @@ serve(async (req) => {
     }],
   };
 
+  const claudeCallStart = Date.now();
   try {
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -62,7 +65,7 @@ serve(async (req) => {
     let parsed: unknown = null;
     try { parsed = JSON.parse(raw); } catch { /* leave raw */ }
 
-    const p = parsed as { content?: Array<{ type: string; text?: string; name?: string; input?: unknown; server_name?: string }>; stop_reason?: string; error?: unknown; usage?: unknown } | null;
+    const p = parsed as { content?: Array<{ type: string; text?: string; name?: string; input?: unknown; server_name?: string }>; stop_reason?: string; error?: unknown; usage?: { input_tokens?: number; output_tokens?: number } } | null;
 
     // Summarize content blocks
     const blocks = (p?.content ?? []).map(b => {
@@ -97,6 +100,16 @@ serve(async (req) => {
       // Log each MCP call to ct_mcp_calls so it shows up in the inspector
       const { logMcpCalls } = await import('../_shared/mcpLog.ts');
       await logMcpCalls(supabase, 'mcp-verify', parsed as unknown as { content?: unknown });
+      // Log Claude cost — diagnostic function, usually James-invoked manually.
+      const mcpToolUseCount = (p?.content ?? []).filter(b => b.type === 'mcp_tool_use').length;
+      logClaudeUsage(supabase, {
+        source: 'ct-mcp-verify',
+        model: CLAUDE_MODELS.sonnet,
+        usage: p?.usage ?? null,
+        duration_ms: Date.now() - claudeCallStart,
+        mcp_calls: mcpToolUseCount,
+        metadata: { manual_invocation: true, http_status: status, stop_reason: p?.stop_reason ?? null },
+      });
     } catch (_e) { /* ignore write errors */ }
 
     return new Response(JSON.stringify(summary, null, 2), {

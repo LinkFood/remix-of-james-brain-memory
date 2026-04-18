@@ -261,6 +261,9 @@ verify_jwt = false
 [functions.ct-fundamentals-sync]
 verify_jwt = false
 
+[functions.ct-earnings-moves-sync]
+verify_jwt = false
+
 [functions.ct-earnings-pre-event-check]
 verify_jwt = false
 
@@ -283,4 +286,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ct-correlation-compute]
+verify_jwt = false
+
+[functions.ct-dream]
 verify_jwt = false
