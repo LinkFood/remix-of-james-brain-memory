@@ -315,6 +315,79 @@ export interface DailyBriefRow {
   triggered_by: string;
 }
 
+// ---------------------------------------------------------------------------
+// Wave C ingester views — the 7 UW streams ingested by ct-*-ingester fns.
+// ---------------------------------------------------------------------------
+
+export interface InsiderTradeRow {
+  ticker: string;
+  insider_name: string | null;
+  insider_title: string | null;
+  transaction_type: string | null;
+  shares: number | null;
+  price: number | null;
+  value_usd: number | null;
+  trade_date: string | null;
+  filing_date: string | null;
+}
+
+export interface PoliticalTradeRow {
+  ticker: string | null;
+  trader_name: string | null;
+  chamber: string | null;
+  party: string | null;
+  side: string | null;
+  amount_band_usd: string | null;
+  traded_at: string | null;
+  reported_at: string | null;
+}
+
+export interface AnalystActionRow {
+  ticker: string;
+  analyst_firm: string | null;
+  action_type: string | null;
+  from_rating: string | null;
+  to_rating: string | null;
+  price_target: number | null;
+  prior_price_target: number | null;
+  action_date: string | null;
+}
+
+export interface ShortInterestRow {
+  ticker: string;
+  report_date: string;
+  short_interest_shares: number | null;
+  short_interest_pct_float: number | null;
+  days_to_cover: number | null;
+  short_volume_ratio_recent: number | null;
+}
+
+export interface SectorTideRow {
+  sector: string;
+  captured_at: string;
+  net_call_premium: number | null;
+  net_put_premium: number | null;
+  net_delta: number | null;
+  net_vega: number | null;
+}
+
+export interface RiskReversalSkewRow {
+  ticker: string;
+  capture_date: string;
+  expiry: string | null;
+  delta_25_call_iv: number | null;
+  delta_25_put_iv: number | null;
+  skew_25d: number | null;
+}
+
+export interface TechnicalIndicatorRow {
+  ticker: string;
+  indicator_name: string;
+  period: number | null;
+  captured_at: string;
+  value: number | null;
+}
+
 export interface ClaudeContext {
   // Objective market — always allowed
   latestHeartbeat: Heartbeat | null;
@@ -357,6 +430,15 @@ export interface ClaudeContext {
   activeBiases: BiasRow[];
   activePlaybooks: PlaybookRow[];
   activeBrief: DailyBriefRow | null;
+
+  // Wave C — newly ingested UW streams
+  recentInsiderTrades: InsiderTradeRow[];
+  recentPoliticalTrades: PoliticalTradeRow[];
+  recentAnalystActions: AnalystActionRow[];
+  shortInterestByTicker: ShortInterestRow[];
+  recentSectorTide: SectorTideRow[];
+  skewByTicker: RiskReversalSkewRow[];
+  technicalsByTicker: TechnicalIndicatorRow[];
 
   // Watchlist the above were filtered against (for downstream prompt clarity)
   watchlist: string[];
@@ -412,6 +494,18 @@ export interface BuildClaudeContextOpts {
   biasLimit?: number;
   /** Max active playbooks. Default 10. */
   playbookLimit?: number;
+  /** Max recent insider trades (watchlist-filtered). Default 20. */
+  insiderLimit?: number;
+  /** Max recent political trades. Default 30. */
+  politicalLimit?: number;
+  /** Max recent analyst actions (watchlist-filtered). Default 30. */
+  analystLimit?: number;
+  /** Sector-tide snapshots — how many most-recent rows. Default 22 (1 per sector). */
+  sectorTideLimit?: number;
+  /** Hours back to consider for sector tide. Default 2. */
+  sectorTideHours?: number;
+  /** Max technicals rows per (ticker, indicator). Default 1 (latest). */
+  technicalsPerTickerIndicator?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +544,11 @@ export async function buildClaudeContext(
   const principleLimit = opts.principleLimit ?? 20;
   const biasLimit = opts.biasLimit ?? 20;
   const playbookLimit = opts.playbookLimit ?? 10;
+  const insiderLimit = opts.insiderLimit ?? 20;
+  const politicalLimit = opts.politicalLimit ?? 30;
+  const analystLimit = opts.analystLimit ?? 30;
+  const sectorTideLimit = opts.sectorTideLimit ?? 22;
+  const sectorTideHours = opts.sectorTideHours ?? 2;
 
   // --- config snapshot (all keys have safe fallbacks) --------------------
   const autonomyModeRaw = String(await getConfig<string>('claude_autonomy_mode', 'execute'));
@@ -1070,6 +1169,193 @@ export async function buildClaudeContext(
     console.warn('[claudeReadSurface] ct_daily_briefs:', e instanceof Error ? e.message : e);
   }
 
+  // ========================================================================
+  // Wave C ingester queries — insider / political / analyst / shorts /
+  // sector-tide / skew / technicals. All table reads are scoped to the
+  // watchlist (when the table carries a ticker) and to recent time windows.
+  // Each read is wrapped in try/catch so a table-missing or slow query doesn't
+  // take down the rest of the context build.
+  // ========================================================================
+
+  // --- Insider trades (watchlist-filtered) ---
+  let recentInsiderTrades: InsiderTradeRow[] = [];
+  try {
+    const { data } = await supabase
+      .from('ct_insider_trades')
+      .select('ticker, insider_name, insider_title, transaction_type, shares, price, value_usd, trade_date, filing_date')
+      .in('ticker', watchlist)
+      .order('trade_date', { ascending: false, nullsFirst: false })
+      .limit(insiderLimit);
+    recentInsiderTrades = (data ?? []).map((r) => ({
+      ticker: String(r.ticker ?? ''),
+      insider_name: (r.insider_name as string) ?? null,
+      insider_title: (r.insider_title as string) ?? null,
+      transaction_type: (r.transaction_type as string) ?? null,
+      shares: r.shares == null ? null : Number(r.shares),
+      price: r.price == null ? null : Number(r.price),
+      value_usd: r.value_usd == null ? null : Number(r.value_usd),
+      trade_date: (r.trade_date as string) ?? null,
+      filing_date: (r.filing_date as string) ?? null,
+    }));
+  } catch (e) {
+    console.warn('[claudeReadSurface] ct_insider_trades:', e instanceof Error ? e.message : e);
+  }
+
+  // --- Political / congress trades (no ticker filter — signal is breadth) ---
+  let recentPoliticalTrades: PoliticalTradeRow[] = [];
+  try {
+    const { data } = await supabase
+      .from('ct_political_trades')
+      .select('ticker, trader_name, chamber, party, side, amount_band_usd, traded_at, reported_at')
+      .order('reported_at', { ascending: false, nullsFirst: false })
+      .limit(politicalLimit);
+    recentPoliticalTrades = (data ?? []).map((r) => ({
+      ticker: (r.ticker as string) ?? null,
+      trader_name: (r.trader_name as string) ?? null,
+      chamber: (r.chamber as string) ?? null,
+      party: (r.party as string) ?? null,
+      side: (r.side as string) ?? null,
+      amount_band_usd: (r.amount_band_usd as string) ?? null,
+      traded_at: (r.traded_at as string) ?? null,
+      reported_at: (r.reported_at as string) ?? null,
+    }));
+  } catch (e) {
+    console.warn('[claudeReadSurface] ct_political_trades:', e instanceof Error ? e.message : e);
+  }
+
+  // --- Analyst actions (watchlist-filtered) ---
+  let recentAnalystActions: AnalystActionRow[] = [];
+  try {
+    const { data } = await supabase
+      .from('ct_analyst_actions')
+      .select('ticker, analyst_firm, action_type, from_rating, to_rating, price_target, prior_price_target, action_date')
+      .in('ticker', watchlist)
+      .order('action_date', { ascending: false, nullsFirst: false })
+      .limit(analystLimit);
+    recentAnalystActions = (data ?? []).map((r) => ({
+      ticker: String(r.ticker ?? ''),
+      analyst_firm: (r.analyst_firm as string) ?? null,
+      action_type: (r.action_type as string) ?? null,
+      from_rating: (r.from_rating as string) ?? null,
+      to_rating: (r.to_rating as string) ?? null,
+      price_target: r.price_target == null ? null : Number(r.price_target),
+      prior_price_target: r.prior_price_target == null ? null : Number(r.prior_price_target),
+      action_date: (r.action_date as string) ?? null,
+    }));
+  } catch (e) {
+    console.warn('[claudeReadSurface] ct_analyst_actions:', e instanceof Error ? e.message : e);
+  }
+
+  // --- Short interest (watchlist-filtered, most recent per ticker) ---
+  let shortInterestByTicker: ShortInterestRow[] = [];
+  try {
+    const { data } = await supabase
+      .from('ct_short_interest')
+      .select('ticker, report_date, short_interest_shares, short_interest_pct_float, days_to_cover, short_volume_ratio_recent')
+      .in('ticker', watchlist)
+      .order('report_date', { ascending: false });
+    // Keep only the most recent row per ticker.
+    const seen = new Set<string>();
+    for (const r of data ?? []) {
+      const t = String(r.ticker ?? '');
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      shortInterestByTicker.push({
+        ticker: t,
+        report_date: String(r.report_date ?? ''),
+        short_interest_shares: r.short_interest_shares == null ? null : Number(r.short_interest_shares),
+        short_interest_pct_float: r.short_interest_pct_float == null ? null : Number(r.short_interest_pct_float),
+        days_to_cover: r.days_to_cover == null ? null : Number(r.days_to_cover),
+        short_volume_ratio_recent: r.short_volume_ratio_recent == null ? null : Number(r.short_volume_ratio_recent),
+      });
+    }
+  } catch (e) {
+    console.warn('[claudeReadSurface] ct_short_interest:', e instanceof Error ? e.message : e);
+  }
+
+  // --- Sector tide (most recent snapshot per sector within window) ---
+  let recentSectorTide: SectorTideRow[] = [];
+  try {
+    const sinceIso = new Date(Date.now() - sectorTideHours * 3600 * 1000).toISOString();
+    const { data } = await supabase
+      .from('ct_sector_tide')
+      .select('sector, captured_at, net_call_premium, net_put_premium, net_delta, net_vega')
+      .gte('captured_at', sinceIso)
+      .order('captured_at', { ascending: false })
+      .limit(sectorTideLimit * 8);
+    const seen = new Set<string>();
+    for (const r of data ?? []) {
+      const s = String(r.sector ?? '');
+      if (!s || seen.has(s)) continue;
+      seen.add(s);
+      recentSectorTide.push({
+        sector: s,
+        captured_at: String(r.captured_at),
+        net_call_premium: r.net_call_premium == null ? null : Number(r.net_call_premium),
+        net_put_premium: r.net_put_premium == null ? null : Number(r.net_put_premium),
+        net_delta: r.net_delta == null ? null : Number(r.net_delta),
+        net_vega: r.net_vega == null ? null : Number(r.net_vega),
+      });
+      if (recentSectorTide.length >= sectorTideLimit) break;
+    }
+  } catch (e) {
+    console.warn('[claudeReadSurface] ct_sector_tide:', e instanceof Error ? e.message : e);
+  }
+
+  // --- Risk-reversal skew (latest capture per ticker, front expiry) ---
+  let skewByTicker: RiskReversalSkewRow[] = [];
+  try {
+    const { data } = await supabase
+      .from('ct_risk_reversal_skew')
+      .select('ticker, capture_date, expiry, delta_25_call_iv, delta_25_put_iv, skew_25d')
+      .in('ticker', watchlist)
+      .order('capture_date', { ascending: false })
+      .order('expiry', { ascending: true, nullsFirst: false });
+    // Keep the front (nearest) expiry per ticker from the most recent capture.
+    const seen = new Set<string>();
+    for (const r of data ?? []) {
+      const t = String(r.ticker ?? '');
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      skewByTicker.push({
+        ticker: t,
+        capture_date: String(r.capture_date ?? ''),
+        expiry: (r.expiry as string) ?? null,
+        delta_25_call_iv: r.delta_25_call_iv == null ? null : Number(r.delta_25_call_iv),
+        delta_25_put_iv: r.delta_25_put_iv == null ? null : Number(r.delta_25_put_iv),
+        skew_25d: r.skew_25d == null ? null : Number(r.skew_25d),
+      });
+    }
+  } catch (e) {
+    console.warn('[claudeReadSurface] ct_risk_reversal_skew:', e instanceof Error ? e.message : e);
+  }
+
+  // --- Technical indicators (latest per ticker-indicator pair) ---
+  let technicalsByTicker: TechnicalIndicatorRow[] = [];
+  try {
+    const { data } = await supabase
+      .from('ct_technical_indicators')
+      .select('ticker, indicator_name, period, captured_at, value')
+      .in('ticker', watchlist)
+      .order('captured_at', { ascending: false })
+      .limit(watchlist.length * 6); // 5 indicators + 1 headroom per ticker
+    const seen = new Set<string>();
+    for (const r of data ?? []) {
+      const key = `${r.ticker}|${r.indicator_name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      technicalsByTicker.push({
+        ticker: String(r.ticker ?? ''),
+        indicator_name: String(r.indicator_name ?? ''),
+        period: r.period == null ? null : Number(r.period),
+        captured_at: String(r.captured_at),
+        value: r.value == null ? null : Number(r.value),
+      });
+    }
+  } catch (e) {
+    console.warn('[claudeReadSurface] ct_technical_indicators:', e instanceof Error ? e.message : e);
+  }
+
   return {
     latestHeartbeat,
     recentHeartbeats,
@@ -1097,6 +1383,13 @@ export async function buildClaudeContext(
     activeBiases,
     activePlaybooks,
     activeBrief,
+    recentInsiderTrades,
+    recentPoliticalTrades,
+    recentAnalystActions,
+    shortInterestByTicker,
+    recentSectorTide,
+    skewByTicker,
+    technicalsByTicker,
     watchlist,
     advisoryChatContext,
     chatIsAdvisory,
@@ -1144,9 +1437,11 @@ export function claudeSystemPromptPreamble(ctx: ClaudeContext): string {
 
   const surfaceLine =
     'You have access to your watchlist\'s flow (sweeps, whales, greek flow, net premium, NOPE), ' +
-    'dark pool prints, volatility structure (IV rank, max pain, VIX), calendar events (earnings/FDA/econ), ' +
-    'news (watchlist headlines + real-time breaking news), your own principles/biases/playbooks, ' +
-    'and today\'s morning brief when available.';
+    'dark pool prints, volatility structure (IV rank, max pain, VIX, 25-delta risk-reversal skew), ' +
+    'technical indicators (RSI/MACD/VWAP/ATR/BBANDS), short-interest + short-volume ratios, ' +
+    'sector tide (net call/put premium by sector), insider transactions, congress trades, ' +
+    'analyst rating changes, calendar events (earnings/FDA/econ), news (watchlist headlines + ' +
+    'real-time breaking news), your own principles/biases/playbooks, and today\'s morning brief when available.';
 
   if (ctx.chatIsAdvisory) {
     return [

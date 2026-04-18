@@ -322,6 +322,53 @@ export function getCongressTrades(): Promise<unknown> {
   return uwGet('/api/congress/recent-trades');
 }
 
+/**
+ * Analyst rating changes via the screener endpoint. Returns recent upgrades,
+ * downgrades, reiterations, price-target revisions across the market. Filter
+ * by ticker in-memory against the watchlist.
+ */
+export function getAnalystRatings(params: {
+  limit?: number;
+  ticker?: string;
+  action?: 'upgraded' | 'downgraded' | 'reiterated' | 'initiated' | 'target_raised' | 'target_lowered';
+} = {}): Promise<unknown> {
+  return uwGet('/api/screener/analyst-rating', params);
+}
+
+/**
+ * Short interest vs float (bi-monthly settlement + days-to-cover).
+ * v2 endpoint returns richer payload than the legacy `/shorts/interest-float`.
+ */
+export function getShortInterestFloat(ticker: string): Promise<unknown> {
+  return uwGet(`/api/shorts/${ticker}/interest-float-v2`);
+}
+
+/**
+ * Recent short-volume ratio time series. Daily short-volume as % of total
+ * consolidated volume (higher = more selling pressure from shorts).
+ */
+export function getShortVolumeRatio(ticker: string): Promise<unknown> {
+  return uwGet(`/api/shorts/${ticker}/volume-ratio`);
+}
+
+/**
+ * Sector tide — net call/put premium + net delta/vega by sector. Community-
+ * documented hidden gem. Gives sector rotation signal that doesn't show up in
+ * price action yet.
+ */
+export function getSectorTide(): Promise<unknown> {
+  return uwGet('/api/market/sector-tide');
+}
+
+/**
+ * Risk-reversal skew (25-delta call IV minus 25-delta put IV, per expiry).
+ * Pre-earnings / pre-event vol edge — divergent skew = crowded directional
+ * positioning.
+ */
+export function getRiskReversalSkew(ticker: string): Promise<unknown> {
+  return uwGet(`/api/stock/${ticker}/historical-risk-reversal-skew`);
+}
+
 // ============================================================================
 // Financials
 // ============================================================================
