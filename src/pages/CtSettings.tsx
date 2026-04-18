@@ -66,9 +66,18 @@ import {
   AlertTriangle,
   Sliders,
   History,
+  X,
+  Plus,
 } from 'lucide-react';
 
-type ConfigValue = number | boolean | string | null;
+// The one config key that renders as a ticker-pill editor instead of the
+// default slider/switch/input UI. Kept in lockstep with the migration
+// 20260420000030_watchlist_config.sql and the getWatchlist() helper.
+const WATCHLIST_KEY = 'watcher.watchlist';
+const WATCHLIST_MAX = 16;
+const WATCHLIST_TICKER_RE = /^[A-Z0-9.]{1,8}$/;
+
+type ConfigValue = number | boolean | string | string[] | null;
 
 interface ConfigRow {
   id: string;
@@ -142,16 +151,26 @@ const CATEGORIES: Record<string, CategoryMeta> = {
   },
 };
 
-function detectType(value: ConfigValue): 'boolean' | 'number' | 'string' {
+function detectType(value: ConfigValue): 'boolean' | 'number' | 'string' | 'array' {
   if (typeof value === 'boolean') return 'boolean';
   if (typeof value === 'number') return 'number';
+  if (Array.isArray(value)) return 'array';
   return 'string';
 }
 
 function formatDisplay(value: ConfigValue): string {
   if (value === null || value === undefined) return '—';
   if (typeof value === 'boolean') return value ? 'on' : 'off';
+  if (Array.isArray(value)) return `${value.length} tickers`;
   return String(value);
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 /** Find a sensible slider step given the min/max range. */
@@ -399,6 +418,9 @@ export default function CtSettings() {
     if (typeof draft === 'number' && typeof row.value === 'number') {
       return Math.abs(draft - row.value) > 1e-9;
     }
+    if (Array.isArray(draft) && Array.isArray(row.value)) {
+      return !arraysEqual(draft, row.value);
+    }
     return draft !== row.value;
   };
 
@@ -412,6 +434,22 @@ export default function CtSettings() {
       }
       if (row.max_value !== null && n > row.max_value) {
         return `Above max (${row.max_value})`;
+      }
+    }
+    if (kind === 'array') {
+      // Watchlist-specific rules (the only array key today). Keep in sync
+      // with validateWatchlist() in supabase/functions/_shared/watchlist.ts.
+      if (!Array.isArray(draft)) return 'Not an array';
+      if (draft.length < 1) return 'Need at least 1 ticker';
+      if (draft.length > WATCHLIST_MAX) return `Max ${WATCHLIST_MAX} tickers`;
+      const seen = new Set<string>();
+      for (const t of draft) {
+        if (typeof t !== 'string') return 'All entries must be strings';
+        const u = t.trim().toUpperCase();
+        if (!u) return 'Empty ticker';
+        if (!WATCHLIST_TICKER_RE.test(u)) return `Invalid ticker: ${t}`;
+        if (seen.has(u)) return `Duplicate ticker: ${u}`;
+        seen.add(u);
       }
     }
     return null;
@@ -732,6 +770,22 @@ interface EditorProps {
 }
 
 function ConfigRowEditor({ row, draft, dirty, saving, onChange, onSave, onResetToDefault }: EditorProps) {
+  // The watchlist row gets its own pill-based editor — renders as a full-width
+  // block so it needs a different layout than the slider/input rows.
+  if (row.key === WATCHLIST_KEY) {
+    return (
+      <WatchlistEditor
+        row={row}
+        draft={draft}
+        dirty={dirty}
+        saving={saving}
+        onChange={onChange}
+        onSave={onSave}
+        onResetToDefault={onResetToDefault}
+      />
+    );
+  }
+
   const kind = detectType(row.default_value);
   const canSlide =
     kind === 'number' && row.min_value !== null && row.max_value !== null;
@@ -845,6 +899,176 @@ function ConfigRowEditor({ row, draft, dirty, saving, onChange, onSave, onResetT
           <Save className="w-3 h-3 mr-1" />
           {saving ? 'Saving…' : 'Save'}
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * WatchlistEditor — ticker-pill management for `watcher.watchlist`.
+ *
+ * Differs from the other rows in three ways:
+ *   1. Value is a `string[]` (jsonb array in ct_config), not a scalar.
+ *   2. Renders full-width with a pill list + add input, not a slider.
+ *   3. Validates ticker format client-side before accepting an add, and
+ *      refuses adds that exceed MAX_WATCHLIST.
+ *
+ * Persistence still goes through the same onSave → ct_config UPDATE path
+ * used by every other row; we just shape the draft as an array instead of
+ * a number/string. The 16-ticker cap is enforced here and in
+ * `_shared/watchlist.ts`.
+ */
+function WatchlistEditor({ row, draft, dirty, saving, onChange, onSave, onResetToDefault }: EditorProps) {
+  const tickers: string[] = Array.isArray(draft) ? (draft as string[]) : [];
+  const [input, setInput] = useState('');
+  const [addError, setAddError] = useState<string | null>(null);
+  const atCap = tickers.length >= WATCHLIST_MAX;
+
+  const removeTicker = (t: string) => {
+    onChange(tickers.filter((x) => x !== t));
+  };
+
+  const addTicker = () => {
+    const candidate = input.trim().toUpperCase();
+    if (!candidate) {
+      setAddError('Enter a ticker');
+      return;
+    }
+    if (!WATCHLIST_TICKER_RE.test(candidate)) {
+      setAddError('Tickers must be 1-8 uppercase letters/digits/dots');
+      return;
+    }
+    if (tickers.includes(candidate)) {
+      setAddError(`${candidate} is already in the list`);
+      return;
+    }
+    if (atCap) {
+      setAddError(`Max ${WATCHLIST_MAX} tickers — remove one first`);
+      return;
+    }
+    onChange([...tickers, candidate]);
+    setInput('');
+    setAddError(null);
+  };
+
+  const onInputKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addTicker();
+    }
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Header row — label + tooltip + header-level actions */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <Label className="text-sm font-medium font-mono">{row.key}</Label>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  className="text-muted-foreground/60 hover:text-muted-foreground"
+                  aria-label={`About ${row.key}`}
+                >
+                  <Info className="w-3 h-3" />
+                </button>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="max-w-xs text-xs">
+                <div className="space-y-1">
+                  {row.description && <div>{row.description}</div>}
+                  <div className="text-muted-foreground">
+                    Changes apply on next tick (~60s). Max {WATCHLIST_MAX} tickers.
+                  </div>
+                </div>
+              </TooltipContent>
+            </Tooltip>
+          </div>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            {tickers.length}/{WATCHLIST_MAX} tickers
+            {dirty && <span className="ml-2 text-amber-400">· unsaved</span>}
+          </p>
+        </div>
+
+        <div className="flex items-center gap-1 shrink-0">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs"
+            onClick={onResetToDefault}
+            disabled={saving}
+            title="Reset to default watchlist"
+          >
+            <RotateCcw className="w-3 h-3" />
+          </Button>
+          <Button
+            size="sm"
+            className="h-8 px-3 text-xs"
+            onClick={onSave}
+            disabled={saving || !dirty}
+          >
+            <Save className="w-3 h-3 mr-1" />
+            {saving ? 'Saving…' : 'Save'}
+          </Button>
+        </div>
+      </div>
+
+      {/* Pill list */}
+      <div className="flex flex-wrap gap-1.5 min-h-[2rem]">
+        {tickers.length === 0 && (
+          <span className="text-xs text-muted-foreground italic">
+            No tickers — add at least one before saving.
+          </span>
+        )}
+        {tickers.map((t) => (
+          <Badge
+            key={t}
+            variant="outline"
+            className="font-mono text-xs pl-2 pr-1 py-1 gap-1 bg-muted/40"
+          >
+            {t}
+            <button
+              type="button"
+              onClick={() => removeTicker(t)}
+              disabled={saving}
+              aria-label={`Remove ${t}`}
+              className="text-muted-foreground/70 hover:text-foreground rounded p-0.5 disabled:opacity-50"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </Badge>
+        ))}
+      </div>
+
+      {/* Add input */}
+      <div className="flex items-center gap-2">
+        <Input
+          type="text"
+          placeholder="Add ticker (e.g. NFLX)"
+          className="h-8 text-sm font-mono max-w-[200px]"
+          value={input}
+          onChange={(e) => {
+            setInput(e.target.value.toUpperCase());
+            if (addError) setAddError(null);
+          }}
+          onKeyDown={onInputKey}
+          disabled={saving || atCap}
+          maxLength={8}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 px-3 text-xs"
+          onClick={addTicker}
+          disabled={saving || atCap || !input.trim()}
+        >
+          <Plus className="w-3 h-3 mr-1" />
+          Add
+        </Button>
+        {addError && (
+          <span className="text-xs text-red-400">{addError}</span>
+        )}
       </div>
     </div>
   );

@@ -38,9 +38,9 @@ import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitc
 import {
   getSpotGexByStrike,
   getVixSpot,
-  WATCHLIST,
   MARKET_BANNER_SYMBOL,
 } from '../_shared/uwClient.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
 
 // -- Capture cadence in ms (must mirror the cron `*/2` schedule). ------
 const CAPTURE_WINDOW_MS = 2 * 60 * 1000;
@@ -115,8 +115,10 @@ serve(async (req) => {
   const rows: Row[] = [];
   const errors: Array<{ ticker: string; error: string }> = [];
 
-  // ----- Watchlist (12) + SPX via spot-exposures/strike ------------------
-  const stockTargets: string[] = [...WATCHLIST, MARKET_BANNER_SYMBOL];
+  // ----- Watchlist (tunable) + SPX via spot-exposures/strike -------------
+  // One config read per tick; the returned array is reused for the loop.
+  const watchlist = await getWatchlist(supabase);
+  const stockTargets: string[] = [...watchlist, MARKET_BANNER_SYMBOL];
   for (const ticker of stockTargets) {
     try {
       const raw = await getSpotGexByStrike(ticker);

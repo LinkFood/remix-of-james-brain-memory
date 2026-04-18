@@ -20,6 +20,7 @@ import { JamesVsClaude } from '@/components/command/JamesVsClaude';
 import { WeeklyReflectionPanel } from '@/components/command/WeeklyReflectionPanel';
 import { CalibrationChart } from '@/components/scorecard/CalibrationChart';
 import { ClaudesSurprises } from '@/components/scorecard/ClaudesSurprises';
+import { BandCalibrationPanel } from '@/components/scorecard/BandCalibrationPanel';
 import { AxisAttributionPanel } from '@/components/scorecard/AxisAttributionPanel';
 import { AlertPostMortemsPanel } from '@/components/scorecard/AlertPostMortemsPanel';
 import { RegimeConditionalPanel } from '@/components/scorecard/RegimeConditionalPanel';
@@ -490,6 +491,13 @@ export function Scorecard() {
 
         {/* Claude's Surprises — the furthest-from-reality calls. Most instructive grades. */}
         <ClaudesSurprises />
+
+        {/* Band Calibration — wave 17 magnitude accuracy. Does actual move fall
+            inside Claude's claimed [low_pct, high_pct]? Histogram of
+            band_calibration_delta exposes systemic over/underconfidence in
+            magnitude claims. Sits below Surprises + CalibrationChart per
+            wave 17 placement. */}
+        <BandCalibrationPanel />
 
         {/* Ghost Trade Tape — paper P&L of Claude's flagged calls. Hidden until
             there's at least one graded trade; zero-state would be pure noise. */}

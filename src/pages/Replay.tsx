@@ -30,7 +30,12 @@ import { Badge } from '@/components/ui/badge';
 import {
   Loader2, Play, TrendingUp, TrendingDown, Zap, AlertTriangle,
   ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, RotateCw,
+  Ghost,
 } from 'lucide-react';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine,
+} from 'recharts';
+import { ChartSafe } from '@/components/ChartSafe';
 
 // Chunked-mode config. 40-tick session split into 3 chunks of ~14 each.
 const CHUNKED_TOTAL_TICKS = 40;
@@ -70,6 +75,50 @@ interface PerTick {
   output_tokens: number;
 }
 
+interface GhostTrade {
+  alert_ref: string;
+  tick_time: string;
+  instrument: string;
+  direction: 'bullish' | 'bearish' | 'neutral' | 'volatility';
+  entry_level: number;
+  stop_level: number;
+  target_level: number;
+  horizon_end: string;
+  size_pct: number;
+  size_usd: number;
+  exit_time: string;
+  exit_price: number | null;
+  exit_reason: 'stop' | 'target' | 'horizon_close' | 'no_price_data';
+  realized_pnl_pct: number;
+  realized_pnl_usd: number;
+  resolution: 'price_ticks' | 'heartbeats';
+  ticks_walked: number;
+}
+
+interface GhostTradesSummary {
+  mode: 'ghost_trades';
+  total_trades: number;
+  wins: number;
+  losses: number;
+  pushes: number;
+  no_data: number;
+  win_rate: number;
+  total_pnl_pct: number;
+  total_pnl_usd: number;
+  max_drawdown_pct: number;
+  starting_equity: number;
+  final_equity: number;
+  resolution: 'price_ticks' | 'heartbeats' | 'mixed' | 'none';
+  equity_curve: Array<{ t: string; equity: number; pnl_pct: number }>;
+  actual_trades_count: number;
+  actual_pnl_pct_session: number;
+  filter_edge_usd: number;
+  filter_edge_pct: number;
+  insight_text: string;
+}
+
+type ReplayMode = 'replay' | 'ghost_trades';
+
 interface RunRow {
   id: string;
   started_at: string;
@@ -87,6 +136,8 @@ interface RunRow {
   replay_counts: { observations: number; flags: number; alerts: number; demoted: number; trades_would_commit: number } | null;
   per_tick: PerTick[] | null;
   trade_decisions: AlertCommitDecision[] | null;
+  ghost_trades: GhostTrade[] | null;
+  ghost_trades_summary: GhostTradesSummary | null;
   cost_usd: number | null;
   duration_ms: number | null;
   error_message: string | null;
@@ -147,8 +198,14 @@ export default function Replay() {
   // The set of chunks we are currently displaying. For single runs: one entry.
   // For chunked or loaded-from-history: the parent + children sorted by chunk_index.
   const [runs, setRuns] = useState<RunRow[]>([]);
-  const [firing, setFiring] = useState<null | 'single' | 'chunked'>(null);
+  const [firing, setFiring] = useState<null | 'single' | 'chunked' | 'ghost'>(null);
   const [sidebarLimit, setSidebarLimit] = useState(SIDEBAR_PAGE_SIZE);
+
+  // viewMode toggle — which body does the RIGHT PANEL show? The replay diff
+  // or the ghost-trades P&L. Does not change what's stored — just what's
+  // displayed. A single run can have both attached (replay counts + ghost
+  // summary) if it was fired with mode='ghost_trades'.
+  const [viewMode, setViewMode] = useState<ReplayMode>('replay');
 
   const runsRef = useRef<RunRow[]>([]);
   runsRef.current = runs;
@@ -278,7 +335,7 @@ export default function Replay() {
   }, [runs, firing]);
 
   // -------------------- Firing helpers --------------------
-  async function fireChunk(chunkIndex: number, parentRunId: string | null) {
+  async function fireChunk(chunkIndex: number, parentRunId: string | null, mode: ReplayMode = 'replay') {
     const prior = runsRef.current[runsRef.current.length - 1];
     if (prior && prior.status === 'running') {
       setError(`refusing to fire chunk ${chunkIndex}: prior chunk still running`);
@@ -291,8 +348,9 @@ export default function Replay() {
         body: {
           session_date: sessionDate,
           dry_run: true,
+          mode,
           modules: ['watcher_writes', 'cooldown', 'alert_book_commit'],
-          max_ticks: chunkIndex === 0 && runsRef.current.length === 0 && firing === 'single' ? SINGLE_TICKS : CHUNKED_TICKS_PER,
+          max_ticks: chunkIndex === 0 && runsRef.current.length === 0 && (firing === 'single' || firing === 'ghost') ? SINGLE_TICKS : CHUNKED_TICKS_PER,
           chunk_index: chunkIndex,
           total_chunks: firing === 'chunked' ? CHUNKED_COUNT : 1,
           parent_run_id: parentRunId,
@@ -337,6 +395,22 @@ export default function Replay() {
     setFiring('chunked');
     await fireChunk(0, null);
     // Subsequent chunks fire via the effect watching `runs`.
+  }
+
+  // Fire a ghost-trades replay. Single-run mode (12 ticks) since ghost_trades
+  // only needs chunk 0 — alerts don't change across chunks. Auto-switches the
+  // right panel to show ghost view.
+  async function runGhost() {
+    setError(null);
+    setRuns([]);
+    setFiring('ghost');
+    setViewMode('ghost_trades');
+    await fireChunk(0, null, 'ghost_trades');
+    setFiring(null);
+    setTimeout(() => {
+      queryClient.invalidateQueries({ queryKey: ['ct_replay_runs_history'] });
+      queryClient.invalidateQueries({ queryKey: ['ct_replay_runs_session_dates'] });
+    }, 1500);
   }
 
   // Fire "another run for this same date" — single-mode re-fire against the
@@ -477,6 +551,11 @@ export default function Replay() {
       }
     }
 
+    // Ghost trades live on the parent run (chunk 0) only — not replicated
+    // across chunks. Pull from the first sorted run if present.
+    const ghost_trades_summary = sorted[0]?.ghost_trades_summary ?? null;
+    const ghost_trades = sorted[0]?.ghost_trades ?? null;
+
     return {
       sorted_runs: sorted,
       per_tick,
@@ -488,6 +567,8 @@ export default function Replay() {
       cost_usd,
       duration_ms,
       tokens,
+      ghost_trades_summary,
+      ghost_trades,
     };
   }, [runs, runsWithTimeoutOverride]);
 
@@ -731,7 +812,28 @@ export default function Replay() {
                 </div>
               )}
 
-              {/* Fire buttons — re-run same date or fire chunked */}
+              {/* Mode toggle — flips right-panel view between replay diff and
+                  ghost-trade P&L. Available regardless of whether ghost data
+                  is attached; if not, ghost panel shows the "fire ghost" CTA. */}
+              <div className="flex items-center gap-2 pt-1">
+                <span className="text-[10px] uppercase tracking-wide text-zinc-500">View:</span>
+                <div className="inline-flex rounded border border-zinc-800 overflow-hidden">
+                  <button
+                    onClick={() => setViewMode('replay')}
+                    className={`px-3 py-1 text-xs transition-colors ${viewMode === 'replay' ? 'bg-emerald-500/20 text-emerald-300' : 'text-zinc-400 hover:bg-zinc-900'}`}
+                  >
+                    Replay
+                  </button>
+                  <button
+                    onClick={() => setViewMode('ghost_trades')}
+                    className={`px-3 py-1 text-xs transition-colors border-l border-zinc-800 ${viewMode === 'ghost_trades' ? 'bg-purple-500/20 text-purple-300' : 'text-zinc-400 hover:bg-zinc-900'}`}
+                  >
+                    Ghost Trades
+                  </button>
+                </div>
+              </div>
+
+              {/* Fire buttons — re-run same date or fire chunked or ghost */}
               <div className="flex gap-2 flex-wrap pt-1">
                 <Button
                   size="sm"
@@ -757,12 +859,24 @@ export default function Replay() {
                     : <Zap className="w-3 h-3" />}
                   Fire {CHUNKED_TOTAL_TICKS}-tick chunked run
                 </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={runGhost}
+                  disabled={disableFire}
+                  className="gap-2 border-purple-500/40 text-purple-300 hover:bg-purple-500/10"
+                >
+                  {firing === 'ghost'
+                    ? <Loader2 className="w-3 h-3 animate-spin" />
+                    : <Ghost className="w-3 h-3" />}
+                  Fire ghost trades replay
+                </Button>
               </div>
             </Card>
           )}
 
           {/* Summary side-by-side */}
-          {merged && (
+          {merged && viewMode === 'replay' && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <Card className="p-4 space-y-3">
                 <h2 className="text-sm font-semibold text-zinc-300">
@@ -791,7 +905,7 @@ export default function Replay() {
           )}
 
           {/* Cost line */}
-          {merged && (
+          {merged && viewMode === 'replay' && (
             <div className="text-xs text-zinc-500 flex gap-4 flex-wrap px-1">
               <span>Model: claude-haiku-4-5</span>
               <span>Tokens in: {merged.tokens.input.toLocaleString()}</span>
@@ -804,8 +918,19 @@ export default function Replay() {
             </div>
           )}
 
+          {/* ======================= GHOST TRADES VIEW ======================= */}
+          {merged && viewMode === 'ghost_trades' && (
+            <GhostTradesPanel
+              summary={merged.ghost_trades_summary}
+              trades={merged.ghost_trades ?? []}
+              onFireGhost={runGhost}
+              firing={firing === 'ghost'}
+              disabled={disableFire}
+            />
+          )}
+
           {/* Trades */}
-          {merged && (
+          {merged && viewMode === 'replay' && (
             <Card className="p-4 space-y-3">
               <h2 className="text-sm font-semibold text-zinc-300">
                 Alert-Book-Commit Decisions
@@ -861,7 +986,7 @@ export default function Replay() {
           )}
 
           {/* Per-tick diff */}
-          {merged && (
+          {merged && viewMode === 'replay' && (
             <Card className="p-4 space-y-3">
               <h2 className="text-sm font-semibold text-zinc-300">
                 Per-Tick Diff
@@ -922,7 +1047,7 @@ export default function Replay() {
           )}
 
           {/* Caveats */}
-          {merged && (
+          {merged && viewMode === 'replay' && (
             <Card className="p-4 bg-zinc-900/50 border-zinc-800">
               <h3 className="text-xs font-semibold text-zinc-400 mb-2">Caveats</h3>
               <ul className="text-xs text-zinc-500 space-y-1 list-disc list-inside">
@@ -946,5 +1071,236 @@ function Stat({ label, value, highlight }: { label: string; value: number | stri
       <div className="text-[10px] uppercase tracking-wide text-zinc-500">{label}</div>
       <div className={`text-lg font-mono ${highlight ? 'text-emerald-300' : 'text-zinc-200'}`}>{value}</div>
     </div>
+  );
+}
+
+// ============================================================================
+// Ghost Trades Panel
+//
+// Renders the counterfactual "took every alert" book. Shown only when the
+// viewMode toggle is set to ghost_trades. If the current run was fired in
+// replay mode (no ghost data attached), we show a CTA to fire a ghost run.
+// ============================================================================
+
+function exitReasonBadge(reason: GhostTrade['exit_reason']): string {
+  switch (reason) {
+    case 'target':         return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30';
+    case 'stop':           return 'bg-red-500/20 text-red-400 border-red-500/30';
+    case 'horizon_close':  return 'bg-zinc-500/20 text-zinc-400 border-zinc-500/30';
+    case 'no_price_data':  return 'bg-amber-500/20 text-amber-400 border-amber-500/30';
+    default:               return 'bg-zinc-500/20 text-zinc-400 border-zinc-500/30';
+  }
+}
+
+function GhostTradesPanel({
+  summary,
+  trades,
+  onFireGhost,
+  firing,
+  disabled,
+}: {
+  summary: GhostTradesSummary | null;
+  trades: GhostTrade[];
+  onFireGhost: () => void;
+  firing: boolean;
+  disabled: boolean;
+}) {
+  // No ghost data on this run — prompt to fire one.
+  if (!summary) {
+    return (
+      <Card className="p-8 text-center space-y-3 border-purple-500/30 bg-purple-500/5">
+        <Ghost className="w-8 h-8 mx-auto text-purple-400" />
+        <div className="space-y-1">
+          <p className="text-sm text-zinc-300">
+            This run was fired in <span className="font-mono">replay</span> mode — no ghost trades attached.
+          </p>
+          <p className="text-xs text-zinc-500">
+            Fire a ghost-trades replay to see what taking every alert that day would have produced.
+          </p>
+        </div>
+        <Button
+          onClick={onFireGhost}
+          disabled={disabled}
+          className="gap-2 bg-purple-500/20 text-purple-300 border border-purple-500/40 hover:bg-purple-500/30"
+        >
+          {firing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ghost className="w-4 h-4" />}
+          Fire ghost trades replay
+        </Button>
+      </Card>
+    );
+  }
+
+  const pnlPositive = summary.total_pnl_pct >= 0;
+  const edgePositive = summary.filter_edge_pct >= 0;
+  const chartData = summary.equity_curve.map(p => ({
+    t: p.t,
+    label: new Date(p.t).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' }),
+    equity: p.equity,
+    pnl_pct: p.pnl_pct,
+  }));
+
+  return (
+    <>
+      {/* Insight block — headline sentence, filter-edge interpretation */}
+      <Card className="p-4 space-y-3 border-purple-500/30 bg-purple-500/5">
+        <div className="flex items-center gap-2">
+          <Ghost className="w-4 h-4 text-purple-400" />
+          <h2 className="text-sm font-semibold text-purple-300">Ghost Book — if you took every alert</h2>
+        </div>
+        <p className="text-sm text-zinc-200 leading-relaxed">{summary.insight_text}</p>
+        {summary.total_trades > 0 && (
+          <div className={`text-xs font-mono ${edgePositive ? 'text-emerald-400' : 'text-red-400'}`}>
+            Filter edge: {edgePositive ? '+' : ''}{summary.filter_edge_pct.toFixed(2)}% ({edgePositive ? '+' : ''}${summary.filter_edge_usd.toFixed(2)})
+            <span className="text-zinc-500 ml-2">
+              {edgePositive ? '(James beat the ghost book)' : '(ghost book beat James)'}
+            </span>
+          </div>
+        )}
+      </Card>
+
+      {/* Summary stats */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <Card className="p-3">
+          <Stat label="Ghost Trades" value={summary.total_trades} />
+        </Card>
+        <Card className="p-3">
+          <Stat label="Win Rate" value={`${(summary.win_rate * 100).toFixed(1)}%`} />
+        </Card>
+        <Card className="p-3">
+          <Stat
+            label="Total P&L"
+            value={`${summary.total_pnl_pct >= 0 ? '+' : ''}${summary.total_pnl_pct.toFixed(2)}%`}
+            highlight={pnlPositive}
+          />
+        </Card>
+        <Card className="p-3">
+          <Stat label="Max Drawdown" value={`-${summary.max_drawdown_pct.toFixed(2)}%`} />
+        </Card>
+        <Card className="p-3">
+          <Stat label="Wins" value={summary.wins} />
+        </Card>
+        <Card className="p-3">
+          <Stat label="Losses" value={summary.losses} />
+        </Card>
+        <Card className="p-3">
+          <Stat label="No-Data Skips" value={summary.no_data} />
+        </Card>
+        <Card className="p-3">
+          <Stat
+            label="Final Equity"
+            value={`$${summary.final_equity.toFixed(2)}`}
+          />
+        </Card>
+      </div>
+
+      {/* Equity curve — virtual ghost book over session time */}
+      <Card className="p-4 space-y-2">
+        <h3 className="text-sm font-semibold text-zinc-300">Virtual Equity Curve</h3>
+        <p className="text-xs text-zinc-500">
+          Starting equity: ${summary.starting_equity.toLocaleString()} · Size per trade: 20% of starting book
+        </p>
+        <div className="h-56 w-full">
+          <ChartSafe label="ghost-equity-curve">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={chartData} margin={{ top: 10, right: 20, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                <XAxis dataKey="label" stroke="#71717a" fontSize={10} />
+                <YAxis
+                  stroke="#71717a"
+                  fontSize={10}
+                  domain={['auto', 'auto']}
+                  tickFormatter={(v: number) => `$${Math.round(v).toLocaleString()}`}
+                />
+                <Tooltip
+                  contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', fontSize: 12 }}
+                  formatter={(v: number, name: string) => name === 'equity' ? [`$${v.toFixed(2)}`, 'Equity'] : [`${v.toFixed(2)}%`, 'P&L']}
+                />
+                <ReferenceLine y={summary.starting_equity} stroke="#52525b" strokeDasharray="3 3" />
+                <Line
+                  type="monotone"
+                  dataKey="equity"
+                  stroke={pnlPositive ? '#a78bfa' : '#f87171'}
+                  strokeWidth={2}
+                  dot={false}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </ChartSafe>
+        </div>
+      </Card>
+
+      {/* Trade table */}
+      <Card className="p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-zinc-300">
+          Simulated Trades
+          <span className="ml-2 text-xs text-zinc-500">
+            ({trades.length} attempted · resolution: {summary.resolution})
+          </span>
+        </h3>
+        {trades.length === 0 ? (
+          <p className="text-sm text-zinc-500">No qualifying alerts in this session.</p>
+        ) : (
+          <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="text-zinc-500 text-left border-b border-zinc-800 sticky top-0 bg-background">
+                <tr>
+                  <th className="p-2">Open ET</th>
+                  <th className="p-2">Inst.</th>
+                  <th className="p-2">Side</th>
+                  <th className="p-2">Entry</th>
+                  <th className="p-2">Exit</th>
+                  <th className="p-2">P&L %</th>
+                  <th className="p-2">P&L $</th>
+                  <th className="p-2">Reason</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-800">
+                {trades.map(t => (
+                  <tr
+                    key={t.alert_ref}
+                    className={t.realized_pnl_usd > 0 ? 'bg-emerald-500/5' : t.realized_pnl_usd < 0 ? 'bg-red-500/5' : ''}
+                  >
+                    <td className="p-2 font-mono">{new Date(t.tick_time).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', timeZone: 'America/New_York' })}</td>
+                    <td className="p-2 font-medium">{t.instrument}</td>
+                    <td className="p-2">
+                      <span className="inline-flex items-center gap-1">
+                        {t.direction === 'bullish' && <TrendingUp className="w-3 h-3 text-emerald-400" />}
+                        {t.direction === 'bearish' && <TrendingDown className="w-3 h-3 text-red-400" />}
+                        {t.direction}
+                      </span>
+                    </td>
+                    <td className="p-2 font-mono text-zinc-400">{t.entry_level}</td>
+                    <td className="p-2 font-mono text-zinc-400">{t.exit_price ?? '—'}</td>
+                    <td className={`p-2 font-mono ${t.realized_pnl_pct > 0 ? 'text-emerald-400' : t.realized_pnl_pct < 0 ? 'text-red-400' : 'text-zinc-500'}`}>
+                      {t.realized_pnl_pct >= 0 ? '+' : ''}{t.realized_pnl_pct.toFixed(2)}%
+                    </td>
+                    <td className={`p-2 font-mono ${t.realized_pnl_usd > 0 ? 'text-emerald-400' : t.realized_pnl_usd < 0 ? 'text-red-400' : 'text-zinc-500'}`}>
+                      {t.realized_pnl_usd >= 0 ? '+' : ''}${t.realized_pnl_usd.toFixed(2)}
+                    </td>
+                    <td className="p-2">
+                      <Badge variant="outline" className={`${exitReasonBadge(t.exit_reason)} text-[10px]`}>
+                        {t.exit_reason}
+                      </Badge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {/* Caveats specific to ghost mode */}
+      <Card className="p-4 bg-zinc-900/50 border-zinc-800">
+        <h3 className="text-xs font-semibold text-zinc-400 mb-2">Ghost Mode Caveats</h3>
+        <ul className="text-xs text-zinc-500 space-y-1 list-disc list-inside">
+          <li>Exit resolution: <span className="font-mono">{summary.resolution}</span>. Price ticks = 2-min bars (7-day retention); heartbeats = 15-min bars. Stops/targets touched intra-bar will NOT register — ghost P&L is an upper-bound proxy, not a fill simulation.</li>
+          <li>Every qualifying alert gets a 20% size of a $10k starting book. No sizing variance, no concentration caps, no cooldown.</li>
+          <li>Filter edge = (actual session P&L %) − (ghost P&L %). Positive = James&apos;s filter beat "take everything." Negative = ghost book left him behind.</li>
+          <li>no_price_data trades are counted in the attempted total but do not move equity.</li>
+          <li>Simulation is PURE — nothing writes to ct_trades or the real book.</li>
+        </ul>
+      </Card>
+    </>
   );
 }

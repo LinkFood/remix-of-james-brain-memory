@@ -27,7 +27,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
-import { WATCHLIST } from '../_shared/uwClient.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
 import { fireWatcherImmediate } from '../_shared/watcherDispatch.ts';
 
 const RE_FIRE_MS = 60 * 60 * 1000; // 60min re-fire exception per ticker per session
@@ -179,7 +179,9 @@ serve(async (req) => {
     const sessionDate = sessionDateFor(latest.created_at);
 
     // Candidate set: SPX macro + every watchlist ticker.
-    const targets: string[] = ['SPX', ...WATCHLIST];
+    // One ct_config read per invocation.
+    const watchlist = await getWatchlist(supabase);
+    const targets: string[] = ['SPX', ...watchlist];
     const flips: FlipCandidate[] = [];
     for (const t of targets) {
       const f = detectFlip(t, latest, prior);

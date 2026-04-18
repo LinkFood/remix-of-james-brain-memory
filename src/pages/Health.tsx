@@ -42,11 +42,15 @@ import {
   Database,
   DollarSign,
   Gauge,
+  Radar,
   Shield,
   Timer,
   Wallet,
   XCircle,
 } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import {
   Table,
@@ -1219,6 +1223,64 @@ function UiErrorsSection() {
   );
 }
 
+/**
+ * WatchlistTile — reads the current `watcher.watchlist` from ct_config so
+ * James can see at-a-glance how many tickers Claude is watching, and jump
+ * to /ct-settings to tune the list. Falls back silently (renders dashes)
+ * if the row is missing — matches the edge-helper fallback philosophy.
+ */
+function WatchlistTile() {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['ct-config', 'watcher.watchlist'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('ct_config')
+        .select('value, updated_at')
+        .eq('key', 'watcher.watchlist')
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+
+  const tickers: string[] = Array.isArray(data?.value) ? (data!.value as string[]) : [];
+  const tickerCount = tickers.length;
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="px-4 py-3 flex items-center gap-3">
+        <div className="w-9 h-9 bg-primary/10 rounded-lg flex items-center justify-center shrink-0">
+          <Radar className="w-4 h-4 text-primary" />
+        </div>
+        <div className="flex-1 min-w-0">
+          {isLoading ? (
+            <div className="text-sm text-muted-foreground">Loading watchlist…</div>
+          ) : error ? (
+            <div className="text-sm text-red-400">Watchlist read failed</div>
+          ) : (
+            <>
+              <div className="text-sm font-semibold">
+                Watching: <span className="font-mono">{tickerCount}</span> ticker{tickerCount === 1 ? '' : 's'}
+                {' · '}
+                <Link to="/ct-settings" className="text-primary hover:underline font-normal">
+                  configured at /ct-settings
+                </Link>
+              </div>
+              {tickerCount > 0 && (
+                <div className="text-[11px] text-muted-foreground font-mono mt-0.5 truncate">
+                  {tickers.join(' · ')}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
 export default function Health() {
   const { data, isLoading, error, dataUpdatedAt } = useHealthData();
 
@@ -1249,6 +1311,10 @@ export default function Health() {
             <span>Failed to load health data: {(error as Error).message}</span>
           </Card>
         )}
+
+        {/* Watchlist tile — always rendered so James can jump to config
+            even while the rest of the health data is loading. */}
+        <WatchlistTile />
 
         {isLoading && !data ? (
           <Card className="p-8 text-center text-sm text-muted-foreground">Loading system health…</Card>

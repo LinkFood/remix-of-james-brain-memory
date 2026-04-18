@@ -35,11 +35,12 @@ import { checkConcentration } from '../_shared/concentration.ts';
 import { preTradeCheck, type Check } from '../_shared/preTradeGate.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { firePreTradeQuality } from '../_shared/tradeQuality.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
 
-const WATCHLIST = new Set([
-  'SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT',
-  'META', 'GOOGL', 'AMZN', 'TSLA', 'GLD', 'USO',
-]);
+// Watchlist set is built ONCE per invocation from ct_config (via the
+// shared helper) — see `const watchlistSet = ...` inside the handler.
+// The hard-coded list that used to live here is now the shared
+// DEFAULT_WATCHLIST used as the helper's fallback.
 
 // Defaults — overridable via ct_config keys alert_commit.size_pct,
 // alert_commit.cooldown_min, alert_commit.max_concurrent. size_usd is derived
@@ -105,12 +106,16 @@ serve(async (req) => {
   }
 
   // Pull tunable thresholds from ct_config (60s cache TTL, defaults preserve
-  // legacy behavior if the row is missing or the RPC errors).
-  const [cooldownMin, sizePct, maxConcurrent] = await Promise.all([
+  // legacy behavior if the row is missing or the RPC errors). One read per
+  // tick — the watchlist set is built from the returned array and reused
+  // inside the per-alert loop below.
+  const [cooldownMin, sizePct, maxConcurrent, watchlist] = await Promise.all([
     getConfig<number>('alert_commit.cooldown_min', DEFAULT_COOLDOWN_MINUTES),
     getConfig<number>('alert_commit.size_pct', DEFAULT_ALERT_SIZE_PCT),
     getConfig<number>('alert_commit.max_concurrent', DEFAULT_MAX_CONCURRENT),
+    getWatchlist(supabase),
   ]);
+  const watchlistSet = new Set<string>(watchlist);
   const alertSizeUsd = Math.round(BOOK_EQUITY_USD * (sizePct / 100));
   console.log(`[ct-alert-book-commit] thresholds: cooldown=${cooldownMin}min size=${sizePct}% max_concurrent=${maxConcurrent}`);
 
@@ -207,7 +212,7 @@ serve(async (req) => {
     const instrument = setup.instrument.toUpperCase();
 
     // Whitelist
-    if (!WATCHLIST.has(instrument)) {
+    if (!watchlistSet.has(instrument)) {
       skipped.push({ alert_id: alert.id, reason: 'instrument_not_whitelisted', detail: instrument });
       continue;
     }

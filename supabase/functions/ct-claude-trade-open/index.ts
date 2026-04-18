@@ -31,15 +31,19 @@ import { checkConcentration } from '../_shared/concentration.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { preTradeCheck, type Check } from '../_shared/preTradeGate.ts';
 import { firePreTradeQuality } from '../_shared/tradeQuality.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
 
-const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA', 'GLD', 'USO'] as const;
+// The 12-ticker hard-coded watchlist that previously lived here now lives
+// in `supabase/functions/_shared/watchlist.ts` as DEFAULT_WATCHLIST, which
+// is the safety-net fallback `getWatchlist()` returns when ct_config is
+// unreadable or the value fails validation.
 
-const SYSTEM_PROMPT = `You manage a $10k paper trading book. 9:26 AM ET. Market opens in 4 minutes.
+const SYSTEM_PROMPT_TEMPLATE = `You manage a $10k paper trading book. 9:26 AM ET. Market opens in 4 minutes.
 
 Your job: commit 1-3 trades for today. Long or short — doesn't matter. Make money. Daily goal: positive P&L. Stretch: +0.5% ($50).
 
 HARD RULES (enforced after your output — violations get clipped):
-- Instruments: SPY, QQQ, IWM, NVDA, AAPL, MSFT, META, GOOGL, AMZN, TSLA, GLD, USO ONLY
+- Instruments: {{WATCHLIST}} ONLY
 - Side: long or short
 - Max 3 trades total
 - Max 40% of book per trade (size_pct 1-40)
@@ -83,6 +87,10 @@ If the tape gives you nothing — no clear setup, violates biases, corpus thin �
 
 SKIP > FORCE. Flat is a position. But if you skip 5 days in a row you're not trying.`;
 
+function buildSystemPrompt(watchlist: readonly string[]): string {
+  return SYSTEM_PROMPT_TEMPLATE.replace('{{WATCHLIST}}', watchlist.join(', '));
+}
+
 interface TradeCommit {
   instrument: string;
   side: 'long' | 'short';
@@ -116,6 +124,12 @@ serve(async (req) => {
   if (await isKillSwitchActive(supabase)) {
     return killSwitchSkipResponse(supabase, 'ct-claude-trade-open', corsHeaders);
   }
+
+  // Tunable watchlist — one config read per invocation. Falls back to the
+  // 12-ticker default inside getWatchlist if ct_config is unreadable.
+  const watchlist = await getWatchlist(supabase);
+  const allowedSet = new Set<string>(watchlist);
+  const systemPrompt = buildSystemPrompt(watchlist);
 
   const sessionDate = new Date().toISOString().slice(0, 10);
 
@@ -184,7 +198,7 @@ serve(async (req) => {
     self_corrections_72h: corrections.data ?? [],
     recent_grades_72h: recentGrades.data ?? [],
     yesterday_recap: priorRecap.data ?? null,
-    allowed_instruments: WATCHLIST,
+    allowed_instruments: watchlist,
     note: 'Commit 1-3 trades per the system schema, OR skip with reason. Return ONLY the JSON.',
   });
 
@@ -192,7 +206,7 @@ serve(async (req) => {
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.sonnet,
-      system: SYSTEM_PROMPT,
+      system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
       max_tokens: 1500,
       temperature: 0.2,
@@ -229,12 +243,12 @@ serve(async (req) => {
     });
   }
 
-  // Sanity-clip + totals check
-  const allowed = new Set(WATCHLIST);
+  // Sanity-clip + totals check — reuse the set built at handler entry
+  // (one ct_config read per tick, not per trade).
   let totalPct = 0;
   const valid: TradeCommit[] = [];
   for (const t of trades) {
-    if (!allowed.has(t.instrument as typeof WATCHLIST[number])) continue;
+    if (!allowedSet.has(t.instrument)) continue;
     if (t.side !== 'long' && t.side !== 'short') continue;
     const sz = Math.min(40, Math.max(1, Math.round(t.size_pct ?? 15)));
     if (totalPct + sz > 100) break;

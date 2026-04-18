@@ -17,11 +17,11 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { gradeSubjects, type Direction } from '../_shared/ctGrader.ts';
+import { gradeSubjects, normalizeExpectedMove, type Direction, type ExpectedMove } from '../_shared/ctGrader.ts';
 
 type SubjectType = 'flag' | 'alert' | 'james_view';
 
-async function fetchDueSubjects(supabase: ReturnType<typeof createClient>): Promise<Array<{
+interface DueSubject {
   subject_type: SubjectType;
   subject_id: string;
   instrument: string;
@@ -29,22 +29,18 @@ async function fetchDueSubjects(supabase: ReturnType<typeof createClient>): Prom
   odds_up: number | null;
   odds_down: number | null;
   entry_price: number;
-}>> {
+  /** v1.3+ only; null for pre-v1.3 rows and all james_views. */
+  expected_move: ExpectedMove | null;
+}
+
+async function fetchDueSubjects(supabase: ReturnType<typeof createClient>): Promise<DueSubject[]> {
   const nowIso = new Date().toISOString();
-  const results: Array<{
-    subject_type: SubjectType;
-    subject_id: string;
-    instrument: string;
-    direction: Direction;
-    odds_up: number | null;
-    odds_down: number | null;
-    entry_price: number;
-  }> = [];
+  const results: DueSubject[] = [];
 
   // Flags
   const { data: flags, error: flagErr } = await supabase
     .from('ct_flags')
-    .select('id, instruments, direction, up_case_odds, down_case_odds, entry_prices')
+    .select('id, instruments, direction, up_case_odds, down_case_odds, entry_prices, expected_move')
     .is('grade_id', null)
     .lt('horizon_end', nowIso)
     .limit(50);
@@ -52,6 +48,7 @@ async function fetchDueSubjects(supabase: ReturnType<typeof createClient>): Prom
   for (const row of flags ?? []) {
     const instruments = Array.isArray(row.instruments) ? row.instruments : [];
     const entryPrices = (row.entry_prices ?? {}) as Record<string, number | null>;
+    const band = normalizeExpectedMove(row.expected_move);
     for (const instrument of instruments) {
       const entry = entryPrices[instrument];
       if (typeof entry === 'number' && Number.isFinite(entry)) {
@@ -63,6 +60,7 @@ async function fetchDueSubjects(supabase: ReturnType<typeof createClient>): Prom
           odds_up: (row.up_case_odds as number | null) ?? null,
           odds_down: (row.down_case_odds as number | null) ?? null,
           entry_price: entry,
+          expected_move: band,
         });
       }
     }
@@ -71,7 +69,7 @@ async function fetchDueSubjects(supabase: ReturnType<typeof createClient>): Prom
   // Alerts
   const { data: alerts, error: alertErr } = await supabase
     .from('ct_alerts')
-    .select('id, instruments, direction, up_case_odds, down_case_odds, entry_prices')
+    .select('id, instruments, direction, up_case_odds, down_case_odds, entry_prices, expected_move')
     .is('grade_id', null)
     .lt('horizon_end', nowIso)
     .limit(50);
@@ -79,6 +77,7 @@ async function fetchDueSubjects(supabase: ReturnType<typeof createClient>): Prom
   for (const row of alerts ?? []) {
     const instruments = Array.isArray(row.instruments) ? row.instruments : [];
     const entryPrices = (row.entry_prices ?? {}) as Record<string, number | null>;
+    const band = normalizeExpectedMove(row.expected_move);
     for (const instrument of instruments) {
       const entry = entryPrices[instrument];
       if (typeof entry === 'number' && Number.isFinite(entry)) {
@@ -90,12 +89,13 @@ async function fetchDueSubjects(supabase: ReturnType<typeof createClient>): Prom
           odds_up: (row.up_case_odds as number | null) ?? null,
           odds_down: (row.down_case_odds as number | null) ?? null,
           entry_price: entry,
+          expected_move: band,
         });
       }
     }
   }
 
-  // James views
+  // James views — no expected_move on this table, always null.
   const { data: jviews, error: jvErr } = await supabase
     .from('ct_james_views')
     .select('id, instrument, direction, entry_price')
@@ -113,6 +113,7 @@ async function fetchDueSubjects(supabase: ReturnType<typeof createClient>): Prom
         odds_up: null,
         odds_down: null,
         entry_price: row.entry_price,
+        expected_move: null,
       });
     }
   }

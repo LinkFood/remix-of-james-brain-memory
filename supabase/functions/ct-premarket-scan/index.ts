@@ -2,7 +2,8 @@
  * ct-premarket-scan — overnight-gap scanner for the watchlist.
  *
  * Fires at 13:15 UTC (9:15 AM ET) weekdays — 15 min before the US cash open.
- * For each of the 12 WATCHLIST tickers we:
+ * For each ticker in the configured watchlist (ct_config['watcher.watchlist'],
+ * 12 by default) we:
  *   1) pull UW spot-exposures/strike to get the current (pre-market) underlying
  *      price — same wrapper everyone else uses, no new endpoint.
  *   2) derive a prev_close baseline:
@@ -28,7 +29,8 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
-import { getSpotGexByStrike, WATCHLIST } from '../_shared/uwClient.ts';
+import { getSpotGexByStrike } from '../_shared/uwClient.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 
 // ============================================================================
@@ -179,6 +181,10 @@ serve(async (req) => {
   const startedAt = Date.now();
   const today = todayIsoDate();
 
+  // Tunable watchlist — one config read per invocation. Falls back to the
+  // shared DEFAULT_WATCHLIST inside getWatchlist if ct_config is unreadable.
+  const watchlist = await getWatchlist(supabase);
+
   interface ScanRow {
     ticker: string;
     prev_close: number | null;
@@ -192,7 +198,7 @@ serve(async (req) => {
   const results: ScanRow[] = [];
   const errors: Array<{ ticker: string; error: string }> = [];
 
-  for (const ticker of WATCHLIST) {
+  for (const ticker of watchlist) {
     // 1) UW spot call
     let raw: unknown;
     try {

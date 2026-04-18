@@ -99,18 +99,18 @@ export interface RiskMetrics {
 /**
  * Graded flag/alert that had an expected_move claim at write time.
  * Used to compute band accuracy + forward expectancy.
+ *
+ * As of migration 20260420000029, band_* columns live directly on ct_grades,
+ * so we no longer need to cross-reference ct_flags/ct_alerts at read time.
+ * A row with `band_hit = null` is pre-v1.3 (no band claim) and is dropped.
  */
 interface BandedGradeRow {
-  subject_type: 'flag' | 'alert';
-  subject_id: string;
   graded_at: string;
   actual_return_pct: number;
-  expected_move: {
-    low_pct: number;
-    high_pct: number;
-    confidence_pct: number;
-    horizon_hrs: number;
-  };
+  band_hit: boolean;
+  band_low_pct: number;
+  band_high_pct: number;
+  band_confidence_pct: number;
 }
 
 function sliceByPeriod<T extends { session_date: string }>(
@@ -245,7 +245,7 @@ export function useRiskMetrics(period: RiskPeriod = '30d') {
     refetchInterval: 5 * 60_000,
     staleTime: 60_000,
     queryFn: async () => {
-      const [bookRes, tradesRes, spyRes, gradesRes, flagsRes, alertsRes] = await Promise.all([
+      const [bookRes, tradesRes, spyRes, bandedRes] = await Promise.all([
         supabase
           .from('ct_book')
           .select('*')
@@ -259,26 +259,16 @@ export function useRiskMetrics(period: RiskPeriod = '30d') {
           .from('ct_spy_daily')
           .select('date, close, prev_close, daily_return_pct')
           .order('date', { ascending: true }),
-        // Graded flag/alert outcomes — `actual_return_pct` is the realized
-        // move from entry to horizon exit. Limit 2000 is conservative;
-        // we only read the subject_ids that have a banded claim anyway.
+        // Banded grades — band_* columns live directly on ct_grades as of
+        // 20260420000029. A row with band_hit IS NOT NULL had an expected_move
+        // at write time (v1.3+). Pre-v1.3 grades are filtered at the DB.
+        // No more ct_flags/ct_alerts cross-join — the grader now snapshots
+        // the claim into ct_grades at horizon close.
         supabase
           .from('ct_grades')
-          .select('subject_type, subject_id, graded_at, actual_return_pct')
-          .in('subject_type', ['flag', 'alert'])
+          .select('graded_at, actual_return_pct, band_hit, band_low_pct, band_high_pct, band_confidence_pct')
+          .not('band_hit', 'is', null)
           .order('graded_at', { ascending: false })
-          .limit(2000),
-        // Pull all banded flags — we join in JS. Missing expected_move =
-        // pre-v1.3 row, dropped naturally by the inner join.
-        supabase
-          .from('ct_flags')
-          .select('id, expected_move')
-          .not('expected_move', 'is', null)
-          .limit(2000),
-        supabase
-          .from('ct_alerts')
-          .select('id, expected_move')
-          .not('expected_move', 'is', null)
           .limit(2000),
       ]);
       if (bookRes.error) throw bookRes.error;
@@ -287,44 +277,30 @@ export function useRiskMetrics(period: RiskPeriod = '30d') {
       // just fall back to the "no benchmark" path.
       const spy: CtSpyDailyRow[] = spyRes.error ? [] : ((spyRes.data ?? []) as CtSpyDailyRow[]);
 
-      // Join grades ↔ banded flags/alerts in JS. Either side missing or
-      // malformed → row dropped (validation re-runs here to catch any
-      // historical garbage that slipped past the writer).
-      const bandByKey = new Map<string, BandedGradeRow['expected_move']>();
-      const pushBand = (type: 'flag' | 'alert', rows: unknown) => {
-        if (!Array.isArray(rows)) return;
-        for (const r of rows as Array<{ id?: string; expected_move?: unknown }>) {
-          if (!r?.id || !r.expected_move || typeof r.expected_move !== 'object') continue;
-          const em = r.expected_move as Record<string, unknown>;
-          const low = Number(em.low_pct);
-          const high = Number(em.high_pct);
-          const conf = Number(em.confidence_pct);
-          const horiz = Number(em.horizon_hrs);
-          if (!Number.isFinite(low) || !Number.isFinite(high) || !Number.isFinite(conf) || !Number.isFinite(horiz)) continue;
-          if (low > high || conf < 50 || conf > 90) continue;
-          bandByKey.set(`${type}:${r.id}`, { low_pct: low, high_pct: high, confidence_pct: conf, horizon_hrs: horiz });
-        }
-      };
-      pushBand('flag', flagsRes.data);
-      pushBand('alert', alertsRes.data);
-
       const bandedGrades: BandedGradeRow[] = [];
-      const gradeRows = (gradesRes.data ?? []) as Array<{
-        subject_type: 'flag' | 'alert';
-        subject_id: string;
+      const bandedRows = (bandedRes.error ? [] : (bandedRes.data ?? [])) as Array<{
         graded_at: string;
         actual_return_pct: number | null;
+        band_hit: boolean | null;
+        band_low_pct: number | null;
+        band_high_pct: number | null;
+        band_confidence_pct: number | null;
       }>;
-      for (const g of gradeRows) {
-        if (g.actual_return_pct == null || !Number.isFinite(g.actual_return_pct)) continue;
-        const band = bandByKey.get(`${g.subject_type}:${g.subject_id}`);
-        if (!band) continue;
+      for (const r of bandedRows) {
+        if (
+          r.actual_return_pct == null || !Number.isFinite(r.actual_return_pct) ||
+          r.band_hit == null ||
+          r.band_low_pct == null || !Number.isFinite(r.band_low_pct) ||
+          r.band_high_pct == null || !Number.isFinite(r.band_high_pct) ||
+          r.band_confidence_pct == null || !Number.isFinite(r.band_confidence_pct)
+        ) continue;
         bandedGrades.push({
-          subject_type: g.subject_type,
-          subject_id: g.subject_id,
-          graded_at: g.graded_at,
-          actual_return_pct: g.actual_return_pct,
-          expected_move: band,
+          graded_at: r.graded_at,
+          actual_return_pct: r.actual_return_pct,
+          band_hit: r.band_hit,
+          band_low_pct: r.band_low_pct,
+          band_high_pct: r.band_high_pct,
+          band_confidence_pct: r.band_confidence_pct,
         });
       }
 
@@ -406,16 +382,18 @@ export function useRiskMetrics(period: RiskPeriod = '30d') {
     let absSum = 0;
     let confSum = 0;
     for (const r of bandedSliced) {
-      const { low_pct, high_pct, confidence_pct } = r.expected_move;
       const actual = r.actual_return_pct;
-      const weight = confidence_pct / 100;
-      const hit = actual >= low_pct && actual <= high_pct ? 1 : 0;
+      const weight = r.band_confidence_pct / 100;
+      // band_hit is authoritative — the grader already checked inclusion at
+      // horizon close against the snapshotted band. Re-deriving here would
+      // re-run the same inequality on the same numbers.
+      const hit = r.band_hit ? 1 : 0;
       bandHits += hit;
       weightedHits += hit * weight;
       weightSum += weight;
-      midSum += (low_pct + high_pct) / 2 * weight;
+      midSum += (r.band_low_pct + r.band_high_pct) / 2 * weight;
       absSum += Math.abs(actual);
-      confSum += confidence_pct;
+      confSum += r.band_confidence_pct;
     }
     const bandN = bandedSliced.length;
     const bandAccuracy: RiskMetrics['bandAccuracy'] = bandN > 0

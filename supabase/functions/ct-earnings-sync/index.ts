@@ -27,7 +27,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getEarnings, WATCHLIST } from '../_shared/uwClient.ts';
+import { getEarnings } from '../_shared/uwClient.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
 
 const LOOKAHEAD_DAYS = 30;
 
@@ -250,8 +251,11 @@ serve(async (req) => {
   const horizonIso = horizon.toISOString().slice(0, 10);
 
   const results: SyncResult[] = [];
-  // Serial to stay gentle on UW's per-stock endpoint — 12 calls total.
-  for (const ticker of WATCHLIST) {
+  // Serial to stay gentle on UW's per-stock endpoint — N calls where N is
+  // the configured watchlist size (default 12, max 16 per UW budget
+  // discipline). One ct_config read resolves the list.
+  const watchlist = await getWatchlist(supabase);
+  for (const ticker of watchlist) {
     results.push(await syncTicker(supabase, ticker, todayIso, horizonIso));
   }
 

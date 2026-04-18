@@ -31,7 +31,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { WATCHLIST } from '../_shared/uwClient.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
 import { isKillSwitchActive } from '../_shared/killSwitch.ts';
 
 // Largest → smallest. Order matters: if a ticker is already inside the 1h
@@ -98,12 +98,16 @@ function effectiveReportMs(report_date: string, report_time: string | null): num
   return probe.getTime() + offsetMs;
 }
 
-async function fetchNextEarnings(supabase: SupabaseClient, todayIso: string): Promise<Map<string, NextEarnings>> {
+async function fetchNextEarnings(
+  supabase: SupabaseClient,
+  todayIso: string,
+  watchlist: readonly string[],
+): Promise<Map<string, NextEarnings>> {
   const { data, error } = await supabase
     .from('ct_events')
     .select('ticker, event_date, report_time')
     .eq('event_type', 'earnings')
-    .in('ticker', WATCHLIST as unknown as string[])
+    .in('ticker', watchlist as string[])
     .gte('event_date', todayIso)
     .order('event_date', { ascending: true })
     .limit(500);
@@ -222,10 +226,13 @@ serve(async (req) => {
   const todayIso = new Date().toISOString().slice(0, 10);
   const nowMs = Date.now();
 
-  const nextByTicker = await fetchNextEarnings(supabase, todayIso);
+  // One ct_config read per tick — passed into fetchNextEarnings and used
+  // for the per-ticker loop below.
+  const watchlist = await getWatchlist(supabase);
+  const nextByTicker = await fetchNextEarnings(supabase, todayIso, watchlist);
   const results: CheckResult[] = [];
 
-  for (const ticker of WATCHLIST) {
+  for (const ticker of watchlist) {
     const next = nextByTicker.get(ticker);
     if (!next) {
       results.push({ ticker, report_date: null, report_time: null, hours_to_report: null, fired: [], skipped: [] });

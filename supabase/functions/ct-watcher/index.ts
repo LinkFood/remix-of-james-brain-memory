@@ -23,7 +23,8 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
-import { pullWatcherState, WATCHLIST } from '../_shared/uwClient.ts';
+import { pullWatcherState } from '../_shared/uwClient.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
 import { now as clockNow } from '../_shared/clock.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
@@ -826,18 +827,23 @@ serve(async (req) => {
     // Pull tunable thresholds from ct_config (60s cache TTL, defaults preserve
     // legacy behavior if the row is missing or the RPC errors). Cooldowns feed
     // writeAlert's demotion logic.
-    const [sameDirectionMin, invalidationMin] = await Promise.all([
+    const [sameDirectionMin, invalidationMin, watchlist] = await Promise.all([
       getConfig<number>('cooldown.same_direction_min', 30),
       getConfig<number>('cooldown.invalidation_min', 60),
+      // One config read per tick. All subsequent references inside this
+      // handler use the local `watchlist` variable — never re-fetch.
+      getWatchlist(supabase),
     ]);
-    console.log(`[ct-watcher] cooldowns: same_direction=${sameDirectionMin}min invalidation=${invalidationMin}min`);
+    console.log(`[ct-watcher] cooldowns: same_direction=${sameDirectionMin}min invalidation=${invalidationMin}min watchlist=${watchlist.length}`);
 
     // 1. Single-user: fetch James's user_id
     const { data: users } = await supabase.from('profiles').select('id').limit(1);
     const userId = (users?.[0]?.id as string | undefined) ?? null;
 
-    // 2. Pull live UW state
-    const rawState = await pullWatcherState();
+    // 2. Pull live UW state (pass tunable watchlist into pullWatcherState
+    // which accepts a tickers param; default in uwClient.ts is preserved
+    // for any caller that still skips the param).
+    const rawState = await pullWatcherState(watchlist);
 
     // 2a. Look up prior-session VIX close for change_pct. Defensive: missing
     // table, no rows, or query error → prevClose = null and change_pct stays
@@ -896,7 +902,7 @@ serve(async (req) => {
           });
         }
       };
-      for (const t of WATCHLIST) writeGex(t, rawState.spot_gex[t], rawState.greek_exposure[t]);
+      for (const t of watchlist) writeGex(t, rawState.spot_gex[t], rawState.greek_exposure[t]);
       writeGex('SPX', rawState.spx_spot_gex, rawState.spx_greek_exposure);
       if (gexRows.length > 0) {
         // Batch in chunks of 500 to keep payloads reasonable
@@ -915,14 +921,14 @@ serve(async (req) => {
 
     // 3. Build memory bundle (thesis + recent + similar + lessons per instrument)
     const liveStateByInstrument: Record<string, Record<string, unknown>> = {};
-    for (const t of WATCHLIST) {
+    for (const t of watchlist) {
       liveStateByInstrument[t] = {
         spot_gex: rawState.spot_gex[t],
         options_volume: rawState.options_volume[t],
       };
     }
     const [memory, selfCorrections, activeBiases, activePlaybooksRes] = await Promise.all([
-      buildMemoryBundle(supabase, WATCHLIST, liveStateByInstrument),
+      buildMemoryBundle(supabase, watchlist, liveStateByInstrument),
       getRecentSelfCorrections(supabase, 5),
       getActiveBiases(supabase, 3),
       // Top-5 active playbooks by quality score (win_rate × sample_size).
@@ -974,7 +980,7 @@ serve(async (req) => {
         .select('ticker, side, strike, expiry, is_otm, is_ask, size, premium, size_gt_oi, executed_at, ingested_at')
         .gte('ingested_at', flowCutoff)
         .gte('premium', 250_000)
-        .in('ticker', WATCHLIST as unknown as string[])
+        .in('ticker', watchlist)
         .order('premium', { ascending: false })
         .limit(25),
       // Dark pool: 25 -> 10 (biggest)
@@ -1094,7 +1100,7 @@ serve(async (req) => {
     // Net <= -3 = bearish catalyst bias; net >= +3 = bullish catalyst bias.
     // Watcher system prompt references this explicitly. Defensive: returns
     // zeroed map on query error — never crashes the cycle.
-    const newsSentiment24h = await getNewsSentimentNet(supabase, WATCHLIST as unknown as string[], 24);
+    const newsSentiment24h = await getNewsSentimentNet(supabase, watchlist, 24);
 
     // 3c. CONVERGENCE DETECTOR — count independent signals pointing same
     // direction in the last 15min. ≥3 converging signals forces ALERT even

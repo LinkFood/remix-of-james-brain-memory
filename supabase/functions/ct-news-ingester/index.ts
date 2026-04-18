@@ -25,7 +25,7 @@ import { getNewsHeadlines } from '../_shared/uwClient.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { NEWS_ANALYSIS_SYSTEM } from '../_shared/ctPrompts.ts';
-import { WATCHLIST } from '../_shared/uwClient.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
 import { embedCtItem } from '../_shared/ctEmbed.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 import { fireWatcherImmediate } from '../_shared/watcherDispatch.ts';
@@ -283,11 +283,14 @@ serve(async (req) => {
     const { data: users } = await supabase.from('profiles').select('id').limit(1);
     const userId = (users?.[0]?.id as string | undefined) ?? null;
 
+    // One ct_config read per invocation — reused for the whole loop.
+    const watchlist = await getWatchlist(supabase);
+
     let totalHeadlines = 0, analyzed = 0, skipped = 0, failed = 0, rawSkipped = 0;
     let totalTokensIn = 0, totalTokensOut = 0, claudeCallsMade = 0;
     const perTickerStats: Record<string, { headlines: number; analyzed: number; skipped: number; failed: number; raw_skipped: number }> = {};
 
-    for (const ticker of WATCHLIST) {
+    for (const ticker of watchlist) {
       const stats = { headlines: 0, analyzed: 0, skipped: 0, failed: 0, raw_skipped: 0 };
       try {
         const raw = await getNewsHeadlines({ ticker, limit: perTickerLimit });
