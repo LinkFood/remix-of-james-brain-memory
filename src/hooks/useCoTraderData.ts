@@ -189,11 +189,17 @@ export interface AttentionStreamRow {
 }
 
 export function useTopAttention(minutesBack = 30, minScore = 60) {
+  const { data: session } = useEffectiveSessionDate();
+  // When the market is closed, use the effective session window instead of
+  // a rolling 30-min cutoff — otherwise nothing ever shows over the weekend
+  // even though ct_attention_stream has Friday's rows.
   return useQuery<AttentionStreamRow | null>({
-    queryKey: ['ct_top_attention', minutesBack, minScore],
+    queryKey: ['ct_top_attention', minutesBack, minScore, session?.isLive, session?.sessionStartISO],
     refetchInterval: 30_000,
     queryFn: async () => {
-      const since = new Date(Date.now() - minutesBack * 60_000).toISOString();
+      const since = session?.isLive === false && session?.sessionStartISO
+        ? session.sessionStartISO
+        : new Date(Date.now() - minutesBack * 60_000).toISOString();
       const { data, error } = await supabase
         .from('ct_attention_stream')
         .select('kind, id, created_at, attention_score, summary')
