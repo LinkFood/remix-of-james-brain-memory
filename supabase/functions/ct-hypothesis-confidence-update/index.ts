@@ -34,6 +34,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getConfig } from '../_shared/configCache.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
 
 interface GradeRow {
   id: string;
@@ -289,6 +290,42 @@ serve(async (req) => {
   let promotion = { promoted: false, reason: 'skipped (no refreshed hypothesis)' };
   if (refreshed) {
     promotion = await attemptPromote(supabase, refreshed as HypothesisRow, minWins, minWinRate);
+  }
+
+  // Decision journal — the mechanical update.
+  await recordDecision(supabase, {
+    decision_type: 'update_hypothesis',
+    model_tier: 'none',
+    reasoning: `Elo+confidence update from grade ${g.id} (${g.verdict}): elo Δ${eloDelta}, confidence Δ${confDelta.toFixed(3)}, k=${k}, weight=${weight}. ${reason}`,
+    outcome: outcome === 'win' ? 'win_applied' : 'loss_applied',
+    alignment: outcome === 'win' ? 'aligned' : 'conflict',
+    claude_followed: outcome === 'win' ? 'narrative' : 'tape',
+    linked_hypothesis_id: h.id,
+    context_snapshot: {
+      grade_id: g.id,
+      verdict: g.verdict,
+      claimed_direction: g.claimed_direction,
+      actual_direction: g.actual_direction,
+      actual_return_pct: g.actual_return_pct,
+      elo_before: h.elo,
+      elo_delta: eloDelta,
+      confidence_before: h.confidence,
+      confidence_delta: confDelta,
+      k_factor: k,
+      weight,
+    },
+    tool_calls_summary: { called: 'update_hypothesis_confidence', promotion_checked: true, promoted: promotion.promoted },
+  });
+  // If promoted, also log the promotion as its own decision.
+  if (promotion.promoted) {
+    await recordDecision(supabase, {
+      decision_type: 'promote_playbook',
+      model_tier: 'none',
+      reasoning: `Auto-promoted hypothesis to playbook: ${promotion.reason}`,
+      outcome: 'promoted',
+      linked_hypothesis_id: h.id,
+      context_snapshot: { promotion_reason: promotion.reason },
+    });
   }
 
   const respBody = {

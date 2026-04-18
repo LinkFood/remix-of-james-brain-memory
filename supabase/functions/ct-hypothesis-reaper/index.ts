@@ -29,6 +29,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getConfig } from '../_shared/configCache.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
 
 interface OpenHyp {
   id: string;
@@ -99,10 +100,11 @@ serve(async (req) => {
   for (const h of rows) {
     // Zombie pass first — once retired, decay is moot.
     if (h.confidence < zombieThreshold && h.updated_at < zombieCutoff) {
+      const reason = `confidence ${h.confidence} < ${zombieThreshold} for ${zombieAgeDays}+ days`;
       const { error: retireErr } = await supabase.rpc('retire_hypothesis', {
         p_hypothesis_id: h.id,
         p_status: 'zombie',
-        p_reason: `confidence ${h.confidence} < ${zombieThreshold} for ${zombieAgeDays}+ days`,
+        p_reason: reason,
       });
       if (retireErr) {
         console.warn(`[ct-hypothesis-reaper] zombie retire failed ${h.id}: ${retireErr.message}`);
@@ -110,6 +112,20 @@ serve(async (req) => {
       } else {
         zombied++;
       }
+      await recordDecision(supabase, {
+        decision_type: 'retire_hypothesis',
+        model_tier: 'none',
+        reasoning: `Zombie retirement: ${reason}`,
+        outcome: retireErr ? 'retire_rpc_failed' : 'retired_zombie',
+        linked_hypothesis_id: h.id,
+        context_snapshot: {
+          confidence: h.confidence,
+          elo: h.elo,
+          updated_at: h.updated_at,
+          threshold: zombieThreshold,
+          age_days: zombieAgeDays,
+        },
+      });
       continue;
     }
 
@@ -134,6 +150,18 @@ serve(async (req) => {
     } else {
       decayed++;
     }
+    await recordDecision(supabase, {
+      decision_type: 'update_hypothesis',
+      model_tier: 'none',
+      reasoning: `Weekly confidence decay (no fresh evidence in 7d). Applied delta ${delta.toFixed(4)} to current confidence ${h.confidence}.`,
+      outcome: rpcErr ? 'decay_rpc_failed' : 'decayed',
+      linked_hypothesis_id: h.id,
+      context_snapshot: {
+        confidence_before: h.confidence,
+        confidence_delta: delta,
+        decay_weekly_rate: decayWeekly,
+      },
+    });
   }
 
   const body = {

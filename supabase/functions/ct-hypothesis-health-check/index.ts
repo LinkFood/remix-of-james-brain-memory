@@ -23,6 +23,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { buildClaudeContext, claudeSystemPromptPreamble, type ClaudeContext } from '../_shared/claudeReadSurface.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
 
 const MAX_PER_RUN = 20;
 
@@ -156,7 +157,24 @@ serve(async (req) => {
 
   for (const h of rows) {
     const v = await judgeHypothesis(h, marketState, systemPrompt);
-    if (!v) { failed++; continue; }
+    if (!v) {
+      failed++;
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'haiku',
+        reasoning: `health-check judgment failed for hypothesis: ${h.claim.slice(0, 300)}`,
+        outcome: 'haiku_failed',
+        linked_hypothesis_id: h.id,
+        context_snapshot: { horizon: h.horizon, tickers: h.tickers, had_market_state: marketState !== null },
+      });
+      continue;
+    }
+
+    const tapeSignal = {
+      direction: v.verdict === 'invalidated' ? 'invalidates' : 'supports',
+      reasoning: v.reasoning,
+      sources: ['ct_heartbeats.current_reads'],
+    };
 
     if (v.verdict === 'invalidated') {
       invalidated++;
@@ -168,6 +186,17 @@ serve(async (req) => {
       if (retireErr) {
         console.warn(`[ct-hypothesis-health-check] retire failed hyp=${h.id}: ${retireErr.message}`);
       }
+      await recordDecision(supabase, {
+        decision_type: 'invalidate_hypothesis',
+        model_tier: 'haiku',
+        reasoning: `Invalidated: ${v.reasoning}. Claim: ${h.claim.slice(0, 300)}`,
+        outcome: retireErr ? 'retire_rpc_failed' : 'retired_refuted',
+        alignment: 'conflict',
+        claude_followed: 'tape',
+        tape_signal: tapeSignal,
+        linked_hypothesis_id: h.id,
+        context_snapshot: { horizon: h.horizon, tickers: h.tickers, invalidate_if: h.invalidate_if },
+      });
     } else if (v.verdict === 'ambiguous') {
       ambiguous++;
       const { error: evErr } = await supabase
@@ -186,12 +215,33 @@ serve(async (req) => {
         .from('ct_hypotheses')
         .update({ last_tested_at: new Date().toISOString() })
         .eq('id', h.id);
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'haiku',
+        reasoning: `Ambiguous verdict: ${v.reasoning}. Claim: ${h.claim.slice(0, 300)}`,
+        outcome: 'ambiguous_hold',
+        alignment: 'insufficient_data',
+        tape_signal: { reasoning: v.reasoning, sources: ['ct_heartbeats.current_reads'] },
+        linked_hypothesis_id: h.id,
+        context_snapshot: { horizon: h.horizon, tickers: h.tickers, invalidate_if: h.invalidate_if },
+      });
     } else {
       intact++;
       await supabase
         .from('ct_hypotheses')
         .update({ last_tested_at: new Date().toISOString() })
         .eq('id', h.id);
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'haiku',
+        reasoning: `Intact: ${v.reasoning}. Claim: ${h.claim.slice(0, 300)}`,
+        outcome: 'intact_hold',
+        alignment: 'aligned',
+        claude_followed: 'narrative',
+        tape_signal: { reasoning: v.reasoning, sources: ['ct_heartbeats.current_reads'] },
+        linked_hypothesis_id: h.id,
+        context_snapshot: { horizon: h.horizon, tickers: h.tickers, invalidate_if: h.invalidate_if },
+      });
     }
   }
 

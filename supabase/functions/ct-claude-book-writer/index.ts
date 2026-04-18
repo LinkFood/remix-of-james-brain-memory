@@ -23,6 +23,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
 
 interface TradeIdea {
   id: string;
@@ -337,6 +338,36 @@ serve(async (req) => {
 
     filled++;
     results.push({ idea_id: idea.id, outcome: 'filled', trade_id: insertedTrade.id });
+
+    // Decision journal — fill is a concrete write the engine just performed.
+    await recordDecision(supabase, {
+      decision_type: 'fill_trade',
+      model_tier: 'none',
+      reasoning: `Trigger fired (${evalResult.reason}). Filled ${idea.instrument} ${idea.direction} ${idea.contract_type} at ${entryPrice} size ${idea.size_pct}% ($${sizeUsd}). Stop ${stopPrice}, target ${targetPrice}.`,
+      outcome: 'filled',
+      alignment: 'aligned',
+      claude_followed: 'both',
+      tape_signal: {
+        direction: idea.direction === 'long' ? 'bullish' : 'bearish',
+        reasoning: `trigger ${idea.entry_trigger.type}: ${evalResult.reason}`,
+        sources: ['ct_heartbeats.current_reads', 'ct_gex_timeseries.underlying_price'],
+      },
+      linked_hypothesis_id: idea.hypothesis_id ?? undefined,
+      linked_trade_idea_id: idea.id,
+      linked_trade_id: insertedTrade.id,
+      context_snapshot: {
+        instrument: idea.instrument,
+        direction: idea.direction,
+        entry_price: entryPrice,
+        stop_price: stopPrice,
+        target_price: targetPrice,
+        size_pct: idea.size_pct,
+        size_usd: sizeUsd,
+        entry_trigger: idea.entry_trigger,
+        book_balance: bookBalance,
+        session_date: sessionDate,
+      },
+    });
   }
 
   // Bump Claude's book trades_count once for the batch.

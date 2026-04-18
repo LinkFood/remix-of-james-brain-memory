@@ -25,6 +25,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
 
 interface OpenTrade {
   id: string;
@@ -233,6 +234,39 @@ serve(async (req) => {
     closedTodayByBook[key] = agg;
 
     results.push({ trade_id: trade.id, outcome: 'closed', close_reason: closeReason, pnl_pct: pnlPctRounded });
+
+    // Decision journal — close.
+    const won = pnlPctRounded > 0;
+    await recordDecision(supabase, {
+      decision_type: 'close_trade',
+      model_tier: 'none',
+      reasoning: `Closed ${trade.instrument} ${trade.side} (${closeReason}) at ${closePrice}. Entry ${entry}. PnL ${pnlPctRounded}% ($${pnlUsd}). Verdict ${verdict}.`,
+      outcome: closeReason,
+      alignment: won ? 'aligned' : 'conflict',
+      claude_followed: won ? 'narrative' : 'tape',
+      tape_signal: {
+        direction: actualDirection,
+        reasoning: `close_reason=${closeReason} exit=${closePrice} entry=${entry}`,
+        sources: ['ct_heartbeats.current_reads', 'ct_gex_timeseries.underlying_price'],
+      },
+      linked_hypothesis_id: trade.hypothesis_id ?? undefined,
+      linked_trade_idea_id: trade.trade_idea_id ?? undefined,
+      linked_trade_id: trade.id,
+      context_snapshot: {
+        instrument: trade.instrument,
+        side: trade.side,
+        entry_price: entry,
+        exit_price: closePrice,
+        stop_price: trade.stop_price,
+        target_price: trade.target_price,
+        realized_pnl_pct: pnlPctRounded,
+        realized_pnl_usd: pnlUsd,
+        size_usd: trade.size_usd,
+        close_reason: closeReason,
+        verdict,
+        session_date: trade.session_date,
+      },
+    });
   }
 
   // Apply book deltas per session.
