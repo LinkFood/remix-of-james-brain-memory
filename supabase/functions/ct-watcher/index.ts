@@ -831,11 +831,28 @@ serve(async (req) => {
         options_volume: rawState.options_volume[t],
       };
     }
-    const [memory, selfCorrections, activeBiases] = await Promise.all([
+    const [memory, selfCorrections, activeBiases, activePlaybooksRes] = await Promise.all([
       buildMemoryBundle(supabase, WATCHLIST, liveStateByInstrument),
       getRecentSelfCorrections(supabase, 5),
       getActiveBiases(supabase, 3),
+      // Top-5 active playbooks by quality score (win_rate × sample_size).
+      // Curated weekly by ct-playbook-curator. Trimmed to fields Claude needs
+      // to pattern-match against current tape.
+      supabase
+        .from('ct_playbooks')
+        .select('id, name, description, setup_criteria, historical_win_rate, sample_size, avg_return_pct, avg_r_multiple, last_confirmed_at')
+        .eq('status', 'active')
+        .not('historical_win_rate', 'is', null)
+        .gt('sample_size', 0)
+        // Postgres can't order by a computed product directly via PostgREST,
+        // so sort by sample_size desc then win_rate desc — near-equivalent
+        // for quality ranking and cheap (no RPC needed). If it matters later
+        // we'll promote this to an RPC with the real composite.
+        .order('sample_size', { ascending: false })
+        .order('historical_win_rate', { ascending: false })
+        .limit(5),
     ]);
+    const activePlaybooks = activePlaybooksRes?.data ?? [];
 
     // 3b. Recent flow + dark pool + NOPE + top movers + sweeps + net-prem ticks
     // + max pain + greek flow + iv rank. Claude reasons over real whale activity,
@@ -1036,6 +1053,7 @@ serve(async (req) => {
       memory,
       self_corrections_72h: selfCorrections,
       known_biases: activeBiases,
+      active_playbooks: activePlaybooks,
       convergence,
       recent_flow_alerts: flowRecent.data ?? [],
       recent_dark_pool_prints: dpRecent.data ?? [],
@@ -1055,6 +1073,7 @@ serve(async (req) => {
       note: `UW does not cover futures directly; treat the proxies above as their futures equivalents for reasoning.
 self_corrections_72h: your OWN hindsight from the self-grader on recent calls. "what_i_got_wrong" = the specific error pattern. "how_id_rewrite" = the corrected read. BEFORE emitting FLAG/ALERT, check if you're about to repeat a pattern flagged here. Cite the correction if relevant (e.g. "regraded myself 2h ago — called 'imminent' too hot; this time holding OBSERVATION until acceleration confirms"). This is your memory of your own mistakes — use it or repeat them.
 known_biases: structural patterns extracted by the weekly bias-booth. Identity-level blindspots (not tactical rules). If any bias here applies to the current setup, explicitly counter-weight: if bias says "overweights put flow in low-VIX tape," and today is low-VIX + put-flow-heavy, demote any bearish FLAG to OBSERVATION unless flow is >2σ above your usual threshold.
+active_playbooks: curated setup signatures you've won on repeatedly. Each row has a setup_criteria object (regime, session, evidence_axes, catalyst, iv_tier, instruments, direction). If current tape MATCHES a playbook's criteria (regime tag aligns, session window aligns, required evidence_axes are present, instrument in scope, catalyst matches), WEIGHT HEAVILY toward that playbook's direction — this is your proven edge, distilled from N+ graded outcomes with a stated win_rate. Cite the playbook name in your glance when it fires (e.g. "Monday gamma+ breadth setup — playbook win rate 68% n=11"). If no playbook matches, ignore this field.
 recent_flow_alerts: WATCHLIST-only, premium ≥\$250K, last 10min — cite specific prints when material.
 recent_dark_pool_prints: top-10 by notional, last 10min. Prints >\$50M = institutional positioning.
 nope_recent: Net Options Pricing Effect per minute for SPY/QQQ/IWM. NOPE < 0 = dealers short gamma = momentum / trending regime. NOPE > 0 = dealers long gamma = mean-revert / vol-compressed. Use latest readings to validate or contradict the regime inference from gamma flip.

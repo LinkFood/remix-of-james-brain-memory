@@ -7,11 +7,13 @@
  *
  * Placement: top of /scorecard, below the header.
  */
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
+import { useVoiceAlerts } from '@/hooks/useVoiceAlerts';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
   BookOpen,
@@ -25,6 +27,11 @@ import {
   Compass,
   Activity,
   ExternalLink,
+  Play,
+  Pause,
+  Volume2,
+  Loader2,
+  Mic,
 } from 'lucide-react';
 
 // --------------- Types ---------------
@@ -38,6 +45,8 @@ interface WeeklyReport {
   decomposition: WeeklyDecomposition | null;
   scorecard: Record<string, unknown> | null;
   self_assessment: string | null;
+  audio_url: string | null;
+  audio_duration_ms: number | null;
   created_at: string;
 }
 
@@ -63,6 +72,7 @@ interface WeeklyDecomposition {
   calibration_note?: string;
   next_week_posture?: string;
   structural_read?: string;
+  script?: string;
   counts?: Record<string, number>;
 }
 
@@ -83,6 +93,24 @@ function fmtRate(n: number | null | undefined): string {
   return `${(n * 100).toFixed(0)}%`;
 }
 
+function fmtClock(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+/**
+ * "Current week" = report's period_end is within the last 7 days. Used to
+ * gate auto-play — we don't want to auto-play last month's reflection when
+ * James loads /scorecard, only the freshly-landed Sunday one.
+ */
+function isCurrentWeek(periodEndIso: string | null | undefined): boolean {
+  if (!periodEndIso) return false;
+  const ageMs = Date.now() - new Date(periodEndIso).getTime();
+  return ageMs >= 0 && ageMs <= 7 * 24 * 60 * 60 * 1000;
+}
+
 // --------------- Data hook ---------------
 
 function useLatestWeekly() {
@@ -92,7 +120,7 @@ function useLatestWeekly() {
     queryFn: async () => {
       const { data } = await supabase
         .from('ct_reports')
-        .select('id, report_type, period_start, period_end, summary, decomposition, scorecard, self_assessment, created_at')
+        .select('id, report_type, period_start, period_end, summary, decomposition, scorecard, self_assessment, audio_url, audio_duration_ms, created_at')
         .eq('report_type', 'weekly')
         .order('period_end', { ascending: false })
         .limit(1)
@@ -178,10 +206,110 @@ function ThemeAttributionTable({ rows }: { rows: ThemeAttrRow[] }) {
 
 export function WeeklyReflectionPanel() {
   const { data: report, isLoading } = useLatestWeekly();
+  const { enabled: voiceEnabled } = useVoiceAlerts();
 
   const decomp = useMemo<WeeklyDecomposition>(() => {
     return (report?.decomposition ?? {}) as WeeklyDecomposition;
   }, [report]);
+
+  // -------- Audio player state (mirrors MorningBriefPanel) --------
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const autoPlayedFor = useRef<string | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [durationSec, setDurationSec] = useState(0);
+  const [seeking, setSeeking] = useState(false);
+
+  // On-demand TTS fallback (when audio_url is null — generation failed or
+  // we're viewing an older report that pre-dates TTS integration)
+  const [onDemandUrl, setOnDemandUrl] = useState<string | null>(null);
+  const [ttsLoading, setTtsLoading] = useState(false);
+  const [ttsError, setTtsError] = useState<string | null>(null);
+
+  const effectiveSrc = report?.audio_url ?? onDemandUrl ?? null;
+  const script = decomp.script ?? '';
+  const fallbackDurationSec = report?.audio_duration_ms != null
+    ? report.audio_duration_ms / 1000
+    : 0;
+
+  const isCurrent = useMemo(
+    () => isCurrentWeek(report?.period_end ?? null),
+    [report?.period_end],
+  );
+
+  // Auto-play once per report if voice toggle is on AND the reflection is
+  // for the current week (period_end within last 7d). Keyed off report.id
+  // so a fresh Sunday reflection replaces any previous one cleanly.
+  useEffect(() => {
+    if (!report?.audio_url || !voiceEnabled || !isCurrent) return;
+    if (autoPlayedFor.current === report.id) return;
+    const el = audioRef.current;
+    if (!el) return;
+    autoPlayedFor.current = report.id;
+    el.load();
+    const p = el.play();
+    if (p && typeof p.catch === 'function') {
+      p.catch(() => {
+        // Autoplay blocked — user can press Play manually. Reset guard so
+        // a later voice-enable click gets another shot.
+        autoPlayedFor.current = null;
+      });
+    }
+  }, [report?.audio_url, report?.id, voiceEnabled, isCurrent]);
+
+  // Revoke any blob URL we created on unmount / replacement
+  useEffect(() => {
+    return () => {
+      if (onDemandUrl && onDemandUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(onDemandUrl);
+      }
+    };
+  }, [onDemandUrl]);
+
+  function toggleAudio() {
+    const el = audioRef.current;
+    if (!el) return;
+    if (el.paused) void el.play();
+    else el.pause();
+  }
+
+  function onSeek(e: React.ChangeEvent<HTMLInputElement>) {
+    const el = audioRef.current;
+    if (!el || !durationSec) return;
+    const next = (Number(e.target.value) / 1000) * durationSec;
+    setCurrentTime(next);
+    el.currentTime = next;
+  }
+
+  async function generateOnDemand() {
+    if (!script || ttsLoading) return;
+    setTtsLoading(true);
+    setTtsError(null);
+    try {
+      const { data, error } = await supabase.functions.invoke<Blob>('elevenlabs-tts', {
+        body: { text: script },
+      });
+      if (error) throw error;
+      if (!data) throw new Error('empty response');
+      const blob = data instanceof Blob ? data : new Blob([data], { type: 'audio/mpeg' });
+      const url = URL.createObjectURL(blob);
+      setOnDemandUrl(url);
+      requestAnimationFrame(() => {
+        const el = audioRef.current;
+        if (el) {
+          el.load();
+          void el.play();
+        }
+      });
+    } catch (e) {
+      setTtsError(e instanceof Error ? e.message : 'TTS failed');
+    } finally {
+      setTtsLoading(false);
+    }
+  }
+
+  const progressPermille = durationSec > 0 ? Math.round((currentTime / durationSec) * 1000) : 0;
+  const shownDuration = durationSec || fallbackDurationSec;
 
   if (isLoading) {
     return (
@@ -246,6 +374,93 @@ export function WeeklyReflectionPanel() {
           view all weekly reflections <ExternalLink className="w-3 h-3" />
         </Link>
       </div>
+
+      {/* Narration — audio player if we have audio, Narrate button otherwise.
+          Hidden entirely if there's no script (e.g. corpus-empty week). */}
+      {script && (
+        <div className="border border-border rounded-md bg-muted/20 px-3 py-2">
+          <div className="flex items-center gap-2 mb-1.5">
+            <Mic className="w-3.5 h-3.5 text-primary" />
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Listen
+            </span>
+            {shownDuration ? (
+              <span className="text-[10px] tabular-nums text-muted-foreground ml-auto">
+                {fmtClock(shownDuration)}
+              </span>
+            ) : null}
+          </div>
+          {effectiveSrc ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={toggleAudio} className="h-8">
+                  {playing ? (
+                    <><Pause className="w-3.5 h-3.5 mr-1" /> Pause</>
+                  ) : (
+                    <><Play className="w-3.5 h-3.5 mr-1" /> Play</>
+                  )}
+                </Button>
+                <span className="text-[10px] tabular-nums text-muted-foreground">
+                  {fmtClock(currentTime)} / {fmtClock(shownDuration)}
+                </span>
+                {voiceEnabled && isCurrent && report.audio_url && (
+                  <span className="text-[10px] text-primary/70 ml-auto">auto-play armed</span>
+                )}
+              </div>
+              <input
+                type="range"
+                min={0}
+                max={1000}
+                value={progressPermille}
+                onChange={onSeek}
+                onMouseDown={() => setSeeking(true)}
+                onMouseUp={() => setSeeking(false)}
+                onTouchStart={() => setSeeking(true)}
+                onTouchEnd={() => setSeeking(false)}
+                disabled={!durationSec}
+                className="w-full h-1 accent-primary cursor-pointer disabled:opacity-40"
+                aria-label="Weekly reflection narration progress"
+              />
+              <audio
+                ref={audioRef}
+                src={effectiveSrc}
+                preload="metadata"
+                onLoadedMetadata={(e) => setDurationSec(e.currentTarget.duration || 0)}
+                onTimeUpdate={(e) => { if (!seeking) setCurrentTime(e.currentTarget.currentTime); }}
+                onEnded={() => { setPlaying(false); setCurrentTime(0); }}
+                onPause={() => setPlaying(false)}
+                onPlay={() => setPlaying(true)}
+                className="hidden"
+              />
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={generateOnDemand}
+                disabled={ttsLoading}
+                className="h-8"
+                title="Generate narration on demand"
+              >
+                {ttsLoading ? (
+                  <><Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> Generating…</>
+                ) : (
+                  <><Volume2 className="w-3.5 h-3.5 mr-1" /> Narrate</>
+                )}
+              </Button>
+              {ttsError && (
+                <span className="text-[10px] text-destructive">{ttsError}</span>
+              )}
+              {!ttsError && !ttsLoading && (
+                <span className="text-[10px] text-muted-foreground italic">
+                  script ready — tap to generate audio
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Week summary — always open */}
       {report.summary && (

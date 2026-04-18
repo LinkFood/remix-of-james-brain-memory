@@ -31,6 +31,330 @@ import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { preTradeCheck, type Check } from '../_shared/preTradeGate.ts';
 import { firePreTradeQuality } from '../_shared/tradeQuality.ts';
 
+// ============================================================================
+// /propose — Claude proposes 1-3 trade ideas given current state.
+// Proposals are EPHEMERAL — James reviews, then /commits the ones he likes.
+// Sonnet only (quality > cost; ~$0.02/call expected).
+// ============================================================================
+
+const PROPOSE_TRADE_SYSTEM = `You're proposing 1-3 trades James could take right now. These are
+PROPOSALS not commits. He reviews and decides.
+
+Each proposal MUST include:
+  - instrument, side, size_pct (respecting concentration + ideal R)
+  - entry, stop, target (levels, not percentages)
+  - thesis (2-3 sentences, cite specific evidence)
+  - evidence_axes (A-F array)
+  - expected_move { low_pct, high_pct, confidence_pct, horizon_hrs }
+  - conviction (1-5)
+  - bias_check (which active biases could invalidate this, or "clear")
+  - pre_trade_concerns (any warn-level gate issues)
+  - commit_syntax (the exact /commit ... line James pastes to execute)
+
+Rules:
+  - Don't propose if concentration would breach.
+  - Don't propose if kill switch active.
+  - Don't propose anti-bias trades unless severity < 3.
+  - If tape is quiet, return { proposals: [], skip_reason: "quiet tape, no edge" }.
+  - Numbers-first, no cheerleading, acknowledge uncertainty.
+
+Return ONLY a JSON object shaped:
+{
+  "proposals": [ { ...fields above... } ],
+  "skip_reason": null | string
+}
+No prose outside the JSON. No code fence.`;
+
+interface ProposalCard {
+  instrument: string;
+  side: 'long' | 'short';
+  size_pct: number;
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  thesis: string;
+  evidence_axes: string[];
+  expected_move: {
+    low_pct: number | null;
+    high_pct: number | null;
+    confidence_pct: number | null;
+    horizon_hrs: number | null;
+  };
+  conviction: number;
+  bias_check: string;
+  pre_trade_concerns: string[];
+  commit_syntax: string;
+  /** Populated server-side after preTradeCheck runs on the draft. */
+  pre_trade_checks?: Check[];
+}
+
+/**
+ * Build the /propose context block. Pulls current book, open positions,
+ * concentration snapshot, recent high-attention events, active biases,
+ * news sentiment, and combo verdicts. Everything is best-effort — a
+ * missing table returns [] rather than failing the whole proposal.
+ */
+async function buildProposeContext(
+  supabase: ReturnType<typeof createClient>,
+  instrumentFilter: string | null,
+) {
+  const attentionCutoff = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+  const sessionDate = new Date().toISOString().slice(0, 10);
+
+  const [
+    heartbeat,
+    theses,
+    openTrades,
+    book,
+    biases,
+    flags,
+    alerts,
+    news,
+    drawdown,
+  ] = await Promise.all([
+    supabase.from('ct_heartbeats').select('status_line, current_reads, watching, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('ct_theses').select('instrument, direction, conviction, up_case, down_case, watching, rationale, updated_at'),
+    supabase.from('ct_trades').select('id, instrument, side, size_pct, entry_price, stop_price, target_price, contract_type, strike, expiry, thesis, conviction, status, opened_at').eq('status', 'open'),
+    supabase.from('ct_book').select('session_date, realized_pnl, unrealized_pnl, ending_balance, max_drawdown_pct, starting_balance').eq('session_date', sessionDate).maybeSingle(),
+    supabase.from('ct_biases').select('id, pattern, instruments, severity, notes, created_at').eq('active', true),
+    supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, glance, created_at').gte('created_at', attentionCutoff).order('created_at', { ascending: false }).limit(8),
+    supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, alert_trigger, glance, created_at').gte('created_at', attentionCutoff).order('created_at', { ascending: false }).limit(5),
+    supabase.from('ct_news_analyses').select('instrument, news_headline, impact, significance, claude_take, created_at').gte('significance', 3).order('created_at', { ascending: false }).limit(8),
+    supabase.from('ct_drawdown_alerts').select('tier, intraday_pnl_pct, drawdown_from_hwm_pct').eq('session_date', sessionDate).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+  ]);
+
+  const hb = heartbeat.data as { status_line?: string; current_reads?: Record<string, unknown>; created_at?: string } | null;
+  const snapshot = hb?.current_reads?._snapshot ?? null;
+  const comboVerdicts = (hb?.current_reads as Record<string, unknown> | null)?.combo_verdicts
+    ?? (hb?.current_reads as Record<string, unknown> | null)?._combo_verdicts
+    ?? null;
+
+  // Filter by instrument if requested.
+  const filter = instrumentFilter?.toUpperCase() ?? null;
+  const filterArr = <T extends { instrument?: string | null; instruments?: string[] | null; ticker?: string | null }>(rows: T[] | null | undefined): T[] => {
+    if (!filter || !rows) return rows ?? [];
+    return rows.filter((r) => {
+      if (r.instrument && String(r.instrument).toUpperCase() === filter) return true;
+      if (r.ticker && String(r.ticker).toUpperCase() === filter) return true;
+      if (Array.isArray(r.instruments) && r.instruments.map((x) => String(x).toUpperCase()).includes(filter)) return true;
+      return false;
+    });
+  };
+
+  return {
+    instrument_filter: filter,
+    latest_status: hb?.status_line ?? null,
+    latest_pulse_at: hb?.created_at ?? null,
+    market_state: snapshot,
+    combo_verdicts: comboVerdicts,
+    book_today: book.data ?? null,
+    drawdown_today: drawdown.data ?? null,
+    open_positions: filterArr(openTrades.data as Array<Record<string, unknown>> | null ?? []),
+    theses: filterArr(theses.data as Array<Record<string, unknown>> | null ?? []),
+    active_biases: biases.data ?? [],
+    recent_high_attention_flags: filterArr(flags.data as Array<Record<string, unknown>> | null ?? []).slice(0, 5),
+    recent_alerts: filterArr(alerts.data as Array<Record<string, unknown>> | null ?? []),
+    recent_significant_news: filterArr(news.data as Array<Record<string, unknown>> | null ?? []),
+  };
+}
+
+/**
+ * Handle /propose — short-circuit guards before calling Claude, then assemble
+ * context, call Sonnet, parse proposals, run preTradeCheck on each, drop
+ * blocked proposals, surface warns as pre_trade_concerns.
+ */
+async function handleProposeCommand(
+  supabase: ReturnType<typeof createClient>,
+  instrumentFilter: string | null,
+): Promise<{
+  response: string;
+  proposal_cards: ProposalCard[];
+  skip_reason: string | null;
+  model: string;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+}> {
+  // Short-circuit 1: kill switch
+  if (await isKillSwitchActive(supabase)) {
+    return {
+      response: 'Kill switch engaged — no proposals. Disarm via TopNav or /disarm to resume.',
+      proposal_cards: [],
+      skip_reason: 'kill_switch_active',
+      model: 'sonnet',
+      tokens_in: 0,
+      tokens_out: 0,
+      cost_usd: 0,
+    };
+  }
+
+  // Short-circuit 2: urgent drawdown today
+  const sessionDate = new Date().toISOString().slice(0, 10);
+  const { data: urgent } = await supabase
+    .from('ct_drawdown_alerts')
+    .select('tier, intraday_pnl_pct, drawdown_from_hwm_pct')
+    .eq('session_date', sessionDate)
+    .eq('tier', 'urgent')
+    .limit(1)
+    .maybeSingle();
+  if (urgent) {
+    const u = urgent as { intraday_pnl_pct?: number; drawdown_from_hwm_pct?: number };
+    return {
+      response: `Urgent drawdown tier today (intraday ${u.intraday_pnl_pct}%, HWM ${u.drawdown_from_hwm_pct}%) — no proposals.`,
+      proposal_cards: [],
+      skip_reason: 'drawdown_urgent',
+      model: 'sonnet',
+      tokens_in: 0,
+      tokens_out: 0,
+      cost_usd: 0,
+    };
+  }
+
+  // Short-circuit 3: any open positions already at concentration max for filter?
+  // (Leave to preTradeCheck per-proposal — don't pre-block all proposals here.)
+
+  // Build context and call Sonnet
+  const context = await buildProposeContext(supabase, instrumentFilter);
+  const userMsg = `[LIVE STATE]\n${JSON.stringify(context, null, 2)}\n\n${
+    instrumentFilter
+      ? `Propose 1-3 trades focused on ${instrumentFilter} given this state.`
+      : 'Propose 1-3 trades given this state. Return { proposals: [], skip_reason } if tape is quiet.'
+  }`;
+
+  let raw = '';
+  let tokensIn = 0;
+  let tokensOut = 0;
+  let costUsd = 0;
+  try {
+    const res = await callClaude({
+      model: CLAUDE_MODELS.sonnet,
+      system: PROPOSE_TRADE_SYSTEM,
+      messages: [{ role: 'user', content: userMsg }],
+      max_tokens: 2500,
+      temperature: 0.3,
+    });
+    raw = parseTextContent(res).trim();
+    const usage = (res as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+    tokensIn = usage?.input_tokens ?? 0;
+    tokensOut = usage?.output_tokens ?? 0;
+    costUsd = Number(((tokensIn / 1_000_000) * 3 + (tokensOut / 1_000_000) * 15).toFixed(6));
+  } catch (e) {
+    const detail = e instanceof ClaudeError ? `Claude ${e.status}` : String(e);
+    return {
+      response: `Propose failed — Claude error: ${detail}`,
+      proposal_cards: [],
+      skip_reason: 'claude_error',
+      model: 'sonnet',
+      tokens_in: 0,
+      tokens_out: 0,
+      cost_usd: 0,
+    };
+  }
+
+  // Fallback-safe JSON parse. Strip code fences if Sonnet ignored the rule.
+  let parsed: { proposals?: unknown; skip_reason?: unknown } | null = null;
+  try {
+    const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+    parsed = JSON.parse(stripped);
+  } catch (e) {
+    return {
+      response: `Propose returned malformed JSON — can't render cards. Raw head: ${raw.slice(0, 200)}`,
+      proposal_cards: [],
+      skip_reason: 'malformed_response',
+      model: 'sonnet',
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+      cost_usd: costUsd,
+    };
+  }
+
+  const skipReason = typeof parsed?.skip_reason === 'string' ? parsed.skip_reason : null;
+  const rawProposals = Array.isArray(parsed?.proposals) ? parsed!.proposals as Array<Record<string, unknown>> : [];
+
+  if (rawProposals.length === 0) {
+    return {
+      response: skipReason ? `No proposals — ${skipReason}` : 'No proposals.',
+      proposal_cards: [],
+      skip_reason: skipReason,
+      model: 'sonnet',
+      tokens_in: tokensIn,
+      tokens_out: tokensOut,
+      cost_usd: costUsd,
+    };
+  }
+
+  // Run preTradeCheck on each proposal. Drop blocked. Merge warn details into
+  // pre_trade_concerns so James sees them on the card.
+  const kept: ProposalCard[] = [];
+  for (const p of rawProposals) {
+    const instrument = String(p.instrument ?? '').toUpperCase();
+    const side = (p.side === 'short' ? 'short' : 'long') as 'long' | 'short';
+    const sizePct = Number(p.size_pct ?? 0);
+    if (!instrument || !sizePct) continue;
+
+    const draft = {
+      instrument,
+      side,
+      size_pct: sizePct,
+      thesis_theme: null,
+      contract_type: 'underlying' as const,
+      size_usd: null,
+      source: 'chat' as const,
+    };
+    const gate = await preTradeCheck(supabase, draft, { force: false });
+
+    const warnDetails = gate.checks
+      .filter((c) => c.status === 'warn')
+      .map((c) => `${c.name}: ${c.detail}`);
+
+    if (!gate.passed) {
+      // Block-level failure → drop the proposal entirely.
+      console.log(`[ct-chat propose] dropped ${instrument} ${side} ${sizePct}% — blockers:`, gate.blockers.map((b) => b.name).join(','));
+      continue;
+    }
+
+    const card: ProposalCard = {
+      instrument,
+      side,
+      size_pct: sizePct,
+      entry: typeof p.entry === 'number' ? p.entry : null,
+      stop: typeof p.stop === 'number' ? p.stop : null,
+      target: typeof p.target === 'number' ? p.target : null,
+      thesis: String(p.thesis ?? ''),
+      evidence_axes: Array.isArray(p.evidence_axes) ? (p.evidence_axes as unknown[]).map(String) : [],
+      expected_move: {
+        low_pct: typeof (p.expected_move as Record<string, unknown> | undefined)?.low_pct === 'number' ? (p.expected_move as Record<string, number>).low_pct : null,
+        high_pct: typeof (p.expected_move as Record<string, unknown> | undefined)?.high_pct === 'number' ? (p.expected_move as Record<string, number>).high_pct : null,
+        confidence_pct: typeof (p.expected_move as Record<string, unknown> | undefined)?.confidence_pct === 'number' ? (p.expected_move as Record<string, number>).confidence_pct : null,
+        horizon_hrs: typeof (p.expected_move as Record<string, unknown> | undefined)?.horizon_hrs === 'number' ? (p.expected_move as Record<string, number>).horizon_hrs : null,
+      },
+      conviction: Number(p.conviction ?? 3),
+      bias_check: String(p.bias_check ?? 'clear'),
+      pre_trade_concerns: [
+        ...(Array.isArray(p.pre_trade_concerns) ? (p.pre_trade_concerns as unknown[]).map(String) : []),
+        ...warnDetails,
+      ],
+      commit_syntax: String(p.commit_syntax ?? `/commit ${instrument} ${side} ${sizePct}%`),
+      pre_trade_checks: gate.checks,
+    };
+    kept.push(card);
+  }
+
+  const header = kept.length === 0
+    ? `Claude returned ${rawProposals.length} proposal(s) but all were blocked by the pre-trade gate.`
+    : `${kept.length} proposal${kept.length === 1 ? '' : 's'} — review each and paste the commit line to execute.`;
+
+  return {
+    response: header,
+    proposal_cards: kept,
+    skip_reason: kept.length === 0 ? 'all_blocked' : skipReason,
+    model: 'sonnet',
+    tokens_in: tokensIn,
+    tokens_out: tokensOut,
+    cost_usd: costUsd,
+  };
+}
+
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -561,6 +885,39 @@ serve(async (req) => {
         pre_trade_checks: out.pre_trade_checks ?? [],
         force: out.force ?? false,
         duration_ms: 0,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // /propose — Claude proposes 1-3 trades given current state.
+    // Guardrails (kill switch, drawdown urgent) short-circuit BEFORE calling
+    // Claude. Proposals are ephemeral; James pastes the commit_syntax to
+    // execute. Optional instrument filter: "/propose NVDA" → NVDA only.
+    // Match:  "/propose", "/propose NVDA", "propose" (exact), "Propose a trade"
+    // The chip-suggested "Propose a trade" is treated as a bare /propose with
+    // no filter (we intentionally ignore the trailing natural-language bits
+    // when there's no leading slash). With a leading slash, the next token is
+    // the instrument filter: "/propose NVDA" → NVDA only.
+    const slashProposeMatch = message.match(/^\s*\/propose(?:\s+(\S+))?(?:\s.*)?$/i);
+    const bareProposeMatch = !slashProposeMatch && /^\s*propose(\s+a\s+trade)?\s*\.?\s*$/i.test(message);
+    const isProposeCmd = Boolean(slashProposeMatch) || bareProposeMatch;
+    if (isProposeCmd) {
+      const filterRaw = (slashProposeMatch?.[1] ?? '').trim();
+      const filter = filterRaw && /^[A-Za-z]{1,5}$/.test(filterRaw) ? filterRaw.toUpperCase() : null;
+      const proposed = await handleProposeCommand(supabase, filter);
+      return new Response(JSON.stringify({
+        response: proposed.response,
+        proposal_cards: proposed.proposal_cards,
+        skip_reason: proposed.skip_reason,
+        propose: true,
+        model: proposed.model,
+        tokens_in: proposed.tokens_in,
+        tokens_out: proposed.tokens_out,
+        cost_usd: proposed.cost_usd,
+        mcp_calls: 0,
+        duration_ms: Date.now() - startedAt,
       }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

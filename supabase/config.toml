@@ -123,6 +123,9 @@ verify_jwt = false
 [functions.ct-lessons-curator]
 verify_jwt = false
 
+[functions.ct-playbook-curator]
+verify_jwt = false
+
 [functions.ct-chat]
 verify_jwt = false
 

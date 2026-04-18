@@ -25,6 +25,82 @@ import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 
 // ----------------------------------------------------------------------------
+// TTS constants — mirror ct-morning-brief's setup so James gets the same
+// audio shape. WEEKLY_VOICE_ID lets us pick a different voice for the
+// Sunday read (e.g. a calmer, more reflective voice) without affecting the
+// daily brief. Falls back to Rachel (same as morning brief) if unset.
+// ----------------------------------------------------------------------------
+const DEFAULT_VOICE_ID = '21m00Tcm4TlvDq8ikWAM'; // Rachel
+const TTS_MODEL_ID = 'eleven_turbo_v2_5';
+const AUDIO_BUCKET = 'ct-audio';
+
+// Append-on to the canonical WEEKLY_REFLECTION_SYSTEM so this function can
+// require a narratable `script` field without forking the shared prompt.
+// The script is what ElevenLabs speaks on Sunday evening.
+const WEEKLY_SCRIPT_ADDENDUM = `
+
+ADDITIONALLY, include a "script" field in the JSON — a 200-400 word narratable prose version of this reflection meant to be listened to, not read. The script must weave the 8 sections (week_summary, worked, didnt_work, theme_attribution, new_biases, calibration_note, next_week_posture, structural_read) into a single flowing spoken-word piece. Numbers stay in. No bullet points, no headers, no markdown. Write it like you're talking to yourself on Sunday evening, reviewing the week before Monday opens. Keep the numbers-first discipline — read specific P&L percentages, win rates, trade counts aloud. If a section is empty, skip it in the script rather than saying "nothing this week".`;
+
+const WEEKLY_REFLECTION_SYSTEM_WITH_SCRIPT = `${WEEKLY_REFLECTION_SYSTEM}${WEEKLY_SCRIPT_ADDENDUM}`;
+
+// ----------------------------------------------------------------------------
+// ISO 8601 week number — used for the audio filename. Matches what humans
+// call "week 16" etc. Sunday-fires-for-prior-week is fine; we compute off
+// the end date so the filename reflects the week James just lived.
+// ----------------------------------------------------------------------------
+function isoWeekLabel(dateIso: string): string {
+  const d = new Date(dateIso + 'T12:00:00Z'); // noon avoids UTC edge cases
+  const tmp = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const dayNum = tmp.getUTCDay() || 7; // 1..7, Mon..Sun
+  tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+  const weekNum = Math.ceil(((tmp.getTime() - yearStart.getTime()) / 86_400_000 + 1) / 7);
+  return `${tmp.getUTCFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+
+// ----------------------------------------------------------------------------
+// TTS helpers — copied shape from ct-morning-brief for consistency. If
+// ElevenLabs errors, the weekly report still lands with audio_url=null.
+// ----------------------------------------------------------------------------
+interface TtsResult {
+  ok: boolean;
+  status?: number;
+  audioBytes?: Uint8Array;
+  error?: string;
+}
+
+async function renderTts(script: string, apiKey: string, voiceId: string): Promise<TtsResult> {
+  try {
+    const resp = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
+      {
+        method: 'POST',
+        headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: script,
+          model_id: TTS_MODEL_ID,
+          voice_settings: { stability: 0.5, similarity_boost: 0.75 },
+        }),
+      },
+    );
+    if (!resp.ok) {
+      const errText = await resp.text();
+      return { ok: false, status: resp.status, error: errText.slice(0, 300) };
+    }
+    const buf = new Uint8Array(await resp.arrayBuffer());
+    return { ok: true, status: resp.status, audioBytes: buf };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function estimateDurationSeconds(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length;
+  const wpm = 155;
+  return Math.round((words / wpm) * 60 * 10) / 10;
+}
+
+// ----------------------------------------------------------------------------
 // Week window: the 7 days ending at "now". When the cron fires Sunday 22:00
 // UTC this covers Mon 22:00 UTC through Sun 22:00 UTC — a full trading
 // week including Friday's close.
@@ -367,7 +443,7 @@ serve(async (req) => {
     let claudeModel = CLAUDE_MODELS.sonnet;
 
     if (corpusEmpty) {
-      // Skip Claude, write a sparse-week stub
+      // Skip Claude, write a sparse-week stub. No script → no TTS call.
       reflection = {
         week_summary: `Corpus is empty for ${startDate} → ${endDate} — no trades, grades, or reports landed this week. Nothing to reflect on yet.`,
         worked: [],
@@ -377,6 +453,7 @@ serve(async (req) => {
         calibration_note: '',
         next_week_posture: 'Posture unchanged — wait for data.',
         structural_read: '',
+        script: '',
       };
     } else {
       const userMessage = JSON.stringify({
@@ -405,9 +482,9 @@ serve(async (req) => {
       try {
         const res = await callClaude({
           model: claudeModel,
-          system: WEEKLY_REFLECTION_SYSTEM,
+          system: WEEKLY_REFLECTION_SYSTEM_WITH_SCRIPT,
           messages: [{ role: 'user', content: userMessage }],
-          max_tokens: 3000,
+          max_tokens: 3500, // script adds ~400 words of output
           temperature: 0.3,
         });
         claudeText = parseTextContent(res).trim();
@@ -438,6 +515,7 @@ serve(async (req) => {
     const workedArr = Array.isArray(reflection.worked) ? (reflection.worked as unknown[]).map(String) : [];
     const didntArr = Array.isArray(reflection.didnt_work) ? (reflection.didnt_work as unknown[]).map(String) : [];
     const themeAttr = Array.isArray(reflection.theme_attribution) ? reflection.theme_attribution : [];
+    const script = String(reflection.script ?? '').trim();
 
     const summary = String(reflection.week_summary ?? '').slice(0, 4000);
     const selfAssessment = [
@@ -461,6 +539,7 @@ serve(async (req) => {
       calibration_note: reflection.calibration_note ?? '',
       next_week_posture: reflection.next_week_posture ?? '',
       structural_read: reflection.structural_read ?? '',
+      script, // narratable prose — what ElevenLabs speaks and what the on-demand Narrate fallback uses
       counts,
     };
 
@@ -520,6 +599,63 @@ serve(async (req) => {
       }
     }
 
+    // ----------------------------------------------------------------------
+    // ElevenLabs TTS — fire-and-forget. Report is already persisted above,
+    // so any failure here leaves audio_url=null and the frontend Narrate
+    // button can regenerate on demand. WEEKLY_VOICE_ID env var allows a
+    // different voice from the weekday morning brief (e.g. slower cadence
+    // for reflective Sunday listening).
+    // ----------------------------------------------------------------------
+    let audioUrl: string | null = null;
+    let ttsStatus: number | null = null;
+    let ttsError: string | null = null;
+    let audioBytes: number | null = null;
+    let audioDurationMs: number | null = null;
+
+    if (script && !corpusEmpty) {
+      const elevenKey = Deno.env.get('ELEVENLABS_API_KEY');
+      const voiceId = Deno.env.get('WEEKLY_VOICE_ID')
+        || Deno.env.get('ELEVENLABS_VOICE_ID')
+        || DEFAULT_VOICE_ID;
+
+      if (!elevenKey) {
+        ttsError = 'ELEVENLABS_API_KEY missing';
+      } else {
+        const tts = await renderTts(script, elevenKey, voiceId);
+        ttsStatus = tts.status ?? null;
+        if (tts.ok && tts.audioBytes) {
+          audioBytes = tts.audioBytes.byteLength;
+          const fileName = `weekly-reflection-${isoWeekLabel(endDate)}.mp3`;
+          const { error: upErr } = await supabase.storage
+            .from(AUDIO_BUCKET)
+            .upload(fileName, tts.audioBytes, { contentType: 'audio/mpeg', upsert: true });
+          if (upErr) {
+            ttsError = `upload: ${upErr.message}`;
+          } else {
+            const { data: pub } = supabase.storage.from(AUDIO_BUCKET).getPublicUrl(fileName);
+            audioUrl = pub?.publicUrl ?? null;
+            audioDurationMs = Math.round(estimateDurationSeconds(script) * 1000);
+          }
+        } else {
+          ttsError = tts.error ?? `status ${tts.status ?? 'unknown'}`;
+        }
+      }
+
+      // Stamp audio URL + duration onto the weekly report row. Best-effort —
+      // if this fails the frontend can still fall back to on-demand narration.
+      if (audioUrl) {
+        const { error: audioErr } = await supabase
+          .from('ct_reports')
+          .update({ audio_url: audioUrl, audio_duration_ms: audioDurationMs })
+          .eq('id', report.id);
+        if (audioErr) {
+          console.warn('[ct-weekly-reflection] ct_reports audio stamp failed (non-blocking):', audioErr.message);
+        } else {
+          console.log(`[ct-weekly-reflection] audio stamped on report ${report.id} — ${audioBytes} bytes, ~${audioDurationMs}ms`);
+        }
+      }
+    }
+
     return new Response(JSON.stringify({
       success: true,
       report_id: report.id,
@@ -532,6 +668,11 @@ serve(async (req) => {
       grades_rollup: gradesRollup,
       embed_ok: embedRes.ok,
       embed_error: embedRes.error ?? null,
+      audio_url: audioUrl,
+      audio_bytes: audioBytes,
+      audio_duration_ms: audioDurationMs,
+      tts_status: ttsStatus,
+      tts_error: ttsError,
       duration_ms: Date.now() - startedAt,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 

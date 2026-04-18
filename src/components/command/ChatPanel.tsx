@@ -22,6 +22,27 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Check, Copy, Loader2, MessageSquare, Send, Trash2 } from 'lucide-react';
 
+interface ProposalCard {
+  instrument: string;
+  side: 'long' | 'short';
+  size_pct: number;
+  entry: number | null;
+  stop: number | null;
+  target: number | null;
+  thesis: string;
+  evidence_axes: string[];
+  expected_move: {
+    low_pct: number | null;
+    high_pct: number | null;
+    confidence_pct: number | null;
+    horizon_hrs: number | null;
+  };
+  conviction: number;
+  bias_check: string;
+  pre_trade_concerns: string[];
+  commit_syntax: string;
+}
+
 interface MessageMeta {
   model?: string;
   tokens_in?: number;
@@ -33,6 +54,8 @@ interface MessageMeta {
   cross_facet_hits?: number;
   /** True iff Claude's response actually cited the DCD brain. Drives the chip. */
   cross_facet_used?: boolean;
+  /** /propose returned these — rendered as expanded review cards. */
+  proposal_cards?: ProposalCard[];
 }
 
 interface Message {
@@ -51,6 +74,7 @@ const CHIPS_AUTO_SEND = false;
 const SUGGESTED_PROMPTS = [
   "How's the book?",
   "What's hot right now?",
+  "Propose a trade",
   "Scan SPY for anomalies",
   "What did you flag in the last hour?",
   "Show me today's worst trade",
@@ -219,6 +243,111 @@ function AssistantBody({ content }: { content: string }) {
   );
 }
 
+/**
+ * Renders a single /propose result as an expanded review card. The Accept
+ * button pastes commit_syntax into the chat input (NOT auto-submit) so James
+ * can sanity-check before pressing Enter. No server call, no trade is bound.
+ */
+function ProposalCardView({
+  card,
+  onAccept,
+}: {
+  card: ProposalCard;
+  onAccept: (commitSyntax: string) => void;
+}) {
+  const em = card.expected_move;
+  const emLabel = em.low_pct != null && em.high_pct != null
+    ? `${em.low_pct > 0 ? '+' : ''}${em.low_pct}% / ${em.high_pct > 0 ? '+' : ''}${em.high_pct}%${em.confidence_pct != null ? ` @${em.confidence_pct}%` : ''}${em.horizon_hrs != null ? ` · ${em.horizon_hrs}h` : ''}`
+    : null;
+  const sideColor = card.side === 'long' ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400';
+
+  return (
+    <div className="my-2 rounded-lg border border-border bg-background/70 overflow-hidden">
+      {/* Header row */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border/60 bg-muted/40">
+        <div className="flex items-center gap-2 text-xs">
+          <span className="font-semibold">{card.instrument}</span>
+          <span className={`uppercase font-semibold ${sideColor}`}>{card.side}</span>
+          <span className="text-muted-foreground">{card.size_pct}%</span>
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">conv {card.conviction}/5</span>
+        </div>
+        <button
+          onClick={() => onAccept(card.commit_syntax)}
+          className="text-[11px] px-2 py-1 rounded bg-primary text-primary-foreground hover:opacity-90 transition-opacity"
+          title="Paste commit line into input for review"
+        >
+          Accept → Review
+        </button>
+      </div>
+
+      {/* Levels */}
+      <div className="grid grid-cols-3 gap-2 px-3 py-2 text-[11px] border-b border-border/60">
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">entry</div>
+          <div className="font-mono">{card.entry ?? '—'}</div>
+        </div>
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">stop</div>
+          <div className="font-mono">{card.stop ?? '—'}</div>
+        </div>
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">target</div>
+          <div className="font-mono">{card.target ?? '—'}</div>
+        </div>
+      </div>
+
+      {/* Thesis */}
+      <div className="px-3 py-2 text-[11px] leading-relaxed border-b border-border/60">
+        <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-1">thesis</div>
+        <div>{card.thesis}</div>
+      </div>
+
+      {/* Expected move + evidence axes */}
+      <div className="grid grid-cols-2 gap-2 px-3 py-2 text-[10.5px] border-b border-border/60">
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">expected move</div>
+          <div className="font-mono">{emLabel ?? '—'}</div>
+        </div>
+        <div>
+          <div className="text-[9px] uppercase tracking-wider text-muted-foreground">evidence axes</div>
+          <div className="flex flex-wrap gap-1">
+            {card.evidence_axes.length === 0 && <span className="text-muted-foreground">—</span>}
+            {card.evidence_axes.map((a) => (
+              <span key={a} className="px-1.5 py-0.5 rounded bg-muted text-[10px] font-mono">{a}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Bias check */}
+      <div className="px-3 py-2 text-[10.5px] border-b border-border/60">
+        <div className="text-[9px] uppercase tracking-wider text-muted-foreground">bias check</div>
+        <div className={card.bias_check === 'clear' ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}>
+          {card.bias_check}
+        </div>
+      </div>
+
+      {/* Pre-trade concerns (warns) */}
+      {card.pre_trade_concerns.length > 0 && (
+        <div className="px-3 py-2 text-[10.5px] border-b border-border/60">
+          <div className="text-[9px] uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-1">pre-trade concerns</div>
+          <ul className="space-y-0.5">
+            {card.pre_trade_concerns.map((c, idx) => (
+              <li key={idx} className="text-amber-700 dark:text-amber-300">• {c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Commit syntax */}
+      <div className="px-3 py-2 bg-muted/30">
+        <div className="text-[9px] uppercase tracking-wider text-muted-foreground mb-1">commit syntax</div>
+        <code className="text-[10.5px] font-mono break-all">{card.commit_syntax}</code>
+      </div>
+    </div>
+  );
+}
+
 export function ChatPanel() {
   const [messages, setMessages] = useState<Message[]>(() => loadHistory());
   const [input, setInput] = useState('');
@@ -300,6 +429,7 @@ export function ChatPanel() {
         mcp_calls: typeof body.mcp_calls === 'number' ? body.mcp_calls : undefined,
         cross_facet_hits: typeof body.cross_facet_hits === 'number' ? body.cross_facet_hits : undefined,
         cross_facet_used: typeof body.cross_facet_used === 'boolean' ? body.cross_facet_used : undefined,
+        proposal_cards: Array.isArray(body.proposal_cards) ? (body.proposal_cards as ProposalCard[]) : undefined,
       };
       setMessages([...next, {
         role: 'assistant',
@@ -374,6 +504,20 @@ export function ChatPanel() {
                   {m.role === 'assistant' ? (
                     <>
                       <AssistantBody content={m.content} />
+                      {m.meta?.proposal_cards && m.meta.proposal_cards.length > 0 && (
+                        <div className="mt-1">
+                          {m.meta.proposal_cards.map((card, idx) => (
+                            <ProposalCardView
+                              key={idx}
+                              card={card}
+                              onAccept={(commitSyntax) => {
+                                setInput(commitSyntax);
+                                textareaRef.current?.focus();
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
                       <CrossFacetChip meta={m.meta} />
                       <div className="flex items-center justify-between gap-2 mt-1">
                         <MessageMetaLine meta={m.meta} />
