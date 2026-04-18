@@ -37,6 +37,12 @@ import { ctSlackPush } from '../_shared/ctSlack.ts';
 import { deriveWriteTimeAttention } from '../_shared/attentionScore.ts';
 import { logMcpCalls } from '../_shared/mcpLog.ts';
 import { getConfig } from '../_shared/configCache.ts';
+import {
+  openHypothesesForTickers,
+  selectGoverningHypothesis,
+  recordHypothesisEvidence,
+  type SelectorResult,
+} from '../_shared/hypothesisSelect.ts';
 
 // Watcher MCP budget — ONE drill-down call per tick. The scheduled snapshot
 // covers the 12-ticker watchlist; MCP is only for chasing specific outliers
@@ -116,6 +122,42 @@ interface ClaudeJson {
 function toArray<T>(v: T | T[] | undefined | null): T[] {
   if (v == null) return [];
   return Array.isArray(v) ? v : [v];
+}
+
+/**
+ * Pick the governing hypothesis for a new watcher write (if any open
+ * hypothesis is a clear match). Never throws. Callers use the returned
+ * hypothesis_id in the insert payload and, on non-null, record an evidence row
+ * after the insert completes.
+ */
+async function pickHypothesisForWrite(
+  supabase: SupabaseClient,
+  instruments: string[],
+  claude: ClaudeJson,
+): Promise<SelectorResult> {
+  try {
+    const candidates = await openHypothesesForTickers(supabase, instruments);
+    if (candidates.length === 0) {
+      return { hypothesis_id: null, polarity: null, weight: 0, reason: 'no open hypotheses' };
+    }
+    const summary = asString(claude.observation)
+      || (toArray(claude.glance).filter(s => typeof s === 'string')[0] as string | undefined)
+      || asString(claude.status_line)
+      || '';
+    return await selectGoverningHypothesis(
+      supabase,
+      {
+        summary,
+        tickers: instruments,
+        direction: claude.direction,
+        reasoning: asString(claude.update_note),
+      },
+      candidates,
+    );
+  } catch (e) {
+    console.warn('[ct-watcher] pickHypothesisForWrite threw:', e instanceof Error ? e.message : e);
+    return { hypothesis_id: null, polarity: null, weight: 0, reason: 'selector threw' };
+  }
 }
 
 function asString(v: unknown): string {
@@ -441,6 +483,8 @@ async function writeObservation(
   const glanceArr = toArray(claude.glance).filter(s => typeof s === 'string') as string[];
   const isInvalidation = glanceArr[0]?.toUpperCase().startsWith('THESIS INVALIDAT') ?? false;
 
+  const hypPick = await pickHypothesisForWrite(supabase, instruments, claude);
+
   const { data, error } = await supabase.from('ct_observations').insert({
     user_id: userId,
     instruments,
@@ -458,6 +502,7 @@ async function writeObservation(
     self_assessment: claude.self_assessment ?? null,
     triggered_by: triggerInfo ?? null,
     prompt_version: CT_PROMPT_VERSION,
+    hypothesis_id: hypPick.hypothesis_id,
     attention_score: deriveWriteTimeAttention({
       state: 'OBSERVATION',
       convergenceCount,
@@ -470,6 +515,18 @@ async function writeObservation(
     return null;
   }
   const id = data?.id ?? null;
+
+  if (id && hypPick.hypothesis_id) {
+    await recordHypothesisEvidence(supabase, {
+      hypothesis_id: hypPick.hypothesis_id,
+      evidence_type: 'observation',
+      source_id: id,
+      polarity: hypPick.polarity ?? 'for',
+      weight: hypPick.weight,
+      summary: (glanceArr[0] || asString(claude.observation) || '').slice(0, 120),
+      added_by: 'cron',
+    });
+  }
 
   // Embed for corpus
   if (id) {
@@ -515,6 +572,8 @@ async function writeFlag(
   const nowIso = new Date().toISOString();
   const memoryRecallSummary = opts?.memoryRecallOverride ?? asString(claude.memory_recall);
 
+  const hypPick = await pickHypothesisForWrite(supabase, instruments, claude);
+
   const { data, error } = await supabase.from('ct_flags').insert({
     user_id: userId,
     instruments,
@@ -537,6 +596,7 @@ async function writeFlag(
     expected_move: validateExpectedMove(claude.expected_move, `flag ${instruments.join(',')} ${claude.direction ?? ''}`),
     triggered_by: opts?.triggerInfo ?? null,
     prompt_version: CT_PROMPT_VERSION,
+    hypothesis_id: hypPick.hypothesis_id,
     attention_score: deriveWriteTimeAttention({
       state: 'FLAG',
       conviction,
@@ -550,6 +610,19 @@ async function writeFlag(
     return null;
   }
   const id = data?.id ?? null;
+
+  if (id && hypPick.hypothesis_id) {
+    const glanceFirst = (toArray(claude.glance).filter(s => typeof s === 'string')[0] as string | undefined) ?? '';
+    await recordHypothesisEvidence(supabase, {
+      hypothesis_id: hypPick.hypothesis_id,
+      evidence_type: 'flag',
+      source_id: id,
+      polarity: hypPick.polarity ?? 'for',
+      weight: hypPick.weight,
+      summary: (glanceFirst || asString(claude.observation) || '').slice(0, 120),
+      added_by: 'cron',
+    });
+  }
 
   if (id) {
     const richText = buildCtRichText({
@@ -720,6 +793,8 @@ async function writeAlert(
   // No cooldown — proceed with normal ALERT insert.
   // ========================================================================
 
+  const hypPick = await pickHypothesisForWrite(supabase, instruments, claude);
+
   const { data, error } = await supabase.from('ct_alerts').insert({
     user_id: userId,
     instruments,
@@ -743,6 +818,7 @@ async function writeAlert(
     expected_move: validateExpectedMove(claude.expected_move, `alert ${instruments.join(',')} ${direction} ${trigger}`),
     triggered_by: triggerInfo ?? null,
     prompt_version: CT_PROMPT_VERSION,
+    hypothesis_id: hypPick.hypothesis_id,
     attention_score: deriveWriteTimeAttention({
       state: 'ALERT',
       alertTrigger: trigger,
@@ -756,6 +832,19 @@ async function writeAlert(
     return { alertId: null, demotedTo: null, demotedEventId: null };
   }
   const id = data?.id ?? null;
+
+  if (id && hypPick.hypothesis_id) {
+    const glanceFirst = (toArray(claude.glance).filter(s => typeof s === 'string')[0] as string | undefined) ?? '';
+    await recordHypothesisEvidence(supabase, {
+      hypothesis_id: hypPick.hypothesis_id,
+      evidence_type: 'alert',
+      source_id: id,
+      polarity: hypPick.polarity ?? 'for',
+      weight: hypPick.weight,
+      summary: (glanceFirst || asString(claude.observation) || '').slice(0, 120),
+      added_by: 'cron',
+    });
+  }
 
   if (id) {
     const richText = buildCtRichText({

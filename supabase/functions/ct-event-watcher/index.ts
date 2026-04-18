@@ -19,6 +19,11 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { WATCHLIST } from '../_shared/uwClient.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
+import {
+  openHypothesesForTickers,
+  selectGoverningHypothesis,
+  recordHypothesisEvidence,
+} from '../_shared/hypothesisSelect.ts';
 
 const COOLDOWN_MS = 3 * 60 * 1000;
 const WINDOW_MS = 90 * 1000;
@@ -178,12 +183,65 @@ serve(async (req) => {
 
     // Fire watcher + log an event-marker heartbeat so we can see what tripped
     const triggerNote = signals.slice(0, 5).map(s => `${s.kind}:${s.detail}`).join(' | ');
+    const signalTickers = [...new Set(signals.map(s => s.ticker))];
     await supabase.from('ct_heartbeats').insert({
       status_line: `[event] triggering watcher on ${signals.length} signals: ${triggerNote.slice(0, 300)}`,
-      watching: [...new Set(signals.map(s => s.ticker))],
+      watching: signalTickers,
       current_reads: { _event_trigger: signals },
       prompt_version: CT_PROMPT_VERSION,
     });
+
+    // Tag this event trip as an observation citing its governing hypothesis
+    // (if any open hypothesis is a strong match). This runs alongside the
+    // heartbeat so downstream queries can trace "which thesis was in play
+    // when this event fired." Best-effort — never throws.
+    try {
+      const candidates = await openHypothesesForTickers(supabase, signalTickers);
+      if (candidates.length > 0) {
+        const eventSummary = `Event watcher tripped on ${signals.length} signals: ${triggerNote}`;
+        const pick = await selectGoverningHypothesis(
+          supabase,
+          {
+            summary: eventSummary.slice(0, 400),
+            tickers: signalTickers,
+            reasoning: triggerNote,
+          },
+          candidates,
+        );
+
+        const glance = signals.slice(0, 5).map(s => `[${s.kind}] ${s.detail}`);
+        const { data: obsRow, error: obsErr } = await supabase
+          .from('ct_observations')
+          .insert({
+            instruments: signalTickers,
+            observation: eventSummary,
+            glance,
+            direction: null,
+            watching: triggerNote.slice(0, 200),
+            memory_recall_used: { summary: `event-watcher: ${signals.length} signals` },
+            prompt_version: CT_PROMPT_VERSION,
+            hypothesis_id: pick.hypothesis_id,
+          })
+          .select('id')
+          .maybeSingle();
+
+        if (obsErr) {
+          console.warn('[ct-event-watcher] observation insert failed:', obsErr.message);
+        } else if (obsRow?.id && pick.hypothesis_id) {
+          await recordHypothesisEvidence(supabase, {
+            hypothesis_id: pick.hypothesis_id,
+            evidence_type: 'observation',
+            source_id: obsRow.id,
+            polarity: pick.polarity ?? 'for',
+            weight: pick.weight,
+            summary: eventSummary.slice(0, 120),
+            added_by: 'cron',
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('[ct-event-watcher] hypothesis tagging threw:', e instanceof Error ? e.message : e);
+    }
 
     // Fire the main watcher
     const url = Deno.env.get('SUPABASE_URL')!;
