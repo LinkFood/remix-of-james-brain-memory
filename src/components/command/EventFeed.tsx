@@ -1,8 +1,8 @@
-import { useRecentEvents, useSelfRegrade, type CtEvent, type CtSelfAssessment } from '@/hooks/useCoTraderData';
+import { useRecentEvents, useSelfRegrade, useLatestHeartbeat, type CtEvent, type CtSelfAssessment, type ExpectedMove } from '@/hooks/useCoTraderData';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronUp, AlertTriangle, Flag, Eye, Target, Brain, Layers } from 'lucide-react';
+import { ChevronDown, ChevronUp, AlertTriangle, Flag, Eye, Target, Brain, Layers, Check, TrendingUp } from 'lucide-react';
 
 function relativeTime(iso: string): string {
   const d = Date.now() - Date.parse(iso);
@@ -129,7 +129,84 @@ function RetrospectiveBlock({ event }: { event: CtEvent }) {
   );
 }
 
-function EventRow({ event }: { event: CtEvent }) {
+/** Compact "expected: +0.5% to +1.5% (70% conf, 4h)" line + in-range indicator. */
+function ExpectedMoveLine({
+  em,
+  entryPrices,
+  livePrices,
+  instruments,
+  direction,
+}: {
+  em: ExpectedMove;
+  entryPrices: Record<string, number | null> | null | undefined;
+  livePrices: Record<string, number | null>;
+  instruments: string[];
+  direction: string | null;
+}) {
+  // Primary instrument = first listed (matches writer convention)
+  const primary = instruments[0];
+  const entry = primary ? entryPrices?.[primary] ?? null : null;
+  const live = primary ? livePrices[primary] ?? null : null;
+
+  const fmt = (n: number) => `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
+
+  // In-range / exceeded indicator. We express the band as percent bounds
+  // around the entry price (the price at write time). "In range" = live
+  // within [low, high] of entry. "Exceeded" = live is beyond high_pct on
+  // the expected side (direction-aware — overshooting the bullish target
+  // is an exceed, undershooting is still in-range). Neutral/unknown when
+  // we don't have both entry and live.
+  let indicator: { kind: 'in_range' | 'exceeded' | 'under'; deltaPct: number } | null = null;
+  if (entry && entry > 0 && live != null && Number.isFinite(live)) {
+    const deltaPct = ((live - entry) / entry) * 100;
+    if (deltaPct >= em.low_pct && deltaPct <= em.high_pct) {
+      indicator = { kind: 'in_range', deltaPct };
+    } else if (deltaPct > em.high_pct) {
+      indicator = { kind: 'exceeded', deltaPct };
+    } else {
+      // deltaPct < em.low_pct — band not reached on low side
+      indicator = { kind: 'under', deltaPct };
+    }
+  }
+
+  return (
+    <div className="mt-1 flex items-center gap-2 flex-wrap text-[10px]">
+      <span className="uppercase tracking-wider text-muted-foreground">expected</span>
+      <span className="font-mono text-foreground/80">
+        {fmt(em.low_pct)} to {fmt(em.high_pct)}
+      </span>
+      <span className="text-muted-foreground">
+        ({em.confidence_pct}% conf, {em.horizon_hrs}h)
+      </span>
+      {indicator?.kind === 'in_range' && (
+        <span
+          className="inline-flex items-center gap-0.5 text-green-400"
+          title={`${fmt(indicator.deltaPct)} since entry — inside claimed band`}
+        >
+          <Check className="w-3 h-3" /> in range
+        </span>
+      )}
+      {indicator?.kind === 'exceeded' && (
+        <span
+          className="inline-flex items-center gap-0.5 text-amber-400"
+          title={`${fmt(indicator.deltaPct)} since entry — beyond high_pct`}
+        >
+          <TrendingUp className="w-3 h-3" /> exceeded
+        </span>
+      )}
+      {indicator?.kind === 'under' && direction && (
+        <span
+          className="inline-flex items-center gap-0.5 text-muted-foreground"
+          title={`${fmt(indicator.deltaPct)} since entry — below low_pct`}
+        >
+          under
+        </span>
+      )}
+    </div>
+  );
+}
+
+function EventRow({ event, livePrices }: { event: CtEvent; livePrices: Record<string, number | null> }) {
   const [expanded, setExpanded] = useState(false);
   return (
     <div className={`p-3 border-l-2 ${stateColor(event._type)} hover:bg-muted/30 transition-colors`}>
@@ -158,6 +235,16 @@ function EventRow({ event }: { event: CtEvent }) {
                 <li key={i} className="pl-2 before:content-['·'] before:mr-1 before:text-muted-foreground">{g}</li>
               ))}
             </ul>
+          )}
+
+          {event.expected_move && (
+            <ExpectedMoveLine
+              em={event.expected_move}
+              entryPrices={event.entry_prices}
+              livePrices={livePrices}
+              instruments={event.instruments}
+              direction={event.direction}
+            />
           )}
 
           {event.self_assessment && <SelfAssessmentLine sa={event.self_assessment} />}
@@ -237,10 +324,10 @@ function spanLabel(members: CtEvent[]): string {
   return `${Math.round(hrs / 24)}d`;
 }
 
-function GroupedEventRow({ group }: { group: EventGroup }) {
+function GroupedEventRow({ group, livePrices }: { group: EventGroup; livePrices: Record<string, number | null> }) {
   const [showRestatements, setShowRestatements] = useState(false);
   const n = group.members.length;
-  if (n === 1) return <EventRow event={group.lead} />;
+  if (n === 1) return <EventRow event={group.lead} livePrices={livePrices} />;
 
   return (
     <div>
@@ -267,14 +354,34 @@ function GroupedEventRow({ group }: { group: EventGroup }) {
           ))}
         </div>
       )}
-      <EventRow event={group.lead} />
+      <EventRow event={group.lead} livePrices={livePrices} />
     </div>
   );
+}
+
+/**
+ * Pull latest per-ticker price from the newest heartbeat's embedded
+ * _snapshot. Heartbeats land every cycle, so this is as close to live
+ * as we get without a separate quote feed.
+ */
+function useLivePriceMap(): Record<string, number | null> {
+  const { data: hb } = useLatestHeartbeat();
+  return useMemo(() => {
+    const reads = (hb?.current_reads ?? {}) as Record<string, unknown>;
+    const snap = (reads._snapshot ?? null) as { per_ticker?: Record<string, { price?: number | null }> } | null;
+    const per = snap?.per_ticker ?? {};
+    const out: Record<string, number | null> = {};
+    for (const [ticker, row] of Object.entries(per)) {
+      out[ticker] = typeof row?.price === 'number' ? row.price : null;
+    }
+    return out;
+  }, [hb]);
 }
 
 export function EventFeed() {
   const { data: events, isLoading } = useRecentEvents(25);
   const groups = useMemo(() => groupConsecutive(events ?? []), [events]);
+  const livePrices = useLivePriceMap();
 
   return (
     <Card className="divide-y divide-border">
@@ -295,7 +402,7 @@ export function EventFeed() {
       ) : (
         <div className="max-h-[60vh] overflow-y-auto divide-y divide-border">
           {groups.map((g) => (
-            <GroupedEventRow key={`${g.lead._type}:${g.lead.id}`} group={g} />
+            <GroupedEventRow key={`${g.lead._type}:${g.lead.id}`} group={g} livePrices={livePrices} />
           ))}
         </div>
       )}

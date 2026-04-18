@@ -1,11 +1,14 @@
 /**
  * useRiskMetrics — hedge-fund-grade stats for Claude's paper book.
  *
- * Pulls ct_book + ct_trades, filters by period, and runs the pure-math
- * helpers in `src/lib/riskMetrics.ts`. No edge function calls. No SPY
- * price table exists in the DB yet, so beta/alpha are reported as NaN
- * with a `benchmarkAvailable = false` flag; the panel renders "—" and
- * a tooltip explaining the gap.
+ * Pulls ct_book, ct_trades, and ct_spy_daily, filters by period, runs the
+ * pure-math helpers in `src/lib/riskMetrics.ts`. No edge function calls.
+ *
+ * Benchmark: ct_spy_daily is populated daily by the ct-spy-capture cron
+ * (4:05 PM ET weekdays). When the table has ≥ MIN_SAMPLE aligned rows with
+ * ct_book, we compute a real beta + annualized alpha. Before the pipeline
+ * has enough history, benchmarkAvailable stays false and the panel renders
+ * "—" as before.
  *
  * Re-fetches every 5 min. The panel passes a period selector; the
  * filter is applied client-side so the React Query cache is shared
@@ -30,6 +33,16 @@ import {
   type RBucket,
 } from '@/lib/riskMetrics';
 
+const TRADING_DAYS = 252;
+const BETA_MIN_SAMPLE = 5;
+
+interface CtSpyDailyRow {
+  date: string;
+  close: number | null;
+  prev_close: number | null;
+  daily_return_pct: number | null;
+}
+
 export type RiskPeriod = '7d' | '30d' | 'all';
 
 export interface RiskMetrics {
@@ -53,9 +66,51 @@ export interface RiskMetrics {
     avgLossR: number;
     kelly: number;
   };
+  /**
+   * Forward-looking expectancy from Claude's expected_move claims.
+   * Per graded+banded call: midpoint = (low_pct + high_pct) / 2,
+   * weighted by confidence_pct/100. Compared against the mean absolute
+   * realized move in the same universe — answers "is Claude's claimed
+   * magnitude roughly anchored to what actually happened?"
+   */
+  forwardExpectancy: {
+    meanClaimedMidPct: number;          // NaN when no graded+banded samples
+    meanRealizedAbsPct: number;         // mean |actual_return_pct| in %
+    sampleSize: number;
+  };
+  /**
+   * Band accuracy — CALIBRATION of magnitude claims.
+   * % of graded flags/alerts where actual_return_pct fell inside
+   * [low_pct, high_pct]. Confidence-weighted variant upweights higher
+   * claimed-confidence calls so "I said 85% and nailed it" is worth
+   * more than "I said 55% and nailed it." NaN when no samples exist.
+   */
+  bandAccuracy: {
+    hitRate: number;                    // 0..1
+    sampleSize: number;
+    weightedHitRate: number;            // 0..1, each claim weighted by confidence_pct
+    meanClaimedConfidence: number;      // average confidence_pct (sanity anchor)
+  };
   rHistogram: RBucket[];
   grade: 'A' | 'B' | 'C' | 'D' | 'N/A';
   gradeReason: string;
+}
+
+/**
+ * Graded flag/alert that had an expected_move claim at write time.
+ * Used to compute band accuracy + forward expectancy.
+ */
+interface BandedGradeRow {
+  subject_type: 'flag' | 'alert';
+  subject_id: string;
+  graded_at: string;
+  actual_return_pct: number;
+  expected_move: {
+    low_pct: number;
+    high_pct: number;
+    confidence_pct: number;
+    horizon_hrs: number;
+  };
 }
 
 function sliceByPeriod<T extends { session_date: string }>(
@@ -107,13 +162,90 @@ function computeGrade(
   return { grade: 'N/A', reason: 'Metrics incomplete.' };
 }
 
+/**
+ * Align ct_book-derived daily returns with ct_spy_daily returns by session_date.
+ *
+ * Book returns are *session-to-session* — row i's return is (balance_i - balance_{i-1})/balance_{i-1}.
+ * So we pair book.session_date[i] (i>=1) with ct_spy_daily.date where date == session_date[i].
+ * SPY rows missing for a given session are dropped (both sides). Any pair where the
+ * SPY return is non-finite is also dropped.
+ *
+ * Returns { strategy, spy } as two same-length arrays in session order.
+ */
+function alignBookAndSpy(
+  book: CtBookRow[],
+  spy: CtSpyDailyRow[],
+): { strategy: number[]; spy: number[] } {
+  if (!Array.isArray(book) || book.length < 2) return { strategy: [], spy: [] };
+
+  const sorted = [...book].sort((a, b) => a.session_date.localeCompare(b.session_date));
+  const balances = sorted.map(r =>
+    r.ending_balance != null
+      ? r.ending_balance
+      : r.starting_balance + (r.realized_pnl ?? 0) + (r.unrealized_pnl ?? 0),
+  );
+
+  const spyByDate = new Map<string, number>();
+  for (const row of spy) {
+    if (!row.date) continue;
+    const ret = row.daily_return_pct;
+    if (ret == null || !Number.isFinite(ret)) continue;
+    // Generated column is in percent. Convert to fractional decimal.
+    spyByDate.set(row.date, ret / 100);
+  }
+
+  const strategyOut: number[] = [];
+  const spyOut: number[] = [];
+  for (let i = 1; i < balances.length; i++) {
+    const prev = balances[i - 1];
+    const curr = balances[i];
+    if (!Number.isFinite(prev) || !Number.isFinite(curr) || prev <= 0) continue;
+    const sessionDate = sorted[i].session_date;
+    const spyRet = spyByDate.get(sessionDate);
+    if (spyRet === undefined) continue;
+    strategyOut.push((curr - prev) / prev);
+    spyOut.push(spyRet);
+  }
+  return { strategy: strategyOut, spy: spyOut };
+}
+
+/**
+ * Annualized alpha (Jensen). With aligned daily return arrays:
+ *   alpha_daily = mean(strategy - rfDaily) - beta * mean(spy - rfDaily)
+ *   alpha_annual = alpha_daily * 252
+ */
+function alphaVsSpy(
+  strategy: number[],
+  spy: number[],
+  beta: number,
+  rfAnnual = 0.045,
+): number {
+  if (strategy.length !== spy.length || strategy.length < BETA_MIN_SAMPLE) return NaN;
+  if (!Number.isFinite(beta)) return NaN;
+  const rfDaily = rfAnnual / TRADING_DAYS;
+  let sS = 0;
+  let sM = 0;
+  for (let i = 0; i < strategy.length; i++) {
+    sS += strategy[i] - rfDaily;
+    sM += spy[i] - rfDaily;
+  }
+  const meanS = sS / strategy.length;
+  const meanM = sM / spy.length;
+  return (meanS - beta * meanM) * TRADING_DAYS;
+}
+
 export function useRiskMetrics(period: RiskPeriod = '30d') {
-  const query = useQuery<{ book: CtBookRow[]; trades: CtTradeRow[] }>({
+  const query = useQuery<{
+    book: CtBookRow[];
+    trades: CtTradeRow[];
+    spy: CtSpyDailyRow[];
+    bandedGrades: BandedGradeRow[];
+  }>({
     queryKey: ['risk_metrics_raw'],
     refetchInterval: 5 * 60_000,
     staleTime: 60_000,
     queryFn: async () => {
-      const [bookRes, tradesRes] = await Promise.all([
+      const [bookRes, tradesRes, spyRes, gradesRes, flagsRes, alertsRes] = await Promise.all([
         supabase
           .from('ct_book')
           .select('*')
@@ -123,12 +255,84 @@ export function useRiskMetrics(period: RiskPeriod = '30d') {
           .select('*')
           .order('session_date', { ascending: true })
           .limit(5000),
+        supabase
+          .from('ct_spy_daily')
+          .select('date, close, prev_close, daily_return_pct')
+          .order('date', { ascending: true }),
+        // Graded flag/alert outcomes — `actual_return_pct` is the realized
+        // move from entry to horizon exit. Limit 2000 is conservative;
+        // we only read the subject_ids that have a banded claim anyway.
+        supabase
+          .from('ct_grades')
+          .select('subject_type, subject_id, graded_at, actual_return_pct')
+          .in('subject_type', ['flag', 'alert'])
+          .order('graded_at', { ascending: false })
+          .limit(2000),
+        // Pull all banded flags — we join in JS. Missing expected_move =
+        // pre-v1.3 row, dropped naturally by the inner join.
+        supabase
+          .from('ct_flags')
+          .select('id, expected_move')
+          .not('expected_move', 'is', null)
+          .limit(2000),
+        supabase
+          .from('ct_alerts')
+          .select('id, expected_move')
+          .not('expected_move', 'is', null)
+          .limit(2000),
       ]);
       if (bookRes.error) throw bookRes.error;
       if (tradesRes.error) throw tradesRes.error;
+      // ct_spy_daily missing (pre-migration) shouldn't crash the panel —
+      // just fall back to the "no benchmark" path.
+      const spy: CtSpyDailyRow[] = spyRes.error ? [] : ((spyRes.data ?? []) as CtSpyDailyRow[]);
+
+      // Join grades ↔ banded flags/alerts in JS. Either side missing or
+      // malformed → row dropped (validation re-runs here to catch any
+      // historical garbage that slipped past the writer).
+      const bandByKey = new Map<string, BandedGradeRow['expected_move']>();
+      const pushBand = (type: 'flag' | 'alert', rows: unknown) => {
+        if (!Array.isArray(rows)) return;
+        for (const r of rows as Array<{ id?: string; expected_move?: unknown }>) {
+          if (!r?.id || !r.expected_move || typeof r.expected_move !== 'object') continue;
+          const em = r.expected_move as Record<string, unknown>;
+          const low = Number(em.low_pct);
+          const high = Number(em.high_pct);
+          const conf = Number(em.confidence_pct);
+          const horiz = Number(em.horizon_hrs);
+          if (!Number.isFinite(low) || !Number.isFinite(high) || !Number.isFinite(conf) || !Number.isFinite(horiz)) continue;
+          if (low > high || conf < 50 || conf > 90) continue;
+          bandByKey.set(`${type}:${r.id}`, { low_pct: low, high_pct: high, confidence_pct: conf, horizon_hrs: horiz });
+        }
+      };
+      pushBand('flag', flagsRes.data);
+      pushBand('alert', alertsRes.data);
+
+      const bandedGrades: BandedGradeRow[] = [];
+      const gradeRows = (gradesRes.data ?? []) as Array<{
+        subject_type: 'flag' | 'alert';
+        subject_id: string;
+        graded_at: string;
+        actual_return_pct: number | null;
+      }>;
+      for (const g of gradeRows) {
+        if (g.actual_return_pct == null || !Number.isFinite(g.actual_return_pct)) continue;
+        const band = bandByKey.get(`${g.subject_type}:${g.subject_id}`);
+        if (!band) continue;
+        bandedGrades.push({
+          subject_type: g.subject_type,
+          subject_id: g.subject_id,
+          graded_at: g.graded_at,
+          actual_return_pct: g.actual_return_pct,
+          expected_move: band,
+        });
+      }
+
       return {
         book: (bookRes.data ?? []) as CtBookRow[],
         trades: (tradesRes.data ?? []) as CtTradeRow[],
+        spy,
+        bandedGrades,
       };
     },
   });
@@ -146,12 +350,21 @@ export function useRiskMetrics(period: RiskPeriod = '30d') {
     const calmar = calmarRatio(returns, ddInfo.maxDd);
     const kurt = kurtosisExcess(returns);
 
-    // SPY benchmark not stored in DB yet. Punt with NaN + flag.
-    // When a SPY price pipeline lands, fetch daily closes aligned to
-    // book session_date and pass here.
-    const benchmarkAvailable = false;
-    const beta = benchmarkAvailable ? betaVsSpy(returns, []) : NaN;
-    const alpha = NaN;
+    // SPY benchmark — ct_spy_daily populated daily by ct-spy-capture cron.
+    // Slice SPY rows to the same period filter, then align by session_date.
+    const spySliced = (query.data.spy ?? []).filter(r => {
+      if (period === 'all') return true;
+      const days = period === '7d' ? 7 : 30;
+      const cutoff = new Date();
+      cutoff.setUTCHours(0, 0, 0, 0);
+      cutoff.setUTCDate(cutoff.getUTCDate() - days);
+      const cutoffStr = cutoff.toISOString().slice(0, 10);
+      return r.date >= cutoffStr;
+    });
+    const aligned = alignBookAndSpy(book, spySliced);
+    const benchmarkAvailable = aligned.strategy.length >= BETA_MIN_SAMPLE;
+    const beta = benchmarkAvailable ? betaVsSpy(aligned.strategy, aligned.spy) : NaN;
+    const alpha = benchmarkAvailable ? alphaVsSpy(aligned.strategy, aligned.spy, beta) : NaN;
 
     const exp = expectancy(trades);
     const rHistogram = rMultipleDistribution(trades);
@@ -173,6 +386,55 @@ export function useRiskMetrics(period: RiskPeriod = '30d') {
 
     const { grade, reason } = computeGrade(sharpe, ddInfo.maxDd, exp.meanR);
 
+    // Band accuracy + forward expectancy — scoped to the same period.
+    // Graded rows use `graded_at` timestamp (not session_date), so we
+    // slice on that field directly rather than going through sliceByPeriod.
+    const bandedAll = query.data.bandedGrades ?? [];
+    const bandedSliced = (() => {
+      if (period === 'all') return bandedAll;
+      const days = period === '7d' ? 7 : 30;
+      const cutoff = new Date();
+      cutoff.setUTCHours(0, 0, 0, 0);
+      cutoff.setUTCDate(cutoff.getUTCDate() - days);
+      return bandedAll.filter(r => Date.parse(r.graded_at) >= cutoff.getTime());
+    })();
+
+    let bandHits = 0;
+    let weightedHits = 0;
+    let weightSum = 0;
+    let midSum = 0;
+    let absSum = 0;
+    let confSum = 0;
+    for (const r of bandedSliced) {
+      const { low_pct, high_pct, confidence_pct } = r.expected_move;
+      const actual = r.actual_return_pct;
+      const weight = confidence_pct / 100;
+      const hit = actual >= low_pct && actual <= high_pct ? 1 : 0;
+      bandHits += hit;
+      weightedHits += hit * weight;
+      weightSum += weight;
+      midSum += (low_pct + high_pct) / 2 * weight;
+      absSum += Math.abs(actual);
+      confSum += confidence_pct;
+    }
+    const bandN = bandedSliced.length;
+    const bandAccuracy: RiskMetrics['bandAccuracy'] = bandN > 0
+      ? {
+          hitRate: bandHits / bandN,
+          sampleSize: bandN,
+          weightedHitRate: weightSum > 0 ? weightedHits / weightSum : NaN,
+          meanClaimedConfidence: confSum / bandN,
+        }
+      : { hitRate: NaN, sampleSize: 0, weightedHitRate: NaN, meanClaimedConfidence: NaN };
+
+    const forwardExpectancy: RiskMetrics['forwardExpectancy'] = bandN > 0
+      ? {
+          meanClaimedMidPct: weightSum > 0 ? midSum / weightSum : NaN,
+          meanRealizedAbsPct: absSum / bandN,
+          sampleSize: bandN,
+        }
+      : { meanClaimedMidPct: NaN, meanRealizedAbsPct: NaN, sampleSize: 0 };
+
     return {
       period,
       sampleSize: {
@@ -192,6 +454,8 @@ export function useRiskMetrics(period: RiskPeriod = '30d') {
       alpha,
       benchmarkAvailable,
       expectancy: exp,
+      forwardExpectancy,
+      bandAccuracy,
       rHistogram,
       grade,
       gradeReason: reason,

@@ -29,6 +29,7 @@ import { ctSlackPush } from '../_shared/ctSlack.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 import { classifyThesis } from '../_shared/thesisClassifier.ts';
 import { getConfig } from '../_shared/configCache.ts';
+import { writeTradeAudit, deriveMarketRegime, shapeMcpCalls } from '../_shared/tradeAudit.ts';
 
 const WATCHLIST = new Set([
   'SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT',
@@ -150,13 +151,26 @@ serve(async (req) => {
     });
   }
 
-  // 3. Active biases (severity ≥ 4).
-  const { data: biasRows } = await supabase
+  // 3. Active biases — two reads:
+  //    (a) full active list for the audit trail (all severities)
+  //    (b) high-severity subset (≥ BIAS_MIN_SEVERITY) that actually gates trades
+  const { data: allActiveBiasRows } = await supabase
     .from('ct_biases')
     .select('id, pattern, instruments, severity')
-    .eq('active', true)
-    .gte('severity', BIAS_MIN_SEVERITY);
-  const activeBiases = biasRows ?? [];
+    .eq('active', true);
+  const allActiveBiases = allActiveBiasRows ?? [];
+  const activeBiases = allActiveBiases.filter(b => Number(b.severity ?? 0) >= BIAS_MIN_SEVERITY);
+
+  // Latest heartbeat — shared across every alert commit in this tick. Used for
+  // uw_state_snapshot + heartbeat_id + market_regime on each audit row.
+  const { data: hbRow } = await supabase
+    .from('ct_heartbeats')
+    .select('id, current_reads, created_at')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const snapshot = (hbRow?.current_reads as Record<string, unknown> | undefined)?._snapshot ?? null;
+  const marketRegime = deriveMarketRegime(snapshot);
 
   // 4. Current open book — capacity check is per-tick (refreshed after each commit).
   const { data: openRows } = await supabase
@@ -266,6 +280,59 @@ serve(async (req) => {
 
     // Link alert → trade.
     await supabase.from('ct_alerts').update({ committed_trade_id: tradeId }).eq('id', alert.id);
+
+    // Audit trail — fire-and-forget. MCP linking is best-effort: the watcher's
+    // MCP calls within a 15-min window around the alert's creation time WERE
+    // the reasoning that produced this alert. Grab them as part of the forensic
+    // record. If no calls land in the window (mocked alert, silent tick), we
+    // still write the audit row with mcp_calls=[].
+    (async () => {
+      const alertAt = new Date(alert.created_at).getTime();
+      const winStart = new Date(alertAt - 15 * 60_000).toISOString();
+      const winEnd   = new Date(alertAt + 15 * 60_000).toISOString();
+      const { data: mcpRows } = await supabase
+        .from('ct_mcp_calls')
+        .select('tool_name, input, result, is_error, created_at')
+        .eq('source', 'watcher')
+        .gte('created_at', winStart)
+        .lte('created_at', winEnd)
+        .order('created_at', { ascending: true })
+        .limit(40);
+
+      writeTradeAudit(supabase, {
+        trade_id: tradeId,
+        source: 'alert-book-commit',
+        uw_state_snapshot: snapshot,
+        mcp_calls: shapeMcpCalls(mcpRows as Array<Record<string, unknown>> | null),
+        active_biases: allActiveBiases,
+        sizing_computed: {
+          book_equity:  BOOK_EQUITY_USD,
+          size_pct:     sizePct,
+          size_usd:     alertSizeUsd,
+          entry_price:  price,
+          stop_price:   setup.stop_level ?? null,
+          target_price: setup.target_level ?? null,
+          conviction:   5, // alert commits are hard-coded conviction=5
+        },
+        market_regime: marketRegime,
+        heartbeat_id: (hbRow?.id as string | undefined) ?? null,
+        triggering_alert_id: alert.id,
+        triggering_flag_id: null,
+        prompt_version: CT_PROMPT_VERSION,
+        // Alerts don't have a single raw Claude response — the watcher that
+        // produced the alert did. Serialize the alert row itself as the
+        // closest artifact: rationale + glance + setup are the reasoning.
+        raw_claude_response: JSON.stringify({
+          alert_id: alert.id,
+          direction: alert.direction,
+          alert_trigger: alert.alert_trigger,
+          trade_setup: setup,
+          up_case: alert.up_case,
+          down_case: alert.down_case,
+          glance: alert.glance,
+        }),
+      });
+    })();
 
     // Log action.
     const firstGlance = (alert.glance && alert.glance.length > 0 ? alert.glance[0] : '').slice(0, 500);

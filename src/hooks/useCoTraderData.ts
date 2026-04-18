@@ -54,6 +54,13 @@ export interface TradeSetup {
   [k: string]: unknown;
 }
 
+export interface ExpectedMove {
+  low_pct: number;
+  high_pct: number;
+  confidence_pct: number;
+  horizon_hrs: number;
+}
+
 export interface CtEvent {
   id: string;
   _type: 'observation' | 'flag' | 'alert';
@@ -67,6 +74,8 @@ export interface CtEvent {
   alert_trigger: string | null;
   self_assessment: CtSelfAssessment | null;
   trade_setup?: TradeSetup | null;
+  expected_move?: ExpectedMove | null;
+  entry_prices?: Record<string, number | null> | null;
   created_at: string;
 }
 
@@ -223,13 +232,13 @@ export function useRecentEvents(limit = 20) {
     queryFn: async () => {
       const [obs, flags, alerts] = await Promise.all([
         supabase.from('ct_observations').select('id, instruments, direction, glance, observation, self_assessment, created_at').order('created_at', { ascending: false }).limit(limit),
-        supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, horizon_end, glance, full_reasoning, self_assessment, trade_setup, created_at').order('created_at', { ascending: false }).limit(limit),
-        supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, horizon_end, alert_trigger, glance, full_reasoning, self_assessment, trade_setup, created_at').order('created_at', { ascending: false }).limit(limit),
+        supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, horizon_end, glance, full_reasoning, self_assessment, trade_setup, expected_move, entry_prices, created_at').order('created_at', { ascending: false }).limit(limit),
+        supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, horizon_end, alert_trigger, glance, full_reasoning, self_assessment, trade_setup, expected_move, entry_prices, created_at').order('created_at', { ascending: false }).limit(limit),
       ]);
       const items: CtEvent[] = [];
       for (const r of (obs.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'observation', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: null, horizon: null, horizon_end: null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.observation as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: null, created_at: r.created_at as string });
-      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, created_at: r.created_at as string });
-      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, created_at: r.created_at as string });
+      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, expected_move: (r.expected_move as ExpectedMove) ?? null, entry_prices: (r.entry_prices as Record<string, number | null>) ?? null, created_at: r.created_at as string });
+      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, expected_move: (r.expected_move as ExpectedMove) ?? null, entry_prices: (r.entry_prices as Record<string, number | null>) ?? null, created_at: r.created_at as string });
       items.sort((a, b) => b.created_at.localeCompare(a.created_at));
       return items.slice(0, limit);
     },
@@ -260,7 +269,7 @@ export function useActiveTradeSetups(limit = 5) {
       const [flags, alerts] = await Promise.all([
         supabase
           .from('ct_flags')
-          .select('id, instruments, direction, conviction, horizon, horizon_end, glance, full_reasoning, self_assessment, trade_setup, created_at')
+          .select('id, instruments, direction, conviction, horizon, horizon_end, glance, full_reasoning, self_assessment, trade_setup, expected_move, entry_prices, created_at')
           .is('grade_id', null)
           .not('trade_setup', 'is', null)
           .gt('horizon_end', nowIso)
@@ -269,7 +278,7 @@ export function useActiveTradeSetups(limit = 5) {
           .limit(limit * 2),
         supabase
           .from('ct_alerts')
-          .select('id, instruments, direction, conviction, horizon, horizon_end, alert_trigger, glance, full_reasoning, self_assessment, trade_setup, created_at')
+          .select('id, instruments, direction, conviction, horizon, horizon_end, alert_trigger, glance, full_reasoning, self_assessment, trade_setup, expected_move, entry_prices, created_at')
           .is('grade_id', null)
           .not('trade_setup', 'is', null)
           .gt('horizon_end', nowIso)
@@ -277,8 +286,8 @@ export function useActiveTradeSetups(limit = 5) {
           .limit(limit * 2),
       ]);
       const items: CtEvent[] = [];
-      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, created_at: r.created_at as string });
-      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, created_at: r.created_at as string });
+      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'flag', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, expected_move: (r.expected_move as ExpectedMove) ?? null, entry_prices: (r.entry_prices as Record<string, number | null>) ?? null, created_at: r.created_at as string });
+      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) items.push({ _type: 'alert', id: r.id as string, instruments: (r.instruments as string[]) ?? [], direction: (r.direction as string) ?? null, conviction: (r.conviction as number) ?? null, horizon: (r.horizon as string) ?? null, horizon_end: (r.horizon_end as string) ?? null, glance: (r.glance as string[]) ?? null, full_reasoning: (r.full_reasoning as string) ?? null, alert_trigger: (r.alert_trigger as string) ?? null, self_assessment: (r.self_assessment as CtSelfAssessment) ?? null, trade_setup: (r.trade_setup as TradeSetup) ?? null, expected_move: (r.expected_move as ExpectedMove) ?? null, entry_prices: (r.entry_prices as Record<string, number | null>) ?? null, created_at: r.created_at as string });
       items.sort((a, b) => b.created_at.localeCompare(a.created_at));
       // DEDUPE: show only setups that match the latest alert's direction
       // per (instrument set). When Claude flips bullish→bearish on SPY

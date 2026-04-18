@@ -18,6 +18,7 @@ import { ArrowLeft, Wallet, Target, ListOrdered, NotebookPen, RefreshCw } from '
 import { BookEquityCurve } from '@/components/command/BookEquityCurve';
 import { PnLByTheme } from '@/components/command/PnLByTheme';
 import { RiskMetricsPanel } from '@/components/command/RiskMetricsPanel';
+import { TradeAuditPanel } from '@/components/command/TradeAuditPanel';
 import {
   SizingCalculatorButton,
   SizingCalculatorInline,
@@ -385,6 +386,12 @@ function TradesTable() {
                       <tr>
                         <td colSpan={11} className="p-0">
                           <JournalPanel trade={t} />
+                          {/* Second section: forensic audit trail. One row
+                              gives James post-mortem (above) + full forensic
+                              reasoning (below). */}
+                          <div className="bg-muted/5 border-t border-border px-6 py-4">
+                            <TradeAuditPanel tradeId={t.id} />
+                          </div>
                         </td>
                       </tr>
                     )}

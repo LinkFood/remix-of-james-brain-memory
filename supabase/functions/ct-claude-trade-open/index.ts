@@ -24,6 +24,8 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { getCurrentPrice } from '../_shared/ctGrader.ts';
 import { classifyThesis } from '../_shared/thesisClassifier.ts';
+import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
+import { writeTradeAudit, deriveMarketRegime } from '../_shared/tradeAudit.ts';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA', 'GLD', 'USO'] as const;
 
@@ -148,14 +150,18 @@ serve(async (req) => {
   // Gather context
   const since12h = new Date(Date.now() - 12 * 3600_000).toISOString();
   const since72h = new Date(Date.now() - 72 * 3600_000).toISOString();
-  const [news, flow, heartbeat, biases, corrections, recentGrades, priorRecap] = await Promise.all([
+  const [news, flow, heartbeat, biases, corrections, recentGrades, priorRecap, allActiveBiases] = await Promise.all([
     supabase.from('ct_news_analyses').select('instrument, news_headline, impact, significance, claude_take, created_at').gte('created_at', since12h).gte('significance', 3).order('significance', { ascending: false }).limit(10),
     supabase.from('ct_flow_alerts').select('ticker, side, strike, expiry, is_otm, size, premium, executed_at').gte('ingested_at', since12h).order('premium', { ascending: false }).limit(15),
-    supabase.from('ct_heartbeats').select('status_line, current_reads, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    supabase.from('ct_heartbeats').select('id, status_line, current_reads, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabase.from('ct_biases').select('pattern, instruments, severity').eq('active', true).order('severity', { ascending: false }).limit(3),
     supabase.from('ct_self_regrades').select('what_i_got_wrong, how_id_rewrite, regraded_at').gte('regraded_at', since72h).order('regraded_at', { ascending: false }).limit(3),
     supabase.from('ct_grades').select('instrument, claimed_direction, verdict, actual_return_pct, graded_at').gte('graded_at', since72h).order('graded_at', { ascending: false }).limit(10),
     supabase.from('ct_daily_recaps').select('session_date, recap, what_worked, what_didnt, tomorrow_posture, pnl_pct').order('session_date', { ascending: false }).limit(1).maybeSingle(),
+    // Full active bias snapshot for the audit trail — the prompt-facing `biases`
+    // is truncated to top 3; the audit row keeps the whole list so post-mortem
+    // questions like "was there a severity-2 bias Claude ignored?" are answerable.
+    supabase.from('ct_biases').select('id, pattern, instruments, severity').eq('active', true),
   ]);
 
   const userMessage = JSON.stringify({
@@ -268,11 +274,48 @@ serve(async (req) => {
     });
   }
 
-  const { error: insErr } = await supabase.from('ct_trades').insert(rows);
+  const { data: insertedRows, error: insErr } = await supabase
+    .from('ct_trades')
+    .insert(rows)
+    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction');
   if (insErr) {
     return new Response(JSON.stringify({ error: `insert failed: ${insErr.message}` }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  }
+  const inserted = (insertedRows ?? []) as Array<{ id: string; instrument: string; side: string; size_pct: number; size_usd: number; entry_price: number | null; stop_price: number | null; target_price: number | null; thesis: string; conviction: number }>;
+
+  // Audit trail — fire-and-forget, one row per trade inserted. Captures the
+  // exact state Claude saw, the full active bias list, and the raw response
+  // JSON. Never blocks the commit response.
+  const hbRow = heartbeat.data as { id?: string; current_reads?: Record<string, unknown> } | null;
+  const snapshot = hbRow?.current_reads?._snapshot ?? null;
+  const marketRegime = deriveMarketRegime(snapshot);
+  const activeBiasesSnapshot = (allActiveBiases?.data ?? []) as unknown;
+
+  for (const row of inserted) {
+    writeTradeAudit(supabase, {
+      trade_id: row.id,
+      source: 'claude-trade-open',
+      uw_state_snapshot: snapshot,
+      mcp_calls: [], // ct-claude-trade-open doesn't call MCP in this version
+      active_biases: activeBiasesSnapshot,
+      sizing_computed: {
+        book_equity:  startingBalance,
+        size_pct:     row.size_pct,
+        size_usd:     row.size_usd,
+        entry_price:  row.entry_price,
+        stop_price:   row.stop_price,
+        target_price: row.target_price,
+        conviction:   row.conviction,
+      },
+      market_regime: marketRegime,
+      heartbeat_id: hbRow?.id ?? null,
+      triggering_alert_id: null,
+      triggering_flag_id: null,
+      prompt_version: CT_PROMPT_VERSION,
+      raw_claude_response: claudeText,
     });
   }
 
@@ -280,10 +323,10 @@ serve(async (req) => {
     ok: true,
     session_date: sessionDate,
     book_starting: startingBalance,
-    committed: rows.length,
-    total_exposure_pct: rows.reduce((a, r) => a + r.size_pct, 0),
+    committed: inserted.length,
+    total_exposure_pct: inserted.reduce((a, r) => a + (r.size_pct ?? 0), 0),
     posture: parsed.posture ?? null,
-    trades: rows.map(r => ({ instrument: r.instrument, side: r.side, size_pct: r.size_pct, entry: r.entry_price, stop: r.stop_price, target: r.target_price })),
+    trades: inserted.map(r => ({ instrument: r.instrument, side: r.side, size_pct: r.size_pct, entry: r.entry_price, stop: r.stop_price, target: r.target_price })),
   }), {
     status: 200,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },

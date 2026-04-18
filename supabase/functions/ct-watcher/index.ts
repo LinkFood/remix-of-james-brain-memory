@@ -75,6 +75,15 @@ interface ClaudeJson {
   // Evidence axes — v1.1 diversity gate. Expected on FLAG and ALERT.
   // Array of axis letters from {A,B,C,D,E,F}. ALERT requires length >=3.
   evidence_axes?: string[];
+  // Expected magnitude band — v1.3. Required on FLAG and ALERT.
+  // Permissive validation: malformed payloads log a WARN but do NOT block
+  // the write (we don't drop a legit alert because Claude fumbled a number).
+  expected_move?: {
+    low_pct?: number;
+    high_pct?: number;
+    confidence_pct?: number;
+    horizon_hrs?: number;
+  };
   // inline self-assessment (required by prompt on obs/flag/alert; trust-pass to DB)
   self_assessment?: {
     confidence?: number;
@@ -126,6 +135,61 @@ function normalizeEvidenceAxes(raw: unknown): string[] {
     }
   }
   return out;
+}
+
+/**
+ * Validate and normalize Claude's `expected_move` payload.
+ *
+ * PERMISSIVE by policy: we never block a write when this is malformed — we
+ * log a WARN and return null, and the caller inserts the row with
+ * expected_move = null. Rationale: a legitimate ALERT should not die
+ * because Claude forgot or botched one field. Magnitude claims are
+ * opt-in edge data; missing rows just don't contribute to band-accuracy.
+ *
+ * Required shape: { low_pct: number, high_pct: number,
+ *                   confidence_pct: number in [50,90], horizon_hrs: number }
+ *
+ * Returns the normalized object (numbers coerced, confidence_pct clamped
+ * into the allowed window is NOT done — we reject out-of-range instead,
+ * since "80% when you meant 8%" is a data-quality issue worth surfacing).
+ */
+function validateExpectedMove(
+  raw: unknown,
+  ctx: string,
+): { low_pct: number; high_pct: number; confidence_pct: number; horizon_hrs: number } | null {
+  if (raw == null) {
+    console.warn(`[ct-watcher] expected_move missing on ${ctx} — writing null`);
+    return null;
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    console.warn(`[ct-watcher] expected_move on ${ctx} is not an object (got ${typeof raw}) — writing null`);
+    return null;
+  }
+  const obj = raw as Record<string, unknown>;
+  const low = Number(obj.low_pct);
+  const high = Number(obj.high_pct);
+  const conf = Number(obj.confidence_pct);
+  const horiz = Number(obj.horizon_hrs);
+
+  if (!Number.isFinite(low) || !Number.isFinite(high) || !Number.isFinite(conf) || !Number.isFinite(horiz)) {
+    console.warn(`[ct-watcher] expected_move on ${ctx} has non-numeric fields: ${JSON.stringify(obj)} — writing null`);
+    return null;
+  }
+  if (low > high) {
+    console.warn(`[ct-watcher] expected_move on ${ctx} has low_pct > high_pct (${low} > ${high}) — writing null`);
+    return null;
+  }
+  // Confidence rule: reject <50 (model shouldn't claim sub-coinflip on its
+  // own call — that's noise), accept up to 90 (>90 smells overconfident).
+  if (conf < 50 || conf > 90) {
+    console.warn(`[ct-watcher] expected_move on ${ctx} confidence_pct=${conf} outside [50,90] — writing null`);
+    return null;
+  }
+  if (horiz <= 0 || horiz > 720) { // >30d smells wrong for intraday watcher
+    console.warn(`[ct-watcher] expected_move on ${ctx} horizon_hrs=${horiz} out of sane range — writing null`);
+    return null;
+  }
+  return { low_pct: low, high_pct: high, confidence_pct: conf, horizon_hrs: horiz };
 }
 
 function parseClaudeJson(raw: string): ClaudeJson | null {
@@ -349,6 +413,7 @@ async function writeFlag(
     self_assessment: claude.self_assessment ?? null,
     trade_setup: claude.trade_setup ?? null,
     evidence_axes: normalizeEvidenceAxes(claude.evidence_axes),
+    expected_move: validateExpectedMove(claude.expected_move, `flag ${instruments.join(',')} ${claude.direction ?? ''}`),
     prompt_version: CT_PROMPT_VERSION,
     attention_score: deriveWriteTimeAttention({
       state: 'FLAG',
@@ -551,6 +616,7 @@ async function writeAlert(
     trade_setup: claude.trade_setup ?? null,
     alert_trigger: trigger,
     evidence_axes: currAxes,
+    expected_move: validateExpectedMove(claude.expected_move, `alert ${instruments.join(',')} ${direction} ${trigger}`),
     prompt_version: CT_PROMPT_VERSION,
     attention_score: deriveWriteTimeAttention({
       state: 'ALERT',

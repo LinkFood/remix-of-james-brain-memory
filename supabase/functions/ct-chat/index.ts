@@ -21,6 +21,8 @@ import { CT_CHAT_SYSTEM } from '../_shared/chatPromptV1.ts';
 import { logMcpCalls } from '../_shared/mcpLog.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { voyageEmbed } from '../_shared/ctEmbed.ts';
+import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
+import { writeTradeAudit, deriveMarketRegime, shapeMcpCalls } from '../_shared/tradeAudit.ts';
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -328,6 +330,70 @@ serve(async (req) => {
     if (commitMatch) {
       const args = commitMatch[1];
       const out = await handleCommitCommand(supabase, args);
+
+      // Audit trail — fire-and-forget. Manual chat commits are the highest-
+      // trust path (James himself) but also the one that bypasses Claude's
+      // usual reasoning loop. The audit row captures:
+      //   - the chat message that issued the commit (raw_claude_response field
+      //     reused as "raw input text" — there's no Claude JSON here),
+      //   - the last ~10 message chat history (as context),
+      //   - active biases + latest heartbeat snapshot + market regime,
+      //   - MCP calls from this chat session in the preceding 15 min.
+      if (out.trade_id) {
+        (async () => {
+          try {
+            const [hbRes, biasRes, mcpRes] = await Promise.all([
+              supabase.from('ct_heartbeats')
+                .select('id, current_reads, created_at')
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle(),
+              supabase.from('ct_biases')
+                .select('id, pattern, instruments, severity')
+                .eq('active', true),
+              supabase.from('ct_mcp_calls')
+                .select('tool_name, input, result, is_error, created_at')
+                .eq('source', 'chat')
+                .gte('created_at', new Date(Date.now() - 15 * 60_000).toISOString())
+                .order('created_at', { ascending: false })
+                .limit(20),
+            ]);
+            const hb = hbRes.data as { id?: string; current_reads?: Record<string, unknown> } | null;
+            const snapshot = hb?.current_reads?._snapshot ?? null;
+
+            writeTradeAudit(supabase, {
+              trade_id: out.trade_id,
+              source: 'chat',
+              uw_state_snapshot: snapshot,
+              mcp_calls: shapeMcpCalls(mcpRes.data as Array<Record<string, unknown>> | null),
+              active_biases: biasRes.data ?? [],
+              // Chat commits don't compute size_pct via a sizer — the numbers
+              // are parsed straight from the slash-command args. Record them
+              // as-entered for the audit trail.
+              sizing_computed: {
+                source: 'chat-slash-command',
+                raw_args: args,
+                trade_id: out.trade_id,
+              },
+              market_regime: deriveMarketRegime(snapshot),
+              heartbeat_id: hb?.id ?? null,
+              triggering_alert_id: null,
+              triggering_flag_id: null,
+              prompt_version: CT_PROMPT_VERSION,
+              // For chat commits there's no Claude JSON; preserve the full
+              // user message + tail of chat history as the "input" that
+              // produced the trade. Capped at 20KB by writeTradeAudit.
+              raw_claude_response: JSON.stringify({
+                message,
+                tail_history: history.slice(-5),
+              }),
+            });
+          } catch (e) {
+            console.warn('[ct-chat] audit write failed:', e instanceof Error ? e.message : e);
+          }
+        })();
+      }
+
       return new Response(JSON.stringify({ response: out.response, trade_id: out.trade_id, commit: true, duration_ms: 0 }), {
         status: 200,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

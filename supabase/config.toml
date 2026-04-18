@@ -218,3 +218,6 @@ verify_jwt = false
 
 [functions.ct-drawdown-watch]
 verify_jwt = false
+
+[functions.ct-spy-capture]
+verify_jwt = false
