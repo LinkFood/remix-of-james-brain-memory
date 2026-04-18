@@ -65,6 +65,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Trade',
     items: [
       { path: '/', label: 'Station' },
+      { path: '/commit', label: 'Commit' },
       { path: '/book', label: 'Book' },
       { path: '/session', label: 'Timeline' },
     ],

@@ -258,6 +258,9 @@ verify_jwt = false
 [functions.ct-earnings-sync]
 verify_jwt = false
 
+[functions.ct-fundamentals-sync]
+verify_jwt = false
+
 [functions.ct-earnings-pre-event-check]
 verify_jwt = false
 

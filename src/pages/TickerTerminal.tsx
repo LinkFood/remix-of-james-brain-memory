@@ -40,6 +40,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { LinkGexDeep } from '@/components/command/LinkGexDeep';
 import { TickerChartWithAlerts } from '@/components/command/TickerChartWithAlerts';
+import { FundamentalsTile } from '@/components/command/FundamentalsTile';
 import {
   useTickerTerminal,
   type TickerHeartbeatPoint,
@@ -922,6 +923,9 @@ export default function TickerTerminal() {
 
         {/* ─── Row 1: session chart with Claude's alerts overlaid ── */}
         <TickerChartWithAlerts ticker={ticker} />
+
+        {/* ─── Fundamentals tile (weekly-cached, compact) ────────── */}
+        <FundamentalsTile ticker={ticker} />
 
         {/* ─── Row 2: attention history + option chain ───────────── */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">

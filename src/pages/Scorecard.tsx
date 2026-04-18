@@ -24,6 +24,7 @@ import { BandCalibrationPanel } from '@/components/scorecard/BandCalibrationPane
 import { AxisAttributionPanel } from '@/components/scorecard/AxisAttributionPanel';
 import { AlertPostMortemsPanel } from '@/components/scorecard/AlertPostMortemsPanel';
 import { RegimeConditionalPanel } from '@/components/scorecard/RegimeConditionalPanel';
+import { HourlyPerformancePanel } from '@/components/scorecard/HourlyPerformancePanel';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 import { useCalibration } from '@/hooks/useCalibration';
 import { useClaudesSurprises } from '@/hooks/useClaudesSurprises';
@@ -488,6 +489,13 @@ export function Scorecard() {
             overall hit rate. Six dimensions + gamma×session heatmap. Sits between
             Calibration/AxisAttribution and Surprises per wave 19 placement. */}
         <RegimeConditionalPanel />
+
+        {/* Intraday edge — finer than the regime session slices above. 13 ET
+            half-hour buckets from 09:30 to 15:30 start. Heat strip + avg-return
+            bars + alerts-per-hour overlay. Placed directly below regime so the
+            reader can see "session slice says midday weak, hourly shows it's
+            really just 13:00-13:30." */}
+        <HourlyPerformancePanel />
 
         {/* Claude's Surprises — the furthest-from-reality calls. Most instructive grades. */}
         <ClaudesSurprises />
