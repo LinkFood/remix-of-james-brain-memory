@@ -26,10 +26,17 @@ export interface NetPremCumTicker {
   end_time: string | null;
   points: NetPremCumPoint[];
   error?: string;
+  fallback?: boolean;
+  fallback_session_date?: string | null;
 }
 
 export interface NetPremCumResponse {
   tickers: NetPremCumTicker[];
+  /** True when any ticker is served from ct_net_premium_ticks (market closed). */
+  fallback?: boolean;
+  fallback_session_date?: string | null;
+  /** Present when UW empty AND no DB snapshot available. */
+  reason?: string;
 }
 
 const DEFAULT_TICKERS = [

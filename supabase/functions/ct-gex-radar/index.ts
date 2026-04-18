@@ -23,6 +23,7 @@
  */
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getOptionContracts, getSpotGexByStrike } from '../_shared/uwClient.ts';
 import { computeTickerScores, type UWContract, type TickerScores } from '../_shared/attentionScore.ts';
@@ -104,6 +105,75 @@ interface TickerPayload {
   verdicts: ComboVerdict | null;
   scores: ScoreBreakdown | null;
   errors: string[];
+  fallback?: boolean;
+  fallback_session_date?: string | null;
+}
+
+// -----------------------------------------------------------------------------
+// DB fallback — when UW returns empty (weekend / market closed), reconstruct
+// gexMap + spot from the most recent ct_gex_timeseries snapshot for the ticker.
+// Returns null if no snapshot exists. OI data is NOT available in the timeseries
+// table, so OI-derived fields (velocity badges, ΔOPEN, combo verdict) will be
+// zero / null on fallback — UI shows the fallback badge to explain this.
+// -----------------------------------------------------------------------------
+
+async function loadGexFallback(ticker: string): Promise<{
+  gexMap: Map<number, { cGex: number; pGex: number; netGex: number }>;
+  spot: number | null;
+  snapshotAt: string | null;
+} | null> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const serviceKey  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!supabaseUrl || !serviceKey) return null;
+  const supabase = createClient(supabaseUrl, serviceKey);
+
+  // 1) Find the most recent snapshot_at for this ticker.
+  const { data: latest, error: latestErr } = await supabase
+    .from('ct_gex_timeseries')
+    .select('snapshot_at')
+    .eq('ticker', ticker)
+    .order('snapshot_at', { ascending: false })
+    .limit(1);
+  if (latestErr || !latest || latest.length === 0) return null;
+  const snapshotAt = latest[0].snapshot_at as string;
+
+  // 2) Pull the full strike ladder for that snapshot.
+  const { data: rows, error: rowsErr } = await supabase
+    .from('ct_gex_timeseries')
+    .select('strike, call_gex, put_gex, net_gex, underlying_price')
+    .eq('ticker', ticker)
+    .eq('snapshot_at', snapshotAt);
+  if (rowsErr || !rows || rows.length === 0) return null;
+
+  const gexMap = new Map<number, { cGex: number; pGex: number; netGex: number }>();
+  let spot: number | null = null;
+  for (const r of rows as Array<{
+    strike: number | string;
+    call_gex: number | string | null;
+    put_gex: number | string | null;
+    net_gex: number | string | null;
+    underlying_price: number | string | null;
+  }>) {
+    const strike = num(r.strike, NaN);
+    if (!Number.isFinite(strike)) continue;
+    const cGex = num(r.call_gex ?? 0);
+    const pGex = num(r.put_gex ?? 0);
+    const netGex = r.net_gex !== null && r.net_gex !== undefined
+      ? num(r.net_gex)
+      : cGex + pGex;
+    gexMap.set(strike, { cGex, pGex, netGex });
+    if (spot === null && r.underlying_price !== null && r.underlying_price !== undefined) {
+      const s = num(r.underlying_price, NaN);
+      if (Number.isFinite(s) && s > 0) spot = s;
+    }
+  }
+  return { gexMap, spot, snapshotAt };
+}
+
+function sessionDateFromSnapshot(snapshotAt: string | null): string | null {
+  if (!snapshotAt) return null;
+  // YYYY-MM-DD in UTC — good enough for the "which session" badge.
+  return snapshotAt.slice(0, 10);
 }
 
 // -----------------------------------------------------------------------------
@@ -213,7 +283,7 @@ async function buildTickerPayload(ticker: string, windowSize: number): Promise<T
 
   // ---- Dealer gamma per strike from spot-exposures ----
   const gexRows = unwrap<SpotGexStrike>(gexRaw);
-  const gexMap = new Map<number, { cGex: number; pGex: number; netGex: number }>();
+  let gexMap = new Map<number, { cGex: number; pGex: number; netGex: number }>();
   for (const row of gexRows) {
     const strike = num(row.strike, NaN);
     if (!Number.isFinite(strike)) continue;
@@ -226,7 +296,32 @@ async function buildTickerPayload(ticker: string, windowSize: number): Promise<T
   }
 
   // ---- Spot price ----
-  const spot = spotFromGex(gexRaw);
+  let spot = spotFromGex(gexRaw);
+
+  // ---- Weekend / market-closed fallback ----
+  // UW live endpoints return empty on weekends and holidays. When both
+  // spot-exposures AND option-contracts come back empty, reconstruct the
+  // gamma map from the most recent ct_gex_timeseries snapshot so the panel
+  // shows the last session's levels instead of going blank.
+  let fallback = false;
+  let fallbackSessionDate: string | null = null;
+  // Spot is the load-bearing signal: without an underlying price, nothing on
+  // the panel is meaningful. UW returns skeleton strike rows on weekends but
+  // no price, so `spot === null` reliably catches the closed-market case.
+  const uwEmpty = spot === null;
+  if (uwEmpty) {
+    try {
+      const fb = await loadGexFallback(ticker);
+      if (fb && fb.gexMap.size > 0) {
+        gexMap = fb.gexMap;
+        spot = fb.spot;
+        fallback = true;
+        fallbackSessionDate = sessionDateFromSnapshot(fb.snapshotAt);
+      }
+    } catch (e) {
+      errors.push(`fallback: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
 
   // Union of all strikes we have either data source for
   const allStrikes = new Set<number>([...oiMap.keys(), ...gexMap.keys()]);
@@ -410,6 +505,8 @@ async function buildTickerPayload(ticker: string, windowSize: number): Promise<T
     verdicts,
     scores,
     errors,
+    fallback,
+    fallback_session_date: fallbackSessionDate,
   };
 }
 
@@ -442,8 +539,18 @@ serve(async (req) => {
       tickers.map(t => buildTickerPayload(t, windowSize)),
     );
 
+    // Any ticker in fallback → mark the whole response so the UI can show a
+    // single "market closed — showing Friday's close" badge.
+    const anyFallback = tickerPayloads.some(t => t.fallback);
+    const fallbackSessionDate = tickerPayloads.find(t => t.fallback)?.fallback_session_date ?? null;
+
     return new Response(
-      JSON.stringify({ tickers: tickerPayloads, generated_at: new Date().toISOString() }),
+      JSON.stringify({
+        tickers: tickerPayloads,
+        fallback: anyFallback,
+        fallback_session_date: fallbackSessionDate,
+        generated_at: new Date().toISOString(),
+      }),
       { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (e) {

@@ -166,6 +166,11 @@ function MiniChart({ data }: MiniProps) {
 export function NetPremiumCumulative() {
   const { data, isLoading, error } = useNetPremiumCumulative();
   const tickers = data?.tickers ?? [];
+  const isFallback = data?.fallback === true;
+  const fallbackDate = data?.fallback_session_date ?? null;
+  const noData = !isLoading && !error && tickers.length > 0 &&
+    tickers.every(t => t.points.length === 0);
+  const marketClosedNoSnapshot = data?.reason === 'market_closed_no_snapshot' || noData;
 
   return (
     <Card>
@@ -177,6 +182,14 @@ export function NetPremiumCumulative() {
           per-ticker running net premium · UW net-prem-ticks
         </span>
         <SessionBadge />
+        {isFallback && (
+          <span
+            className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-300"
+            title={fallbackDate ? `showing session close for ${fallbackDate}` : 'showing last session close'}
+          >
+            MARKET CLOSED{fallbackDate ? ` · ${fallbackDate}` : ''}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground">
           <span className="flex items-center gap-1">
             <span className="inline-block w-2 h-2 rounded-full" style={{ background: CALL_COLOR }} />
@@ -197,6 +210,10 @@ export function NetPremiumCumulative() {
           </div>
         ) : tickers.length === 0 ? (
           <div className="p-4 text-center text-xs text-muted-foreground">no data</div>
+        ) : marketClosedNoSnapshot ? (
+          <div className="p-6 text-center text-xs text-muted-foreground">
+            market closed — resumes Monday
+          </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
             {tickers.map(t => (

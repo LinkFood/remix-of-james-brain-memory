@@ -15,7 +15,7 @@
  */
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { extractUserIdWithServiceRole } from '../_shared/auth.ts';
+import { extractUserIdWithServiceRole, createServiceClient } from '../_shared/auth.ts';
 import { getNetPremiumTicks } from '../_shared/uwClient.ts';
 
 const DEFAULT_TICKERS = [
@@ -55,6 +55,8 @@ interface TickerResult {
   end_time: string | null;
   points: CumPoint[];
   error?: string;
+  fallback?: boolean;
+  fallback_session_date?: string | null;
 }
 
 function num(v: unknown): number {
@@ -110,11 +112,90 @@ function cumulate(rows: NetPremTickRow[]): CumPoint[] {
   return points;
 }
 
+// -----------------------------------------------------------------------------
+// DB fallback — when UW returns empty (weekend / market closed), read the
+// latest session's cumulative net-premium snapshots from ct_net_premium_ticks.
+// Each row there is already the running cumulative total at that timestamp
+// (per UW's net-prem-ticks endpoint), so we do NOT re-sum — we take the values
+// as-is and dedupe consecutive identical (call, put) pairs for a clean chart.
+// ask/bid-side breakdowns are not stored, so those cumulative fields are 0.
+// -----------------------------------------------------------------------------
+
+async function loadNetPremFallback(ticker: string): Promise<{
+  points: CumPoint[];
+  sessionDate: string | null;
+} | null> {
+  const supabase = createServiceClient();
+  if (!supabase) return null;
+
+  // Find the latest tick_timestamp for this ticker — that's "most recent session."
+  const { data: latest, error: latestErr } = await supabase
+    .from('ct_net_premium_ticks')
+    .select('tick_timestamp')
+    .eq('ticker', ticker)
+    .order('tick_timestamp', { ascending: false })
+    .limit(1);
+  if (latestErr || !latest || latest.length === 0) return null;
+  const latestTs = latest[0].tick_timestamp as string;
+  const sessionDate = latestTs.slice(0, 10); // YYYY-MM-DD in UTC
+
+  // Pull all ticks within that UTC calendar day.
+  const dayStart = `${sessionDate}T00:00:00Z`;
+  const dayEnd   = `${sessionDate}T23:59:59Z`;
+  const { data: rows, error: rowsErr } = await supabase
+    .from('ct_net_premium_ticks')
+    .select('tick_timestamp, net_call_premium, net_put_premium')
+    .eq('ticker', ticker)
+    .gte('tick_timestamp', dayStart)
+    .lte('tick_timestamp', dayEnd)
+    .order('tick_timestamp', { ascending: true });
+  if (rowsErr || !rows || rows.length === 0) return null;
+
+  const points: CumPoint[] = [];
+  let prevCall: number | null = null;
+  let prevPut: number | null = null;
+  for (const r of rows as Array<{
+    tick_timestamp: string;
+    net_call_premium: number | string | null;
+    net_put_premium: number | string | null;
+  }>) {
+    const call = num(r.net_call_premium);
+    const put  = num(r.net_put_premium);
+    // Dedupe consecutive identical values — ingest poll rate is finer than
+    // UW's update cadence, so we see long runs of repeats. One point per
+    // distinct value change keeps the chart clean and accurate.
+    if (call === prevCall && put === prevPut) continue;
+    prevCall = call;
+    prevPut  = put;
+    points.push({
+      t: r.tick_timestamp,
+      cum_call_prem: call,
+      cum_put_prem:  put,
+      cum_net_delta: call - put,
+      cum_call_ask_minus_bid: 0,   // not stored in fallback table
+      cum_put_ask_minus_bid: 0,
+    });
+  }
+  return { points, sessionDate };
+}
+
 async function cumulativeForTicker(ticker: string): Promise<TickerResult> {
   try {
     const raw = await getNetPremiumTicks(ticker);
     const all = unwrapRows(raw);
     if (all.length === 0) {
+      // Weekend / market-closed fallback — hydrate from ct_net_premium_ticks.
+      const fb = await loadNetPremFallback(ticker);
+      if (fb && fb.points.length > 0) {
+        return {
+          ticker,
+          start_time: fb.points[0].t,
+          end_time:   fb.points[fb.points.length - 1].t,
+          points: fb.points,
+          fallback: true,
+          fallback_session_date: fb.sessionDate,
+        };
+      }
       return { ticker, start_time: null, end_time: null, points: [] };
     }
 
@@ -139,6 +220,20 @@ async function cumulativeForTicker(ticker: string): Promise<TickerResult> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.warn(`[ct-net-prem-cumulative] ${ticker} failed:`, msg);
+    // Even on error, try DB fallback before giving up.
+    try {
+      const fb = await loadNetPremFallback(ticker);
+      if (fb && fb.points.length > 0) {
+        return {
+          ticker,
+          start_time: fb.points[0].t,
+          end_time:   fb.points[fb.points.length - 1].t,
+          points: fb.points,
+          fallback: true,
+          fallback_session_date: fb.sessionDate,
+        };
+      }
+    } catch { /* ignore — fall through to error result */ }
     return { ticker, start_time: null, end_time: null, points: [], error: msg };
   }
 }
@@ -172,7 +267,15 @@ serve(async (req) => {
   // sub-5s response times during market hours.
   const results = await Promise.all(tickers.map(t => cumulativeForTicker(t.toUpperCase())));
 
-  return new Response(JSON.stringify({ tickers: results }), {
+  const anyFallback = results.some(r => r.fallback);
+  const allEmpty = results.every(r => r.points.length === 0);
+  const fallbackSessionDate = results.find(r => r.fallback)?.fallback_session_date ?? null;
+
+  const responseBody: Record<string, unknown> = { tickers: results, fallback: anyFallback };
+  if (anyFallback) responseBody.fallback_session_date = fallbackSessionDate;
+  if (allEmpty && !anyFallback) responseBody.reason = 'market_closed_no_snapshot';
+
+  return new Response(JSON.stringify(responseBody), {
     status: 200,
     headers: jsonHeaders,
   });

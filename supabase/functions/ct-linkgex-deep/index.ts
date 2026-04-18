@@ -24,6 +24,7 @@
  */
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getOptionContracts, getSpotGexByStrike } from '../_shared/uwClient.ts';
 import { computeTickerScores, type UWContract } from '../_shared/attentionScore.ts';
@@ -118,6 +119,72 @@ interface Payload {
   };
   generated_at: string;
   errors: string[];
+  fallback?: boolean;
+  fallback_session_date?: string | null;
+}
+
+// -----------------------------------------------------------------------------
+// DB fallback — when UW live endpoints return empty (weekend / market closed),
+// reconstruct the dealer gamma map from the most recent ct_gex_timeseries
+// snapshot. OI velocity (cOIC / pOIC) is NOT in this table, so on fallback the
+// velocity, $FLOW, NOW, and combo fields are zeroed and their verdict strings
+// set to 'n/a'. The UI should show fallback=true badge to explain the gaps.
+// -----------------------------------------------------------------------------
+
+async function loadGexFallback(ticker: string): Promise<{
+  gexMap: Map<number, { cGex: number; pGex: number; netGex: number }>;
+  spot: number | null;
+  snapshotAt: string | null;
+} | null> {
+  const supabaseUrl = Deno.env.get('SUPABASE_URL');
+  const serviceKey  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!supabaseUrl || !serviceKey) return null;
+  const supabase = createClient(supabaseUrl, serviceKey);
+
+  const { data: latest, error: latestErr } = await supabase
+    .from('ct_gex_timeseries')
+    .select('snapshot_at')
+    .eq('ticker', ticker)
+    .order('snapshot_at', { ascending: false })
+    .limit(1);
+  if (latestErr || !latest || latest.length === 0) return null;
+  const snapshotAt = latest[0].snapshot_at as string;
+
+  const { data: rows, error: rowsErr } = await supabase
+    .from('ct_gex_timeseries')
+    .select('strike, call_gex, put_gex, net_gex, underlying_price')
+    .eq('ticker', ticker)
+    .eq('snapshot_at', snapshotAt);
+  if (rowsErr || !rows || rows.length === 0) return null;
+
+  const gexMap = new Map<number, { cGex: number; pGex: number; netGex: number }>();
+  let spot: number | null = null;
+  for (const r of rows as Array<{
+    strike: number | string;
+    call_gex: number | string | null;
+    put_gex: number | string | null;
+    net_gex: number | string | null;
+    underlying_price: number | string | null;
+  }>) {
+    const strike = num(r.strike, NaN);
+    if (!Number.isFinite(strike)) continue;
+    const cGex = num(r.call_gex ?? 0);
+    const pGex = num(r.put_gex ?? 0);
+    const netGex = r.net_gex !== null && r.net_gex !== undefined
+      ? num(r.net_gex)
+      : cGex + pGex;
+    gexMap.set(strike, { cGex, pGex, netGex });
+    if (spot === null && r.underlying_price !== null && r.underlying_price !== undefined) {
+      const s = num(r.underlying_price, NaN);
+      if (Number.isFinite(s) && s > 0) spot = s;
+    }
+  }
+  return { gexMap, spot, snapshotAt };
+}
+
+function sessionDateFromSnapshot(snapshotAt: string | null): string | null {
+  if (!snapshotAt) return null;
+  return snapshotAt.slice(0, 10);
 }
 
 // -----------------------------------------------------------------------------
@@ -225,11 +292,11 @@ async function buildPayload(
   else errors.push(`spot-exposures: ${gexRes.reason instanceof Error ? gexRes.reason.message : String(gexRes.reason)}`);
 
   // Spot from spot-exposures payload (authoritative).
-  const spot = spotFromGex(gexRaw);
+  let spot = spotFromGex(gexRaw);
 
   // Dealer gamma map (authoritative netGex / cGex / pGex per strike).
   const gexRows = unwrap<SpotGexStrike>(gexRaw);
-  const gexMap = new Map<number, { cGex: number; pGex: number; netGex: number }>();
+  let gexMap = new Map<number, { cGex: number; pGex: number; netGex: number }>();
   for (const row of gexRows) {
     const strike = num(row.strike, NaN);
     if (!Number.isFinite(strike)) continue;
@@ -242,6 +309,32 @@ async function buildPayload(
   // Per-strike aggregates from option-contracts. DTE filter applied here —
   // far-dated contracts shouldn't pollute the drill-down view.
   const contracts = unwrap<OptionContract>(contractsRaw);
+
+  // ---- Weekend / market-closed fallback ----
+  // UW live endpoints return empty on weekends and holidays. When both
+  // spot-exposures AND option-contracts come back empty, reconstruct the
+  // gamma map from the most recent ct_gex_timeseries snapshot. OI-derived
+  // columns (velocity, $FLOW, NOW, combo) are NOT recoverable and will be
+  // zero / 'n/a' — the UI uses `fallback: true` to explain the gaps.
+  let fallback = false;
+  let fallbackSessionDate: string | null = null;
+  // Spot is the load-bearing signal: without an underlying price, nothing on
+  // the panel is meaningful. UW returns skeleton rows on weekends but no
+  // price, so `spot === null` reliably catches the closed-market case.
+  const uwEmpty = spot === null;
+  if (uwEmpty) {
+    try {
+      const fb = await loadGexFallback(ticker);
+      if (fb && fb.gexMap.size > 0) {
+        gexMap = fb.gexMap;
+        spot = fb.spot;
+        fallback = true;
+        fallbackSessionDate = sessionDateFromSnapshot(fb.snapshotAt);
+      }
+    } catch (e) {
+      errors.push(`fallback: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
   const perStrike = new Map<number, {
     cOI: number; pOI: number; cOIC: number; pOIC: number;
     dollarAbs: number;  dollarNet: number;
@@ -484,16 +577,29 @@ async function buildPayload(
   const pPct = totalOI > 0 ? (totalPutOI  / totalOI) * 100 : 50;
 
   // ---- Per-dimension verdicts ----
-  const verdicts = {
-    combo: scored.combo,
-    comboLabel: scored.comboLabel,
-    comboColor: scored.comboColor,
-    $flow: dimensionVerdict(scored.totals.totalDollar, scored.totals.maxDollar),
-    gamma: dimensionVerdict(scored.totals.totalGamma, scored.totals.maxGamma),
-    dte:   dimensionVerdict(scored.totals.totalDte,   scored.totals.maxDte),
-    cVel:  velocityVerdict(scored.totals.avgCVel),
-    pVel:  velocityVerdict(scored.totals.avgPVel),
-  };
+  // On fallback (market closed), OI-derived dimensions have no fresh data —
+  // mark them 'n/a' rather than reporting a stale "quiet" reading.
+  const verdicts = fallback
+    ? {
+        combo: scored.combo,
+        comboLabel: 'MARKET CLOSED',
+        comboColor: '#6B7280',
+        $flow: 'n/a',
+        gamma: dimensionVerdict(scored.totals.totalGamma, scored.totals.maxGamma),
+        dte:   'n/a',
+        cVel:  'n/a',
+        pVel:  'n/a',
+      }
+    : {
+        combo: scored.combo,
+        comboLabel: scored.comboLabel,
+        comboColor: scored.comboColor,
+        $flow: dimensionVerdict(scored.totals.totalDollar, scored.totals.maxDollar),
+        gamma: dimensionVerdict(scored.totals.totalGamma, scored.totals.maxGamma),
+        dte:   dimensionVerdict(scored.totals.totalDte,   scored.totals.maxDte),
+        cVel:  velocityVerdict(scored.totals.avgCVel),
+        pVel:  velocityVerdict(scored.totals.avgPVel),
+      };
 
   return {
     ticker,
@@ -525,6 +631,8 @@ async function buildPayload(
     verdicts,
     generated_at: new Date().toISOString(),
     errors,
+    fallback,
+    fallback_session_date: fallbackSessionDate,
   };
 }
 
