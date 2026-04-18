@@ -27,6 +27,7 @@ import { AlertPostMortemsPanel } from '@/components/scorecard/AlertPostMortemsPa
 import { RegimeConditionalPanel } from '@/components/scorecard/RegimeConditionalPanel';
 import { HourlyPerformancePanel } from '@/components/scorecard/HourlyPerformancePanel';
 import { PerThesisPanel } from '@/components/scorecard/PerThesisPanel';
+import { JamesVsClaudeBalances } from '@/components/scorecard/JamesVsClaudeBalances';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
 import { useCalibration } from '@/hooks/useCalibration';
 import { useQueryFreshness } from '@/hooks/useFreshness';
@@ -413,6 +414,12 @@ export function Scorecard() {
             </div>
           </Card>
         </div>
+
+        {/* James vs Claude — compact divergence header (wave D). Sits above the
+            per-thesis breakdown so the first governance surface the reader
+            sees is "who's beating whom this week". Full chart lives under
+            /workspace → Divergence tab. */}
+        <JamesVsClaudeBalances />
 
         {/* Per-Thesis Scorecard — wave 4 of the hypothesis engine. Sits in its
             own row, directly below the hero tiles so it's the first governance

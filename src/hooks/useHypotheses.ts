@@ -112,8 +112,22 @@ const keys = {
   events: (id: string) => ['ct_hypotheses', 'events', id] as const,
   linkedAlerts: (id: string) => ['ct_hypotheses', 'linkedAlerts', id] as const,
   linkedGrades: (id: string) => ['ct_hypotheses', 'linkedGrades', id] as const,
-  needsReview: () => ['ct_hypotheses', 'needsReview'] as const,
+  recentlyProposed: () => ['ct_hypotheses', 'recentlyProposed'] as const,
+  reviews: (id: string) => ['ct_james_reviews', 'hypothesis', id] as const,
 };
+
+// ---------------------------------------------------------------------------
+// James reviews — SANDBOXED table. James sees his thumbs; Claude never does.
+// ---------------------------------------------------------------------------
+export type ReviewThumb = 'up' | 'down' | 'neutral';
+export interface JamesReview {
+  id: string;
+  subject_type: 'trade' | 'trade_idea' | 'hypothesis' | 'rule';
+  subject_id: string;
+  thumb: ReviewThumb;
+  note: string | null;
+  created_at: string;
+}
 
 // ---------------------------------------------------------------------------
 // Queries
@@ -273,61 +287,92 @@ export function useLinkedGrades(hypothesisId: string | null) {
 // ---------------------------------------------------------------------------
 
 /**
- * Approve a newly-proposed hypothesis. Wave-2 semantics: "approve" is a
- * no-op on already-open rows (proposer lands rows in status='open'). For
- * audit traceability we still log an `edited` event with reason 'approved'.
+ * Review a hypothesis — retrospective thumbs-up/down + optional note.
+ *
+ * Wave D semantics: Claude trades autonomously. James's reviews are SANDBOXED
+ * in ct_james_reviews and never read by any Claude-facing function. One row
+ * per click; no optimistic update. We cannot pre-mutate without polluting the
+ * quiet read-back that powers the Workspace "Claude reviews" column.
  */
-export function useApproveHypothesis() {
+export function useReviewHypothesis() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (id: string) => {
-      // Log an event row so the audit trail reflects James's approval.
-      const { error: evErr } = await sb.from('ct_hypothesis_events').insert({
-        hypothesis_id: id,
-        event_type: 'edited',
-        reason: 'approved by james',
-        created_by: 'james',
-      });
-      if (evErr) throw evErr;
-
-      // Touch last_edited_by so the UI can show it moved out of proposal state.
-      const { data, error } = await sb
-        .from('ct_hypotheses')
-        .update({ last_edited_by: 'james', status: 'open' })
-        .eq('id', id)
-        .select()
-        .maybeSingle();
+    mutationFn: async ({
+      hypothesisId, thumb, note,
+    }: { hypothesisId: string; thumb: ReviewThumb; note?: string }) => {
+      const { error } = await sb
+        .from('ct_james_reviews')
+        .insert(
+          {
+            subject_type: 'hypothesis',
+            subject_id: hypothesisId,
+            thumb,
+            note: note ?? null,
+          },
+          { returning: 'minimal' },
+        );
       if (error) throw error;
-      return data as Hypothesis | null;
     },
-    onSuccess: (_d, id) => {
-      qc.invalidateQueries({ queryKey: ['ct_hypotheses'] });
-      qc.invalidateQueries({ queryKey: keys.one(id) });
-      qc.invalidateQueries({ queryKey: keys.events(id) });
+    onSuccess: (_d, vars) => {
+      qc.invalidateQueries({ queryKey: keys.reviews(vars.hypothesisId) });
     },
   });
 }
 
 /**
- * Reject via retire_hypothesis RPC. Status goes to 'retired' (not 'refuted' —
- * refuted is earned through evidence/grades, retired is a hand-wave kill).
+ * Generic ct_james_reviews insert — for trades / trade_ideas / rules too.
+ * Used by the Trade Log tab. Same fire-and-forget semantics.
  */
-export function useRejectHypothesis() {
+export function useReviewSubject() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ id, reason }: { id: string; reason?: string }) => {
-      const { data, error } = await sb.rpc('retire_hypothesis', {
-        p_hypothesis_id: id,
-        p_status: 'retired',
-        p_reason: reason ?? 'rejected by james',
-      });
+    mutationFn: async ({
+      subjectType, subjectId, thumb, note,
+    }: {
+      subjectType: 'trade' | 'trade_idea' | 'hypothesis' | 'rule';
+      subjectId: string;
+      thumb: ReviewThumb;
+      note?: string;
+    }) => {
+      const { error } = await sb
+        .from('ct_james_reviews')
+        .insert(
+          {
+            subject_type: subjectType,
+            subject_id: subjectId,
+            thumb,
+            note: note ?? null,
+          },
+          { returning: 'minimal' },
+        );
       if (error) throw error;
-      return data;
     },
     onSuccess: (_d, vars) => {
-      qc.invalidateQueries({ queryKey: ['ct_hypotheses'] });
-      qc.invalidateQueries({ queryKey: keys.one(vars.id) });
-      qc.invalidateQueries({ queryKey: keys.events(vars.id) });
+      qc.invalidateQueries({ queryKey: ['ct_james_reviews', vars.subjectType, vars.subjectId] });
+      qc.invalidateQueries({ queryKey: ['ct_james_reviews'] });
+    },
+  });
+}
+
+/**
+ * Read James's reviews for a given hypothesis. James-side only — Claude
+ * functions MUST NOT call this hook.
+ */
+export function useHypothesisReviews(hypothesisId: string | null) {
+  return useQuery<JamesReview[]>({
+    queryKey: keys.reviews(hypothesisId ?? ''),
+    enabled: !!hypothesisId,
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error } = await sb
+        .from('ct_james_reviews')
+        .select('*')
+        .eq('subject_type', 'hypothesis')
+        .eq('subject_id', hypothesisId)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return (data ?? []) as JamesReview[];
     },
   });
 }
@@ -384,13 +429,13 @@ export function useEditHypothesis() {
 }
 
 /**
- * "Needs review" bucket: newly-proposed Claude-authored hypotheses that
- * haven't been tested yet AND sit at the default elo 1500. Matches the
- * right-rail shape in Workspace.
+ * "Recently proposed" bucket: newly-birthed Claude hypotheses. No approval
+ * gate anymore — Claude trades on its own authority. This is purely
+ * informational, for James's retrospective review.
  */
-export function useNeedsReviewHypotheses() {
+export function useRecentlyProposedHypotheses() {
   return useQuery<Hypothesis[]>({
-    queryKey: keys.needsReview(),
+    queryKey: keys.recentlyProposed(),
     refetchInterval: 60_000,
     queryFn: async () => {
       const { data, error } = await sb

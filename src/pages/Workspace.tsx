@@ -1,12 +1,16 @@
 /**
- * Workspace — Thesis Engine UI (Wave 2).
+ * Workspace — Thesis Engine UI (Wave D: Claude trades autonomously).
  *
- * Three-column layout:
- *   Left rail  — hypothesis list, filtered by status dropdown, elo DESC
- *   Middle     — selected thesis as a living document (Granola-style coloring)
- *   Right rail — "Needs review" stack: Approve / Reject / Open
+ * Tab bar across the top:
+ *   - Theses          — the 3-col hypothesis view (minus the killed approval queue,
+ *                       plus a "Claude reviews" column for the selected thesis)
+ *   - Trade Log       — Claude's trade ideas + executed trades, filterable
+ *   - Claude's Book   — Claude's paper account: banner, equity curve, open positions
+ *   - Divergence      — James vs Claude equity overlay + side-by-side stats
  *
- * UI label is "Thesis". The DB table is ct_hypotheses; that name is internal.
+ * Wave-D ground rule: Claude is an independent trader. James does not approve.
+ * James reviews AFTER THE FACT. Reviews are sandboxed into ct_james_reviews
+ * and never read by any Claude-facing function.
  *
  * Authorship coloring (Granola-style):
  *   - Pure Claude rows        → text-muted-foreground, subtle muted left border
@@ -24,9 +28,11 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
-  Brain, Check, X, ArrowRight, Bot, Newspaper, Activity, Zap, Radar, Flame,
+  Brain, Check, X, Bot, Newspaper, Activity, Zap, Radar, Flame,
   AlertTriangle, Pencil, Save, RotateCcw, TrendingUp, TrendingDown, Circle,
+  ThumbsUp, ThumbsDown, MessageSquare,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -40,16 +46,19 @@ import {
   useHypothesis,
   useLinkedAlerts,
   useLinkedGrades,
-  useApproveHypothesis,
-  useRejectHypothesis,
   useEditHypothesis,
-  useNeedsReviewHypotheses,
+  useRecentlyProposedHypotheses,
+  useReviewHypothesis,
+  useHypothesisReviews,
   type Hypothesis,
   type HypothesisEvidence,
   type HypothesisStatus,
   type HypothesisHorizon,
   type EvidenceType,
 } from '@/hooks/useHypotheses';
+import { TradeLogTab } from '@/components/workspace/TradeLogTab';
+import { ClaudesBookTab } from '@/components/workspace/ClaudesBookTab';
+import { DivergenceTab } from '@/components/workspace/DivergenceTab';
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -122,22 +131,12 @@ function authorBorderClass(editedByJames: boolean): string {
 }
 
 // ---------------------------------------------------------------------------
-// Page
+// Page — tab bar across the top routes between Theses / Trade Log / Book /
+// Divergence. The Theses tab renders the original 3-col workspace; the other
+// three render dedicated components.
 // ---------------------------------------------------------------------------
 export default function Workspace() {
-  const [statusFilter, setStatusFilter] = useState<HypothesisStatus | 'all'>('open');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-
-  const { data: list = [], isLoading: listLoading } = useHypothesesList(statusFilter);
-  const { data: needsReview = [] } = useNeedsReviewHypotheses();
-
-  // Auto-select the top row when the list first loads or the selected row
-  // disappears (e.g. filter change). Keeps middle pane from flashing empty.
-  const effectiveSelectedId = useMemo(() => {
-    if (!list.length) return null;
-    if (selectedId && list.some((h) => h.id === selectedId)) return selectedId;
-    return list[0].id;
-  }, [list, selectedId]);
+  const [tab, setTab] = useState<'theses' | 'trades' | 'book' | 'divergence'>('theses');
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -146,89 +145,147 @@ export default function Workspace() {
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <Brain className="w-6 h-6 text-primary" />
             <span className="text-primary">Workspace</span>
-            <span className="text-sm text-muted-foreground font-normal">Claude's running theses — read, edit, approve</span>
+            <span className="text-sm text-muted-foreground font-normal">
+              Claude trades autonomously — you observe, review retrospectively
+            </span>
           </h1>
           <p className="text-xs text-muted-foreground mt-1">
-            Every thesis is a live claim with evidence, an invalidation condition, and a confidence trail.
-            Claude proposes, you sign off.
+            Theses are Claude's. Trade ideas and trades are Claude's. Your thumbs are sandboxed into
+            ct_james_reviews and never read back by any Claude-facing function.
           </p>
         </header>
 
-        <div className="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)_260px]">
-          {/* ---------- LEFT RAIL ---------- */}
-          <aside className="space-y-2">
-            <Select
-              value={statusFilter}
-              onValueChange={(v) => setStatusFilter(v as HypothesisStatus | 'all')}
-            >
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {STATUS_OPTIONS.map((o) => (
-                  <SelectItem key={o.value} value={o.value} className="text-xs">
-                    {o.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
+          <TabsList className="grid w-full md:w-auto md:inline-flex grid-cols-4 gap-1">
+            <TabsTrigger value="theses" className="text-xs">Theses</TabsTrigger>
+            <TabsTrigger value="trades" className="text-xs">Trade Log</TabsTrigger>
+            <TabsTrigger value="book" className="text-xs">Claude's Book</TabsTrigger>
+            <TabsTrigger value="divergence" className="text-xs">Divergence</TabsTrigger>
+          </TabsList>
 
-            <div className="space-y-1.5 max-h-[calc(100vh-180px)] overflow-y-auto pr-1">
-              {listLoading ? (
-                <Card className="p-3 text-xs text-muted-foreground">loading...</Card>
-              ) : list.length === 0 ? (
-                <Card className="p-3 text-xs text-muted-foreground leading-relaxed">
-                  No theses yet — the proposer runs Monday 7am ET, or trigger manually via /health.
-                </Card>
-              ) : (
-                list.map((h) => (
-                  <HypothesisListCard
-                    key={h.id}
-                    hypothesis={h}
-                    selected={h.id === effectiveSelectedId}
-                    onClick={() => setSelectedId(h.id)}
-                  />
-                ))
-              )}
-            </div>
-          </aside>
-
-          {/* ---------- MIDDLE ---------- */}
-          <main className="min-w-0">
-            {effectiveSelectedId ? (
-              <ThesisDocument id={effectiveSelectedId} />
-            ) : (
-              <Card className="p-8 text-center text-sm text-muted-foreground">
-                Pick a thesis from the list or approve a proposal on the right.
-              </Card>
-            )}
-          </main>
-
-          {/* ---------- RIGHT RAIL ---------- */}
-          <aside className="space-y-2">
-            <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground px-1">
-              <Bot className="w-3 h-3" />
-              <span>Needs review</span>
-              <span className="ml-auto font-mono">{needsReview.length}</span>
-            </div>
-            <div className="space-y-1.5 max-h-[calc(100vh-180px)] overflow-y-auto pr-1">
-              {needsReview.length === 0 ? (
-                <Card className="p-3 text-xs text-muted-foreground">
-                  Inbox empty — nothing pending review.
-                </Card>
-              ) : (
-                needsReview.map((h) => (
-                  <NeedsReviewCard
-                    key={h.id}
-                    hypothesis={h}
-                    onOpen={() => setSelectedId(h.id)}
-                  />
-                ))
-              )}
-            </div>
-          </aside>
-        </div>
+          <TabsContent value="theses" className="mt-3">
+            <ThesesTab />
+          </TabsContent>
+          <TabsContent value="trades" className="mt-3">
+            <TradeLogTab />
+          </TabsContent>
+          <TabsContent value="book" className="mt-3">
+            <ClaudesBookTab />
+          </TabsContent>
+          <TabsContent value="divergence" className="mt-3">
+            <DivergenceTab />
+          </TabsContent>
+        </Tabs>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Theses tab — original 3-col layout, minus the killed approval queue, plus
+// a "Recently proposed" informational column and a "Claude reviews" column
+// for the selected thesis.
+// ---------------------------------------------------------------------------
+function ThesesTab() {
+  const [statusFilter, setStatusFilter] = useState<HypothesisStatus | 'all'>('open');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const { data: list = [], isLoading: listLoading } = useHypothesesList(statusFilter);
+  const { data: recentlyProposed = [] } = useRecentlyProposedHypotheses();
+
+  const effectiveSelectedId = useMemo(() => {
+    if (!list.length) return null;
+    if (selectedId && list.some((h) => h.id === selectedId)) return selectedId;
+    return list[0].id;
+  }, [list, selectedId]);
+
+  return (
+    <div className="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)_280px]">
+      {/* ---------- LEFT RAIL ---------- */}
+      <aside className="space-y-2">
+        <Select
+          value={statusFilter}
+          onValueChange={(v) => setStatusFilter(v as HypothesisStatus | 'all')}
+        >
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {STATUS_OPTIONS.map((o) => (
+              <SelectItem key={o.value} value={o.value} className="text-xs">
+                {o.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
+        <div className="space-y-1.5 max-h-[calc(100vh-220px)] overflow-y-auto pr-1">
+          {listLoading ? (
+            <Card className="p-3 text-xs text-muted-foreground">loading...</Card>
+          ) : list.length === 0 ? (
+            <Card className="p-3 text-xs text-muted-foreground leading-relaxed">
+              No theses yet — the proposer runs Monday 7am ET, or trigger manually via /health.
+            </Card>
+          ) : (
+            list.map((h) => (
+              <HypothesisListCard
+                key={h.id}
+                hypothesis={h}
+                selected={h.id === effectiveSelectedId}
+                onClick={() => setSelectedId(h.id)}
+              />
+            ))
+          )}
+        </div>
+      </aside>
+
+      {/* ---------- MIDDLE ---------- */}
+      <main className="min-w-0">
+        {effectiveSelectedId ? (
+          <ThesisDocument id={effectiveSelectedId} />
+        ) : (
+          <Card className="p-8 text-center text-sm text-muted-foreground">
+            Pick a thesis from the list.
+          </Card>
+        )}
+      </main>
+
+      {/* ---------- RIGHT RAIL ---------- */}
+      <aside className="space-y-4 max-h-[calc(100vh-220px)] overflow-y-auto pr-1">
+        {/* Recently proposed — informational, no approval buttons. Writes
+            sandboxed thumbs to ct_james_reviews. */}
+        <section className="space-y-2">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground px-1">
+            <Bot className="w-3 h-3" />
+            <span>Recently proposed</span>
+            <span className="ml-auto font-mono">{recentlyProposed.length}</span>
+          </div>
+          <div className="space-y-1.5">
+            {recentlyProposed.length === 0 ? (
+              <Card className="p-3 text-xs text-muted-foreground">
+                No fresh hypotheses. The proposer runs weekly.
+              </Card>
+            ) : (
+              recentlyProposed.map((h) => (
+                <RecentlyProposedCard
+                  key={h.id}
+                  hypothesis={h}
+                  onOpen={() => setSelectedId(h.id)}
+                />
+              ))
+            )}
+          </div>
+        </section>
+
+        {/* Claude reviews — James's recent thumbs on the selected thesis. */}
+        <section className="space-y-2">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground px-1">
+            <MessageSquare className="w-3 h-3" />
+            <span>Your reviews</span>
+          </div>
+          <ClaudeReviewsColumn hypothesisId={effectiveSelectedId} />
+        </section>
+      </aside>
     </div>
   );
 }
@@ -275,39 +332,43 @@ function HypothesisListCard({
 }
 
 // ---------------------------------------------------------------------------
-// RIGHT RAIL — needs-review card
+// RIGHT RAIL — recently-proposed card. No approval gate. Thumbs-up/down +
+// optional note write to ct_james_reviews (subject_type='hypothesis'). Row
+// cannot block Claude.
 // ---------------------------------------------------------------------------
-function NeedsReviewCard({
+function RecentlyProposedCard({
   hypothesis, onOpen,
 }: {
   hypothesis: Hypothesis;
   onOpen: () => void;
 }) {
-  const approve = useApproveHypothesis();
-  const reject = useRejectHypothesis();
-  const busy = approve.isPending || reject.isPending;
+  const review = useReviewHypothesis();
+  const [note, setNote] = useState('');
+  const [noteOpen, setNoteOpen] = useState(false);
 
-  const handleApprove = () => {
-    approve.mutate(hypothesis.id, {
-      onSuccess: () => toast.success('Thesis approved'),
-      onError: (e) => toast.error(`Approve failed: ${(e as Error).message}`),
-    });
-  };
-  const handleReject = () => {
-    reject.mutate(
-      { id: hypothesis.id, reason: 'rejected from review rail' },
+  const submit = (thumb: 'up' | 'down') => {
+    review.mutate(
+      { hypothesisId: hypothesis.id, thumb, note: note.trim() || undefined },
       {
-        onSuccess: () => toast.success('Thesis retired'),
-        onError: (e) => toast.error(`Reject failed: ${(e as Error).message}`),
+        onSuccess: () => {
+          toast.success(`Review saved (${thumb === 'up' ? '+' : '-'})`);
+          setNote('');
+          setNoteOpen(false);
+        },
+        onError: (e) => toast.error(`Review failed: ${(e as Error).message}`),
       },
     );
   };
 
   return (
     <Card className={`p-2.5 space-y-2 ${authorBorderClass(false)}`}>
-      <div className={`text-[11px] leading-snug line-clamp-3 ${authorTextClass(false)}`}>
+      <button
+        type="button"
+        onClick={onOpen}
+        className={`text-left w-full text-[11px] leading-snug line-clamp-3 hover:text-foreground transition-colors ${authorTextClass(false)}`}
+      >
         {hypothesis.claim}
-      </div>
+      </button>
       <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
         <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
           {hypothesis.horizon}
@@ -320,33 +381,94 @@ function NeedsReviewCard({
       <div className="flex items-center gap-1">
         <Button
           size="sm"
-          variant="outline"
-          className="h-6 px-2 text-[10px] flex-1 text-green-400 hover:text-green-300 hover:bg-green-500/10 border-green-500/30"
-          disabled={busy}
-          onClick={handleApprove}
+          variant="ghost"
+          className="h-6 w-6 p-0 text-green-400 hover:text-green-300 hover:bg-green-500/10"
+          disabled={review.isPending}
+          onClick={() => submit('up')}
+          title="Thumbs up"
         >
-          <Check className="w-3 h-3 mr-1" />Approve
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-6 px-2 text-[10px] flex-1 text-red-400 hover:text-red-300 hover:bg-red-500/10 border-red-500/30"
-          disabled={busy}
-          onClick={handleReject}
-        >
-          <X className="w-3 h-3 mr-1" />Reject
+          <ThumbsUp className="w-3 h-3" />
         </Button>
         <Button
           size="sm"
           variant="ghost"
-          className="h-6 px-2 text-[10px]"
-          onClick={onOpen}
-          title="Open in middle pane"
+          className="h-6 w-6 p-0 text-red-400 hover:text-red-300 hover:bg-red-500/10"
+          disabled={review.isPending}
+          onClick={() => submit('down')}
+          title="Thumbs down"
         >
-          <ArrowRight className="w-3 h-3" />
+          <ThumbsDown className="w-3 h-3" />
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground ml-auto"
+          onClick={() => setNoteOpen(v => !v)}
+          title="Add note"
+        >
+          <MessageSquare className="w-3 h-3" />
         </Button>
       </div>
+      {noteOpen && (
+        <Input
+          value={note}
+          onChange={e => setNote(e.target.value)}
+          placeholder="note — sandboxed, Claude never reads"
+          className="text-[10px] h-7"
+        />
+      )}
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Claude reviews column — recent James thumbs on the selected thesis.
+// Reads ct_james_reviews (subject_type='hypothesis'). James-only surface.
+// ---------------------------------------------------------------------------
+function ClaudeReviewsColumn({ hypothesisId }: { hypothesisId: string | null }) {
+  const { data: reviews = [], isLoading } = useHypothesisReviews(hypothesisId);
+  if (!hypothesisId) {
+    return (
+      <Card className="p-3 text-xs text-muted-foreground">
+        Select a thesis to see your reviews on it.
+      </Card>
+    );
+  }
+  if (isLoading) {
+    return <Card className="p-3 text-xs text-muted-foreground">loading reviews...</Card>;
+  }
+  if (reviews.length === 0) {
+    return (
+      <Card className="p-3 text-xs text-muted-foreground">
+        No reviews yet on this thesis. Thumbs from "Recently proposed" land here.
+      </Card>
+    );
+  }
+  return (
+    <div className="space-y-1.5">
+      {reviews.map(r => (
+        <Card key={r.id} className="p-2 text-[11px] space-y-1">
+          <div className="flex items-center gap-1.5">
+            {r.thumb === 'up' && <ThumbsUp className="w-3 h-3 text-green-400" />}
+            {r.thumb === 'down' && <ThumbsDown className="w-3 h-3 text-red-400" />}
+            {r.thumb === 'neutral' && <Circle className="w-3 h-3 text-muted-foreground" />}
+            <span className={
+              r.thumb === 'up' ? 'text-green-400 font-semibold'
+              : r.thumb === 'down' ? 'text-red-400 font-semibold'
+              : 'text-muted-foreground'
+            }>
+              {r.thumb}
+            </span>
+            <span className="ml-auto text-[10px] text-muted-foreground">
+              {timeAgo(r.created_at)}
+            </span>
+          </div>
+          {r.note && (
+            <div className="text-[11px] leading-snug text-foreground/90">{r.note}</div>
+          )}
+        </Card>
+      ))}
+    </div>
   );
 }
 
