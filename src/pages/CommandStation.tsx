@@ -31,14 +31,12 @@ import { ColdOpen } from '@/components/command/ColdOpen';
 import { TradeCards } from '@/components/command/TradeCards';
 import { VoiceToggle } from '@/components/command/VoiceToggle';
 import { McpCallsPanel } from '@/components/command/McpCallsPanel';
-import { UwUsageBadge } from '@/components/command/UwUsageBadge';
 import { Button } from '@/components/ui/button';
 import { triggerCoTrader } from '@/hooks/useCoTraderData';
 import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { RefreshCw, Zap, Clock, Activity } from 'lucide-react';
+import { RefreshCw, Zap } from 'lucide-react';
 import { toast } from 'sonner';
-import { Link } from 'react-router-dom';
 
 export default function CommandStation() {
   const qc = useQueryClient();
@@ -73,14 +71,7 @@ export default function CommandStation() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <UwUsageBadge />
             <VoiceToggle />
-            <Button asChild size="sm" variant="outline">
-              <Link to="/session"><Clock className="w-3.5 h-3.5 mr-1" /> Session →</Link>
-            </Button>
-            <Button asChild size="sm" variant="outline">
-              <Link to="/health"><Activity className="w-3.5 h-3.5 mr-1" /> Health</Link>
-            </Button>
             <Button size="sm" variant="outline" onClick={() => qc.invalidateQueries()}>
               <RefreshCw className="w-3.5 h-3.5 mr-1" /> Refresh
             </Button>

@@ -49,6 +49,7 @@ interface OpenTrade {
   instrument: string;
   side: 'long' | 'short';
   size_pct: number;
+  size_usd: number;
   entry_price: number;
   stop_price: number | null;
   target_price: number | null;
@@ -56,6 +57,8 @@ interface OpenTrade {
   conviction: number;
   opened_at: string | null;
   status: string;
+  contract_type: 'underlying' | 'call' | 'put';
+  entry_premium: number | null;
 }
 
 interface Action {
@@ -116,7 +119,7 @@ serve(async (req) => {
   // Flip any 'planned' trades to 'open' at current (fill) price on the first tick
   const { data: planned } = await supabase
     .from('ct_trades')
-    .select('id, instrument, side, size_pct, entry_price, stop_price, target_price, thesis, conviction, opened_at, status')
+    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium')
     .eq('session_date', sessionDate)
     .eq('status', 'planned');
 
@@ -168,7 +171,7 @@ serve(async (req) => {
   // Pull current open book
   const { data: openTrades } = await supabase
     .from('ct_trades')
-    .select('id, instrument, side, size_pct, entry_price, stop_price, target_price, thesis, conviction, opened_at, status')
+    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium')
     .eq('session_date', sessionDate)
     .eq('status', 'open');
 
@@ -179,19 +182,42 @@ serve(async (req) => {
     });
   }
 
-  // Fetch current prices + deterministic stop/target hits
+  // Fetch current prices + deterministic stop/target hits + live P&L refresh.
+  //
+  // live_pnl_pct / live_pnl_usd surface unrealized P&L per trade in the UI.
+  // Options P&L is DEFERRED to v2 — computing call/put mark-to-market from
+  // first principles is wrong (needs IV, rate, time), and an option-chain
+  // lookup per trade would blow our UW budget. For now: underlying trades
+  // get real numbers, options rows get null (frontend tooltips explain).
+  //
+  // The checkHardStops call may close a trade — in which case we skip the
+  // live-P&L write (realized_pnl_pct already populated by the close).
   const priceMap: Record<string, number> = {};
+  const nowTs = new Date().toISOString();
   for (const t of open) {
     const p = await getCurrentPrice(t.instrument);
     if (p == null) continue;
     priceMap[t.id] = p;
-    await checkHardStops(supabase, t, p);
+    const closed = await checkHardStops(supabase, t, p);
+    if (closed) continue;
+
+    // Underlying only. Options deferred — flagged null so UI can display
+    // a "(deferred)" tooltip instead of a misleading zero.
+    if (t.contract_type !== 'underlying') continue;
+
+    const livePct = unrealizedPct(t.side, t.entry_price, p);
+    const liveUsd = (livePct / 100) * (t.size_usd ?? 0);
+    await supabase.from('ct_trades').update({
+      live_pnl_pct: +livePct.toFixed(3),
+      live_pnl_usd: +liveUsd.toFixed(2),
+      live_pnl_updated_at: nowTs,
+    }).eq('id', t.id);
   }
 
   // Re-pull open after stops/targets
   const { data: stillOpen } = await supabase
     .from('ct_trades')
-    .select('id, instrument, side, size_pct, entry_price, stop_price, target_price, thesis, conviction, opened_at, status')
+    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium')
     .eq('session_date', sessionDate)
     .eq('status', 'open');
 

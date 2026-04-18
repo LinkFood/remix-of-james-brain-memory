@@ -1,25 +1,40 @@
 /**
- * TopNav — The Deck. Always visible, full width.
+ * TopNav — Fixed top navigation bar for all authenticated routes.
  *
- * Left: navigation links (Dashboard, Code, Calendar, Search, Activity, Brain).
- * Right: token counter, clock + overdue badge, kill switch.
+ * Layout:
+ *   Left   : "Co-Trader" logo → /
+ *   Center : Trade / Review / System / More ▾ dropdowns (NavLink-based)
+ *   Right  : BookSparkline · UwUsageBadge · cost popover · health alerts ·
+ *            heartbeat · clock · kill switch · settings
+ *
+ * Mobile  : Dropdowns collapse to a hamburger → full-height Sheet menu.
+ *
+ * Active-state: uses react-router NavLink. Any path under a dropdown's
+ * group lights up the trigger.
  */
 
-import { useLocation, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
-  LayoutDashboard, Code2, CalendarDays, Search, Activity, Users, Brain, Timer,
-  Clock, Zap, DollarSign, OctagonX, Settings, Heart, FileBarChart, MessageSquare,
-  AlertTriangle, X, LineChart, Trophy,
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
+import {
+  Clock, Zap, DollarSign, OctagonX, Settings, Heart, AlertTriangle, X,
+  ChevronDown, Menu,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useClock } from '@/hooks/useClock';
 import { useKillSwitch } from '@/hooks/useKillSwitch';
 import { useTokenCounter } from '@/hooks/useTokenCounter';
 import { BookSparkline } from '@/components/BookSparkline';
 import { useTickerData } from '@/hooks/useTickerData';
+import { UwUsageBadge } from '@/components/command/UwUsageBadge';
 
 const AGENT_LABELS: Record<string, string> = {
   'jac-dispatcher': 'JAC',
@@ -29,25 +44,55 @@ const AGENT_LABELS: Record<string, string> = {
   'jac-code-agent': 'Code',
 };
 
-interface NavItem {
+interface NavLinkItem {
   path: string;
   label: string;
-  icon: React.ReactNode;
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { path: '/', label: 'Co-Trader', icon: <LineChart className="w-4 h-4" /> },
-  { path: '/scorecard', label: 'Scorecard', icon: <Trophy className="w-4 h-4" /> },
-  { path: '/jac', label: 'JAC', icon: <MessageSquare className="w-4 h-4" /> },
-  { path: '/dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
-  { path: '/code', label: 'Code', icon: <Code2 className="w-4 h-4" /> },
-  { path: '/calendar', label: 'Calendar', icon: <CalendarDays className="w-4 h-4" /> },
-  { path: '/search', label: 'Search', icon: <Search className="w-4 h-4" /> },
-  { path: '/activity', label: 'Activity', icon: <Activity className="w-4 h-4" /> },
-  { path: '/agents', label: 'Agents', icon: <Users className="w-4 h-4" /> },
-  { path: '/brain', label: 'Brain', icon: <Brain className="w-4 h-4" /> },
-  { path: '/crons', label: 'Crons', icon: <Timer className="w-4 h-4" /> },
-  { path: '/reports', label: 'Reports', icon: <FileBarChart className="w-4 h-4" /> },
+interface NavGroup {
+  label: string;
+  items: NavLinkItem[];
+}
+
+// Groups match the four dropdowns specified in the plan. Only routes actually
+// registered in App.tsx are listed here.
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: 'Trade',
+    items: [
+      { path: '/', label: 'Station' },
+      { path: '/book', label: 'Book' },
+      { path: '/session', label: 'Timeline' },
+    ],
+  },
+  {
+    label: 'Review',
+    items: [
+      { path: '/scorecard', label: 'Scorecard' },
+      { path: '/replay', label: 'Replay' },
+    ],
+  },
+  {
+    label: 'System',
+    items: [
+      { path: '/health', label: 'Health' },
+      { path: '/crons', label: 'Crons' },
+      { path: '/agents', label: 'Agents' },
+    ],
+  },
+  {
+    label: 'More',
+    items: [
+      { path: '/dashboard', label: 'Dashboard' },
+      { path: '/jac', label: 'JAC' },
+      { path: '/calendar', label: 'Calendar' },
+      { path: '/brain', label: 'Brain' },
+      { path: '/activity', label: 'Activity' },
+      { path: '/reports', label: 'Reports' },
+      { path: '/search', label: 'Search' },
+      { path: '/code', label: 'Code' },
+    ],
+  },
 ];
 
 interface TopNavProps {
@@ -66,6 +111,10 @@ function timeAgo(dateStr: string): string {
   return `${Math.floor(diff / 3_600_000)}h ago`;
 }
 
+function isGroupActive(group: NavGroup, pathname: string): boolean {
+  return group.items.some((i) => i.path === pathname);
+}
+
 export function TopNav({ userId }: TopNavProps) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -76,23 +125,9 @@ export function TopNav({ userId }: TopNavProps) {
 
   const [lastHeartbeat, setLastHeartbeat] = useState<string | null>(null);
   const [healthAlerts, setHealthAlerts] = useState<{ id: string; title: string; body: string }[]>([]);
-  const [gradeCount, setGradeCount] = useState<number | null>(null);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
-  // ct_grades count — used to gate the Scorecard nav item. Zero = pending.
-  useEffect(() => {
-    let cancelled = false;
-    const fetchCount = async () => {
-      const { count } = await supabase
-        .from('ct_grades')
-        .select('subject_id', { count: 'estimated', head: true });
-      if (!cancelled) setGradeCount(count ?? 0);
-    };
-    fetchCount();
-    const interval = setInterval(fetchCount, 5 * 60_000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, []);
-
-  // Check for last heartbeat insight
+  // Last heartbeat insight
   useEffect(() => {
     if (!userId) return;
     supabase
@@ -109,7 +144,7 @@ export function TopNav({ userId }: TopNavProps) {
       });
   }, [userId]);
 
-  // Check for active system_health alerts
+  // Active system_health alerts
   useEffect(() => {
     if (!userId) return;
     const fetchAlerts = () => {
@@ -127,12 +162,12 @@ export function TopNav({ userId }: TopNavProps) {
         });
     };
     fetchAlerts();
-    const interval = setInterval(fetchAlerts, 60_000); // refresh every minute
+    const interval = setInterval(fetchAlerts, 60_000);
     return () => clearInterval(interval);
   }, [userId]);
 
   const dismissHealthAlert = async (id: string) => {
-    setHealthAlerts(prev => prev.filter(a => a.id !== id));
+    setHealthAlerts((prev) => prev.filter((a) => a.id !== id));
     await supabase
       .from('brain_insights')
       .update({ dismissed: true })
@@ -140,37 +175,105 @@ export function TopNav({ userId }: TopNavProps) {
       .eq('user_id', userId);
   };
 
+  // Shared classes for dropdown items — NavLink active state.
+  const itemClass = ({ isActive }: { isActive: boolean }) =>
+    `block w-full px-2 py-1.5 rounded-md text-xs transition-colors ${
+      isActive
+        ? 'bg-primary/10 text-primary'
+        : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+    }`;
+
   return (
-    <nav className="h-10 border-b border-border bg-card/80 backdrop-blur-sm flex items-center px-3 shrink-0 z-50">
-      {/* Left — Nav links */}
-      <div className="flex items-center gap-0.5">
-        {NAV_ITEMS.map((item) => {
-          const isActive = location.pathname === item.path;
-          const isScorecard = item.path === '/scorecard';
-          // Scorecard: if we've loaded the count and it's zero, dim the link and
-          // append "(pending first grade)". On first render (count=null) show normally.
-          const noGrades = isScorecard && gradeCount === 0;
-          return (
+    <nav className="h-11 border-b border-border bg-card/80 backdrop-blur-sm flex items-center px-3 shrink-0 z-50">
+      {/* Mobile: hamburger. Shown < md. */}
+      <div className="md:hidden">
+        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+          <SheetTrigger asChild>
             <button
-              key={item.path}
-              onClick={() => navigate(item.path)}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
-                isActive
-                  ? 'bg-primary/10 text-primary'
-                  : noGrades
-                  ? 'text-muted-foreground/50 hover:text-muted-foreground hover:bg-muted/30'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-              }`}
-              title={noGrades ? 'Scorecard — pending first grade' : undefined}
+              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              aria-label="Open navigation menu"
             >
-              {item.icon}
-              <span className="hidden lg:inline">{item.label}</span>
-              {noGrades && (
-                <span className="hidden xl:inline text-[9px] uppercase tracking-wider opacity-70">
-                  (pending)
-                </span>
-              )}
+              <Menu className="w-4 h-4" />
             </button>
+          </SheetTrigger>
+          <SheetContent side="left" className="w-72 p-0 bg-card">
+            <div className="px-4 py-3 border-b border-border">
+              <NavLink
+                to="/"
+                onClick={() => setMobileOpen(false)}
+                className="text-sm font-semibold text-primary"
+              >
+                Co-Trader
+              </NavLink>
+            </div>
+            <div className="p-3 space-y-4 overflow-y-auto">
+              {NAV_GROUPS.map((group) => (
+                <div key={group.label}>
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground/70 px-2 mb-1">
+                    {group.label}
+                  </div>
+                  <div className="space-y-0.5">
+                    {group.items.map((item) => (
+                      <NavLink
+                        key={item.path}
+                        to={item.path}
+                        end={item.path === '/'}
+                        onClick={() => setMobileOpen(false)}
+                        className={itemClass}
+                      >
+                        {item.label}
+                      </NavLink>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </SheetContent>
+        </Sheet>
+      </div>
+
+      {/* Left — Logo. Links to /. */}
+      <NavLink
+        to="/"
+        end
+        className="hidden md:flex items-center gap-2 mr-4 text-sm font-semibold text-primary hover:text-primary/80 transition-colors"
+      >
+        Co-Trader
+      </NavLink>
+
+      {/* Center — Dropdown groups. Hidden on mobile. */}
+      <div className="hidden md:flex items-center gap-0.5">
+        {NAV_GROUPS.map((group) => {
+          const active = isGroupActive(group, location.pathname);
+          const triggerLabel = group.label === 'More' ? 'More' : group.label;
+          return (
+            <DropdownMenu key={group.label}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className={`flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+                    active
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                  }`}
+                >
+                  <span>{triggerLabel}</span>
+                  <ChevronDown className="w-3 h-3 opacity-60" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-40 p-1">
+                {group.items.map((item) => (
+                  <DropdownMenuItem key={item.path} asChild className="p-0 focus:bg-transparent">
+                    <NavLink
+                      to={item.path}
+                      end={item.path === '/'}
+                      className={itemClass}
+                    >
+                      {item.label}
+                    </NavLink>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           );
         })}
       </div>
@@ -179,6 +282,9 @@ export function TopNav({ userId }: TopNavProps) {
       <div className="ml-auto flex items-center gap-2">
         {/* Claude's book — sparkline of today's closed-trade P&L */}
         <BookSparkline />
+
+        {/* Unusual Whales usage — moved from CommandStation header */}
+        <UwUsageBadge />
 
         {/* Token counter */}
         <Popover>
@@ -231,7 +337,7 @@ export function TopNav({ userId }: TopNavProps) {
                 <span className="text-xs font-medium text-red-400">System Health</span>
               </div>
               <div className="divide-y divide-white/5 max-h-64 overflow-y-auto">
-                {healthAlerts.map(alert => (
+                {healthAlerts.map((alert) => (
                   <div key={alert.id} className="px-3 py-2.5">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -255,13 +361,16 @@ export function TopNav({ userId }: TopNavProps) {
 
         {/* Heartbeat indicator */}
         {lastHeartbeat && (
-          <div className="flex items-center gap-1 px-1.5 py-1 text-xs text-muted-foreground" title={`Last heartbeat: ${new Date(lastHeartbeat).toLocaleTimeString()}`}>
+          <div
+            className="flex items-center gap-1 px-1.5 py-1 text-xs text-muted-foreground"
+            title={`Last heartbeat: ${new Date(lastHeartbeat).toLocaleTimeString()}`}
+          >
             <Heart className="w-3 h-3 text-pink-400 animate-pulse" />
           </div>
         )}
 
         {/* Clock + overdue badge */}
-        <div className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground">
+        <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground">
           <Clock className="w-3 h-3" />
           <span className="font-mono">{time}</span>
           {reminders.overdueCount > 0 && (
@@ -271,7 +380,7 @@ export function TopNav({ userId }: TopNavProps) {
           )}
         </div>
 
-        {/* Kill Switch */}
+        {/* Kill switch */}
         <Button
           variant="ghost"
           size="sm"
@@ -292,7 +401,7 @@ export function TopNav({ userId }: TopNavProps) {
           ) : (
             <>
               <Zap className="w-3.5 h-3.5" />
-              <span>0 agents</span>
+              <span className="hidden sm:inline">0 agents</span>
             </>
           )}
         </Button>
@@ -305,6 +414,7 @@ export function TopNav({ userId }: TopNavProps) {
               ? 'bg-primary/10 text-primary'
               : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
           }`}
+          aria-label="Settings"
         >
           <Settings className="w-3.5 h-3.5" />
         </button>

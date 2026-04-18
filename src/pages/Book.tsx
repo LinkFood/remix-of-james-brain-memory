@@ -215,7 +215,32 @@ function TradesTable() {
             <tbody className="divide-y divide-border">
               {rows.map(t => {
                 const sideColor = t.side === 'long' ? GREEN : RED;
-                const pnlCol = pnlColor(t.realized_pnl_usd);
+                // For open trades, show live_pnl_* (set by ct-book-manager
+                // every 15min for underlying). For closed, show realized.
+                // Options open trades stay null and render "—" with tooltip.
+                const isOpen = t.status === 'open';
+                const isOptionOpen = isOpen && t.contract_type && t.contract_type !== 'underlying';
+                const pnlPct = isOpen ? t.live_pnl_pct ?? null : t.realized_pnl_pct;
+                const pnlUsd = isOpen ? t.live_pnl_usd ?? null : t.realized_pnl_usd;
+                const pnlCol = pnlColor(pnlUsd ?? pnlPct);
+
+                // Stale indicator: book-manager runs every 15min, so >20min
+                // without an update means the cron missed, market closed,
+                // or the function errored. Fade + "(stale)" suffix.
+                const updatedAt = t.live_pnl_updated_at ? new Date(t.live_pnl_updated_at).getTime() : null;
+                const isStale =
+                  isOpen &&
+                  !isOptionOpen &&
+                  updatedAt != null &&
+                  Date.now() - updatedAt > 20 * 60_000;
+                const staleTitle = isStale
+                  ? `live P&L last updated ${new Date(updatedAt!).toLocaleTimeString()} — book-manager hasn't refreshed in >20min`
+                  : undefined;
+                const optionTitle = isOptionOpen
+                  ? 'options live P&L deferred — needs option-chain mark-to-market (v2)'
+                  : undefined;
+                const cellOpacity = isStale ? 0.45 : 1;
+
                 return (
                   <tr key={t.id} className="hover:bg-muted/10">
                     <td className="px-3 py-1.5 text-left text-muted-foreground">{t.session_date}</td>
@@ -225,8 +250,21 @@ function TradesTable() {
                     <td className="px-3 py-1.5 text-right">{fmtUsd(t.size_usd)}</td>
                     <td className="px-3 py-1.5 text-right">{t.entry_price?.toFixed(2) ?? '—'}</td>
                     <td className="px-3 py-1.5 text-right">{t.close_price?.toFixed(2) ?? '—'}</td>
-                    <td className="px-3 py-1.5 text-right" style={{ color: pnlCol }}>{fmtPct(t.realized_pnl_pct)}</td>
-                    <td className="px-3 py-1.5 text-right" style={{ color: pnlCol }}>{fmtUsd(t.realized_pnl_usd, true)}</td>
+                    <td
+                      className="px-3 py-1.5 text-right"
+                      style={{ color: pnlCol, opacity: cellOpacity }}
+                      title={optionTitle ?? staleTitle}
+                    >
+                      {fmtPct(pnlPct)}
+                      {isStale && <span className="ml-1 text-[9px] text-muted-foreground">(stale)</span>}
+                    </td>
+                    <td
+                      className="px-3 py-1.5 text-right"
+                      style={{ color: pnlCol, opacity: cellOpacity }}
+                      title={optionTitle ?? staleTitle}
+                    >
+                      {fmtUsd(pnlUsd, true)}
+                    </td>
                     <td className="px-3 py-1.5 text-center">
                       <Badge variant="outline" className="text-[9px] px-1 py-0">
                         {t.status === 'closed' ? (t.close_reason ?? 'closed') : t.status}

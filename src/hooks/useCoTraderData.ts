@@ -1114,6 +1114,14 @@ export interface CtTradeRow {
   close_reason: string | null;
   realized_pnl_pct: number | null;
   realized_pnl_usd: number | null;
+  // Live unrealized P&L — written by ct-book-manager every 15min during RTH
+  // for underlying trades. Options rows stay null (see migration
+  // 20260419000010 — options P&L deferred). live_pnl_updated_at lets the UI
+  // show a "(stale)" indicator when the book manager hasn't run in >20min.
+  live_pnl_pct?: number | null;
+  live_pnl_usd?: number | null;
+  live_pnl_updated_at?: string | null;
+  contract_type?: 'underlying' | 'call' | 'put';
 }
 
 export function useTodayBook() {

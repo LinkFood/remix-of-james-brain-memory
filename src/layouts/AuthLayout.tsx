@@ -10,7 +10,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useJacAgent } from '@/hooks/useJacAgent';
 import { JacContext } from '@/contexts/JacContext';
-import { TopNav } from '@/components/TopNav';
+import { TopNav } from '@/components/nav/TopNav';
 import { JacSidebar } from '@/components/JacSidebar';
 import { useSidebarState } from '@/hooks/useSidebarState';
 
