@@ -1282,3 +1282,199 @@ export function useIvRank(ticker: string, days = 30) {
     },
   });
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// useTickerDensity — single batched query that feeds TickerGrid card density.
+//
+// Powers (per ticker): attention meter, cluster badges (sweeps / DP / γflip),
+// Claude's last note (latest obs/flag glance within 30 min). No UW calls, no
+// per-card fan-out — one round trip across four tables then indexed by ticker.
+// Grabs a generous 30-min / today's-session window so all cards can read from
+// the shared result.
+// ────────────────────────────────────────────────────────────────────────────
+
+export interface TickerDensityEntry {
+  /** Max attention score (0–100) observed for this ticker in the 30-min window. */
+  maxAttention: number;
+  /** Most recent obs/flag/alert for this ticker w/ glance + kind. */
+  lastNote: {
+    kind: 'observation' | 'flag' | 'alert';
+    id: string;
+    text: string;
+    created_at: string;
+    attention_score: number | null;
+  } | null;
+  /** Today's sweep cluster summary. */
+  sweeps: { count: number; premium: number; lastSide: 'call' | 'put' | 'mixed' | null };
+  /** Today's DP cluster summary. */
+  dps: { count: number; notional: number };
+  /** Any regime inversion for this ticker today? */
+  regimeFlipped: boolean;
+}
+
+export type TickerDensityMap = Record<string, TickerDensityEntry>;
+
+function emptyDensity(): TickerDensityEntry {
+  return {
+    maxAttention: 0,
+    lastNote: null,
+    sweeps: { count: 0, premium: 0, lastSide: null },
+    dps: { count: 0, notional: 0 },
+    regimeFlipped: false,
+  };
+}
+
+/**
+ * One query, mapped by ticker. Safe to memo — the map shape is stable and
+ * only the rows inside refresh on the 30 s interval.
+ */
+export function useTickerDensity() {
+  return useQuery<TickerDensityMap>({
+    queryKey: ['ct_ticker_density'],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const now = Date.now();
+      const since30 = new Date(now - 30 * 60_000).toISOString();
+      const todayIso = new Date(now).toISOString().slice(0, 10);
+      const todayStart = new Date(todayIso + 'T00:00:00.000Z').toISOString();
+
+      const [obs, flags, alerts, sweeps, dps, regimes] = await Promise.all([
+        supabase
+          .from('ct_observations')
+          .select('id, instruments, glance, observation, attention_score, created_at')
+          .gte('created_at', since30)
+          .order('created_at', { ascending: false })
+          .limit(30),
+        supabase
+          .from('ct_flags')
+          .select('id, instruments, glance, full_reasoning, attention_score, created_at')
+          .gte('created_at', since30)
+          .order('created_at', { ascending: false })
+          .limit(30),
+        supabase
+          .from('ct_alerts')
+          .select('id, instruments, glance, full_reasoning, attention_score, created_at')
+          .gte('created_at', since30)
+          .order('created_at', { ascending: false })
+          .limit(30),
+        supabase
+          .from('ct_sweep_clusters')
+          .select('ticker, sweep_count, total_premium, dominant_side, created_at')
+          .gte('created_at', todayStart)
+          .order('created_at', { ascending: false })
+          .limit(200),
+        supabase
+          .from('ct_dp_clusters')
+          .select('ticker, print_count, total_notional, created_at, session_date')
+          .eq('session_date', todayIso)
+          .limit(200),
+        supabase
+          .from('ct_regime_inversions')
+          .select('ticker, session_date')
+          .eq('session_date', todayIso)
+          .limit(50),
+      ]);
+
+      const map: TickerDensityMap = {};
+      const ensure = (t: string) => (map[t] ??= emptyDensity());
+
+      // ── attention + lastNote: merge obs/flags/alerts ──
+      type NoteRow = {
+        kind: 'observation' | 'flag' | 'alert';
+        id: string;
+        instruments: string[] | null;
+        text: string;
+        attention_score: number | null;
+        created_at: string;
+      };
+      const notes: NoteRow[] = [];
+      for (const r of (obs.data ?? []) as Array<Record<string, unknown>>) {
+        const glance = (r.glance as string[] | null) ?? null;
+        const txt = glance?.[0]?.trim() || ((r.observation as string | null) ?? '').slice(0, 140);
+        notes.push({
+          kind: 'observation',
+          id: r.id as string,
+          instruments: (r.instruments as string[] | null) ?? null,
+          text: txt,
+          attention_score: (r.attention_score as number | null) ?? null,
+          created_at: r.created_at as string,
+        });
+      }
+      for (const r of (flags.data ?? []) as Array<Record<string, unknown>>) {
+        const glance = (r.glance as string[] | null) ?? null;
+        const txt = glance?.[0]?.trim() || ((r.full_reasoning as string | null) ?? '').slice(0, 140);
+        notes.push({
+          kind: 'flag',
+          id: r.id as string,
+          instruments: (r.instruments as string[] | null) ?? null,
+          text: txt,
+          attention_score: (r.attention_score as number | null) ?? null,
+          created_at: r.created_at as string,
+        });
+      }
+      for (const r of (alerts.data ?? []) as Array<Record<string, unknown>>) {
+        const glance = (r.glance as string[] | null) ?? null;
+        const txt = glance?.[0]?.trim() || ((r.full_reasoning as string | null) ?? '').slice(0, 140);
+        notes.push({
+          kind: 'alert',
+          id: r.id as string,
+          instruments: (r.instruments as string[] | null) ?? null,
+          text: txt,
+          attention_score: (r.attention_score as number | null) ?? null,
+          created_at: r.created_at as string,
+        });
+      }
+      // Sort newest first so the first hit per ticker is the "last note".
+      notes.sort((a, b) => b.created_at.localeCompare(a.created_at));
+      for (const n of notes) {
+        for (const t of n.instruments ?? []) {
+          const T = (t ?? '').toUpperCase();
+          if (!T) continue;
+          const bucket = ensure(T);
+          if (n.attention_score != null && n.attention_score > bucket.maxAttention) {
+            bucket.maxAttention = n.attention_score;
+          }
+          if (!bucket.lastNote) {
+            bucket.lastNote = {
+              kind: n.kind,
+              id: n.id,
+              text: n.text,
+              created_at: n.created_at,
+              attention_score: n.attention_score,
+            };
+          }
+        }
+      }
+
+      // ── sweep clusters today ──
+      for (const r of (sweeps.data ?? []) as Array<Record<string, unknown>>) {
+        const T = ((r.ticker as string) ?? '').toUpperCase();
+        if (!T) continue;
+        const bucket = ensure(T);
+        bucket.sweeps.count += (r.sweep_count as number) ?? 0;
+        bucket.sweeps.premium += (r.total_premium as number) ?? 0;
+        if (!bucket.sweeps.lastSide) {
+          bucket.sweeps.lastSide = (r.dominant_side as 'call' | 'put' | 'mixed' | null) ?? null;
+        }
+      }
+
+      // ── DP clusters today ──
+      for (const r of (dps.data ?? []) as Array<Record<string, unknown>>) {
+        const T = ((r.ticker as string) ?? '').toUpperCase();
+        if (!T) continue;
+        const bucket = ensure(T);
+        bucket.dps.count += (r.print_count as number) ?? 0;
+        bucket.dps.notional += (r.total_notional as number) ?? 0;
+      }
+
+      // ── regime inversions today ──
+      for (const r of (regimes.data ?? []) as Array<Record<string, unknown>>) {
+        const T = ((r.ticker as string) ?? '').toUpperCase();
+        if (!T) continue;
+        ensure(T).regimeFlipped = true;
+      }
+
+      return map;
+    },
+  });
+}

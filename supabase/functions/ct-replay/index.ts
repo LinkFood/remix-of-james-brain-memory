@@ -32,7 +32,7 @@
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
-import { extractUserIdWithServiceRole } from '../_shared/auth.ts';
+import { extractUserIdWithServiceRole, isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, calculateCost, ClaudeError } from '../_shared/anthropic.ts';
 import { CT_SYSTEM_PROMPT_V1 } from '../_shared/systemPromptV1.ts';
@@ -344,23 +344,41 @@ serve(async (req) => {
 
   let body: Record<string, unknown> = {};
   try {
-    body = await req.json();
+    const raw = await req.text();
+    body = raw ? JSON.parse(raw) : {};
   } catch {
-    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    // Tolerate empty/invalid body and default to today — lets _ct_post
+    // fire a "replay today" run from pg_cron or SQL editor without a body.
+    body = {};
   }
 
-  const auth = await extractUserIdWithServiceRole(req, body);
-  if (auth.error && !auth.supabase) {
-    return new Response(JSON.stringify({ error: auth.error }), {
-      status: 401,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+  // Replay is read-only / dry-run — service role alone is sufficient.
+  // Accept service role without a userId in body (so _ct_post and pg_cron
+  // can fire it), OR accept a user JWT (the Replay page).
+  let auth: { userId: string | null; error: string | null; supabase: SupabaseClient | null };
+  if (isServiceRoleRequest(req)) {
+    auth = {
+      userId: typeof body.userId === 'string' ? body.userId : null,
+      error: null,
+      supabase: createClient(
+        Deno.env.get('SUPABASE_URL')!,
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+      ),
+    };
+  } else {
+    auth = await extractUserIdWithServiceRole(req, body);
+    if (auth.error && !auth.supabase) {
+      return new Response(JSON.stringify({ error: auth.error }), {
+        status: 401,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
   }
 
-  const sessionDate = typeof body.session_date === 'string' ? body.session_date : null;
+  // Default session_date to today (America/New_York) so an empty-body invoke
+  // replays the current session without requiring a body through _ct_post.
+  const todayEt = new Date(Date.now() - 4 * 3600_000).toISOString().slice(0, 10);
+  const sessionDate = typeof body.session_date === 'string' ? body.session_date : todayEt;
   const dryRun = body.dry_run !== false; // default true
   const modules = Array.isArray(body.modules) && body.modules.length > 0
     ? (body.modules as string[])

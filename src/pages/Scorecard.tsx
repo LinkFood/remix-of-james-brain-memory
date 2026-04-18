@@ -15,7 +15,9 @@ import { PreBellGauntletPanel } from '@/components/command/PreBellGauntletPanel'
 import { BookPanel } from '@/components/command/BookPanel';
 import { EquityCurvePanel } from '@/components/command/EquityCurvePanel';
 import { RecallSearch } from '@/components/command/RecallSearch';
+import { CalibrationChart } from '@/components/scorecard/CalibrationChart';
 import { useGhostPnl } from '@/hooks/useCoTraderData';
+import { useCalibration } from '@/hooks/useCalibration';
 
 interface Grade {
   subject_type: 'flag' | 'alert' | 'james_view';
@@ -148,6 +150,10 @@ export function Scorecard() {
     },
   });
 
+  // New structured calibration: conviction buckets (1-5) + attention_score buckets (0-20..80-100).
+  // Uses ct_flags.conviction/attention_score and ct_alerts.conviction/attention_score joined to ct_grades.
+  const { data: calibrationCurves } = useCalibration();
+
   const stats = useMemo(() => {
     if (!grades) return null;
     const byType: Record<string, Tallies> = {};
@@ -184,6 +190,27 @@ export function Scorecard() {
             <Trophy className="w-6 h-6 text-primary" />
             <span className="text-primary">Scorecard</span>
             <span className="text-sm text-muted-foreground font-normal">Claude's graded track record</span>
+            {calibrationCurves?.convictionGap != null && (
+              <a
+                href="#calibration"
+                className="ml-auto text-[11px] font-mono flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+                title="Positive = underconfident (delivers more than claimed). Negative = overconfident."
+              >
+                <span className="uppercase tracking-wider">Conviction gap:</span>
+                <span
+                  className={
+                    calibrationCurves.convictionGap > 0.05
+                      ? 'text-green-400 font-semibold'
+                      : calibrationCurves.convictionGap < -0.05
+                        ? 'text-red-400 font-semibold'
+                        : 'text-foreground font-semibold'
+                  }
+                >
+                  {calibrationCurves.convictionGap >= 0 ? '+' : ''}
+                  {(calibrationCurves.convictionGap * 100).toFixed(0)}%
+                </span>
+              </a>
+            )}
           </h1>
           <p className="text-xs text-muted-foreground mt-1">
             Every FLAG / ALERT / james_view gets scored at horizon close. This is the referee — the source of trust.
@@ -278,6 +305,55 @@ export function Scorecard() {
           )}
           <div className="mt-2 text-[10px] text-muted-foreground">
             calibrated reasoning = accuracy rises with stated confidence. flat or inverted line = miscalibrated.
+          </div>
+        </Card>
+
+        {/* Calibration curves — per-axis is v2 (axis scores are computed on-the-fly
+            from UW, not captured at claim time). v1 uses CONVICTION as an overall-score
+            proxy plus attention_score from wave 1. Bar + dashed ideal line. */}
+        <Card id="calibration" className="p-4 scroll-mt-4">
+          <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
+            <Target className="w-3 h-3" /> Calibration Curves
+            <span className="normal-case tracking-normal text-muted-foreground/70">
+              — does stated conviction / attention correlate with actual outcomes?
+            </span>
+            {calibrationCurves?.convictionGap != null && (
+              <span className="ml-auto normal-case tracking-normal font-mono">
+                gap {calibrationCurves.convictionGap >= 0 ? '+' : ''}
+                {(calibrationCurves.convictionGap * 100).toFixed(0)}%
+                <span className="text-muted-foreground/70 ml-1">
+                  {calibrationCurves.convictionGap > 0
+                    ? '(underconfident)'
+                    : calibrationCurves.convictionGap < 0
+                      ? '(overconfident)'
+                      : '(calibrated)'}
+                </span>
+              </span>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <CalibrationChart
+              title="Conviction Calibration"
+              subtitle="stated 1-5 vs actual hit rate · dashed line = ideal"
+              buckets={calibrationCurves?.conviction ?? []}
+              xLabel="conviction"
+            />
+            <CalibrationChart
+              title="Attention-Score Calibration"
+              subtitle="0-100 buckets vs actual hit rate"
+              buckets={calibrationCurves?.attention ?? []}
+              xLabel="attention score"
+            />
+          </div>
+
+          <div className="mt-3 text-[10px] text-muted-foreground leading-relaxed">
+            <span className="text-foreground/80 font-semibold">Read this:</span>{' '}
+            Hit rate = right / (right + partial + wrong). Ambiguous verdicts are excluded.
+            Bars below the dashed line = overconfidence at that conviction level; bars above = underconfidence.
+            Buckets with fewer than 3 samples show muted and labeled "(sparse)".
+            Per-axis ($FLOW / HEDGE / NOW / CALLS / PUTS) calibration requires capturing the 5-axis snapshot
+            onto each flag/alert at write time — planned for v2.
           </div>
         </Card>
 

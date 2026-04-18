@@ -129,8 +129,14 @@ export function BookEquityCurve() {
           </h3>
           <span className="text-[10px] text-muted-foreground">$10k paper · all sessions</span>
           <Link
-            to="/book"
+            to="/scorecard#calibration"
             className="ml-auto text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
+          >
+            calibration <ArrowRight className="w-3 h-3" />
+          </Link>
+          <Link
+            to="/book"
+            className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
           >
             full book <ArrowRight className="w-3 h-3" />
           </Link>
