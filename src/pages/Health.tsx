@@ -631,12 +631,21 @@ function McpCallsSection({ calls }: { calls: McpCallRow[] }) {
 
 function BookSection({
   book,
+  optionsLivePnl,
 }: {
   book: ReturnType<typeof useHealthData>['data'] extends infer T
     ? T extends { book: infer B } ? B : never : never;
+  optionsLivePnl: ReturnType<typeof useHealthData>['data'] extends infer T
+    ? T extends { optionsLivePnl: infer O } ? O : never : never;
 }) {
   const pnl = book?.realized_pnl_today ?? null;
   const pnlColor = pnl == null || pnl === 0 ? undefined : pnl > 0 ? GREEN : RED;
+
+  const tracked = optionsLivePnl?.tracked ?? 0;
+  const lastUpdated = optionsLivePnl?.last_updated_at ?? null;
+  const lastUpdatedMs = lastUpdated ? Date.parse(lastUpdated) : null;
+  const staleOptions =
+    tracked > 0 && lastUpdatedMs != null && Date.now() - lastUpdatedMs > 20 * 60_000;
 
   return (
     <Card className="overflow-hidden">
@@ -668,6 +677,21 @@ function BookSection({
           <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Open Positions</div>
           <div className="text-xl font-bold tabular-nums">{fmtInt(book?.open_positions ?? 0)}</div>
         </div>
+      </div>
+      <div className="px-4 py-2 border-t bg-muted/10 flex items-center gap-2 text-[11px]">
+        <span className="text-muted-foreground uppercase tracking-wider text-[10px]">
+          Options live P&L
+        </span>
+        <span className={cn('tabular-nums font-medium', staleOptions && 'text-amber-300')}>
+          last updated {timeAgo(lastUpdated)}
+        </span>
+        <span className="text-muted-foreground">·</span>
+        <span className="tabular-nums text-muted-foreground">
+          {fmtInt(tracked)} option trade{tracked === 1 ? '' : 's'} tracked
+        </span>
+        {staleOptions && (
+          <span className="ml-auto text-amber-300 text-[10px]">stale (&gt;20m)</span>
+        )}
       </div>
     </Card>
   );
@@ -1076,7 +1100,7 @@ export default function Health() {
         ) : data ? (
           <>
             {/* Row 1: Book + UW + Claude cost — top-line metrics */}
-            <BookSection book={data.book} />
+            <BookSection book={data.book} optionsLivePnl={data.optionsLivePnl} />
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <UwSection latest={data.uwLatest} daily={data.uwDaily} />

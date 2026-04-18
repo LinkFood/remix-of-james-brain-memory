@@ -31,6 +31,7 @@ import { CT_SYSTEM_PROMPT_V1, CT_PROMPT_VERSION } from '../_shared/systemPromptV
 import { buildMemoryBundle, getRecentSelfCorrections, getActiveBiases } from '../_shared/memoryRecall.ts';
 import { embedCtItem, buildCtRichText } from '../_shared/ctEmbed.ts';
 import { condenseWatcherState, type CondensedState } from '../_shared/ctStateCondense.ts';
+import { getNewsSentimentNet } from '../_shared/ctNewsSentiment.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
 import { deriveWriteTimeAttention } from '../_shared/attentionScore.ts';
 import { logMcpCalls } from '../_shared/mcpLog.ts';
@@ -982,6 +983,12 @@ serve(async (req) => {
       ivRankPerTicker[ticker] = { rank: r.iv_rank, iv_30d: r.iv_30d };
     }
 
+    // 3b2. News sentiment net score per ticker (last 24h). Evidence axis E.
+    // Net <= -3 = bearish catalyst bias; net >= +3 = bullish catalyst bias.
+    // Watcher system prompt references this explicitly. Defensive: returns
+    // zeroed map on query error — never crashes the cycle.
+    const newsSentiment24h = await getNewsSentimentNet(supabase, WATCHLIST as unknown as string[], 24);
+
     // 3c. CONVERGENCE DETECTOR — count independent signals pointing same
     // direction in the last 15min. ≥3 converging signals forces ALERT even
     // if Claude's conviction is low. Bypasses gun-shyness on clear setups.
@@ -1039,6 +1046,7 @@ serve(async (req) => {
       max_pain_per_ticker: maxPainPerTicker,
       greek_flow_latest: greekFlowLatest,
       iv_rank_per_ticker: ivRankPerTicker,
+      news_sentiment_24h_per_ticker: newsSentiment24h,
       proxy_mapping: {
         GLD: 'gold ETF — used as proxy for gold futures (GC) flow and positioning',
         USO: 'oil ETF — used as proxy for oil futures (CL) flow and positioning',
@@ -1056,6 +1064,7 @@ net_prem_per_ticker_30min: TRUE UW tick-stream net call/put premium per ticker +
 max_pain_per_ticker: nearest-expiry max-pain strike per ticker. At 0DTE/1DTE, max-pain has pin gravity — if spot within 1% of max-pain approaching expiry, flag "pin risk."
 greek_flow_latest: signed dealer hedging flow for SPY/QQQ/IWM. A sharp sign flip (dir_delta_flow crossing zero) often LEADS price by minutes. Call it out when it diverges from price.
 iv_rank_per_ticker: rank 80+ = premium-selling regime favored, 20- = premium-buying favored. Influences which strategies are "cheap" and whether vol-expansion is likely vs already priced.
+news_sentiment_24h_per_ticker: per-ticker structured news sentiment over the last 24h. net_score = Σ signed magnitudes (positive = +magnitude, negative = -magnitude, neutral = 0). This is EVIDENCE AXIS E (catalyst). If net_score <= -3, lean bearish on that ticker unless axes A (structural) or C (dealer flow) clearly contradict. If net_score >= +3, the opposite. Cite the specific count when flagging (e.g. "MSFT news -4: 3 neg magnitudes 2,2,1 vs 0 pos"). Stale sentiment (scored=0) = no catalyst signal, ignore.
 Decide ONE state for this cycle and emit the JSON per the schema in the system prompt. Return ONLY the JSON.`,
     });
 

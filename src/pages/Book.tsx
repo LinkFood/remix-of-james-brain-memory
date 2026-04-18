@@ -483,7 +483,6 @@ function TradesTable() {
               {rows.map(t => {
                 const sideColor = t.side === 'long' ? GREEN : RED;
                 const isOpen = t.status === 'open';
-                const isOptionOpen = isOpen && t.contract_type && t.contract_type !== 'underlying';
                 const pnlPct = isOpen ? t.live_pnl_pct ?? null : t.realized_pnl_pct;
                 const pnlUsd = isOpen ? t.live_pnl_usd ?? null : t.realized_pnl_usd;
                 const pnlCol = pnlColor(pnlUsd ?? pnlPct);
@@ -491,14 +490,10 @@ function TradesTable() {
                 const updatedAt = t.live_pnl_updated_at ? new Date(t.live_pnl_updated_at).getTime() : null;
                 const isStale =
                   isOpen &&
-                  !isOptionOpen &&
                   updatedAt != null &&
                   Date.now() - updatedAt > 20 * 60_000;
                 const staleTitle = isStale
                   ? `live P&L last updated ${new Date(updatedAt!).toLocaleTimeString()} — book-manager hasn't refreshed in >20min`
-                  : undefined;
-                const optionTitle = isOptionOpen
-                  ? 'options live P&L deferred — needs option-chain mark-to-market (v2)'
                   : undefined;
                 const cellOpacity = isStale ? 0.45 : 1;
 
@@ -524,7 +519,7 @@ function TradesTable() {
                       <td
                         className="px-3 py-1.5 text-right"
                         style={{ color: pnlCol, opacity: cellOpacity }}
-                        title={optionTitle ?? staleTitle}
+                        title={staleTitle}
                       >
                         {fmtPct(pnlPct)}
                         {isStale && <span className="ml-1 text-[9px] text-muted-foreground">(stale)</span>}
@@ -532,7 +527,7 @@ function TradesTable() {
                       <td
                         className="px-3 py-1.5 text-right"
                         style={{ color: pnlCol, opacity: cellOpacity }}
-                        title={optionTitle ?? staleTitle}
+                        title={staleTitle}
                       >
                         {fmtUsd(pnlUsd, true)}
                       </td>

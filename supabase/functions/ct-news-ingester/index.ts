@@ -134,7 +134,14 @@ async function analyzeAndStore(
 
   // Parse JSON
   const cleaned = claudeText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/i, '').trim();
-  let parsed: { claude_take?: string; impact?: string; significance?: number } | null = null;
+  let parsed: {
+    claude_take?: string;
+    impact?: string;
+    significance?: number;
+    sentiment?: string;
+    sentiment_magnitude?: number;
+    sentiment_reasoning?: string;
+  } | null = null;
   try { parsed = JSON.parse(cleaned); } catch {
     const m = cleaned.match(/\{[\s\S]*\}/);
     if (m) try { parsed = JSON.parse(m[0]); } catch { /* ignore */ }
@@ -143,6 +150,30 @@ async function analyzeAndStore(
 
   const impact = ['bullish', 'bearish', 'neutral', 'mixed'].includes(parsed.impact) ? parsed.impact : 'neutral';
   const significance = Math.max(1, Math.min(5, Number(parsed.significance) || 2));
+
+  // Sentiment validation — Haiku sometimes returns "bullish"/"bearish" or
+  // out-of-range magnitudes. Default to neutral/1 with a warning so downstream
+  // rollups don't see garbage. sentiment_reasoning is free-form so we accept
+  // whatever came back, but cap length defensively.
+  const SENT_VALID = ['positive', 'negative', 'neutral'] as const;
+  let sentiment: 'positive' | 'negative' | 'neutral' = 'neutral';
+  let sentimentMagnitude = 1;
+  let sentimentReasoning: string | null =
+    typeof parsed.sentiment_reasoning === 'string' && parsed.sentiment_reasoning.length <= 500
+      ? parsed.sentiment_reasoning
+      : (typeof parsed.sentiment_reasoning === 'string' ? parsed.sentiment_reasoning.slice(0, 500) : null);
+  if (typeof parsed.sentiment === 'string' && (SENT_VALID as readonly string[]).includes(parsed.sentiment)) {
+    sentiment = parsed.sentiment as 'positive' | 'negative' | 'neutral';
+    const mag = Number(parsed.sentiment_magnitude);
+    if (Number.isFinite(mag) && mag >= 1 && mag <= 5) {
+      sentimentMagnitude = Math.round(mag);
+    } else {
+      console.warn(`[ct-news] ${row.ticker} invalid sentiment_magnitude=${parsed.sentiment_magnitude} — defaulting to 1`);
+    }
+  } else {
+    console.warn(`[ct-news] ${row.ticker} invalid sentiment=${parsed.sentiment} — defaulting to neutral/1`);
+    if (!sentimentReasoning) sentimentReasoning = 'sentiment parse fallback — model returned invalid value';
+  }
 
   const { data, error } = await supabase.from('ct_news_analyses').insert({
     user_id: userId,
@@ -154,6 +185,9 @@ async function analyzeAndStore(
     claude_take: parsed.claude_take,
     impact,
     significance,
+    sentiment,
+    sentiment_magnitude: sentimentMagnitude,
+    sentiment_reasoning: sentimentReasoning,
     prompt_version: runMode === 'weekend' ? `${CT_PROMPT_VERSION}+weekend` : CT_PROMPT_VERSION,
   }).select('id').maybeSingle();
 
@@ -198,6 +232,9 @@ async function storeRawSkipped(
     claude_take: '[weekend-skipped: low-signal pre-filter]',
     impact: 'neutral',
     significance: 1,
+    sentiment: 'neutral',
+    sentiment_magnitude: 1,
+    sentiment_reasoning: 'weekend low-signal pre-filter — no model read',
     prompt_version: `${CT_PROMPT_VERSION}+weekend-raw`,
   }).select('id').maybeSingle();
   if (error || !data) return { ok: false, error: error?.message ?? 'insert failed' };

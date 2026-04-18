@@ -23,6 +23,36 @@ function impactColor(i: string): string {
   }
 }
 
+function sentimentColor(s: NewsItem['sentiment']): string {
+  switch (s) {
+    case 'positive': return 'bg-green-500/15 text-green-400 border-green-500/30';
+    case 'negative': return 'bg-red-500/15 text-red-400 border-red-500/30';
+    case 'neutral':  return 'bg-muted/50 text-muted-foreground border-muted';
+    default:         return 'bg-muted/40 text-muted-foreground/70 border-muted';
+  }
+}
+
+/** "⭐⭐⭐" for magnitude 3, clamped to [1,5]. Null → empty string. */
+function magStars(m: number | null): string {
+  if (m == null || !Number.isFinite(m)) return '';
+  const n = Math.max(1, Math.min(5, Math.round(m)));
+  return '★'.repeat(n);
+}
+
+/** Per-ticker rollup from the current in-memory news list. Net = Σ signed magnitudes. */
+function rollupFromItems(items: NewsItem[]): { pos: number; neg: number; neu: number; net: number; scored: number } {
+  let pos = 0, neg = 0, neu = 0, net = 0, scored = 0;
+  for (const n of items) {
+    if (n.sentiment == null) continue;
+    scored++;
+    const mag = n.sentiment_magnitude ?? 0;
+    if (n.sentiment === 'positive') { pos++; net += mag; }
+    else if (n.sentiment === 'negative') { neg++; net -= mag; }
+    else neu++;
+  }
+  return { pos, neg, neu, net, scored };
+}
+
 function groupAndRank(news: NewsItem[]): Array<{ ticker: string; items: NewsItem[]; topImpact: string; topSig: number }> {
   const byTicker = new Map<string, NewsItem[]>();
   for (const n of news) {
@@ -48,6 +78,15 @@ function groupAndRank(news: NewsItem[]): Array<{ ticker: string; items: NewsItem
 function TickerNewsGroup({ ticker, items, topImpact, topSig }: { ticker: string; items: NewsItem[]; topImpact: string; topSig: number }) {
   const [expanded, setExpanded] = useState(items.length === 1);
   const shownItems = expanded ? items : items.slice(0, 1);
+  const rollup = useMemo(() => rollupFromItems(items), [items]);
+
+  // Format: "News today: +2 pos / -3 neg, net -2"  (omit neutral unless nonzero tail)
+  const rollupLine =
+    rollup.scored > 0
+      ? `News today: +${rollup.pos} pos / -${rollup.neg} neg${rollup.neu > 0 ? ` / ${rollup.neu} neu` : ''}, net ${rollup.net >= 0 ? `+${rollup.net}` : rollup.net}`
+      : null;
+  const netColor =
+    rollup.net > 0 ? 'text-green-400' : rollup.net < 0 ? 'text-red-400' : 'text-muted-foreground';
 
   return (
     <div className="border-b border-border last:border-b-0">
@@ -61,6 +100,11 @@ function TickerNewsGroup({ ticker, items, topImpact, topSig }: { ticker: string;
           {topImpact}
         </Badge>
         <span className="text-[10px] text-muted-foreground">sig {topSig}</span>
+        {rollupLine && (
+          <span className={`text-[10px] tabular-nums ${netColor}`} title={rollupLine}>
+            net {rollup.net >= 0 ? `+${rollup.net}` : rollup.net}
+          </span>
+        )}
         {items.length > 1 && (
           <span className="text-[10px] text-muted-foreground ml-auto">
             +{items.length - (expanded ? 0 : 1)} more
@@ -68,12 +112,28 @@ function TickerNewsGroup({ ticker, items, topImpact, topSig }: { ticker: string;
         )}
       </button>
 
+      {rollupLine && (
+        <div className={`px-3 py-1 text-[10px] bg-muted/10 border-b border-border/50 ${netColor}`}>
+          {rollupLine}
+        </div>
+      )}
+
       {shownItems.map((n) => (
         <div key={n.id} className="p-3 bg-background hover:bg-muted/20 transition-colors">
           <div className="flex items-center gap-2 text-[10px] mb-1 flex-wrap">
             <Badge variant="outline" className={`px-1.5 py-0 ${impactColor(n.impact)}`}>
               {n.impact}
             </Badge>
+            {n.sentiment && (
+              <Badge
+                variant="outline"
+                className={`px-1.5 py-0 ${sentimentColor(n.sentiment)}`}
+                title={n.sentiment_reasoning ?? undefined}
+              >
+                {n.sentiment}
+                {n.sentiment_magnitude ? <span className="ml-1 tracking-tighter">{magStars(n.sentiment_magnitude)}</span> : null}
+              </Badge>
+            )}
             <span className="text-muted-foreground">sig {n.significance}/5</span>
             {n.news_source && <span className="text-muted-foreground">· {n.news_source}</span>}
             <span className="text-muted-foreground ml-auto">{relativeTime(n.created_at)}</span>
@@ -88,6 +148,11 @@ function TickerNewsGroup({ ticker, items, topImpact, topSig }: { ticker: string;
           <div className="text-xs text-foreground/75 leading-relaxed">
             {n.claude_take}
           </div>
+          {n.sentiment_reasoning && (
+            <div className="mt-1 text-[10px] text-muted-foreground italic leading-snug">
+              sentiment: {n.sentiment_reasoning}
+            </div>
+          )}
         </div>
       ))}
     </div>

@@ -111,6 +111,9 @@ verify_jwt = false
 [functions.ct-news-ingester]
 verify_jwt = false
 
+[functions.ct-news-sentiment-backfill]
+verify_jwt = false
+
 [functions.ct-eod-recap]
 verify_jwt = false
 

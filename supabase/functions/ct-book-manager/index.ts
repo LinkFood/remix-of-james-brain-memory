@@ -20,6 +20,14 @@ import { getCurrentPrice } from '../_shared/ctGrader.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { POST_MORTEM_SYSTEM } from '../_shared/ctPrompts.ts';
 import { firePostTradeQuality } from '../_shared/tradeQuality.ts';
+import { getOptionContracts } from '../_shared/uwClient.ts';
+import {
+  computeOptionLivePnlFromChainRow,
+  isExpired as isOptionExpired,
+  matchContract,
+  type OptionChainRow,
+  type OptionTradeLike,
+} from '../_shared/optionsPricing.ts';
 
 const SYSTEM_PROMPT = `You manage a live paper book. 15min has passed. Each open trade has current price, unrealized P&L, and a reason it was opened.
 
@@ -62,10 +70,16 @@ interface OpenTrade {
   opened_at: string | null;
   status: string;
   contract_type: 'underlying' | 'call' | 'put';
+  strike: number | null;
+  expiry: string | null;
+  contracts: number | null;
   entry_premium: number | null;
   pre_trade_quality: number | null;
   pre_trade_quality_reasoning: string | null;
 }
+
+const TRADE_SELECT_COLS =
+  'id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, strike, expiry, contracts, entry_premium, pre_trade_quality, pre_trade_quality_reasoning';
 
 interface Action {
   trade_id: string;
@@ -297,7 +311,7 @@ serve(async (req) => {
   // Flip any 'planned' trades to 'open' at current (fill) price on the first tick
   const { data: planned } = await supabase
     .from('ct_trades')
-    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium, pre_trade_quality, pre_trade_quality_reasoning')
+    .select(TRADE_SELECT_COLS)
     .eq('session_date', sessionDate)
     .eq('status', 'planned');
 
@@ -349,7 +363,7 @@ serve(async (req) => {
   // Pull current open book
   const { data: openTrades } = await supabase
     .from('ct_trades')
-    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium, pre_trade_quality, pre_trade_quality_reasoning')
+    .select(TRADE_SELECT_COLS)
     .eq('session_date', sessionDate)
     .eq('status', 'open');
 
@@ -363,10 +377,8 @@ serve(async (req) => {
   // Fetch current prices + deterministic stop/target hits + live P&L refresh.
   //
   // live_pnl_pct / live_pnl_usd surface unrealized P&L per trade in the UI.
-  // Options P&L is DEFERRED to v2 — computing call/put mark-to-market from
-  // first principles is wrong (needs IV, rate, time), and an option-chain
-  // lookup per trade would blow our UW budget. For now: underlying trades
-  // get real numbers, options rows get null (frontend tooltips explain).
+  // Underlying uses current price; options use per-contract premium mark from
+  // UW's option-contracts endpoint (closed in Wave 17, was deferred in Wave 16).
   //
   // The checkHardStops call may close a trade — in which case we skip the
   // live-P&L write (realized_pnl_pct already populated by the close).
@@ -379,8 +391,8 @@ serve(async (req) => {
     const closed = await checkHardStops(supabase, t, p);
     if (closed) continue;
 
-    // Underlying only. Options deferred — flagged null so UI can display
-    // a "(deferred)" tooltip instead of a misleading zero.
+    // Underlying: mark-to-market on instrument price.
+    // Options handled in the dedicated loop below (needs chain pull per ticker).
     if (t.contract_type !== 'underlying') continue;
 
     const livePct = unrealizedPct(t.side, t.entry_price, p);
@@ -392,10 +404,88 @@ serve(async (req) => {
     }).eq('id', t.id);
   }
 
+  // ---- Options live P&L loop ----
+  //
+  // Group still-open option trades by ticker, pull /option-contracts ONCE per
+  // ticker (not per trade), parse OCC symbols to match strike+expiry+type,
+  // and write live_pnl_{pct,usd,updated_at}.
+  //
+  // Budget impact: 1 UW call per unique ticker with open options per 15min
+  // tick. With ~12 watched tickers and typically <5 option trades live, that's
+  // <5 extra UW calls per tick (bounded by unique tickers, not trades).
+  //
+  // Expired options get skipped — expiry < today means settlement already
+  // happened; the last mark stays sticky and EOD reconciliation handles close.
+  // Chain-row miss (UW didn't return this strike) → warn, skip update.
+  const optionTrades = open.filter(t =>
+    t.contract_type !== 'underlying' &&
+    t.strike != null &&
+    t.expiry != null &&
+    t.contracts != null &&
+    t.entry_premium != null,
+  );
+  if (optionTrades.length > 0) {
+    const byTicker = new Map<string, OpenTrade[]>();
+    for (const t of optionTrades) {
+      const key = t.instrument.toUpperCase();
+      const bucket = byTicker.get(key);
+      if (bucket) bucket.push(t);
+      else byTicker.set(key, [t]);
+    }
+
+    for (const [ticker, trades] of byTicker) {
+      // Skip ticker entirely if ALL its open option trades have already expired.
+      const liveTrades = trades.filter(t => !isOptionExpired(t as OptionTradeLike));
+      if (liveTrades.length === 0) {
+        console.log(`[ct-book-manager] ${ticker}: all ${trades.length} option trades expired, skipping`);
+        continue;
+      }
+
+      let chain: OptionChainRow[] = [];
+      try {
+        const raw = await getOptionContracts(ticker) as unknown;
+        // UW wraps chain rows in { data: [...] }. Fall back to raw array if shape differs.
+        const arr =
+          Array.isArray(raw) ? raw :
+          (raw && typeof raw === 'object' && Array.isArray((raw as { data?: unknown[] }).data))
+            ? (raw as { data: unknown[] }).data
+            : [];
+        chain = arr as OptionChainRow[];
+      } catch (e) {
+        console.warn(`[ct-book-manager] getOptionContracts(${ticker}) failed:`, e instanceof Error ? e.message : e);
+        continue;
+      }
+
+      for (const t of liveTrades) {
+        const tradeLike: OptionTradeLike = {
+          instrument: t.instrument,
+          contract_type: t.contract_type,
+          strike: t.strike,
+          expiry: t.expiry,
+          contracts: t.contracts,
+          entry_premium: t.entry_premium,
+          side: t.side,
+        };
+        const row = matchContract(tradeLike, chain);
+        if (!row) {
+          console.warn(`[ct-book-manager] no chain row for ${t.instrument} ${t.contract_type} ${t.strike} ${t.expiry} (trade ${t.id})`);
+          continue;
+        }
+        const pnl = computeOptionLivePnlFromChainRow(tradeLike, row);
+        if (!pnl) continue;
+        await supabase.from('ct_trades').update({
+          live_pnl_pct: pnl.live_pnl_pct,
+          live_pnl_usd: pnl.live_pnl_usd,
+          live_pnl_updated_at: nowTs,
+        }).eq('id', t.id);
+      }
+    }
+  }
+
   // Re-pull open after stops/targets
   const { data: stillOpen } = await supabase
     .from('ct_trades')
-    .select('id, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, conviction, opened_at, status, contract_type, entry_premium, pre_trade_quality, pre_trade_quality_reasoning')
+    .select(TRADE_SELECT_COLS)
     .eq('session_date', sessionDate)
     .eq('status', 'open');
 

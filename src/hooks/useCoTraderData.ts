@@ -103,8 +103,15 @@ export interface NewsItem {
   claude_take: string;
   impact: string;
   significance: number;
+  /** Structured directional read for the ticker: positive | negative | neutral. May be null on legacy rows. */
+  sentiment: 'positive' | 'negative' | 'neutral' | null;
+  /** 1 = tepid, 5 = seismic. Null on legacy rows. */
+  sentiment_magnitude: number | null;
+  /** 1-sentence numbers-first justification. Null on legacy rows. */
+  sentiment_reasoning: string | null;
   created_at: string;
 }
+
 
 export interface Report {
   id: string;
@@ -323,7 +330,7 @@ export function useRecentNews(limit = 20) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from('ct_news_analyses')
-        .select('id, instrument, news_headline, news_source, news_url, claude_take, impact, significance, created_at')
+        .select('id, instrument, news_headline, news_source, news_url, claude_take, impact, significance, sentiment, sentiment_magnitude, sentiment_reasoning, created_at')
         .order('created_at', { ascending: false })
         .limit(limit);
       if (error) throw error;
@@ -331,6 +338,7 @@ export function useRecentNews(limit = 20) {
     },
   });
 }
+
 
 export function useLatestRecap() {
   return useQuery<Report | null>({

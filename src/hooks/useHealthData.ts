@@ -113,6 +113,15 @@ export interface BookSnapshot {
   session_date: string | null;
 }
 
+/**
+ * Options live P&L freshness snapshot — how recently book-manager refreshed
+ * option-contract mark-to-market for any open option position.
+ */
+export interface OptionsLivePnlStatus {
+  tracked: number;                      // count of open option trades
+  last_updated_at: string | null;       // most recent live_pnl_updated_at across option rows
+}
+
 export interface HealthData {
   crons: HealthCronRow[];
   uwLatest: UwUsageLatest | null;
@@ -127,6 +136,7 @@ export interface HealthData {
   attentionTotal: number;
   mcpCalls: McpCallRow[];
   book: BookSnapshot;
+  optionsLivePnl: OptionsLivePnlStatus;
 }
 
 // ---------------------------------------------------------------------------
@@ -259,6 +269,32 @@ async function fetchMcpCalls(): Promise<McpCallRow[]> {
   return (data ?? []) as McpCallRow[];
 }
 
+async function fetchOptionsLivePnl(): Promise<OptionsLivePnlStatus> {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data, error } = await supabase
+    .from('ct_trades')
+    .select('live_pnl_updated_at')
+    .eq('session_date', today)
+    .eq('status', 'open')
+    .neq('contract_type', 'underlying');
+  if (error) {
+    console.warn('[useHealthData] options live pnl status failed:', error.message);
+    return { tracked: 0, last_updated_at: null };
+  }
+  const rows = (data ?? []) as Array<{ live_pnl_updated_at: string | null }>;
+  let latest: number | null = null;
+  for (const r of rows) {
+    if (!r.live_pnl_updated_at) continue;
+    const ts = Date.parse(r.live_pnl_updated_at);
+    if (!Number.isFinite(ts)) continue;
+    if (latest == null || ts > latest) latest = ts;
+  }
+  return {
+    tracked: rows.length,
+    last_updated_at: latest != null ? new Date(latest).toISOString() : null,
+  };
+}
+
 async function fetchBookSnapshot(): Promise<BookSnapshot> {
   const today = new Date().toISOString().slice(0, 10);
 
@@ -371,6 +407,7 @@ export function useHealthData() {
         attention,
         mcpCalls,
         book,
+        optionsLivePnl,
       ] = await Promise.all([
         fetchCtCrons(),
         fetchUwLatest(),
@@ -379,6 +416,7 @@ export function useHealthData() {
         fetchAttentionHistogram(),
         fetchMcpCalls(),
         fetchBookSnapshot(),
+        fetchOptionsLivePnl(),
       ]);
 
       const today = new Date().toISOString().slice(0, 10);
@@ -398,6 +436,7 @@ export function useHealthData() {
         attentionTotal: attention.total,
         mcpCalls,
         book,
+        optionsLivePnl,
       };
     },
   });

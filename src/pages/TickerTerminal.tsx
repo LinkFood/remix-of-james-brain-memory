@@ -375,7 +375,39 @@ function newsImpactColor(impact: string): string {
   }
 }
 
+function newsSentimentColor(s: NewsItem['sentiment']): string {
+  switch (s) {
+    case 'positive': return COLOR_CALL;
+    case 'negative': return COLOR_PUT;
+    case 'neutral':  return '#94a3b8';
+    default:         return '#64748b';
+  }
+}
+
+/** Clamp + star-render magnitude (1-5). Empty string if null/invalid. */
+function magStars(m: number | null): string {
+  if (m == null || !Number.isFinite(m)) return '';
+  const n = Math.max(1, Math.min(5, Math.round(m)));
+  return '★'.repeat(n);
+}
+
+/** Same rollup as NewsFeed — Σ signed magnitudes across rendered rows. */
+function computeSentimentRollup(rows: NewsItem[]): { pos: number; neg: number; neu: number; net: number; scored: number } {
+  let pos = 0, neg = 0, neu = 0, net = 0, scored = 0;
+  for (const r of rows) {
+    if (r.sentiment == null) continue;
+    scored++;
+    const mag = r.sentiment_magnitude ?? 0;
+    if (r.sentiment === 'positive') { pos++; net += mag; }
+    else if (r.sentiment === 'negative') { neg++; net -= mag; }
+    else neu++;
+  }
+  return { pos, neg, neu, net, scored };
+}
+
 const NewsList = memo(function NewsList({ rows }: { rows: NewsItem[] }) {
+  const rollup = useMemo(() => computeSentimentRollup(rows), [rows]);
+  const netColor = rollup.net > 0 ? COLOR_CALL : rollup.net < 0 ? COLOR_PUT : '#94a3b8';
   return (
     <Card className="p-0 bg-black/60 border-white/10 h-full flex flex-col">
       <div className="px-3 py-2 border-b border-white/10 flex items-center justify-between">
@@ -384,6 +416,23 @@ const NewsList = memo(function NewsList({ rows }: { rows: NewsItem[] }) {
         </span>
         <span className="text-[10px] text-muted-foreground tabular-nums">{rows.length}</span>
       </div>
+      {rollup.scored > 0 && (
+        <div className="px-3 py-1.5 border-b border-white/5 text-[10px] tabular-nums flex items-center gap-2 bg-white/[0.02]">
+          <span className="text-muted-foreground uppercase tracking-wider">News today:</span>
+          <span style={{ color: COLOR_CALL }}>+{rollup.pos} pos</span>
+          <span className="text-muted-foreground">/</span>
+          <span style={{ color: COLOR_PUT }}>-{rollup.neg} neg</span>
+          {rollup.neu > 0 && (
+            <>
+              <span className="text-muted-foreground">/</span>
+              <span className="text-muted-foreground">{rollup.neu} neu</span>
+            </>
+          )}
+          <span className="ml-auto font-semibold" style={{ color: netColor }}>
+            net {rollup.net >= 0 ? `+${rollup.net}` : rollup.net}
+          </span>
+        </div>
+      )}
       <div className="flex-1 overflow-auto max-h-[360px]">
         {rows.length === 0 ? (
           <div className="text-xs text-muted-foreground px-3 py-6 text-center">
@@ -393,13 +442,23 @@ const NewsList = memo(function NewsList({ rows }: { rows: NewsItem[] }) {
           <div className="divide-y divide-white/5 text-[11px]">
             {rows.map(r => (
               <div key={r.id} className="px-3 py-2 space-y-1">
-                <div className="flex items-baseline gap-2">
+                <div className="flex items-baseline gap-2 flex-wrap">
                   <span className="text-[10px] uppercase tracking-wider text-muted-foreground tabular-nums shrink-0">
                     {fmtDate(r.created_at)}
                   </span>
                   <span className="font-semibold uppercase text-[10px] tracking-wider" style={{ color: newsImpactColor(r.impact) }}>
                     {r.impact}
                   </span>
+                  {r.sentiment && (
+                    <span
+                      className="font-semibold uppercase text-[10px] tracking-wider inline-flex items-baseline gap-0.5"
+                      style={{ color: newsSentimentColor(r.sentiment) }}
+                      title={r.sentiment_reasoning ?? undefined}
+                    >
+                      {r.sentiment}
+                      {r.sentiment_magnitude ? <span className="tracking-tighter">{magStars(r.sentiment_magnitude)}</span> : null}
+                    </span>
+                  )}
                   <span className="text-[10px] text-muted-foreground tabular-nums ml-auto">
                     sig {r.significance}
                   </span>
@@ -422,6 +481,11 @@ const NewsList = memo(function NewsList({ rows }: { rows: NewsItem[] }) {
                 {r.claude_take && (
                   <div className="text-muted-foreground italic leading-snug">
                     {r.claude_take}
+                  </div>
+                )}
+                {r.sentiment_reasoning && (
+                  <div className="text-[10px] text-muted-foreground/80 leading-snug">
+                    sentiment: {r.sentiment_reasoning}
                   </div>
                 )}
               </div>

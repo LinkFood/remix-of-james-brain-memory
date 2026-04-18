@@ -19,7 +19,10 @@ Return ONLY this JSON:
 {
   "claude_take": "2-3 sentence read on what this actually means for price/flow/positioning. Empirical.",
   "impact": "bullish" | "bearish" | "neutral" | "mixed",
-  "significance": 1-5
+  "significance": 1-5,
+  "sentiment": "positive" | "negative" | "neutral",
+  "sentiment_magnitude": 1-5,
+  "sentiment_reasoning": "1 sentence — numbers-first, cite which side of the tape it hits"
 }
 
 Significance:
@@ -27,7 +30,16 @@ Significance:
 - 2: worth logging, minor directional nudge
 - 3: notable — could affect near-term positioning
 - 4: material — likely to move flow or sentiment
-- 5: thesis-altering — regime or conviction shift likely`;
+- 5: thesis-altering — regime or conviction shift likely
+
+Sentiment rules:
+- "Positive" means directly bullish for the ticker. A sector-wide
+  positive that also benefits the ticker is positive. A headline
+  about a competitor's failure that helps the ticker is positive.
+- Magnitude: 1 = weak/speculative, 3 = meaningful development, 5 = event
+  that requires immediate portfolio repositioning (earnings beat/miss,
+  FDA decision, M&A close, major fed statement).
+- If ambiguous or mixed, use neutral with low magnitude (1-2).`;
 
 // ----------------------------------------------------------------------------
 // LESSONS CURATOR — weekly consolidation

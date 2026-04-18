@@ -248,7 +248,7 @@ export function useTickerTerminal(
           .limit(30),
         supabase
           .from('ct_news_analyses')
-          .select('id, instrument, news_headline, news_source, news_url, claude_take, impact, significance, created_at')
+          .select('id, instrument, news_headline, news_source, news_url, claude_take, impact, significance, sentiment, sentiment_magnitude, sentiment_reasoning, created_at')
           .eq('instrument', ticker)
           .order('created_at', { ascending: false })
           .limit(10),
