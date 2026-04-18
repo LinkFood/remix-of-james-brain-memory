@@ -1,6 +1,11 @@
 /**
  * hypothesisSelect — Wave 3 of Co-Trader hypothesis engine.
  *
+ * ISOLATION AUDIT (2026-04-18): this module queries ct_hypotheses (Claude-own)
+ * and receives an observation/alert/flag summary from the caller. The selector
+ * prompt only references claim/because/tickers — no James-side data crosses.
+ * Safe under the Claude read-surface contract. See CLAUDE_READ_SURFACE.md.
+ *
  * Every new alert/flag/observation must cite the governing thesis it relates
  * to (or null, if none of the open hypotheses fit). Two exports:
  *

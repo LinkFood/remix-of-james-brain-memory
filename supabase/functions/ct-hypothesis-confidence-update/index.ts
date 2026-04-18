@@ -23,6 +23,12 @@
  * Auth: service role only. The trigger fires under service_role via _ct_post.
  */
 
+// ISOLATION AUDIT (2026-04-18): reads ct_grades, ct_hypotheses, ct_hypothesis_evidence,
+// and writes ct_playbooks / ct_hypothesis_events / ct_hypothesis_evidence. All
+// Claude-own tables. No reads of ct_trades/ct_book/ct_custom_rules/ct_james_reviews.
+// No Claude API call here (mechanical Elo math + promotion), so no preamble needed.
+// Contract satisfied. See _shared/CLAUDE_READ_SURFACE.md.
+
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';

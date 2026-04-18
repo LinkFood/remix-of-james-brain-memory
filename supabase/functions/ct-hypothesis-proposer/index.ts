@@ -30,6 +30,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { getConfig } from '../_shared/configCache.ts';
+import { buildClaudeContext, claudeSystemPromptPreamble } from '../_shared/claudeReadSurface.ts';
 
 const VALID_HORIZONS = new Set(['session', 'week', 'month', 'open']);
 
@@ -157,32 +158,43 @@ serve(async (req) => {
   const maxPerDay = Number(await getConfig<number>('hypothesis_proposer_max_per_day', 3));
   const lookbackHours = Number(await getConfig<number>('hypothesis_proposer_lookback_hours', 36));
 
-  const tape = await pullRecentTape(supabase, lookbackHours);
+  // ISOLATION: Claude read surface (open hyps, own trades/grades, config).
+  // Observations/alerts/wobbly-grades still come from the tape puller below —
+  // those are Claude-authored watcher output, not James-owned data.
+  const claudeCtx = await buildClaudeContext(supabase, {
+    openHypothesisLimit: 30,
+    gradeLimit: 20,
+  });
 
-  const { data: openHyps, error: openErr } = await supabase
-    .from('ct_hypotheses')
-    .select('id, claim, tickers, horizon, created_at')
-    .eq('status', 'open')
-    .order('created_at', { ascending: false })
-    .limit(30);
-  if (openErr) {
-    return new Response(JSON.stringify({ ok: false, error: `open load: ${openErr.message}` }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
-  }
+  const tape = await pullRecentTape(supabase, lookbackHours);
 
   const userPayload = {
     max_new_hypotheses: maxPerDay,
-    existing_open_hypotheses: openHyps ?? [],
+    existing_open_hypotheses: claudeCtx.openHypotheses.map((h) => ({
+      id: h.id,
+      claim: h.claim,
+      tickers: h.tickers,
+      horizon: h.horizon,
+      created_at: h.created_at,
+    })),
+    claude_own_open_trades: claudeCtx.claudeOpenTrades.map((t) => ({
+      id: t.id,
+      instrument: t.instrument,
+      side: t.side,
+      hypothesis_id: t.hypothesis_id,
+      thesis: t.thesis,
+    })),
     recent_tape: tape,
+    blocked_from_reading: claudeCtx.blockedFromReading,
   };
+
+  const systemPrompt = `${claudeSystemPromptPreamble(claudeCtx)}\n\n${SYSTEM}`;
 
   let proposals: Proposal[] = [];
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.sonnet,
-      system: SYSTEM,
+      system: systemPrompt,
       messages: [{ role: 'user', content: JSON.stringify(userPayload) }],
       max_tokens: 2000,
       temperature: 0.4,
@@ -238,7 +250,7 @@ serve(async (req) => {
     proposed: inserted.length,
     capped_at: maxPerDay,
     lookback_hours: lookbackHours,
-    existing_open_count: openHyps?.length ?? 0,
+    existing_open_count: claudeCtx.openHypotheses.length,
     tape_sample: {
       observations: tape.observations.length,
       alerts: tape.alerts.length,

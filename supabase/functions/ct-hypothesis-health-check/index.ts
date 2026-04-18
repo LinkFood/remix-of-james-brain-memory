@@ -18,10 +18,11 @@
  */
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { buildClaudeContext, claudeSystemPromptPreamble, type ClaudeContext } from '../_shared/claudeReadSurface.ts';
 
 const MAX_PER_RUN = 20;
 
@@ -66,6 +67,7 @@ Rules:
 async function judgeHypothesis(
   h: HypothesisRow,
   marketState: Record<string, unknown> | null,
+  systemPrompt: string,
 ): Promise<HaikuVerdict | null> {
   try {
     const payload = {
@@ -78,7 +80,7 @@ async function judgeHypothesis(
     };
     const res = await callClaude({
       model: CLAUDE_MODELS.haiku,
-      system: HAIKU_SYSTEM,
+      system: systemPrompt,
       messages: [{ role: 'user', content: JSON.stringify(payload) }],
       max_tokens: 250,
       temperature: 0.1,
@@ -99,23 +101,14 @@ async function judgeHypothesis(
   }
 }
 
-async function loadMarketState(supabase: SupabaseClient): Promise<Record<string, unknown> | null> {
-  const { data, error } = await supabase
-    .from('ct_heartbeats')
-    .select('status_line, watching, current_reads, created_at')
-    .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) {
-    console.warn(`[ct-hypothesis-health-check] heartbeat load failed: ${error.message}`);
-    return null;
-  }
-  if (!data) return null;
+function marketStateFromContext(ctx: ClaudeContext): Record<string, unknown> | null {
+  const hb = ctx.latestHeartbeat;
+  if (!hb) return null;
   return {
-    status_line: data.status_line,
-    watching: data.watching,
-    current_reads: data.current_reads,
-    snapshot_at: data.created_at,
+    status_line: hb.status_line,
+    watching: hb.watching,
+    current_reads: hb.current_reads,
+    snapshot_at: hb.created_at,
   };
 }
 
@@ -137,7 +130,12 @@ serve(async (req) => {
   );
   const startedAt = Date.now();
 
-  const marketState = await loadMarketState(supabase);
+  // ISOLATION: all context (heartbeat, config, preamble) via Claude read surface.
+  // The stale-first ordering below is a separate query against the same
+  // Claude-own ct_hypotheses table — still inside the contract.
+  const claudeCtx = await buildClaudeContext(supabase, { heartbeatLimit: 1 });
+  const marketState = marketStateFromContext(claudeCtx);
+  const systemPrompt = `${claudeSystemPromptPreamble(claudeCtx)}\n\n${HAIKU_SYSTEM}`;
 
   const { data: open, error } = await supabase
     .from('ct_hypotheses')
@@ -157,7 +155,7 @@ serve(async (req) => {
   let intact = 0, invalidated = 0, ambiguous = 0, failed = 0;
 
   for (const h of rows) {
-    const v = await judgeHypothesis(h, marketState);
+    const v = await judgeHypothesis(h, marketState, systemPrompt);
     if (!v) { failed++; continue; }
 
     if (v.verdict === 'invalidated') {

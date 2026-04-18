@@ -19,6 +19,11 @@
  * Auth: service role only. Called by pg_cron.
  */
 
+// ISOLATION AUDIT (2026-04-18): reads ct_hypotheses + ct_hypothesis_evidence,
+// writes via retire_hypothesis / update_hypothesis_confidence RPCs. All
+// Claude-own tables. No James-side reads. No Claude API call, so no preamble.
+// Contract satisfied. See _shared/CLAUDE_READ_SURFACE.md.
+
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
