@@ -129,8 +129,21 @@ serve(async (req) => {
       }
       const data = extractData(raw);
       for (const r of data) {
-        // UW may return { ticker, correlation } or { ticker_a, ticker_b, correlation }
-        const other = strOrNull(r.ticker ?? r.ticker_b ?? r.symbol ?? r.peer);
+        // UW returns { ticker_fst, ticker_snd, score, info_fst, info_snd } —
+        // verified via ct-mcp-shape-probe 2026-04-19. We also tolerate the
+        // older shapes (ticker, ticker_b, symbol, peer / correlation, corr,
+        // value) in case UW ships a schema change — tolerance is cheap.
+        const fst = strOrNull(r.ticker_fst);
+        const snd = strOrNull(r.ticker_snd);
+        // If UW gave us (fst, snd) use them directly; fst is the seed we
+        // queried with, snd is the peer. Otherwise fall back to the single-
+        // ticker shapes.
+        let other: string | null;
+        if (fst && snd) {
+          other = fst.toUpperCase() === upper ? snd : fst;
+        } else {
+          other = strOrNull(r.ticker ?? r.ticker_b ?? r.symbol ?? r.peer);
+        }
         if (!other) continue;
         const otherUpper = other.toUpperCase();
         if (otherUpper === upper) continue;
@@ -141,7 +154,7 @@ serve(async (req) => {
           ticker_a: a,
           ticker_b: b,
           window_days: UW_DEFAULT_WINDOW_SENTINEL,
-          correlation: numOrNull(r.correlation ?? r.corr ?? r.value),
+          correlation: numOrNull(r.score ?? r.correlation ?? r.corr ?? r.value),
           ingested_at,
           raw: r,
         });
