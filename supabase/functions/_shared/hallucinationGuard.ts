@@ -24,12 +24,24 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0
 export interface HallucinationFlag {
   bullet: string;
   reason: string;
+  /** The source-truth value we computed, for journaling. */
+  actual?: string;
 }
 
 export interface HallucinationResult {
   valid: boolean;
   flagged: HallucinationFlag[];
+  /**
+   * When flagged.length >= AUTO_REJECT_THRESHOLD, the whole proposal should be
+   * rejected. Callers insert a hallucination_flagged decision row and skip the
+   * hypothesis insert entirely.
+   */
+  accepted: boolean;
+  rejected_reason?: string;
 }
+
+/** Threshold — this many hallucinated bullets on a single proposal = auto-reject. */
+export const AUTO_REJECT_THRESHOLD = 2;
 
 // ---- Pattern detection ------------------------------------------------------
 
@@ -117,7 +129,7 @@ function parseNewsClaim(bullet: string): NewsClaim | null {
 async function validateDarkPool(
   supabase: SupabaseClient,
   claim: DarkPoolClaim,
-): Promise<{ ok: boolean; detail: string }> {
+): Promise<{ ok: boolean; detail: string; actual: string }> {
   const sinceIso = new Date(Date.now() - claim.lookbackHours * 3_600_000).toISOString();
   let query = supabase
     .from('ct_dark_pool_prints')
@@ -125,27 +137,29 @@ async function validateDarkPool(
     .gte('executed_at', sinceIso);
   if (claim.ticker) query = query.eq('ticker', claim.ticker);
   const { data, error } = await query.limit(5000);
-  if (error) return { ok: true, detail: `dark-pool query failed: ${error.message} (passing)` };
+  if (error) return { ok: true, detail: `dark-pool query failed: ${error.message} (passing)`, actual: 'query_error' };
   const total = (data ?? []).reduce((s, r) => s + (Number(r.notional_value) || 0), 0);
   const ok = total >= claim.minNotional;
+  const actual = `${claim.lookbackHours}h notional${claim.ticker ? ` ${claim.ticker}` : ''} = $${total.toFixed(0)}`;
   return {
     ok,
-    detail: `actual ${claim.lookbackHours}h notional${claim.ticker ? ` ${claim.ticker}` : ''} = $${total.toFixed(0)} vs claim >= $${claim.minNotional.toFixed(0)}`,
+    detail: `actual ${actual} vs claim >= $${claim.minNotional.toFixed(0)}`,
+    actual,
   };
 }
 
 async function validateGexFlip(
   supabase: SupabaseClient,
   claim: GexFlipClaim,
-): Promise<{ ok: boolean; detail: string }> {
+): Promise<{ ok: boolean; detail: string; actual: string }> {
   const { data, error } = await supabase
     .from('ct_gex_timeseries')
     .select('strike, net_gex, snapshot_at')
     .eq('ticker', claim.ticker)
     .order('snapshot_at', { ascending: false })
     .limit(400);
-  if (error) return { ok: true, detail: `gex query failed: ${error.message} (passing)` };
-  if (!data || data.length === 0) return { ok: false, detail: `no gex rows for ${claim.ticker}` };
+  if (error) return { ok: true, detail: `gex query failed: ${error.message} (passing)`, actual: 'query_error' };
+  if (!data || data.length === 0) return { ok: false, detail: `no gex rows for ${claim.ticker}`, actual: 'no_data' };
 
   // Use only the latest snapshot.
   const latest = data[0].snapshot_at;
@@ -169,20 +183,22 @@ async function validateGexFlip(
       break;
     }
   }
-  if (flipStrike == null) return { ok: false, detail: `no gex flip found for ${claim.ticker} in latest snap` };
+  if (flipStrike == null) return { ok: false, detail: `no gex flip found for ${claim.ticker} in latest snap`, actual: 'no_flip' };
   const deltaPct = Math.abs(flipStrike - claim.flipLevel) / claim.flipLevel * 100;
   const ok = deltaPct <= 2;
+  const actual = `${claim.ticker} gex flip ≈ ${flipStrike.toFixed(2)}`;
   return {
     ok,
-    detail: `actual flip ≈ ${flipStrike.toFixed(2)} vs claim ${claim.flipLevel} (Δ ${deltaPct.toFixed(2)}%)`,
+    detail: `actual ${actual} vs claim ${claim.flipLevel} (Δ ${deltaPct.toFixed(2)}%)`,
+    actual,
   };
 }
 
 async function validateNews(
   supabase: SupabaseClient,
   claim: NewsClaim,
-): Promise<{ ok: boolean; detail: string }> {
-  if (claim.keywords.length === 0) return { ok: true, detail: 'no keywords to validate' };
+): Promise<{ ok: boolean; detail: string; actual: string }> {
+  if (claim.keywords.length === 0) return { ok: true, detail: 'no keywords to validate', actual: 'no_keywords' };
   const sinceIso = new Date(Date.now() - 48 * 3_600_000).toISOString();
 
   // Build ilike pattern for the strongest keyword; we'll require at least one
@@ -213,11 +229,13 @@ async function validateNews(
     if (!k2 || text.includes(k2) || (k3 && text.includes(k3))) hits.push(`analyses: ${row.news_headline}`);
   }
   const ok = hits.length > 0;
+  const actual = ok
+    ? `${hits.length} headline(s) match [${claim.keywords.join(', ')}] in 48h`
+    : `0 headlines match [${claim.keywords.join(', ')}] in 48h`;
   return {
     ok,
-    detail: ok
-      ? `found ${hits.length} matching headline(s) in 48h`
-      : `no headlines match [${claim.keywords.join(', ')}] in 48h`,
+    detail: actual,
+    actual,
   };
 }
 
@@ -242,19 +260,19 @@ export async function validateHypothesisClaims(
       const dp = parseDarkPoolClaim(bullet);
       if (dp) {
         const r = await validateDarkPool(supabase, dp);
-        if (!r.ok) flagged.push({ bullet, reason: `dark-pool: ${r.detail}` });
+        if (!r.ok) flagged.push({ bullet, reason: `dark-pool: ${r.detail}`, actual: r.actual });
         continue;
       }
       const gex = parseGexFlipClaim(bullet);
       if (gex) {
         const r = await validateGexFlip(supabase, gex);
-        if (!r.ok) flagged.push({ bullet, reason: `gex-flip: ${r.detail}` });
+        if (!r.ok) flagged.push({ bullet, reason: `gex-flip: ${r.detail}`, actual: r.actual });
         continue;
       }
       const news = parseNewsClaim(bullet);
       if (news) {
         const r = await validateNews(supabase, news);
-        if (!r.ok) flagged.push({ bullet, reason: `news: ${r.detail}` });
+        if (!r.ok) flagged.push({ bullet, reason: `news: ${r.detail}`, actual: r.actual });
         continue;
       }
       // No pattern matched — unverifiable, passes through silently.
@@ -263,5 +281,9 @@ export async function validateHypothesisClaims(
       console.warn(`[hallucinationGuard] bullet check threw: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-  return { valid: flagged.length === 0, flagged };
+  const accepted = flagged.length < AUTO_REJECT_THRESHOLD;
+  const rejected_reason = accepted
+    ? undefined
+    : `${flagged.length} bullets failed source-truth validation (threshold ${AUTO_REJECT_THRESHOLD})`;
+  return { valid: flagged.length === 0, flagged, accepted, rejected_reason };
 }

@@ -36,6 +36,7 @@ import { getConfig } from '../_shared/configCache.ts';
 import { buildClaudeContext, claudeSystemPromptPreamble } from '../_shared/claudeReadSurface.ts';
 import { recordDecision } from '../_shared/decisionJournal.ts';
 import { validateHypothesisClaims } from '../_shared/hallucinationGuard.ts';
+import { getTickerQuantCard, TickerQuantCard } from '../_shared/tickerQuantCard.ts';
 
 const VALID_HORIZONS = new Set(['session', 'week', 'month', 'open']);
 
@@ -52,20 +53,55 @@ are not commentary — they are the REASONING LAYER that drives trades. Every
 hypothesis you propose should translate, given the right market state, into a
 concrete trade idea with an entry trigger, stop, target, and size.
 
-From the last ~36h of market observations, alerts, and graded outcomes, propose
-NEW running hypotheses that will produce actionable trade ideas when conditions
-align. Quality > quantity. Zero proposals is a valid, often correct answer.
+PRIMARY DATA SOURCE: The user payload carries \`quant_cards\` — one per watchlist
+ticker. Each card contains precise numbers: structure (spot, gamma_flip,
+call_wall, put_wall, max_pain, iv_rank, iv_percentile, net_gamma, regime),
+flow_last_hour (total_premium, net_call_prem, net_put_prem, whale_count,
+sweep_count), dark_pool_last_hour (print_count, total_notional, largest_single,
+accumulation_score), greek_flow_last_hour (net_delta_flow, net_vega_flow), and
+sentiment (nope_latest, put_call_ratio). These are the ONLY numbers you may
+cite in your because-bullets. Narrative context (observations, alerts,
+wobbly_grades) is supplementary — it gives you ideas; the quant cards give you
+the numbers to back them.
+
+THE CITATION RULE — NON-NEGOTIABLE:
+Every "because" bullet that references a specific numeric value MUST cite
+where that value came from, using the format:
+  "<claim fragment with number> (<TICKER>.<card_path>)"
+
+GOOD examples:
+  ✓ "SPY iv_rank=19 (SPY.structure.iv_rank), call_wall=710 within 0.3% of
+     spot=710.42 (SPY.structure.spot)"
+  ✓ "IWM gamma_flip at 217.50 (IWM.structure.gamma_flip), regime=positive_gamma
+     (IWM.structure.regime) — pinning pressure dominant"
+  ✓ "NVDA flow last hour net_call_prem=$12.4M (NVDA.flow_last_hour.net_call_prem)
+     with 3 whales (NVDA.flow_last_hour.whale_count)"
+
+BAD examples (THESE ARE RULE VIOLATIONS):
+  ✗ "dark pool accumulated $1.72B in last 10min" — no card path; number is
+     synthesized
+  ✗ "IWM gamma flip at 14" — card says 217.50; this is a hallucination
+  ✗ "Per UW: SPY sweeps elevated" — no card path; vague
+
+If the cards don't contain data to support a bullet, DO NOT WRITE THAT BULLET.
+Pick a different angle that the cards DO support. Better to propose fewer
+hypotheses than to fabricate numbers.
 
 Each proposal must have:
   - claim:         one assertive, TRADEABLE sentence — what's true right now AND
                    what trade setup it implies. Bad: "0DTE pins dominate in the
-                   final hour." Good: "SPY pins to max-pain into 3:55 PM when call
-                   wall is within 0.3% of spot — short into max-pain with stop
-                   0.2% above, target max-pain level."
-  - because:       3-5 bullets citing the specific evidence (data, prints, flow,
-                   grades) that back the claim.
+                   final hour." Good: "SPY pins to max-pain 710 (SPY.structure
+                   .max_pain) into 3:55 PM when call_wall 710 (SPY.structure
+                   .call_wall) aligns — short into close, stop 0.2% above,
+                   target max-pain."
+  - because:       3-5 bullets, EACH citing a specific value from quant_cards
+                   using the format above. Narrative references (active_brief,
+                   active_principles, active_biases, recent observations) are
+                   allowed but they don't substitute for quant-card citations.
   - invalidate_if: a CONCRETE trigger (price level, flow pattern, macro print)
                    that would clearly refute the claim and kill any live trade.
+                   Cite card paths where relevant (e.g., "if SPY breaks
+                   put_wall=705 (SPY.structure.put_wall)").
   - horizon:       one of session | week | month | open
   - tickers:       array of tickers the claim touches (uppercase, [] if macro)
 
@@ -82,6 +118,8 @@ Rules:
   - invalidate_if must be measurable — not "if the narrative changes."
   - If you have nothing tradeable, return { "proposals": [] }. Better to pass
     than to force a weak hypothesis that generates weak trades.
+  - Zero numeric citations across all bullets = weak proposal. Hallucinated
+    numbers (values the cards don't support) = auto-rejected downstream.
 
 Return strictly:
   { "proposals": [ { "claim": "...", "because": ["...", "..."], "invalidate_if": "...", "horizon": "session|week|month|open", "tickers": ["SPY"] }, ... ] }
@@ -183,8 +221,26 @@ serve(async (req) => {
 
   const tape = await pullRecentTape(supabase, lookbackHours);
 
+  // PRIMARY CONTEXT: Per-ticker quant cards, loaded in parallel. These are
+  // the numbers Claude must cite. The old narrative-only context let Sonnet
+  // invent values that sounded plausible but weren't in the data (5/6
+  // proposals in first live run hit the hallucination guard). Structural
+  // fix: give precise numbers, require citation, reject fabrications.
+  const watchlist = claudeCtx.watchlist;
+  const quantCardResults = await Promise.all(
+    watchlist.map((t) => getTickerQuantCard(supabase, t)),
+  );
+  const quantCards: TickerQuantCard[] = quantCardResults.filter(
+    (c): c is TickerQuantCard => c !== null,
+  );
+
   const userPayload = {
     max_new_hypotheses: maxPerDay,
+    quant_cards: quantCards,
+    active_brief: claudeCtx.activeBrief,
+    active_principles: claudeCtx.activePrinciples,
+    active_biases: claudeCtx.activeBiases,
+    wobbly_grades: tape.wobbly_grades,
     existing_open_hypotheses: claudeCtx.openHypotheses.map((h) => ({
       id: h.id,
       claim: h.claim,
@@ -199,7 +255,12 @@ serve(async (req) => {
       hypothesis_id: t.hypothesis_id,
       thesis: t.thesis,
     })),
-    recent_tape: tape,
+    // Supplementary narrative context — gives Claude ideas, doesn't supply
+    // numbers. Per SYSTEM rules: any numeric citation must be from quant_cards.
+    supplementary_narrative: {
+      observations: tape.observations,
+      alerts: tape.alerts,
+    },
     blocked_from_reading: claudeCtx.blockedFromReading,
   };
 
@@ -249,6 +310,8 @@ serve(async (req) => {
   }
 
   const inserted: Array<{ id: string; claim: string; horizon: string; tickers: string[]; hallucination_flag: boolean }> = [];
+  const autoRejected: Array<{ claim: string; tickers: string[]; rejected_reason: string; flagged_count: number }> = [];
+  let singleFlagCount = 0;
   // Spread token+cost across proposals so each decision row carries a share.
   const perProposalTokensIn = proposals.length > 0 ? Math.round(tokensIn / proposals.length) : tokensIn;
   const perProposalTokensOut = proposals.length > 0 ? Math.round(tokensOut / proposals.length) : tokensOut;
@@ -256,6 +319,69 @@ serve(async (req) => {
 
   for (const p of proposals) {
     const tickers = p.tickers.map((t) => t.toUpperCase().trim()).filter(Boolean);
+
+    // Hallucination check FIRST — before inserting. If 2+ bullets fail
+    // source-truth validation, the proposal is auto-rejected and no
+    // hypothesis row is created. Single-flag proposals still insert, tagged.
+    let hallucinationFlag = false;
+    let hallucinationReason: string | undefined;
+    let flaggedBullets: Array<{ bullet: string; reason: string; actual?: string }> = [];
+    let accepted = true;
+    let rejectedReason: string | undefined;
+    try {
+      const check = await validateHypothesisClaims(supabase, p.because);
+      flaggedBullets = check.flagged;
+      accepted = check.accepted;
+      rejectedReason = check.rejected_reason;
+      if (!check.valid) {
+        hallucinationFlag = true;
+        hallucinationReason = check.flagged
+          .map((f) => `"${f.bullet.slice(0, 80)}" → ${f.reason}`)
+          .join(' | ')
+          .slice(0, 1000);
+      }
+    } catch (e) {
+      console.warn(`[ct-hypothesis-proposer] hallucination guard threw: ${e instanceof Error ? e.message : String(e)}`);
+    }
+
+    // AUTO-REJECT path — 2+ hallucinated bullets. Log to decision journal
+    // with source-truth data, skip insert, move on.
+    if (!accepted) {
+      autoRejected.push({
+        claim: p.claim,
+        tickers,
+        rejected_reason: rejectedReason ?? 'multi_hallucination',
+        flagged_count: flaggedBullets.length,
+      });
+      await recordDecision(supabase, {
+        decision_type: 'hallucination_flagged',
+        model_tier: 'sonnet',
+        reasoning: `Proposal auto-rejected: ${flaggedBullets.length} bullets failed source-truth validation. Claim: ${p.claim.slice(0, 400)}. Flagged bullets + actuals: ${flaggedBullets.map((f) => `["${f.bullet.slice(0, 120)}" → reason: ${f.reason}; source_truth: ${f.actual ?? 'n/a'}]`).join(' | ').slice(0, 3000)}`,
+        outcome: 'rejected_multi_hallucination',
+        context_snapshot: {
+          brief_id: claudeCtx.activeBrief?.id ?? null,
+          claim: p.claim,
+          because: p.because,
+          invalidate_if: p.invalidate_if,
+          tickers,
+          horizon: p.horizon,
+          flagged_count: flaggedBullets.length,
+          flagged_bullets: flaggedBullets,
+          quant_cards_provided: quantCards.length,
+        },
+        tool_calls_summary: { called: 'validateHypothesisClaims', flagged: flaggedBullets.length },
+        linked_brief_id: claudeCtx.activeBrief?.id,
+        hallucination_flag: true,
+        hallucination_reason: hallucinationReason,
+        tokens_in: perProposalTokensIn,
+        tokens_out: perProposalTokensOut,
+        cost_usd: perProposalCost,
+      });
+      continue;
+    }
+
+    if (hallucinationFlag) singleFlagCount += 1;
+
     const { data, error } = await supabase
       .from('ct_hypotheses')
       .insert({
@@ -283,22 +409,6 @@ serve(async (req) => {
       continue;
     }
 
-    // Hallucination check on because bullets — non-blocking, flag only.
-    let hallucinationFlag = false;
-    let hallucinationReason: string | undefined;
-    try {
-      const check = await validateHypothesisClaims(supabase, p.because);
-      if (!check.valid) {
-        hallucinationFlag = true;
-        hallucinationReason = check.flagged
-          .map((f) => `"${f.bullet.slice(0, 80)}" → ${f.reason}`)
-          .join(' | ')
-          .slice(0, 1000);
-      }
-    } catch (e) {
-      console.warn(`[ct-hypothesis-proposer] hallucination guard threw: ${e instanceof Error ? e.message : String(e)}`);
-    }
-
     inserted.push({ id: data.id, claim: p.claim, horizon: p.horizon, tickers, hallucination_flag: hallucinationFlag });
     await supabase.from('ct_hypothesis_events').insert({
       hypothesis_id: data.id,
@@ -319,6 +429,7 @@ serve(async (req) => {
         existing_hypothesis_count: claudeCtx.openHypotheses.length,
         horizon: p.horizon,
         tickers,
+        quant_cards_provided: quantCards.length,
         tape_sample_sizes: {
           observations: tape.observations.length,
           alerts: tape.alerts.length,
@@ -327,7 +438,7 @@ serve(async (req) => {
       },
       narrative_signal: {
         reasoning: p.because.join(' | ').slice(0, 2000),
-        sources: ['ct_observations', 'ct_alerts', 'ct_grades'],
+        sources: ['quant_cards', 'ct_observations', 'ct_alerts', 'ct_grades'],
       },
       tool_calls_summary: { called: 'callClaude(sonnet_46, propose_hypotheses)', proposals_returned: proposals.length },
       linked_hypothesis_id: data.id,
@@ -353,6 +464,7 @@ serve(async (req) => {
         brief_id: claudeCtx.activeBrief?.id ?? null,
         lookback_hours: lookbackHours,
         existing_hypothesis_count: claudeCtx.openHypotheses.length,
+        quant_cards_provided: quantCards.length,
         tape_sample_sizes: {
           observations: tape.observations.length,
           alerts: tape.alerts.length,
@@ -367,18 +479,53 @@ serve(async (req) => {
     });
   }
 
+  // End-of-run summary — one row per proposer invocation. Lets us track
+  // hallucination rate over time and detect regression/drift.
+  const proposalsTotal = proposals.length;
+  const proposalsAccepted = inserted.length;
+  const proposalsRejected = autoRejected.length;
+  await recordDecision(supabase, {
+    decision_type: 'propose_hypothesis',
+    model_tier: 'sonnet',
+    reasoning: `Proposer run summary: total=${proposalsTotal}, accepted=${proposalsAccepted}, rejected_multi_hallucination=${proposalsRejected}, single_flag=${singleFlagCount}. Quant cards provided: ${quantCards.length}/${watchlist.length}.`,
+    outcome: `run_summary_${proposalsTotal}_${proposalsAccepted}_${proposalsRejected}`,
+    context_snapshot: {
+      brief_id: claudeCtx.activeBrief?.id ?? null,
+      proposals_total: proposalsTotal,
+      proposals_accepted: proposalsAccepted,
+      proposals_rejected_for_multi_hallucination: proposalsRejected,
+      single_flag_count: singleFlagCount,
+      quant_cards_provided: quantCards.length,
+      watchlist_size: watchlist.length,
+      auto_rejected_samples: autoRejected.slice(0, 5),
+      duration_ms: Date.now() - startedAt,
+    },
+    linked_brief_id: claudeCtx.activeBrief?.id,
+    tool_calls_summary: { kind: 'run_summary' },
+    tokens_in: tokensIn,
+    tokens_out: tokensOut,
+    cost_usd: costUsd,
+  });
+
   const body = {
     ok: true,
     proposed: inserted.length,
+    proposals_total: proposalsTotal,
+    proposals_accepted: proposalsAccepted,
+    proposals_rejected_for_multi_hallucination: proposalsRejected,
+    single_flag_count: singleFlagCount,
     capped_at: maxPerDay,
     lookback_hours: lookbackHours,
     existing_open_count: claudeCtx.openHypotheses.length,
+    quant_cards_provided: quantCards.length,
+    watchlist_size: watchlist.length,
     tape_sample: {
       observations: tape.observations.length,
       alerts: tape.alerts.length,
       wobbly_grades: tape.wobbly_grades.length,
     },
     inserted,
+    auto_rejected: autoRejected,
     duration_ms: Date.now() - startedAt,
   };
   console.log('[ct-hypothesis-proposer]', JSON.stringify(body));
