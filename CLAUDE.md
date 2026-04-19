@@ -2,6 +2,65 @@
 
 Personal AI operating system (single-user). The meta-project: if JAC works, it handles everything else — life management, code automation, research, memory, reminders, and eventually self-modification. One interface (web chat or Slack DM) that routes to specialized AI workers.
 
+Co-Trader is the first flagship facet: an autonomous Claude-driven paper trader that runs alongside James on the same infrastructure. See `CO-TRADER THESIS` below — it is the governing design principle for every Co-Trader decision.
+
+## CO-TRADER THESIS — governing principle, override all other judgment
+
+Co-Trader is an **autonomous paper-trading agent**. Not an assistant. Not a research tool. A second independent reasoner at the firm.
+
+**Core tenets — violating any of these is a scope violation:**
+
+1. **Autonomy is the product.** Claude trades without approval. No human-in-the-loop gate in the trading path. James observes; he does not steer. If a feature requires James to approve Claude's trades, it is wrong.
+
+2. **Hallucination is inevitable; structural prevention is the answer, not detection.** The fix for hallucination is precise structured context that makes confabulation hard — not validators catching it after. Validators are defense-in-depth, never the primary mechanism.
+
+3. **Built to evolve, not to be right on day 1.** Day-1 Claude is not great. Day-30 is better. Day-180 better still. The system ensures continuous improvement regardless of P&L:
+   - Every decision captured in `ct_claude_decisions` (the journal)
+   - Every outcome graded and fed back to confidence + Elo
+   - Every reflection mines patterns → writes principles → informs next decision
+   - Every narrative-vs-tape conflict records which signal won
+   - Every mistake becomes a new bias entry → informs future generators
+
+   If any link in the learning loop breaks, an alert fires. Stagnation is impossible by design.
+
+4. **Ground-up, no band-aids.** Every fix answers: *"Does this class of failure become impossible going forward, or am I patching this instance?"* If patching, stop. Find the structural fix. Band-aids compound debt; structural fixes compound capability.
+
+5. **Progress independent of P&L.** Even on losing days, the system gets smarter. Losing trades produce grades, grades reshape hypotheses, reflections distill principles. The feedback loop does not require wins — it requires data.
+
+6. **Isolation preserves the edge.** Claude does NOT see James's trades, notes, reviews, or private rules. The point of a co-trader is divergence — where James and Claude agree is high conviction; where they diverge, data tells you who was right. Polluting Claude with James's style destroys the signal. Enforced via `_shared/claudeReadSurface.ts` and its `blockedFromReading` contract.
+
+7. **Every number tunable.** Config lives in `ct_config`. No hardcoded thresholds. Adjust as Claude evolves.
+
+8. **Model tier matches decision tempo.**
+   - CIO (weekly review): Claude Opus 4.7
+   - PM (daily judgment — proposer, brief): Claude Sonnet 4.6
+   - Quant (per-heartbeat evaluation — generator, selector): Claude Haiku 4.5
+   - Execution (triggers, stops): pure logic, no LLM
+   Expensive thinking where decisions are large; fast thinking where decisions are small.
+
+9. **UI is glance-first.** User sees state in one view. Tabs drill down. Nothing critical hides behind navigation.
+
+10. **Real-time contextual awareness.** Claude trades the world, not just the tape. Daily Brief digests macro narrative. Breaking-news watcher regenerates brief on severity-4 events. Per-ticker quant cards consolidate structural + flow + sentiment + events + news for every decision. Claude reads the world, not a silo.
+
+11. **Signal decomposition on every decision.** Narrative view, tape view, alignment, and which signal Claude followed are captured explicitly on `ct_trade_ideas`, `ct_trades`, and `ct_claude_decisions`. Over time Claude learns tape-vs-narrative resolution from his own track record — not from hardcoded rules.
+
+12. **Duplicate nothing UW maintains.** Use their OpenAPI spec / MCP server / prebuilt prompts. Hand-rolled HTTP clients are tech debt the moment UW ships a new endpoint.
+
+### Anti-principles — what we do NOT do
+
+- Band-aids. Workarounds. "Good enough for now."
+- Approval gates in Claude's trading path.
+- Hardcoded magic numbers (all go to `ct_config`).
+- James-bias leakage to Claude (enforced by `blockedFromReading`).
+- Silent failure modes (every cron, ingester, dependency has health signals).
+- Optimizing for day-1 at the expense of day-90.
+- UI as afterthought.
+- Duplicating what UW already maintains.
+
+### Decision ritual
+
+When in doubt on any Co-Trader change, ask: *"Does this class of failure become impossible going forward, or am I patching this instance?"* If patching, redesign until structural.
+
 ## Disk Health Check
 
 Run `df -h /` at session start, before big builds (3+ files/agents), every 5+ commits, and before deploys/pushes. If under 20GB: `sudo rm -rf /private/tmp/*`, re-verify, stop if still low.
