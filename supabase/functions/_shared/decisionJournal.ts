@@ -16,6 +16,42 @@
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 
+// Module-scoped cache for the current generation id. Preflight found callers
+// weren't threading generation_id into recordDecision, so journal rows weren't
+// getting tagged even when the active generation was well-known. Per tenet 4
+// (fix the class, not the instance), we auto-resolve here so future call
+// sites can never "forget" to tag. Cache invalidates on recordDecision
+// failure or after TTL so we pick up new generations automatically.
+let _cachedGenerationId: string | null | undefined = undefined;
+let _cachedAt = 0;
+const GEN_CACHE_TTL_MS = 60_000;
+
+async function resolveCurrentGenerationId(supabase: SupabaseClient): Promise<string | null> {
+  const now = Date.now();
+  if (_cachedGenerationId !== undefined && (now - _cachedAt) < GEN_CACHE_TTL_MS) {
+    return _cachedGenerationId;
+  }
+  try {
+    const { data } = await supabase.rpc('current_claude_generation');
+    const id = Array.isArray(data) && data[0]?.id ? (data[0].id as string) : null;
+    _cachedGenerationId = id;
+    _cachedAt = now;
+    return id;
+  } catch {
+    // RPC missing or migration not yet applied — treat as no-gen and don't
+    // poison future lookups for long.
+    _cachedGenerationId = null;
+    _cachedAt = now;
+    return null;
+  }
+}
+
+/** Invalidate the generation id cache. Call after a known generation change. */
+export function invalidateGenerationCache(): void {
+  _cachedGenerationId = undefined;
+  _cachedAt = 0;
+}
+
 export type DecisionType =
   | 'propose_hypothesis'
   | 'arm_trade_idea'
@@ -100,7 +136,14 @@ export async function recordDecision(
     if (entry.linked_trade_idea_id) row.linked_trade_idea_id = entry.linked_trade_idea_id;
     if (entry.linked_trade_id) row.linked_trade_id = entry.linked_trade_id;
     if (entry.linked_brief_id) row.linked_brief_id = entry.linked_brief_id;
-    if (entry.generation_id !== undefined && entry.generation_id !== null) row.generation_id = entry.generation_id;
+
+    // Generation tagging: explicit wins, else auto-resolve from active gen.
+    // This makes "forgot to pass generation_id" structurally impossible.
+    let genId: string | null | undefined = entry.generation_id;
+    if (genId === undefined) {
+      genId = await resolveCurrentGenerationId(supabase);
+    }
+    if (genId) row.generation_id = genId;
     if (entry.hallucination_reason) row.hallucination_reason = entry.hallucination_reason.slice(0, 1000);
     if (entry.tokens_in !== undefined) row.tokens_in = entry.tokens_in;
     if (entry.tokens_out !== undefined) row.tokens_out = entry.tokens_out;
