@@ -1,9 +1,11 @@
 /**
  * ct-sector-tide-ingester — sector-level net call/put premium (5-min cadence).
  *
- * UW `/api/market/sector-tide` returns a time-series of per-sector rows. We
- * take the most recent captured_at per sector and upsert on (sector,
- * captured_at). Runs every 5 min during RTH weekdays.
+ * UW's sector tide is per-sector, not market-wide. `getSectorTide()` loops
+ * the 11 UW sectors against `/api/market/{sector}/sector-tide` and returns
+ * { per_sector: { [sector]: raw }, errors: [...] }. We flatten the time series
+ * rows and upsert on (sector, captured_at). Runs every 5 min during RTH
+ * weekdays.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -25,11 +27,6 @@ function numOrNull(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
   const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.\-]/g, ''));
   return Number.isFinite(n) ? n : null;
-}
-
-function strOrNull(v: unknown): string | null {
-  if (v === null || v === undefined) return null;
-  return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
 function pickTimestamp(v: unknown): string | null {
@@ -87,34 +84,40 @@ serve(async (req) => {
   const errors: string[] = [];
 
   try {
-    let raw: unknown = null;
+    let bundle: { per_sector: Record<string, unknown>; errors: Array<{ sector: string; error: string }> } = { per_sector: {}, errors: [] };
     try {
-      raw = await getSectorTide();
+      bundle = await getSectorTide();
     } catch (e) {
       errors.push(`uw: ${e instanceof Error ? e.message : String(e)}`);
     }
-    const data = extractData(raw);
+    for (const { sector, error } of bundle.errors) {
+      errors.push(`${sector}: ${error}`);
+    }
 
-    // Build rows. A single call can return many (sector, timestamp) combos —
-    // we upsert all of them; the unique constraint dedupes re-runs.
+    // Flatten {sector -> raw} into rows. Each raw is a Daily Market Tide shape:
+    // { data: [{ timestamp, net_call_premium, net_put_premium, ... }] }.
     const rows: Row[] = [];
     const seen = new Set<string>();
-    for (const r of data) {
-      const sector = strOrNull(r.sector ?? r.name ?? r.sector_name);
-      const captured_at = pickTimestamp(r.captured_at ?? r.timestamp ?? r.time ?? r.date);
-      if (!sector || !captured_at) continue;
-      const key = `${sector}|${captured_at}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rows.push({
-        sector,
-        captured_at,
-        net_call_premium: numOrNull(r.net_call_premium ?? r.call_premium ?? r.net_calls),
-        net_put_premium: numOrNull(r.net_put_premium ?? r.put_premium ?? r.net_puts),
-        net_delta: numOrNull(r.net_delta ?? r.delta),
-        net_vega: numOrNull(r.net_vega ?? r.vega),
-        raw: r,
-      });
+    let totalSeen = 0;
+    for (const [sector, raw] of Object.entries(bundle.per_sector)) {
+      const data = extractData(raw);
+      totalSeen += data.length;
+      for (const r of data) {
+        const captured_at = pickTimestamp(r.timestamp ?? r.captured_at ?? r.time ?? r.date);
+        if (!captured_at) continue;
+        const key = `${sector}|${captured_at}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push({
+          sector,
+          captured_at,
+          net_call_premium: numOrNull(r.net_call_premium ?? r.call_premium ?? r.net_calls),
+          net_put_premium: numOrNull(r.net_put_premium ?? r.put_premium ?? r.net_puts),
+          net_delta: numOrNull(r.net_delta ?? r.delta),
+          net_vega: numOrNull(r.net_vega ?? r.vega),
+          raw: r,
+        });
+      }
     }
 
     let inserted = 0;
@@ -126,7 +129,8 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
-      seen: data.length,
+      sectors: Object.keys(bundle.per_sector).length,
+      seen: totalSeen,
       rows: rows.length,
       inserted,
       errors,

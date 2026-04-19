@@ -1,8 +1,13 @@
 /**
  * Unusual Whales API client
  *
- * Thin wrapper over the UW REST API. Strictly follows the endpoint whitelist
- * from https://unusualwhales.com/skill.md to avoid hallucinated paths.
+ * Thin wrapper over the UW REST API. Paths below are VERIFIED against the live
+ * OpenAPI spec at https://api.unusualwhales.com/api/openapi on 2026-04-18.
+ *
+ * Drift detection: `ct-uw-endpoint-health-check` runs daily at 05:00 UTC and
+ * writes to `ct_uw_endpoint_health`. Any 4xx on a wrapper flips it to
+ * 'degraded'/'broken' and surfaces in /preflight — so the next time UW renames
+ * a path, we learn from telemetry instead of a silent trade-side outage.
  *
  * Mandatory headers (per SKILL.md):
  *   Authorization: Bearer <UW_API_KEY>
@@ -12,6 +17,10 @@
  * retried with exponential backoff.
  *
  * Rate limit: 120 req/min on API Basic. Bulk helpers respect that.
+ *
+ * PHASE 2 TODO: migrate from this hand-rolled HTTP client to the UW official
+ * MCP server (`@unusualwhales/mcp`). Eliminates the endpoint-maintenance loop
+ * entirely — per CO-TRADER THESIS tenet 12 ("Duplicate nothing UW maintains").
  */
 
 const UW_BASE_URL = 'https://api.unusualwhales.com';
@@ -323,41 +332,104 @@ export function getCongressTrades(): Promise<unknown> {
 }
 
 /**
- * Analyst rating changes via the screener endpoint. Returns recent upgrades,
- * downgrades, reiterations, price-target revisions across the market. Filter
- * by ticker in-memory against the watchlist.
+ * Analyst rating changes (verified path 2026-04-18: `/api/screener/analysts`).
+ * OpenAPI: PublicApi.ScreenerController.analyst_ratings.
+ *
+ * Response row fields: { action, analyst_name, firm, recommendation, sector,
+ * target, ticker, timestamp }.
+ *
+ * `action` param enum is not documented — UW accepts `recommendation` as a
+ * filter (buy/hold/sell) but not a free-form action. We pull unfiltered and
+ * classify in-memory.
  */
 export function getAnalystRatings(params: {
   limit?: number;
   ticker?: string;
-  action?: 'upgraded' | 'downgraded' | 'reiterated' | 'initiated' | 'target_raised' | 'target_lowered';
+  recommendation?: 'buy' | 'hold' | 'sell';
 } = {}): Promise<unknown> {
-  return uwGet('/api/screener/analyst-rating', params);
+  return uwGet('/api/screener/analysts', params);
 }
 
 /**
  * Short interest vs float (bi-monthly settlement + days-to-cover).
- * v2 endpoint returns richer payload than the legacy `/shorts/interest-float`.
+ * Verified path 2026-04-18: `/api/shorts/{ticker}/interest-float/v2`.
+ * OpenAPI: PublicApi.ShortController.short_interest_and_float_v2.
+ *
+ * Response fields: { short_interest, si_float, days_to_cover, market_date,
+ * total_float, short_shares_available, fee_rate, rebate_rate, symbol }.
+ * The payload returns a single object in `data` (not an array).
  */
 export function getShortInterestFloat(ticker: string): Promise<unknown> {
-  return uwGet(`/api/shorts/${ticker}/interest-float-v2`);
+  return uwGet(`/api/shorts/${ticker}/interest-float/v2`);
 }
 
 /**
- * Recent short-volume ratio time series. Daily short-volume as % of total
- * consolidated volume (higher = more selling pressure from shorts).
+ * Short volume + ratio time series. Verified path 2026-04-18:
+ * `/api/shorts/{ticker}/volume-and-ratio`.
+ * OpenAPI: PublicApi.ShortController.short_volume_and_ratio.
+ *
+ * Response row fields: { market_date, short_volume, short_volume_ratio,
+ * total_volume, close_price }. Daily observations, most recent last.
  */
 export function getShortVolumeRatio(ticker: string): Promise<unknown> {
-  return uwGet(`/api/shorts/${ticker}/volume-ratio`);
+  return uwGet(`/api/shorts/${ticker}/volume-and-ratio`);
 }
 
 /**
- * Sector tide — net call/put premium + net delta/vega by sector. Community-
- * documented hidden gem. Gives sector rotation signal that doesn't show up in
- * price action yet.
+ * The 11 UW sectors (from `Single sector` schema). Used by getSectorTide()
+ * to loop — UW's sector-tide is per-sector, not market-wide.
  */
-export function getSectorTide(): Promise<unknown> {
-  return uwGet('/api/market/sector-tide');
+export const UW_SECTORS = [
+  'Basic Materials',
+  'Communication Services',
+  'Consumer Cyclical',
+  'Consumer Defensive',
+  'Energy',
+  'Financial Services',
+  'Healthcare',
+  'Industrials',
+  'Real Estate',
+  'Technology',
+  'Utilities',
+] as const;
+export type UwSector = typeof UW_SECTORS[number];
+
+/**
+ * Sector tide for one sector. Verified path 2026-04-18:
+ * `/api/market/{sector}/sector-tide`.
+ * OpenAPI: PublicApi.MarketController.sec_indst.
+ *
+ * Returns `Daily Market Tide` shape: time series of rows with
+ * net_call_premium, net_put_premium, timestamp.
+ *
+ * Optional `date` param for historical snapshot.
+ */
+export function getSectorTideForSector(sector: UwSector, date?: string): Promise<unknown> {
+  return uwGet(`/api/market/${encodeURIComponent(sector)}/sector-tide`, date ? { date } : undefined);
+}
+
+/**
+ * Pulls sector tide for all 11 UW sectors sequentially. 11 requests. Replaces
+ * the market-wide `/api/market/sector-tide` which does NOT exist in UW's API —
+ * sector-tide is always per-sector.
+ *
+ * Returns { sector: raw[] } map plus a flat errors list. Partial failure is
+ * tolerated — one bad sector does not crash the batch.
+ */
+export async function getSectorTide(): Promise<{
+  per_sector: Record<string, unknown>;
+  errors: Array<{ sector: string; error: string }>;
+}> {
+  const per_sector: Record<string, unknown> = {};
+  const errors: Array<{ sector: string; error: string }> = [];
+  for (const sector of UW_SECTORS) {
+    try {
+      per_sector[sector] = await getSectorTideForSector(sector);
+    } catch (e) {
+      errors.push({ sector, error: e instanceof Error ? e.message : String(e) });
+    }
+  }
+  return { per_sector, errors };
 }
 
 /**
@@ -398,16 +470,31 @@ export function getEarnings(ticker: string, report_type?: string): Promise<unkno
 // ============================================================================
 
 /**
- * Technical indicator series.
- * Functions: SMA, EMA, RSI, MACD, BBANDS, STOCH, ADX, ATR, OBV, VWAP, CCI,
- * WILLR, AROON, MFI (14 supported).
+ * Technical indicator series. Verified path 2026-04-18:
+ * `/api/stock/{ticker}/technical-indicator/{function}`.
+ * OpenAPI: PublicApi.AvFundamentalController.technical_indicator.
+ *
+ * IMPORTANT:
+ *  - `fn` MUST be UPPERCASE (RSI, SMA, MACD, BBANDS, VWAP, ATR, ...).
+ *    Lowercase returns 422.
+ *  - `interval` enum: 1min | 5min | 15min | 30min | 60min | daily | weekly |
+ *    monthly. NOT `5m` — that's an AlphaVantage-style shorthand that 422s.
+ *  - `month` (YYYY-MM) only matters for intraday intervals.
+ *
+ * Supported functions (per spec): SMA, EMA, WMA, DEMA, TEMA, TRIMA, KAMA, MAMA,
+ * T3, MACD, MACDEXT, STOCH, STOCHF, RSI, STOCHRSI, WILLR, ADX, ADXR, APO, PPO,
+ * MOM, BOP, CCI, CMO, ROC, ROCR, AROON, AROONOSC, MFI, TRIX, ULTOSC, DX,
+ * MINUS_DI, PLUS_DI, MINUS_DM, PLUS_DM, BBANDS, MIDPOINT, MIDPRICE, SAR,
+ * TRANGE, ATR, NATR, AD, ADOSC, OBV, HT_TRENDLINE, HT_SINE, HT_TRENDMODE,
+ * HT_DCPERIOD, HT_DCPHASE, HT_PHASOR, VWAP.
  */
+export type TechnicalInterval = '1min' | '5min' | '15min' | '30min' | '60min' | 'daily' | 'weekly' | 'monthly';
 export function getTechnicalIndicator(
   ticker: string,
   fn: string,
-  params: { interval?: string; time_period?: number; series_type?: string } = {}
+  params: { interval?: TechnicalInterval; time_period?: number; series_type?: 'close' | 'open' | 'high' | 'low'; month?: string } = {}
 ): Promise<unknown> {
-  return uwGet(`/api/stock/${ticker}/technical-indicator/${fn}`, params);
+  return uwGet(`/api/stock/${ticker}/technical-indicator/${fn.toUpperCase()}`, params);
 }
 
 // ============================================================================
@@ -601,3 +688,58 @@ export async function pullWatcherState(tickers: readonly string[] = WATCHLIST): 
 
   return { spot_gex, greek_exposure, options_volume, spx_spot_gex, spx_greek_exposure, market_tide, vix, errors };
 }
+
+// ============================================================================
+// Endpoint registry — consumed by ct-uw-endpoint-health-check
+// ============================================================================
+
+/**
+ * Every UW endpoint this codebase touches, paired with a minimal probe that
+ * verifies the wrapper still works. Each probe is a no-side-effect GET that
+ * returns quickly and uses a low-limit / single-ticker call.
+ *
+ * The health-check cron iterates this registry daily and flips entries to
+ * 'degraded' / 'broken' in `ct_uw_endpoint_health`. When UW renames a path,
+ * the health-check catches it before the ingester cron silently starves.
+ *
+ * Adding a new wrapper? Add it here too — otherwise drift detection is blind
+ * to it.
+ */
+export const UW_ENDPOINT_REGISTRY: Array<{
+  wrapper: string;
+  path_template: string;
+  probe: () => Promise<unknown>;
+}> = [
+  { wrapper: 'getFlowAlerts',            path_template: '/api/option-trades/flow-alerts',                        probe: () => getFlowAlerts({ limit: 1 }) },
+  { wrapper: 'getOptionScreener',        path_template: '/api/screener/option-contracts',                        probe: () => getOptionScreener({ limit: 1 }) },
+  { wrapper: 'getMarketTide',            path_template: '/api/market/market-tide',                               probe: () => getMarketTide() },
+  { wrapper: 'getTopNetImpact',          path_template: '/api/market/top-net-impact',                            probe: () => getTopNetImpact() },
+  { wrapper: 'getDarkPoolRecent',        path_template: '/api/darkpool/recent',                                  probe: () => getDarkPoolRecent() },
+  { wrapper: 'getDarkPool',              path_template: '/api/darkpool/{ticker}',                                probe: () => getDarkPool('SPY') },
+  { wrapper: 'getSpotGexByStrike',       path_template: '/api/stock/{ticker}/spot-exposures/strike',             probe: () => getSpotGexByStrike('SPY') },
+  { wrapper: 'getStaticGexByStrike',     path_template: '/api/stock/{ticker}/greek-exposure/strike',             probe: () => getStaticGexByStrike('SPY') },
+  { wrapper: 'getOptionsVolume',         path_template: '/api/stock/{ticker}/options-volume',                    probe: () => getOptionsVolume('SPY') },
+  { wrapper: 'getGreeks',                path_template: '/api/stock/{ticker}/greeks',                            probe: () => getGreeks('SPY') },
+  { wrapper: 'getOptionContracts',       path_template: '/api/stock/{ticker}/option-contracts',                  probe: () => getOptionContracts('SPY') },
+  { wrapper: 'getInterpolatedIV',        path_template: '/api/stock/{ticker}/interpolated-iv',                   probe: () => getInterpolatedIV('SPY') },
+  { wrapper: 'getNetPremiumTicks',       path_template: '/api/stock/{ticker}/net-prem-ticks',                    probe: () => getNetPremiumTicks('SPY') },
+  { wrapper: 'getNope',                  path_template: '/api/stock/{ticker}/nope',                              probe: () => getNope('SPY') },
+  { wrapper: 'getGreekFlow',             path_template: '/api/stock/{ticker}/greek-flow',                        probe: () => getGreekFlow('SPY') },
+  { wrapper: 'getMaxPain',               path_template: '/api/stock/{ticker}/max-pain',                          probe: () => getMaxPain('SPY') },
+  { wrapper: 'getIvRank',                path_template: '/api/stock/{ticker}/iv-rank',                           probe: () => getIvRank('SPY') },
+  { wrapper: 'getRecentFlowForTicker',   path_template: '/api/stock/{ticker}/flow-recent',                       probe: () => getRecentFlowForTicker('SPY') },
+  { wrapper: 'getEarningsAfterhours',    path_template: '/api/earnings/afterhours',                              probe: () => getEarningsAfterhours() },
+  { wrapper: 'getEarningsPremarket',     path_template: '/api/earnings/premarket',                               probe: () => getEarningsPremarket() },
+  { wrapper: 'getFdaCalendar',           path_template: '/api/market/fda-calendar',                              probe: () => getFdaCalendar() },
+  { wrapper: 'getEconomicCalendar',      path_template: '/api/market/economic-calendar',                         probe: () => getEconomicCalendar() },
+  { wrapper: 'getNewsHeadlines',         path_template: '/api/news/headlines',                                   probe: () => getNewsHeadlines({ limit: 1 }) },
+  { wrapper: 'getInsiderTransactions',   path_template: '/api/insider/transactions',                             probe: () => getInsiderTransactions() },
+  { wrapper: 'getCongressTrades',        path_template: '/api/congress/recent-trades',                           probe: () => getCongressTrades() },
+  { wrapper: 'getAnalystRatings',        path_template: '/api/screener/analysts',                                probe: () => getAnalystRatings({ limit: 1 }) },
+  { wrapper: 'getShortInterestFloat',    path_template: '/api/shorts/{ticker}/interest-float/v2',                probe: () => getShortInterestFloat('SPY') },
+  { wrapper: 'getShortVolumeRatio',      path_template: '/api/shorts/{ticker}/volume-and-ratio',                 probe: () => getShortVolumeRatio('SPY') },
+  { wrapper: 'getSectorTideForSector',   path_template: '/api/market/{sector}/sector-tide',                      probe: () => getSectorTideForSector('Technology') },
+  { wrapper: 'getRiskReversalSkew',      path_template: '/api/stock/{ticker}/historical-risk-reversal-skew',     probe: () => getRiskReversalSkew('SPY') },
+  { wrapper: 'getFinancials',            path_template: '/api/stock/{ticker}/financials',                        probe: () => getFinancials('SPY') },
+  { wrapper: 'getTechnicalIndicator',    path_template: '/api/stock/{ticker}/technical-indicator/{function}',    probe: () => getTechnicalIndicator('SPY', 'RSI', { interval: 'daily', time_period: 14 }) },
+];

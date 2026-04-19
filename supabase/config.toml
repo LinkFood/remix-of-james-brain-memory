@@ -347,3 +347,6 @@ verify_jwt = false
 
 [functions.ct-technicals-ingester]
 verify_jwt = false
+
+[functions.ct-uw-endpoint-health-check]
+verify_jwt = false

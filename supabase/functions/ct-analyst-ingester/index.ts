@@ -1,9 +1,13 @@
 /**
  * ct-analyst-ingester — analyst rating changes via UW screener endpoint.
  *
- * Pulls `/api/screener/analyst-rating` market-wide, then filters in-memory to
- * the watchlist. Dedup key is action_id (firm + ticker + date + action_type
- * if UW doesn't ship one). Every 2h, 12-22 UTC, weekdays.
+ * Pulls `/api/screener/analysts` (verified path 2026-04-18) market-wide, then
+ * filters in-memory to the watchlist. Response row fields per OpenAPI:
+ *   { action, analyst_name, firm, recommendation, sector, target, ticker, timestamp }
+ *
+ * UW does not ship a stable action_id, so we derive one from
+ * (ticker | firm | date(timestamp) | action | target). Every 2h, 12-22 UTC,
+ * weekdays.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -53,10 +57,11 @@ function buildId(r: Record<string, unknown>): string | null {
   const id = r.action_id ?? r.id;
   if (typeof id === 'string' && id.length > 0) return id;
   const ticker = strOrNull(r.ticker ?? r.symbol);
-  const firm = strOrNull(r.analyst_firm ?? r.firm ?? r.analyst);
-  const date = pickDate(r.action_date ?? r.date ?? r.notification_date);
+  const firm = strOrNull(r.firm ?? r.analyst_firm ?? r.analyst);
+  // UW uses `timestamp` (ISO) — fall back to legacy names for safety.
+  const date = pickDate(r.timestamp ?? r.action_date ?? r.date ?? r.notification_date);
   const action = strOrNull(r.action ?? r.action_type ?? r.recommendation);
-  const target = strOrNull(String(r.price_target ?? r.target ?? ''));
+  const target = strOrNull(String(r.target ?? r.price_target ?? ''));
   if (!ticker || !firm || !date) return null;
   return `${ticker}|${firm}|${date}|${action ?? ''}|${target ?? ''}`;
 }
@@ -126,13 +131,13 @@ serve(async (req) => {
       seenIds.add(id);
       rows.push({
         action_id: id,
-        action_date: pickDate(r.action_date ?? r.date ?? r.notification_date),
+        action_date: pickDate(r.timestamp ?? r.action_date ?? r.date ?? r.notification_date),
         ticker: ticker.toUpperCase(),
-        analyst_firm: strOrNull(r.analyst_firm ?? r.firm ?? r.analyst),
-        action_type: strOrNull(r.action ?? r.action_type ?? r.recommendation),
+        analyst_firm: strOrNull(r.firm ?? r.analyst_firm ?? r.analyst),
+        action_type: strOrNull(r.action ?? r.action_type),
         from_rating: strOrNull(r.from_rating ?? r.rating_prior ?? r.prev_rating),
-        to_rating: strOrNull(r.to_rating ?? r.rating_current ?? r.rating),
-        price_target: numOrNull(r.price_target ?? r.target),
+        to_rating: strOrNull(r.recommendation ?? r.to_rating ?? r.rating_current ?? r.rating),
+        price_target: numOrNull(r.target ?? r.price_target),
         prior_price_target: numOrNull(r.prior_price_target ?? r.target_prior ?? r.prev_target),
         raw: r,
       });

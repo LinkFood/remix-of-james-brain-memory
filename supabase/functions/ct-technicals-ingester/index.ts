@@ -2,17 +2,21 @@
  * ct-technicals-ingester — RSI(14), MACD, VWAP, ATR(14), BBANDS(20) per
  * watchlist ticker.
  *
- * Each indicator is a separate UW call per ticker. We store the latest
- * observation as a scalar `value`, and dump the full series into `raw` for
- * downstream analysis (MACD histograms, BBANDS bands, etc). Every 15 min
- * during RTH weekdays.
+ * Each indicator is a separate UW call per ticker. Paths verified 2026-04-18:
+ *   /api/stock/{ticker}/technical-indicator/{FUNCTION}  (FUNCTION must be UPPERCASE)
+ *
+ * Interval enum: 1min | 5min | 15min | 30min | 60min | daily | weekly | monthly.
+ * We use 5min for intraday cadence. VWAP is intraday-only.
+ *
+ * We store the latest observation as a scalar `value`, and dump the full row
+ * into `raw`. Every 15 min during RTH weekdays.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getTechnicalIndicator } from '../_shared/uwClient.ts';
+import { getTechnicalIndicator, type TechnicalInterval } from '../_shared/uwClient.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
 type Row = {
@@ -24,12 +28,20 @@ type Row = {
   raw: Record<string, unknown>;
 };
 
-const INDICATORS: Array<{ name: string; period: number | null }> = [
-  { name: 'rsi', period: 14 },
-  { name: 'macd', period: null },
-  { name: 'vwap', period: null },
-  { name: 'atr', period: 14 },
-  { name: 'bbands', period: 20 },
+// Names stored lowercase in DB (indicator_name column), wrapper upcases for
+// the path. `period` is null when the indicator doesn't take one (MACD, VWAP).
+//
+// INTERVAL CHOICE: `daily` is the portable default — every indicator returns
+// daily outside market hours. Intraday intervals (5min) frequently 422 or
+// return empty series for lower-tier UW subscriptions. VWAP is intraday-only
+// per UW spec, so it uses 5min explicitly; if the 5min call returns empty
+// (e.g. outside RTH), we simply skip the upsert for that ticker/indicator.
+const INDICATORS: Array<{ name: string; period: number | null; interval: TechnicalInterval }> = [
+  { name: 'rsi',    period: 14,   interval: 'daily' },
+  { name: 'macd',   period: null, interval: 'daily' },
+  { name: 'vwap',   period: null, interval: '5min'  }, // intraday-only per UW spec
+  { name: 'atr',    period: 14,   interval: 'daily' },
+  { name: 'bbands', period: 20,   interval: 'daily' },
 ];
 
 function numOrNull(v: unknown): number | null {
@@ -45,18 +57,73 @@ function pickTimestamp(v: unknown): string | null {
   return null;
 }
 
+/**
+ * UW's technical-indicator payload varies by function:
+ *   - { data: [{timestamp, value}, ...] }           (most indicators)
+ *   - { data: { "2026-04-18": { "RSI": "..." }, ... } }   (AlphaVantage-style
+ *     date-keyed object; observed on live API)
+ *   - { data: { values: [...] } }                   (defensive fallback)
+ *
+ * Normalize to Array<{timestamp, <fields>}>.
+ */
 function extractSeries(raw: unknown): Array<Record<string, unknown>> {
   if (!raw || typeof raw !== 'object') return [];
   const d = (raw as { data?: unknown }).data;
   if (Array.isArray(d)) return d as Array<Record<string, unknown>>;
+  if (d && typeof d === 'object') {
+    const asObj = d as Record<string, unknown>;
+    // Nested array under common keys.
+    for (const k of ['values', 'series', 'indicator', 'results']) {
+      const v = asObj[k];
+      if (Array.isArray(v)) return v as Array<Record<string, unknown>>;
+    }
+    // Date-keyed object: { "2026-04-18": {...}, "2026-04-17": {...} }
+    const entries = Object.entries(asObj);
+    const dateShaped = entries.filter(([k, v]) =>
+      /^\d{4}-\d{2}-\d{2}/.test(k) && v && typeof v === 'object'
+    );
+    if (dateShaped.length > 0) {
+      return dateShaped.map(([k, v]) => ({ timestamp: k, ...(v as Record<string, unknown>) }));
+    }
+  }
   return [];
 }
 
 /**
- * Pull the "primary value" out of a UW indicator row. Most indicators expose
- * `value`; MACD uses `macd`, BBANDS uses `middle` (mid-band), etc.
+ * Pull the "primary value" out of a UW indicator row. UW returns:
+ *   { date, values: { RSI: "64.1753" }, ticker, indicator, ... }
+ * so the real scalar lives at row.values.<INDICATOR_UPPERCASE>. BBANDS has
+ * three bands (UPPER/MIDDLE/LOWER) — we pick MIDDLE. MACD has MACD/SIGNAL/
+ * HIST — we pick MACD.
  */
 function pickPrimary(indicator: string, row: Record<string, unknown>): number | null {
+  const vals = row.values;
+  const valuesObj = (vals && typeof vals === 'object' && !Array.isArray(vals))
+    ? (vals as Record<string, unknown>)
+    : null;
+  const upper = indicator.toUpperCase();
+
+  if (valuesObj) {
+    switch (indicator) {
+      case 'bbands': {
+        const mid = valuesObj.MIDDLE ?? valuesObj.MIDDLE_BAND ?? valuesObj.BBANDS_MIDDLE ?? valuesObj.MA;
+        const n = numOrNull(mid);
+        if (n !== null) return n;
+        break;
+      }
+      case 'macd': {
+        const n = numOrNull(valuesObj.MACD ?? valuesObj.MACD_LINE);
+        if (n !== null) return n;
+        break;
+      }
+      default: {
+        const n = numOrNull(valuesObj[upper]);
+        if (n !== null) return n;
+      }
+    }
+  }
+
+  // Legacy fallbacks (for when UW returns value at root).
   const direct = numOrNull(row.value);
   if (direct !== null) return direct;
   switch (indicator) {
@@ -119,10 +186,10 @@ serve(async (req) => {
 
     for (const ticker of watchlist) {
       const upper = ticker.toUpperCase();
-      for (const { name, period } of INDICATORS) {
+      for (const { name, period, interval } of INDICATORS) {
         let raw: unknown = null;
         try {
-          const params: Record<string, string | number | boolean> = { interval: '5m' };
+          const params: { interval: TechnicalInterval; time_period?: number } = { interval };
           if (period !== null) params.time_period = period;
           raw = await getTechnicalIndicator(upper, name, params);
         } catch (e) {
@@ -131,8 +198,10 @@ serve(async (req) => {
         }
         const series = extractSeries(raw);
         if (series.length === 0) continue;
-        // Take the last (most recent) observation.
-        const latest = series[series.length - 1];
+        // UW returns the series in descending date order — most recent first.
+        // Fall back to last element if first lacks a date (defensive).
+        const firstWithDate = series.find((r) => pickTimestamp(r.timestamp ?? r.time ?? r.date) !== null) ?? series[0];
+        const latest = firstWithDate;
         const captured_at = pickTimestamp(latest.timestamp ?? latest.time ?? latest.date) ?? new Date().toISOString();
         const value = pickPrimary(name, latest);
         rows.push({

@@ -2,13 +2,12 @@
  * ct-short-interest-ingester — per-watchlist short interest + short-volume
  * ratio.
  *
- * Two UW endpoints per ticker:
- *   - /api/shorts/{ticker}/interest-float-v2   — bi-monthly SI, DTC, % float
- *   - /api/shorts/{ticker}/volume-ratio         — daily short-volume-to-total
+ * Two UW endpoints per ticker (verified 2026-04-18):
+ *   - /api/shorts/{ticker}/interest-float/v2     — single row: SI, DTC, si_float, total_float, market_date
+ *   - /api/shorts/{ticker}/volume-and-ratio      — daily time series: market_date, short_volume_ratio
  *
- * We pick the most recent report_date from the interest series, then layer on
- * the most recent daily volume ratio. Dedup on (ticker, report_date). Daily
- * 08:00 UTC.
+ * We pull the one interest row + the most recent volume observation. Dedup on
+ * (ticker, report_date). Daily 08:00 UTC.
  */
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
@@ -111,24 +110,31 @@ serve(async (req) => {
       let interestRaw: unknown = null;
       let volumeRaw: unknown = null;
       try { interestRaw = await getShortInterestFloat(upper); }
-      catch (e) { errors.push({ ticker: upper, endpoint: 'interest-float-v2', error: e instanceof Error ? e.message : String(e) }); }
+      catch (e) { errors.push({ ticker: upper, endpoint: 'interest-float/v2', error: e instanceof Error ? e.message : String(e) }); }
       try { volumeRaw = await getShortVolumeRatio(upper); }
-      catch (e) { errors.push({ ticker: upper, endpoint: 'volume-ratio', error: e instanceof Error ? e.message : String(e) }); }
+      catch (e) { errors.push({ ticker: upper, endpoint: 'volume-and-ratio', error: e instanceof Error ? e.message : String(e) }); }
 
-      const interest = latestRow(extractData(interestRaw));
+      // interest-float/v2 returns a single object in `data` (extractData
+      // normalizes it to a 1-element array). volume-and-ratio returns a time
+      // series — we take the most recent.
+      const interest = extractData(interestRaw)[0] ?? null;
       const volume = latestRow(extractData(volumeRaw));
       if (!interest && !volume) continue;
 
       const report_date =
-        pickDate(interest?.report_date ?? interest?.date ?? interest?.settlement_date ?? interest?.as_of)
-        ?? pickDate(volume?.date ?? volume?.report_date)
+        pickDate(interest?.market_date ?? interest?.report_date ?? interest?.date ?? interest?.settlement_date ?? interest?.as_of)
+        ?? pickDate(volume?.market_date ?? volume?.date ?? volume?.report_date)
         ?? new Date().toISOString().slice(0, 10);
 
+      // UW v2 payload: short_interest (integer), si_float (string decimal as
+      // FRACTION not percent — e.g. 0.017 = 1.7%), days_to_cover (string),
+      // total_float (integer).
+      const siFloatFrac = numOrNull(interest?.si_float);
       rows.push({
         ticker: upper,
         report_date,
         short_interest_shares: numOrNull(interest?.short_interest ?? interest?.shares_short ?? interest?.short_shares),
-        short_interest_pct_float: numOrNull(interest?.short_interest_pct_float ?? interest?.pct_float ?? interest?.short_float_pct),
+        short_interest_pct_float: siFloatFrac !== null ? siFloatFrac * 100 : null,
         days_to_cover: numOrNull(interest?.days_to_cover ?? interest?.dtc ?? interest?.short_ratio),
         short_volume_ratio_recent: numOrNull(volume?.short_volume_ratio ?? volume?.ratio ?? volume?.short_vol_ratio),
         raw: { interest: interest ?? null, volume: volume ?? null },
