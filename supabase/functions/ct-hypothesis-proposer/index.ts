@@ -238,6 +238,9 @@ serve(async (req) => {
     max_new_hypotheses: maxPerDay,
     quant_cards: quantCards,
     active_brief: claudeCtx.activeBrief,
+    // Wave J: weekly CIO review. Additive — Claude may bias proposals toward
+    // focus_tickers and away from avoid_tickers. Null when no review exists.
+    latest_weekly_review: claudeCtx.latestWeeklyReview,
     active_principles: claudeCtx.activePrinciples,
     active_biases: claudeCtx.activeBiases,
     wobbly_grades: tape.wobbly_grades,

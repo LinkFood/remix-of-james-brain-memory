@@ -330,6 +330,9 @@ verify_jwt = false
 [functions.ct-daily-brief]
 verify_jwt = false
 
+[functions.ct-claude-cio-review]
+verify_jwt = false
+
 [functions.ct-insider-ingester]
 verify_jwt = false
 

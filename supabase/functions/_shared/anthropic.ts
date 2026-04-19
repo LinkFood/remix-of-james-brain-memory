@@ -8,8 +8,19 @@
 export const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 export const ANTHROPIC_VERSION = '2023-06-01';
 
+// Model IDs empirically probed against api.anthropic.com on 2026-04-18
+// (probe: supabase/functions/ct-opus-probe). Results:
+//   200 OK: claude-opus-4-7, claude-opus-4-6, claude-opus-4-5,
+//           claude-opus-4-1, claude-opus-4-1-20250805, claude-opus-4-20250514
+//   404:   claude-opus-4-7-<date-guesses>, claude-opus-4-6-20251001,
+//           claude-opus-4-5-20250929, claude-opus-4
+// Primary: claude-opus-4-7. Fallback cascade documented on opus_fallback.
 export const CLAUDE_MODELS = {
   opus: 'claude-opus-4-7',
+  // opus_fallback: use when the primary alias is retired. Next-best
+  // currently-live Opus (verified 2026-04-18). Cascade from here:
+  //   claude-opus-4-6 -> claude-opus-4-5 -> claude-opus-4-1.
+  opus_fallback: 'claude-opus-4-6',
   sonnet: 'claude-sonnet-4-20250514',
   // sonnet_46: PM-tier daily judgment (morning brief, hypothesis proposer,
   // CIO reviews). Latest Sonnet 4.6.
@@ -27,6 +38,7 @@ export function resolveModel(tier: ModelTier): string {
 // Cost per 1M tokens (USD)
 export const CLAUDE_RATES = {
   [CLAUDE_MODELS.opus]: { input: 15.0, output: 75.0 },
+  [CLAUDE_MODELS.opus_fallback]: { input: 15.0, output: 75.0 },
   [CLAUDE_MODELS.sonnet]: { input: 3.0, output: 15.0 },
   [CLAUDE_MODELS.sonnet_46]: { input: 3.0, output: 15.0 },
   [CLAUDE_MODELS.haiku]: { input: 0.80, output: 4.0 },

@@ -360,6 +360,10 @@ serve(async (req) => {
       urgency,
       session_date: sessionDate,
       watchlist,
+      // Wave J: quote the most recent CIO weekly review into brief context.
+      // Claude should weave tactical_notes into macro_narrative and lean
+      // watchlist_focus toward focus_tickers / skip_today toward avoid_tickers.
+      latest_weekly_review: ctx.latestWeeklyReview,
       latest_heartbeat: ctx.latestHeartbeat,
       recent_heartbeats: ctx.recentHeartbeats,
       open_hypotheses: ctx.openHypotheses.slice(0, 20).map((h) => ({

@@ -388,6 +388,21 @@ export interface TechnicalIndicatorRow {
   value: number | null;
 }
 
+// Weekly CIO review row surfaced into every Claude context build. Additive:
+// functions that ignore it behave as before; Monday proposer + daily brief
+// read it to bias toward focus_tickers / away from avoid_tickers and to quote
+// tactical_notes. `null` when no weekly review has run yet.
+export interface WeeklyReviewRow {
+  id: string;
+  week_ending_date: string;
+  macro_regime: string | null;
+  focus_tickers: string[];
+  avoid_tickers: string[];
+  tactical_notes: string | null;
+  generated_at: string;
+  model_used: string;
+}
+
 export interface ClaudeContext {
   // Objective market — always allowed
   latestHeartbeat: Heartbeat | null;
@@ -430,6 +445,10 @@ export interface ClaudeContext {
   activeBiases: BiasRow[];
   activePlaybooks: PlaybookRow[];
   activeBrief: DailyBriefRow | null;
+
+  // Weekly CIO review — written Sunday 22:00 UTC by ct-claude-cio-review.
+  // Monday morning proposer + daily brief additively consume it.
+  latestWeeklyReview: WeeklyReviewRow | null;
 
   // Wave C — newly ingested UW streams
   recentInsiderTrades: InsiderTradeRow[];
@@ -1169,6 +1188,37 @@ export async function buildClaudeContext(
     console.warn('[claudeReadSurface] ct_daily_briefs:', e instanceof Error ? e.message : e);
   }
 
+  // --- Latest weekly CIO review (Wave J) ---------------------------------
+  // Non-blocking: if the table hasn't been created yet, treat as null so this
+  // field rolls out safely before the migration lands on a given environment.
+  let latestWeeklyReview: WeeklyReviewRow | null = null;
+  try {
+    const { data } = await supabase
+      .from('ct_weekly_reviews')
+      .select('id, week_ending_date, macro_regime, focus_tickers, avoid_tickers, tactical_notes, generated_at, model_used')
+      .order('generated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (data) {
+      latestWeeklyReview = {
+        id: String(data.id),
+        week_ending_date: String(data.week_ending_date ?? ''),
+        macro_regime: (data.macro_regime as string) ?? null,
+        focus_tickers: Array.isArray(data.focus_tickers)
+          ? (data.focus_tickers as unknown[]).map((x) => String(x))
+          : [],
+        avoid_tickers: Array.isArray(data.avoid_tickers)
+          ? (data.avoid_tickers as unknown[]).map((x) => String(x))
+          : [],
+        tactical_notes: typeof data.tactical_notes === 'string' ? data.tactical_notes.slice(0, 4000) : null,
+        generated_at: String(data.generated_at),
+        model_used: String(data.model_used ?? 'claude-opus-4-7'),
+      };
+    }
+  } catch (e) {
+    console.warn('[claudeReadSurface] ct_weekly_reviews:', e instanceof Error ? e.message : e);
+  }
+
   // ========================================================================
   // Wave C ingester queries — insider / political / analyst / shorts /
   // sector-tide / skew / technicals. All table reads are scoped to the
@@ -1383,6 +1433,7 @@ export async function buildClaudeContext(
     activeBiases,
     activePlaybooks,
     activeBrief,
+    latestWeeklyReview,
     recentInsiderTrades,
     recentPoliticalTrades,
     recentAnalystActions,
@@ -1441,7 +1492,8 @@ export function claudeSystemPromptPreamble(ctx: ClaudeContext): string {
     'technical indicators (RSI/MACD/VWAP/ATR/BBANDS), short-interest + short-volume ratios, ' +
     'sector tide (net call/put premium by sector), insider transactions, congress trades, ' +
     'analyst rating changes, calendar events (earnings/FDA/econ), news (watchlist headlines + ' +
-    'real-time breaking news), your own principles/biases/playbooks, and today\'s morning brief when available.';
+    'real-time breaking news), your own principles/biases/playbooks, today\'s morning brief ' +
+    'when available, and the most recent weekly CIO review (focus/avoid tilts) when available.';
 
   if (ctx.chatIsAdvisory) {
     return [
