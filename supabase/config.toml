@@ -353,3 +353,6 @@ verify_jwt = false
 
 [functions.ct-uw-endpoint-health-check]
 verify_jwt = false
+
+[functions.ct-uw-mcp-scout]
+verify_jwt = false
