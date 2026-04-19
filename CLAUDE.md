@@ -60,6 +60,8 @@ Co-Trader is an **autonomous paper-trading agent**. Not an assistant. Not a rese
 
 16. **Actionable reasoning.** Every "because" bullet must state HOW the evidence changes the setup, not just that the evidence exists. Factual-but-non-actionable bullets ("NVDA has earnings in 4 days") fail the actionability rule. Good bullets thread evidence → implication ("NVDA earnings in 4 days AND skew flipped put-heavy AND insider selling 3 days straight — setup favors bearish pre-earnings positioning; call wall at 250 becomes resistance instead of magnet"). Dream reviews for this pattern weekly.
 
+17. **Meta-layer eats its own outputs.** Co-Trader's decisions, grades, dreams, and principles are not siloed in `ct_*` tables — they feed JAC's `jac_reflections` pipeline via `ct-reflect-to-jac` (daily 22:30 UTC) and become input to JAC's weekly `distill-principles` extraction. The substrate that watches James's tasks watches Co-Trader's trades. This cross-facet feedback is how the meta-layer learns from domain-specific outcomes and how future facets inherit wisdom from past ones. A new facet is not a new brain — it's a new vertical feeding the same brain.
+
 ### Anti-principles — what we do NOT do
 
 - Band-aids. Workarounds. "Good enough for now."
@@ -74,6 +76,32 @@ Co-Trader is an **autonomous paper-trading agent**. Not an assistant. Not a rese
 ### Decision ritual
 
 When in doubt on any Co-Trader change, ask: *"Does this class of failure become impossible going forward, or am I patching this instance?"* If patching, redesign until structural.
+
+### Realizations — April 18, 2026 session
+
+These are the shifts that led to the tenets above. Future sessions inherit the conclusions, but also the evolution — so you know *why* the tenets look the way they do, and what alternatives were tried and rejected.
+
+1. **From goals to survival to generational pressure.** Initial framing: goals-based ("make +X% per week"). Rejected as prescriptive (tenet 15). Next: pure survival ("don't run out of money"). Rejected because paralysis becomes optimal (never trade = never die). Final: three-way generational pressure (tenet 14) — 14-day window to target, survival floor below it, cash decay against idle. Perform or reset, survive or die, engage or bleed.
+
+2. **Stakes-with-consequence is not a goal.** "Claude must hit +20% or he's fired" *sounds* like a goal. In context (data persists across resets, firing = generational reset, not death) it's evolutionary pressure — the fear of firing drives adaptation without prescribing the strategy. Every generation inherits all prior generations' memory; failed generations are the learning substrate for the next. Goals optimize; evolution discovers.
+
+3. **From hard caps to conditions-with-override.** Original trade-idea schema had hard caps (5% size, stop required, concurrent ≤5). Rejected as prescriptive. Changed to soft defaults with `*_override_reasoning` fields — Claude can exceed the default with justification. Hard ceiling (10%) still applies. Keeps rails on 95% of cases without blocking the unusual 5% (tenet 15).
+
+4. **Structural prevention beats validators.** First approach to hallucinations: validator catches fabrications after the fact (still shipped as defense-in-depth). Real fix: if Claude doesn't have precise numbers in context, he fills in plausible values. Give him the quant card with actual values as primary context, and hallucination becomes structurally hard. Post-fix: 0/3 hallucinations (from 5/6 pre-fix). Tenet 2 operational.
+
+5. **Signal tunneling was a layout problem, not a data problem.** Audit showed Claude was theorizing almost entirely from microstructure despite having access to 20+ signal types. Root cause: quant card emphasized flow/gamma; positioning / macro / sentiment were supplementary. Fix: multi-view quant card with 5 equal-weight sections. Post-fix first run: hypotheses spanned positioning (insider + political + analyst), macro (geopolitical news), and structural. Tenet 13 operational.
+
+6. **Fractal architecture.** The Co-Trader tenets (autonomy, reflection, principles, bounded self-mod, embedded memory, persistent identity, rate limits as features) describe the same patterns JAC itself embodies. The thesis isn't new doctrine — it's an articulation of JAC's own design applied to a domain with real financial stakes. Future facets should expect the same pattern.
+
+7. **Cross-facet learning bridge is the most important wire in the build.** `ct-reflect-to-jac` (commit `158cce9`) closes the loop so Co-Trader's decisions become input to JAC's principle pipeline. Without it, learning stayed siloed. With it, JAC meta-layer now analyzes trading outcomes the same way it analyzes research runs (see HN discourse delta analysis, Runs #48-52). Tenet 17 operational.
+
+8. **Trust ≠ capability.** Self-modification was already built when this session started (code agent opens PRs; `supabase-management.ts` awaits PAT). The gap isn't architectural — it's the human decision to *use* the capability. Scaffolding (CI, kill switch, rollback) enables autonomy; using it produces trust through observed reliability. Additional scaffolding past the working point is risk-aversion masquerading as engineering. The move is small real tasks, not more safety nets.
+
+9. **Model tier = decision tempo, not decision importance.** Opus CIO weekly / Sonnet PM daily / Haiku quant per-heartbeat / pure logic execution. Organized by *cadence*, not *stakes*. Important decisions on long time horizons (weekly strategy) get Opus. Important decisions on short time horizons (fill this trade on trigger) get pure logic. Speed and depth aren't opposing axes; they serve different decision shapes (tenet 8).
+
+10. **The ship is already sailing.** JAC operated autonomously for 2 months with zero touch. It got better. It flags its own operational drift, runs proactive research (Run #52 delta vs #48-50), distills principles, asks for direction when priorities diverge, and produces analyst-quality reports in Slack. The question was never "will it work autonomously" — it's "what to point it at next." The architecture compounds.
+
+11. **`recordDecision` should auto-resolve what it needs, not require callers to remember.** Preflight found 14+ call sites weren't passing `generation_id` to the decision journal. Per tenet 4 (fix class not instance): added module-scoped auto-resolution in `_shared/decisionJournal.ts` that queries `current_claude_generation()` and caches 60s. Every call site benefits without editing — "forgot to tag" is now structurally impossible. Same pattern applies to other implicit-context fields: resolve at the central point, not at every consumer.
 
 ## Disk Health Check
 
