@@ -46,6 +46,20 @@ Co-Trader is an **autonomous paper-trading agent**. Not an assistant. Not a rese
 
 12. **Duplicate nothing UW maintains.** Use their OpenAPI spec / MCP server / prebuilt prompts. Hand-rolled HTTP clients are tech debt the moment UW ships a new endpoint.
 
+13. **Ungated signal access.** Claude reads every signal UW exposes that we can ingest cheaply. The per-ticker quant card presents all signal categories (microstructure / positioning / macro / sentiment / historical) at equal weight — none is supplementary to another. Claude's edge is seeing combinations no human has time to multiplex. Gating any signal category by prioritization or omission defeats the purpose. If a category is absent, it's debt to close, not a decision.
+
+14. **Generational pressure — survival + cost of inaction + performance target.** Each Claude generation begins with $50,000 paper capital and has 14 trading days to reach $60,000 (+20%). Generation ends (is "fired") when:
+    - Target hit within window → SUCCESS: account + new window compound forward
+    - Target missed by day 15 → performance_floor fire
+    - Balance below $30,000 survival floor → survival_breach fire
+    - Cash holding cost 0.03%/day → slow bleed if idle, preventing paralysis
+    
+    **Firing is not death.** Account resets but ALL memory persists: decisions, dreams, principles, biases, hypotheses, grades, trades, Elo history. Each generation inherits the full accumulated wisdom of every prior generation. Pressure is always forward: "last generation fired at day N for reason X — I have 14 days to do better OR I'm next." No prescribed strategy, no forced trade cadence — just *win or reset, always learning*. The consequence serves evolution, not termination.
+
+15. **Conditions, not prescriptions.** Claude operates under soft defaults, not hard caps. Any default constraint (size, stops, horizons, concurrent positions) can be overridden with justification via `*_override_reasoning` fields on trade ideas. Hard ceiling (e.g., 10% max size) still applies. The system asks Claude to make the case; it does not make the case for him. Rails that serve for 95% of cases should not block the 5% where the unusual trade is the right trade.
+
+16. **Actionable reasoning.** Every "because" bullet must state HOW the evidence changes the setup, not just that the evidence exists. Factual-but-non-actionable bullets ("NVDA has earnings in 4 days") fail the actionability rule. Good bullets thread evidence → implication ("NVDA earnings in 4 days AND skew flipped put-heavy AND insider selling 3 days straight — setup favors bearish pre-earnings positioning; call wall at 250 becomes resistance instead of magnet"). Dream reviews for this pattern weekly.
+
 ### Anti-principles — what we do NOT do
 
 - Band-aids. Workarounds. "Good enough for now."
