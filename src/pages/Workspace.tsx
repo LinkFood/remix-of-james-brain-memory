@@ -18,7 +18,7 @@
  * Applied to: claim, because bullets, invalidate_if, evidence summaries.
  */
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -59,6 +59,8 @@ import {
 import { TradeLogTab } from '@/components/workspace/TradeLogTab';
 import { ClaudesBookTab } from '@/components/workspace/ClaudesBookTab';
 import { DivergenceTab } from '@/components/workspace/DivergenceTab';
+import { ClaudeStateDashboard } from '@/components/workspace/ClaudeStateDashboard';
+import { useRecentDecisions } from '@/hooks/useClaudeState';
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -135,8 +137,27 @@ function authorBorderClass(editedByJames: boolean): string {
 // Divergence. The Theses tab renders the original 3-col workspace; the other
 // three render dedicated components.
 // ---------------------------------------------------------------------------
+type WorkspaceView = 'state' | 'theses' | 'trades' | 'book' | 'divergence' | 'decisions';
+const VALID_VIEWS: readonly WorkspaceView[] = [
+  'state', 'theses', 'trades', 'book', 'divergence', 'decisions',
+] as const;
+
 export default function Workspace() {
-  const [tab, setTab] = useState<'theses' | 'trades' | 'book' | 'divergence'>('theses');
+  // URL is the source of truth so old bookmarks to /workspace still land
+  // somewhere useful (the new State dashboard) and direct deep-links like
+  // /workspace?view=theses keep working.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const raw = searchParams.get('view') as WorkspaceView | null;
+  const view: WorkspaceView = raw && VALID_VIEWS.includes(raw) ? raw : 'state';
+
+  const setView = (v: WorkspaceView) => {
+    if (v === 'state') {
+      searchParams.delete('view');
+    } else {
+      searchParams.set('view', v);
+    }
+    setSearchParams(searchParams, { replace: true });
+  };
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -155,14 +176,19 @@ export default function Workspace() {
           </p>
         </header>
 
-        <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)}>
-          <TabsList className="grid w-full md:w-auto md:inline-flex grid-cols-4 gap-1">
+        <Tabs value={view} onValueChange={(v) => setView(v as WorkspaceView)}>
+          <TabsList className="grid w-full md:w-auto md:inline-flex grid-cols-3 md:grid-cols-6 gap-1">
+            <TabsTrigger value="state" className="text-xs">State</TabsTrigger>
             <TabsTrigger value="theses" className="text-xs">Theses</TabsTrigger>
             <TabsTrigger value="trades" className="text-xs">Trade Log</TabsTrigger>
             <TabsTrigger value="book" className="text-xs">Claude's Book</TabsTrigger>
             <TabsTrigger value="divergence" className="text-xs">Divergence</TabsTrigger>
+            <TabsTrigger value="decisions" className="text-xs">Decisions</TabsTrigger>
           </TabsList>
 
+          <TabsContent value="state" className="mt-3">
+            <ClaudeStateDashboard />
+          </TabsContent>
           <TabsContent value="theses" className="mt-3">
             <ThesesTab />
           </TabsContent>
@@ -175,9 +201,62 @@ export default function Workspace() {
           <TabsContent value="divergence" className="mt-3">
             <DivergenceTab />
           </TabsContent>
+          <TabsContent value="decisions" className="mt-3">
+            <DecisionsFullTab />
+          </TabsContent>
         </Tabs>
       </div>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Decisions — full log view. Simple deeper drill-down from the dashboard
+// feed. Read-only; writes live elsewhere.
+// ---------------------------------------------------------------------------
+function DecisionsFullTab() {
+  const { data: decisions = [], isLoading } = useRecentDecisions(200);
+
+  return (
+    <Card className="p-4">
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground mb-3">
+        <Activity className="w-3 h-3" />
+        <span>Decision log · last 200</span>
+        <span className="ml-auto font-mono">{decisions.length}</span>
+      </div>
+      {isLoading ? (
+        <div className="text-xs text-muted-foreground">loading...</div>
+      ) : decisions.length === 0 ? (
+        <div className="text-xs text-muted-foreground italic">
+          No decisions yet. ct_claude_decisions fills as Claude runs.
+        </div>
+      ) : (
+        <div className="divide-y divide-border">
+          {decisions.map((d) => (
+            <div key={d.id} className="py-2 space-y-0.5">
+              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                <span className="font-mono">{new Date(d.created_at).toLocaleString()}</span>
+                <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                  {d.decision_type.replace(/_/g, ' ')}
+                </Badge>
+                <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 uppercase font-mono">
+                  {d.model_tier}
+                </Badge>
+                {d.hallucination_flag && (
+                  <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 bg-red-500/15 text-red-400 border-red-500/40">
+                    halluc
+                  </Badge>
+                )}
+              </div>
+              <div className="text-xs leading-snug text-foreground/90">{d.reasoning}</div>
+              {d.outcome && (
+                <div className="text-[10px] text-muted-foreground">→ {d.outcome}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 }
 
