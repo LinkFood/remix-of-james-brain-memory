@@ -333,6 +333,12 @@ verify_jwt = false
 [functions.ct-claude-cio-review]
 verify_jwt = false
 
+[functions.ct-claude-generation-manager]
+verify_jwt = false
+
+[functions.ct-claude-cash-decay]
+verify_jwt = false
+
 [functions.ct-insider-ingester]
 verify_jwt = false
 
@@ -352,6 +358,27 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ct-technicals-ingester]
+verify_jwt = false
+
+[functions.ct-prediction-markets-ingester]
+verify_jwt = false
+
+[functions.ct-yield-curve-ingester]
+verify_jwt = false
+
+[functions.ct-correlations-ingester]
+verify_jwt = false
+
+[functions.ct-seasonality-ingester]
+verify_jwt = false
+
+[functions.ct-central-bank-ingester]
+verify_jwt = false
+
+[functions.ct-institutional-ingester]
+verify_jwt = false
+
+[functions.ct-indicator-events-ingester]
 verify_jwt = false
 
 [functions.ct-uw-endpoint-health-check]

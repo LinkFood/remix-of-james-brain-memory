@@ -66,6 +66,7 @@ export interface DecisionEntry {
   linked_trade_idea_id?: string;
   linked_trade_id?: string;
   linked_brief_id?: string;
+  generation_id?: string | null;
   hallucination_flag?: boolean;
   hallucination_reason?: string;
   tokens_in?: number;
@@ -99,6 +100,7 @@ export async function recordDecision(
     if (entry.linked_trade_idea_id) row.linked_trade_idea_id = entry.linked_trade_idea_id;
     if (entry.linked_trade_id) row.linked_trade_id = entry.linked_trade_id;
     if (entry.linked_brief_id) row.linked_brief_id = entry.linked_brief_id;
+    if (entry.generation_id !== undefined && entry.generation_id !== null) row.generation_id = entry.generation_id;
     if (entry.hallucination_reason) row.hallucination_reason = entry.hallucination_reason.slice(0, 1000);
     if (entry.tokens_in !== undefined) row.tokens_in = entry.tokens_in;
     if (entry.tokens_out !== undefined) row.tokens_out = entry.tokens_out;

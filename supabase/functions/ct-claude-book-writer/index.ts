@@ -40,13 +40,14 @@ interface TradeIdea {
     time?: string;
   };
   entry_price_target: number | null;
-  stop_pct: number;
+  stop_pct: number | null;
   target_pct: number;
   size_pct: number;
   horizon: string;
   rationale: string;
   armed_at: string;
   expires_at: string;
+  exit_mode: string | null;
 }
 
 /** Get the latest spot for a ticker from heartbeats → gex_timeseries fallback. */
@@ -167,6 +168,35 @@ serve(async (req) => {
   );
   const startedAt = Date.now();
 
+  // Generational gate — Tenet 14. No active gen / fired gen → no new fills.
+  const { data: genRows } = await supabase.rpc('current_claude_generation');
+  const activeGen = Array.isArray(genRows) && genRows.length > 0 ? genRows[0] : null;
+  const generationId: string | null = activeGen?.id ?? null;
+  {
+    const { data: gateRows } = await supabase.rpc('claude_can_open_positions');
+    const gate = Array.isArray(gateRows) && gateRows.length > 0 ? gateRows[0] : null;
+    if (!gate || gate.allowed !== true) {
+      const reason = gate?.reason ?? 'generational gate denied';
+      await supabase.from('ct_claude_decisions').insert({
+        decision_type: 'no_trade',
+        model_tier:    'none',
+        reasoning:     `blocked: ${reason}`,
+        outcome:       'skipped: generational_gate',
+        generation_id: generationId,
+        context_snapshot: {
+          source: 'ct-claude-book-writer',
+          gate_reason: reason,
+        },
+      });
+      return new Response(JSON.stringify({
+        ok: true,
+        gated: true,
+        reason,
+        duration_ms: Date.now() - startedAt,
+      }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+  }
+
   // Safety gate: if Claude is circuit-broken today, DO NOT fire any new
   // trades. Existing positions are managed by ct-claude-book-exit-watcher
   // (intentionally NOT gated — stops/targets must still close).
@@ -180,6 +210,7 @@ serve(async (req) => {
         model_tier:    'none',
         reasoning:     reason,
         outcome:       'skipped: circuit_breaker_active',
+        generation_id: generationId,
         context_snapshot: {
           source:       'ct-claude-book-writer',
           breaker_type: halt.breaker_type,
@@ -214,7 +245,7 @@ serve(async (req) => {
   // 2) Pull live armed ideas.
   const { data: ideas, error: ideasErr } = await supabase
     .from('ct_trade_ideas')
-    .select('id, hypothesis_id, instrument, contract_type, strike, expiry, direction, entry_trigger, entry_price_target, stop_pct, target_pct, size_pct, horizon, rationale, armed_at, expires_at')
+    .select('id, hypothesis_id, instrument, contract_type, strike, expiry, direction, entry_trigger, entry_price_target, stop_pct, target_pct, size_pct, horizon, rationale, armed_at, expires_at, exit_mode')
     .eq('status', 'armed')
     .eq('trader', 'claude')
     .gt('expires_at', nowIso)
@@ -268,7 +299,9 @@ serve(async (req) => {
 
     const sizeUsd = +(bookBalance * (idea.size_pct / 100)).toFixed(2);
     const isLong = idea.direction === 'long';
-    const stopPrice = +(entryPrice * (1 + (isLong ? idea.stop_pct : -idea.stop_pct) / 100)).toFixed(4);
+    const stopPrice = idea.stop_pct == null
+      ? null
+      : +(entryPrice * (1 + (isLong ? idea.stop_pct : -idea.stop_pct) / 100)).toFixed(4);
     const targetPrice = +(entryPrice * (1 + (isLong ? idea.target_pct : -idea.target_pct) / 100)).toFixed(4);
 
     // Pull hypothesis info for thesis text + conviction.
@@ -310,6 +343,8 @@ serve(async (req) => {
       hypothesis_id:   idea.hypothesis_id,
       trade_idea_id:   idea.id,
       prompt_version:  'ct-trade-engine-v1',
+      generation_id:   generationId,
+      exit_mode:       idea.exit_mode ?? 'stop_target_horizon',
     };
 
     const { data: insertedTrade, error: tradeErr } = await supabase
@@ -343,8 +378,9 @@ serve(async (req) => {
     await recordDecision(supabase, {
       decision_type: 'fill_trade',
       model_tier: 'none',
-      reasoning: `Trigger fired (${evalResult.reason}). Filled ${idea.instrument} ${idea.direction} ${idea.contract_type} at ${entryPrice} size ${idea.size_pct}% ($${sizeUsd}). Stop ${stopPrice}, target ${targetPrice}.`,
+      reasoning: `Trigger fired (${evalResult.reason}). Filled ${idea.instrument} ${idea.direction} ${idea.contract_type} at ${entryPrice} size ${idea.size_pct}% ($${sizeUsd}). Stop ${stopPrice ?? 'none'}, target ${targetPrice}, exit_mode=${idea.exit_mode ?? 'stop_target_horizon'}.`,
       outcome: 'filled',
+      generation_id: generationId,
       alignment: 'aligned',
       claude_followed: 'both',
       tape_signal: {

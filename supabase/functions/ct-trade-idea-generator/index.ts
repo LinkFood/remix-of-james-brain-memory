@@ -73,13 +73,23 @@ const TOOLS = [
           },
           required: ['type'],
         },
-        stop_pct:   { type: 'number', description: 'Adverse move pct from entry (negative, e.g. -0.5 for 0.5% stop)' },
+        stop_pct:   { type: ['number', 'null'], description: 'Adverse move pct from entry (negative, e.g. -0.5 for 0.5% stop). Omit or null for no-stop trades; you MUST provide no_stop_reasoning + exit_mode in that case.' },
         target_pct: { type: 'number', description: 'Favorable move pct from entry (positive, e.g. 1.2 for 1.2% target)' },
-        size_pct:   { type: 'number', description: 'Position size as % of book, bounded by max_size_pct' },
+        size_pct:   { type: 'number', description: 'Position size as % of book. Soft default max_size_pct; override up to hard ceiling requires size_override_reasoning.' },
         horizon:    { type: 'string', enum: ['intraday', 'session', 'swing', 'multi_day'] },
+        horizon_minutes: { type: 'number', description: 'TTL in minutes until the armed idea expires. Default ttl applies if omitted; values above default require horizon_extended_reasoning (capped at 72h = 4320 min).' },
+        exit_mode: {
+          type: 'string',
+          enum: ['stop_target_horizon', 'open_until_invalidated', 'theta_decay', 'manual'],
+          description: "Exit behavior: stop_target_horizon (default — stop/target/horizon), open_until_invalidated (only closes when hypothesis invalidate_if hits), theta_decay (target/invalidation/horizon only; for decay-play expirations), manual (no auto-close).",
+        },
         rationale:  { type: 'string', description: 'Why this setup right now — cite the hypothesis + market state' },
+        size_override_reasoning:       { type: 'string', description: 'REQUIRED if size_pct > soft default max_size_pct: justify the over-size given thesis + quant card.' },
+        no_stop_reasoning:             { type: 'string', description: 'REQUIRED if stop_pct is null/omitted: justify why this trade has no stop + name the exit_mode.' },
+        concurrent_override_reasoning: { type: 'string', description: 'REQUIRED if current concurrent positions already >= soft cap: justify why this additional position is worth adding.' },
+        horizon_extended_reasoning:    { type: 'string', description: 'REQUIRED if horizon_minutes exceeds the default TTL: justify the extension (up to 4320 min = 72h hard cap).' },
       },
-      required: ['instrument', 'contract_type', 'direction', 'entry_trigger', 'stop_pct', 'target_pct', 'size_pct', 'horizon', 'rationale'],
+      required: ['instrument', 'contract_type', 'direction', 'entry_trigger', 'target_pct', 'size_pct', 'horizon', 'rationale'],
     },
   },
   {
@@ -113,10 +123,21 @@ If current conditions support a concrete tradeable setup RIGHT NOW with a clear
 trigger, entry, stop, target, and size (bounded by max_size_pct), call
 propose_trade_idea. Otherwise call no_trade.
 
-Rules:
-- size_pct MUST be in (0, max_size_pct].
-- stop_pct MUST be negative (adverse move from entry).
+Rules (conditions, not prescriptions — Tenet 15):
+- size_pct must be > 0. Soft default is max_size_pct. You MAY propose above it
+  up to the hard ceiling (size_hard_ceiling_pct) — but you MUST include a
+  non-empty size_override_reasoning that argues the case given thesis + quant
+  card. Proposals above hard ceiling are always rejected.
 - target_pct MUST be positive (favorable move).
+- stop_pct MAY be negative (standard adverse stop) OR null. If null, you MUST
+  include no_stop_reasoning AND pick exit_mode = 'theta_decay' or
+  'open_until_invalidated' or 'manual' — pick the one that matches how the
+  position actually exits.
+- If concurrent Claude positions are already at or above max_concurrent_positions,
+  you MUST include concurrent_override_reasoning — argue why THIS 6th (or Nth)
+  position is the one worth adding.
+- horizon_minutes MAY exceed the default TTL up to 4320 (72h). Above default
+  requires horizon_extended_reasoning. Never exceed 4320.
 - instrument MUST match or be one of the hypothesis tickers.
 - entry_trigger must be measurable from spot prices (price_cross/break/touch) or
   a specific UTC time (time_gate).
@@ -271,6 +292,10 @@ async function runSonnetSizeReview(
   }
 }
 
+type ExitMode = 'stop_target_horizon' | 'open_until_invalidated' | 'theta_decay' | 'manual';
+const VALID_EXIT_MODES = new Set<ExitMode>(['stop_target_horizon', 'open_until_invalidated', 'theta_decay', 'manual']);
+const HORIZON_MINUTES_HARD_CAP = 4320; // 72h
+
 interface ProposedIdea {
   instrument: string;
   contract_type: 'stock' | 'call' | 'put';
@@ -283,18 +308,32 @@ interface ProposedIdea {
     condition?: string;
     time?: string;
   };
-  stop_pct: number;
+  stop_pct: number | null;
   target_pct: number;
   size_pct: number;
   horizon: string;
+  horizon_minutes?: number;
   rationale: string;
+  exit_mode: ExitMode;
+  size_override_reasoning?: string;
+  no_stop_reasoning?: string;
+  concurrent_override_reasoning?: string;
+  horizon_extended_reasoning?: string;
+}
+
+interface ValidateOpts {
+  softMaxSizePct: number;
+  hardSizeCeilingPct: number;
+  currentConcurrent: number;
+  softConcurrentCap: number;
+  defaultTtlMinutes: number;
 }
 
 function validateIdea(
   idea: unknown,
   hyp: HypothesisRow,
-  maxSizePct: number,
-): { ok: true; idea: ProposedIdea } | { ok: false; reason: string } {
+  opts: ValidateOpts,
+): { ok: true; idea: ProposedIdea } | { ok: false; reason: string; override_category?: string } {
   if (!idea || typeof idea !== 'object') return { ok: false, reason: 'not an object' };
   const i = idea as Record<string, unknown>;
   const inst = typeof i.instrument === 'string' ? i.instrument.toUpperCase().trim() : '';
@@ -319,12 +358,65 @@ function validateIdea(
   } else if (trigType === 'time_gate') {
     if (typeof trig.time !== 'string' || isNaN(Date.parse(trig.time))) return { ok: false, reason: 'time_gate needs ISO time' };
   }
-  const stopPct = Number(i.stop_pct);
+
   const targetPct = Number(i.target_pct);
-  const sizePct = Number(i.size_pct);
-  if (!Number.isFinite(stopPct) || stopPct >= 0) return { ok: false, reason: 'stop_pct must be negative' };
+  const sizePct   = Number(i.size_pct);
   if (!Number.isFinite(targetPct) || targetPct <= 0) return { ok: false, reason: 'target_pct must be positive' };
-  if (!Number.isFinite(sizePct) || sizePct <= 0 || sizePct > maxSizePct) return { ok: false, reason: `size_pct must be (0, ${maxSizePct}]` };
+  if (!Number.isFinite(sizePct) || sizePct <= 0) return { ok: false, reason: 'size_pct must be > 0' };
+
+  // Stop handling — null/omitted triggers the no_stop_reasoning requirement.
+  let stopPct: number | null;
+  if (i.stop_pct === null || i.stop_pct === undefined) {
+    stopPct = null;
+  } else {
+    const raw = Number(i.stop_pct);
+    if (!Number.isFinite(raw) || raw >= 0) return { ok: false, reason: 'stop_pct must be negative or null' };
+    stopPct = raw;
+  }
+
+  // Exit mode: default stop_target_horizon. If stop is null, must be one of the non-stop modes.
+  let exitMode: ExitMode = 'stop_target_horizon';
+  if (typeof i.exit_mode === 'string') {
+    if (!VALID_EXIT_MODES.has(i.exit_mode as ExitMode)) return { ok: false, reason: `bad exit_mode ${i.exit_mode}` };
+    exitMode = i.exit_mode as ExitMode;
+  }
+  if (stopPct === null && exitMode === 'stop_target_horizon') {
+    return { ok: false, reason: 'stop_pct null requires exit_mode != stop_target_horizon', override_category: 'no_stop_missing_mode' };
+  }
+
+  // --- Soft-cap override justification gates ---
+  const sizeOverrideReasoning       = typeof i.size_override_reasoning       === 'string' ? i.size_override_reasoning.trim()       : '';
+  const noStopReasoning             = typeof i.no_stop_reasoning             === 'string' ? i.no_stop_reasoning.trim()             : '';
+  const concurrentOverrideReasoning = typeof i.concurrent_override_reasoning === 'string' ? i.concurrent_override_reasoning.trim() : '';
+  const horizonExtendedReasoning    = typeof i.horizon_extended_reasoning    === 'string' ? i.horizon_extended_reasoning.trim()    : '';
+
+  // Size.
+  if (sizePct > opts.hardSizeCeilingPct) {
+    return { ok: false, reason: `size_pct ${sizePct} > hard ceiling ${opts.hardSizeCeilingPct}`, override_category: 'size_above_hard_ceiling' };
+  }
+  if (sizePct > opts.softMaxSizePct && sizeOverrideReasoning.length < 15) {
+    return { ok: false, reason: `size_pct ${sizePct} > soft cap ${opts.softMaxSizePct} requires size_override_reasoning (>=15 chars)`, override_category: 'size_override_missing_justification' };
+  }
+  // No-stop.
+  if (stopPct === null && noStopReasoning.length < 15) {
+    return { ok: false, reason: 'stop_pct null requires no_stop_reasoning (>=15 chars)', override_category: 'no_stop_missing_justification' };
+  }
+  // Concurrent.
+  if (opts.currentConcurrent >= opts.softConcurrentCap && concurrentOverrideReasoning.length < 15) {
+    return { ok: false, reason: `current concurrent ${opts.currentConcurrent} >= soft cap ${opts.softConcurrentCap} requires concurrent_override_reasoning (>=15 chars)`, override_category: 'concurrent_override_missing_justification' };
+  }
+  // Horizon.
+  let horizonMinutes: number | undefined;
+  if (i.horizon_minutes !== undefined && i.horizon_minutes !== null) {
+    const hm = Number(i.horizon_minutes);
+    if (!Number.isFinite(hm) || hm <= 0) return { ok: false, reason: 'horizon_minutes must be > 0' };
+    if (hm > HORIZON_MINUTES_HARD_CAP) return { ok: false, reason: `horizon_minutes ${hm} > hard cap ${HORIZON_MINUTES_HARD_CAP}`, override_category: 'horizon_above_hard_cap' };
+    if (hm > opts.defaultTtlMinutes && horizonExtendedReasoning.length < 15) {
+      return { ok: false, reason: `horizon_minutes ${hm} > default ttl ${opts.defaultTtlMinutes} requires horizon_extended_reasoning (>=15 chars)`, override_category: 'horizon_override_missing_justification' };
+    }
+    horizonMinutes = hm;
+  }
+
   const horizon = i.horizon as string;
   if (!VALID_HORIZONS.has(horizon)) return { ok: false, reason: `bad horizon ${horizon}` };
   const rationale = typeof i.rationale === 'string' ? i.rationale.trim() : '';
@@ -348,7 +440,13 @@ function validateIdea(
       target_pct: targetPct,
       size_pct: sizePct,
       horizon,
+      horizon_minutes: horizonMinutes,
       rationale,
+      exit_mode: exitMode,
+      size_override_reasoning: sizeOverrideReasoning || undefined,
+      no_stop_reasoning: noStopReasoning || undefined,
+      concurrent_override_reasoning: concurrentOverrideReasoning || undefined,
+      horizon_extended_reasoning: horizonExtendedReasoning || undefined,
     },
   };
 }
@@ -398,6 +496,36 @@ serve(async (req) => {
   );
   const startedAt = Date.now();
 
+  // Generational gate — Tenet 14. If no active gen or gen fired, we do not
+  // open. Load current gen once so we can tag every new trade_idea row.
+  const { data: genRows } = await supabase.rpc('current_claude_generation');
+  const activeGen = Array.isArray(genRows) && genRows.length > 0 ? genRows[0] : null;
+  const generationId: string | null = activeGen?.id ?? null;
+  {
+    const { data: gateRows } = await supabase.rpc('claude_can_open_positions');
+    const gate = Array.isArray(gateRows) && gateRows.length > 0 ? gateRows[0] : null;
+    if (!gate || gate.allowed !== true) {
+      const reason = gate?.reason ?? 'generational gate denied';
+      await supabase.from('ct_claude_decisions').insert({
+        decision_type: 'no_trade',
+        model_tier:    'none',
+        reasoning:     `blocked: ${reason}`,
+        outcome:       'skipped: generational_gate',
+        generation_id: generationId,
+        context_snapshot: {
+          source: 'ct-trade-idea-generator',
+          gate_reason: reason,
+        },
+      });
+      return new Response(JSON.stringify({
+        ok: true,
+        gated: true,
+        reason,
+        duration_ms: Date.now() - startedAt,
+      }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    }
+  }
+
   // Safety gate: skip entirely if Claude is circuit-broken today.
   {
     const { data: haltRows } = await supabase.rpc('is_claude_trading_halted');
@@ -409,6 +537,7 @@ serve(async (req) => {
         model_tier:    'none',
         reasoning:     reason,
         outcome:       'skipped: circuit_breaker_active',
+        generation_id: generationId,
         context_snapshot: {
           source:       'ct-trade-idea-generator',
           breaker_type: halt.breaker_type,
@@ -432,6 +561,7 @@ serve(async (req) => {
   const ttlMinutes          = Number(await getConfig<number>('claude_trade_idea_ttl_minutes', 120));
   const cooldownMinutes     = Number(await getConfig<number>('claude_generator_cooldown_minutes', 5));
   const sizeEscalationPct   = Number(await getConfig<number>('claude_size_sonnet_escalation_pct', 2.0));
+  const hardSizeCeilingPct  = Number(await getConfig<number>('claude_size_hard_ceiling_pct', 10));
 
   // Load open hypotheses above min confidence, capped at 10.
   const { data: hyps, error: hypErr } = await supabase
@@ -492,25 +622,17 @@ serve(async (req) => {
         reasoning: `Cooldown: hypothesis armed a trade idea within last ${cooldownMinutes} min — skipping to avoid duplicate.`,
         outcome: 'cooldown',
         linked_hypothesis_id: hyp.id,
+        generation_id: generationId,
         context_snapshot: { cooldown_minutes: cooldownMinutes, hyp_confidence: hyp.confidence, hyp_elo: hyp.elo, tickers: hyp.tickers },
       });
       continue;
     }
 
-    // Concurrent cap — count live ones (including any we just armed this run).
+    // Concurrent cap is SOFT (Tenet 15). validateIdea enforces the override-
+    // reasoning requirement when current_concurrent >= maxConcurrent. We no
+    // longer short-circuit here.
     const armedThisRun = results.filter((r) => r.outcome === 'armed').length;
-    if (currentConcurrent + armedThisRun >= maxConcurrent) {
-      results.push({ hypothesis_id: hyp.id, outcome: 'at_concurrent_cap' });
-      await recordDecision(supabase, {
-        decision_type: 'no_trade',
-        model_tier: 'none',
-        reasoning: `At concurrent position cap (${currentConcurrent + armedThisRun}/${maxConcurrent}) — no new arming.`,
-        outcome: 'at_concurrent_cap',
-        linked_hypothesis_id: hyp.id,
-        context_snapshot: { current_concurrent: currentConcurrent, armed_this_run: armedThisRun, max_concurrent: maxConcurrent },
-      });
-      continue;
-    }
+    const effectiveConcurrent = currentConcurrent + armedThisRun;
 
     // Recent grades on this hypothesis (learning signal).
     const { data: grades } = await supabase
@@ -634,6 +756,7 @@ serve(async (req) => {
         reasoning: `Claude error evaluating hypothesis: ${msg}`,
         outcome: 'claude_error',
         linked_hypothesis_id: hyp.id,
+        generation_id: generationId,
         context_snapshot: { hyp_confidence: hyp.confidence, hyp_elo: hyp.elo, tickers: hyp.tickers },
       });
       continue;
@@ -659,6 +782,7 @@ serve(async (req) => {
         reasoning: 'Claude returned no tool use.',
         outcome: 'no_tool_use',
         linked_hypothesis_id: hyp.id,
+        generation_id: generationId,
         context_snapshot: decisionCtx,
         tokens_in: thisCallTokensIn,
         tokens_out: thisCallTokensOut,
@@ -678,6 +802,7 @@ serve(async (req) => {
         narrative_signal: { reasoning: reason },
         tape_signal: { reasoning: latest?.status_line ?? 'no heartbeat' },
         linked_hypothesis_id: hyp.id,
+        generation_id: generationId,
         context_snapshot: decisionCtx,
         tool_calls_summary: { tool: 'no_trade', input: toolUse.input },
         tokens_in: thisCallTokensIn,
@@ -694,6 +819,7 @@ serve(async (req) => {
         reasoning: `Unknown tool returned by Claude: ${toolUse.name}`,
         outcome: 'unknown_tool',
         linked_hypothesis_id: hyp.id,
+        generation_id: generationId,
         context_snapshot: decisionCtx,
         tool_calls_summary: { tool: toolUse.name, input: toolUse.input },
         tokens_in: thisCallTokensIn,
@@ -703,16 +829,29 @@ serve(async (req) => {
       continue;
     }
 
-    const v = validateIdea(toolUse.input, hyp, maxSizePct);
+    const v = validateIdea(toolUse.input, hyp, {
+      softMaxSizePct: maxSizePct,
+      hardSizeCeilingPct,
+      currentConcurrent: effectiveConcurrent,
+      softConcurrentCap: maxConcurrent,
+      defaultTtlMinutes: ttlMinutes,
+    });
     if (!v.ok) {
-      results.push({ hypothesis_id: hyp.id, outcome: 'validation_failed', reason: v.reason });
+      // Override-category validation failures are a distinct decision type —
+      // Claude proposed an over-cap trade without justification; reject
+      // and log as size_override / rejected_no_justification.
+      const isOverride = typeof v.override_category === 'string';
+      results.push({ hypothesis_id: hyp.id, outcome: isOverride ? 'override_rejected' : 'validation_failed', reason: v.reason });
       await recordDecision(supabase, {
-        decision_type: 'no_trade',
+        decision_type: isOverride ? 'size_override' : 'no_trade',
         model_tier: 'haiku',
-        reasoning: `Proposed idea failed validation: ${v.reason}`,
-        outcome: 'validation_failed',
+        reasoning: isOverride
+          ? `Override rejected — ${v.override_category}: ${v.reason}`
+          : `Proposed idea failed validation: ${v.reason}`,
+        outcome: isOverride ? 'rejected_no_justification' : 'validation_failed',
         linked_hypothesis_id: hyp.id,
-        context_snapshot: decisionCtx,
+        generation_id: generationId,
+        context_snapshot: { ...decisionCtx, override_category: v.override_category ?? null },
         tool_calls_summary: { tool: 'propose_trade_idea', input: toolUse.input, validation_error: v.reason },
         tokens_in: thisCallTokensIn,
         tokens_out: thisCallTokensOut,
@@ -742,6 +881,7 @@ serve(async (req) => {
             reasoning: `Sonnet rejected Haiku-proposed trade at size ${idea.size_pct}%. ${sonnetOutcome.reasoning}`,
             outcome: 'rejected',
             linked_hypothesis_id: hyp.id,
+            generation_id: generationId,
             context_snapshot: {
               haiku_proposed_size_pct: idea.size_pct,
               escalation_threshold_pct: sizeEscalationPct,
@@ -765,6 +905,7 @@ serve(async (req) => {
             reasoning: `Sonnet reduced size from ${idea.size_pct}% to ${finalSizePct}%. ${sonnetOutcome.reasoning}`,
             outcome: 'modified',
             linked_hypothesis_id: hyp.id,
+            generation_id: generationId,
             context_snapshot: {
               haiku_proposed_size_pct: idea.size_pct,
               sonnet_final_size_pct: finalSizePct,
@@ -788,6 +929,7 @@ serve(async (req) => {
           reasoning: `Sonnet size review errored — proceeding with Haiku-proposed size ${idea.size_pct}%.`,
           outcome: 'review_unavailable',
           linked_hypothesis_id: hyp.id,
+          generation_id: generationId,
           context_snapshot: {
             haiku_proposed_size_pct: idea.size_pct,
             escalation_threshold_pct: sizeEscalationPct,
@@ -800,7 +942,8 @@ serve(async (req) => {
     // Resolve entry price target = current spot for the instrument.
     const spot = await resolveSpot(supabase, idea.instrument);
 
-    const expiresAt = new Date(Date.now() + ttlMinutes * 60_000).toISOString();
+    const effectiveTtl = idea.horizon_minutes ?? ttlMinutes;
+    const expiresAt = new Date(Date.now() + effectiveTtl * 60_000).toISOString();
 
     const { data: inserted, error: insErr } = await supabase
       .from('ct_trade_ideas')
@@ -822,6 +965,12 @@ serve(async (req) => {
         status:             'armed',
         armed_at:           new Date().toISOString(),
         expires_at:         expiresAt,
+        generation_id:      generationId,
+        exit_mode:          idea.exit_mode,
+        size_override_reasoning:       idea.size_override_reasoning       ?? null,
+        no_stop_reasoning:             idea.no_stop_reasoning             ?? null,
+        concurrent_override_reasoning: idea.concurrent_override_reasoning ?? null,
+        horizon_extended_reasoning:    idea.horizon_extended_reasoning    ?? null,
       })
       .select('id')
       .single();
@@ -833,6 +982,7 @@ serve(async (req) => {
         reasoning: `Claude armed a trade idea but insert failed: ${insErr?.message ?? 'no data'}`,
         outcome: 'insert_failed',
         linked_hypothesis_id: hyp.id,
+        generation_id: generationId,
         context_snapshot: { ...decisionCtx, idea },
         tool_calls_summary: { tool: 'propose_trade_idea', input: toolUse.input },
         tokens_in: thisCallTokensIn,
@@ -871,8 +1021,9 @@ serve(async (req) => {
     await recordDecision(supabase, {
       decision_type: 'arm_trade_idea',
       model_tier: sonnetOutcome ? 'sonnet' : 'haiku',
-      reasoning: `Armed ${idea.instrument} ${idea.direction} ${idea.contract_type} size ${finalSizePct}% (haiku proposed ${idea.size_pct}%) stop ${idea.stop_pct}% target ${idea.target_pct}%. Rationale: ${idea.rationale}${sonnetOutcome ? ` | Sonnet: ${sonnetOutcome.decision} — ${sonnetOutcome.reasoning.slice(0, 300)}` : ''}`,
+      reasoning: `Armed ${idea.instrument} ${idea.direction} ${idea.contract_type} size ${finalSizePct}% (haiku proposed ${idea.size_pct}%) stop ${idea.stop_pct == null ? 'none' : `${idea.stop_pct}%`} target ${idea.target_pct}% exit_mode=${idea.exit_mode}. Rationale: ${idea.rationale}${sonnetOutcome ? ` | Sonnet: ${sonnetOutcome.decision} — ${sonnetOutcome.reasoning.slice(0, 300)}` : ''}`,
       outcome: 'armed',
+      generation_id: generationId,
       alignment: 'aligned',
       claude_followed: 'both',
       narrative_signal: {

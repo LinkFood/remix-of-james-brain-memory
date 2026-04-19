@@ -46,6 +46,8 @@ interface OpenTrade {
   trade_idea_id: string | null;
   claude_notes: string | null;
   journal_version: number | null;
+  exit_mode: string | null;
+  generation_id: string | null;
 }
 
 /**
@@ -200,6 +202,37 @@ function classifyVerdict(pnlPct: number): 'right' | 'wrong' | 'ambiguous' {
   return 'ambiguous';
 }
 
+/** Has the most recent trade_journal decision for this trade stance='invalidated'?
+ *  (The open-trade-journal writes stance into context_snapshot on each pass.) */
+async function latestJournalInvalidated(supabase: SupabaseClient, tradeId: string): Promise<boolean> {
+  const { data } = await supabase
+    .from('ct_claude_decisions')
+    .select('context_snapshot, reasoning')
+    .eq('linked_trade_id', tradeId)
+    .eq('decision_type', 'trade_journal')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!data) return false;
+  const ctx = (data.context_snapshot ?? {}) as Record<string, unknown>;
+  const stance = typeof ctx.stance === 'string' ? ctx.stance : null;
+  if (stance === 'invalidated') return true;
+  // Fallback — some older rows only have the stance in reasoning text.
+  const reasoning = typeof data.reasoning === 'string' ? data.reasoning.toLowerCase() : '';
+  return reasoning.includes('stance=invalidated') || reasoning.includes('"invalidated"');
+}
+
+/** Is the hypothesis behind this trade flagged invalidated? */
+async function hypothesisInvalidated(supabase: SupabaseClient, hypothesisId: string | null): Promise<boolean> {
+  if (!hypothesisId) return false;
+  const { data } = await supabase
+    .from('ct_hypotheses')
+    .select('status')
+    .eq('id', hypothesisId)
+    .maybeSingle();
+  return data?.status === 'invalidated';
+}
+
 serve(async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
@@ -220,7 +253,7 @@ serve(async (req) => {
 
   const { data: trades, error: tradesErr } = await supabase
     .from('ct_trades')
-    .select('id, session_date, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, horizon, opened_at, hypothesis_id, trade_idea_id, claude_notes, journal_version')
+    .select('id, session_date, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, horizon, opened_at, hypothesis_id, trade_idea_id, claude_notes, journal_version, exit_mode, generation_id')
     .eq('trader', 'claude')
     .eq('status', 'open');
   if (tradesErr) {
@@ -250,11 +283,12 @@ serve(async (req) => {
     }
 
     const isLong = trade.side === 'long';
+    const exitMode = (trade.exit_mode ?? 'stop_target_horizon').toLowerCase();
     let closeReason: string | null = null;
     let closePrice: number = spot;
 
-    // Stop + target evaluation.
-    if (trade.stop_price != null) {
+    // Stop: only stop_target_horizon watches the stop_price level.
+    if (exitMode === 'stop_target_horizon' && trade.stop_price != null) {
       if (isLong && spot <= trade.stop_price) {
         closeReason = 'stopped_out';
         closePrice = trade.stop_price;
@@ -263,7 +297,9 @@ serve(async (req) => {
         closePrice = trade.stop_price;
       }
     }
-    if (!closeReason && trade.target_price != null) {
+
+    // Target: stop_target_horizon AND theta_decay close on target hit.
+    if (!closeReason && (exitMode === 'stop_target_horizon' || exitMode === 'theta_decay') && trade.target_price != null) {
       if (isLong && spot >= trade.target_price) {
         closeReason = 'target_hit';
         closePrice = trade.target_price;
@@ -273,9 +309,21 @@ serve(async (req) => {
       }
     }
 
-    // Horizon expiry. intraday → must close today by 4pm ET. session → 4pm ET
-    // of opened_at's session (= session_date field).
-    if (!closeReason) {
+    // Invalidation: open_until_invalidated AND theta_decay close when the
+    // thesis is marked invalidated — either via the hypothesis status or the
+    // most recent open-trade-journal stance.
+    if (!closeReason && (exitMode === 'open_until_invalidated' || exitMode === 'theta_decay')) {
+      const hypInvalid = await hypothesisInvalidated(supabase, trade.hypothesis_id);
+      const journalInvalid = await latestJournalInvalidated(supabase, trade.id);
+      if (hypInvalid || journalInvalid) {
+        closeReason = 'thesis_invalidated';
+        closePrice = spot;
+      }
+    }
+
+    // Horizon expiry: stop_target_horizon + theta_decay close at session end
+    // for intraday/session horizons. open_until_invalidated and manual skip.
+    if (!closeReason && (exitMode === 'stop_target_horizon' || exitMode === 'theta_decay')) {
       const horizon = (trade.horizon ?? 'intraday').toLowerCase();
       if (horizon === 'intraday' || horizon === 'session') {
         const refSession = trade.session_date ?? sessionDateToday;
@@ -350,10 +398,11 @@ serve(async (req) => {
     await recordDecision(supabase, {
       decision_type: 'close_trade',
       model_tier: 'none',
-      reasoning: `Closed ${trade.instrument} ${trade.side} (${closeReason}) at ${closePrice}. Entry ${entry}. PnL ${pnlPctRounded}% ($${pnlUsd}). Verdict ${verdict}.`,
+      reasoning: `Closed ${trade.instrument} ${trade.side} (${closeReason}, exit_mode=${exitMode}) at ${closePrice}. Entry ${entry}. PnL ${pnlPctRounded}% ($${pnlUsd}). Verdict ${verdict}.`,
       outcome: closeReason,
       alignment: won ? 'aligned' : 'conflict',
       claude_followed: won ? 'narrative' : 'tape',
+      generation_id: trade.generation_id,
       tape_signal: {
         direction: actualDirection,
         reasoning: `close_reason=${closeReason} exit=${closePrice} entry=${entry}`,
@@ -375,6 +424,7 @@ serve(async (req) => {
         close_reason: closeReason,
         verdict,
         session_date: trade.session_date,
+        exit_mode: exitMode,
       },
     });
 
