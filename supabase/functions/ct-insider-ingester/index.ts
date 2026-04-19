@@ -11,6 +11,8 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getInsiderTransactions } from '../_shared/uwClient.ts';
+import { mcpCallToolAsData, isUwRateLimit } from '../_shared/uwMcpClient.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
 type Row = {
@@ -110,11 +112,33 @@ serve(async (req) => {
   try {
     const watchlist = new Set((await getWatchlist(supabase)).map((t) => t.toUpperCase()));
 
+    // Wave N.2 — prefer UW MCP (`get_insider_trades`). Fall back to legacy
+    // REST on any MCP failure. Legacy path deletes 7 days after MCP proves
+    // itself in production.
     let raw: unknown = null;
+    let path: 'mcp' | 'legacy' = 'mcp';
     try {
-      raw = await getInsiderTransactions();
-    } catch (e) {
-      errors.push(`uw: ${e instanceof Error ? e.message : String(e)}`);
+      raw = await mcpCallToolAsData('get_insider_trades', { limit: 500 });
+    } catch (mcpErr) {
+      if (isUwRateLimit(mcpErr)) {
+        // Shared bucket — don't burn a legacy REST call on a saturated bucket.
+        errors.push(`mcp_rate_limited`);
+        path = 'legacy';
+        raw = null;
+      } else {
+        const msg = mcpErr instanceof Error ? mcpErr.message : String(mcpErr);
+        await recordDecision(supabase, {
+          decision_type: 'stress_check',
+          model_tier: 'none',
+          reasoning: `MCP fallback on ct-insider-ingester: ${msg.slice(0, 400)}`,
+        });
+        path = 'legacy';
+        try {
+          raw = await getInsiderTransactions();
+        } catch (e) {
+          errors.push(`uw: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
     }
     const data = extractData(raw);
 
@@ -151,6 +175,7 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
+      path,
       seen: data.length,
       watchlist_filtered: rows.length,
       inserted,

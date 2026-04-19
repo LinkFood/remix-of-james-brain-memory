@@ -17,6 +17,8 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getTechnicalIndicator, type TechnicalInterval } from '../_shared/uwClient.ts';
+import { mcpCallToolAsData, isUwRateLimit } from '../_shared/uwMcpClient.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
 type Row = {
@@ -179,6 +181,8 @@ serve(async (req) => {
   );
   const startedAt = Date.now();
   const errors: Array<{ ticker: string; indicator: string; error: string }> = [];
+  let mcpCalls = 0;
+  let legacyCalls = 0;
 
   try {
     const watchlist = await getWatchlist(supabase);
@@ -188,14 +192,48 @@ serve(async (req) => {
       const upper = ticker.toUpperCase();
       for (const { name, period, interval } of INDICATORS) {
         let raw: unknown = null;
+
+        // Wave N.2 — prefer UW MCP `get_av_technical_indicator` (Alpha Vantage
+        // tech indicator set — same shape UW's legacy REST already proxied).
+        // Fall back to legacy on per-indicator failure. One stress_check row
+        // per failing MCP call — noisy first day, drops to zero as MCP proves.
+        const mcpArgs: Record<string, unknown> = {
+          ticker: upper,
+          function: name.toUpperCase(),
+          interval,
+        };
+        if (period !== null) mcpArgs.time_period = period;
+
+        let source: 'mcp' | 'legacy' = 'mcp';
         try {
-          const params: { interval: TechnicalInterval; time_period?: number } = { interval };
-          if (period !== null) params.time_period = period;
-          raw = await getTechnicalIndicator(upper, name, params);
-        } catch (e) {
-          errors.push({ ticker: upper, indicator: name, error: e instanceof Error ? e.message : String(e) });
-          continue;
+          raw = await mcpCallToolAsData('get_av_technical_indicator', mcpArgs);
+          mcpCalls++;
+        } catch (mcpErr) {
+          if (isUwRateLimit(mcpErr)) {
+            // Shared bucket — falling back to legacy REST just burns a second
+            // request on the same saturated 120/min limit. Skip this indicator
+            // this cycle; next cron tick will backfill.
+            errors.push({ ticker: upper, indicator: name, error: 'mcp_rate_limited' });
+            continue;
+          }
+          const msg = mcpErr instanceof Error ? mcpErr.message : String(mcpErr);
+          await recordDecision(supabase, {
+            decision_type: 'stress_check',
+            model_tier: 'none',
+            reasoning: `MCP fallback on ct-technicals-ingester ${upper}/${name}: ${msg.slice(0, 300)}`,
+          });
+          source = 'legacy';
+          try {
+            const params: { interval: TechnicalInterval; time_period?: number } = { interval };
+            if (period !== null) params.time_period = period;
+            raw = await getTechnicalIndicator(upper, name, params);
+            legacyCalls++;
+          } catch (e) {
+            errors.push({ ticker: upper, indicator: name, error: e instanceof Error ? e.message : String(e) });
+            continue;
+          }
         }
+        void source; // used for read-flow clarity; accounted in mcpCalls/legacyCalls
         const series = extractSeries(raw);
         if (series.length === 0) continue;
         // UW returns the series in descending date order — most recent first.
@@ -226,6 +264,8 @@ serve(async (req) => {
       success: true,
       rows: rows.length,
       inserted,
+      mcp_calls: mcpCalls,
+      legacy_calls: legacyCalls,
       errors,
       duration_ms: Date.now() - startedAt,
     }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });

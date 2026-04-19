@@ -10,6 +10,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getCongressTrades } from '../_shared/uwClient.ts';
+import { mcpCallToolAsData, isUwRateLimit } from '../_shared/uwMcpClient.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
 
 type Row = {
   disclosure_id: string;
@@ -92,13 +94,37 @@ serve(async (req) => {
 
   const startedAt = Date.now();
   const errors: string[] = [];
+  const supabase = createClient(
+    Deno.env.get('SUPABASE_URL')!,
+    Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
+  );
 
   try {
+    // Wave N.2 — prefer UW MCP (`get_congress_trades`). Fall back to legacy
+    // REST on any MCP failure.
     let raw: unknown = null;
+    let path: 'mcp' | 'legacy' = 'mcp';
     try {
-      raw = await getCongressTrades();
-    } catch (e) {
-      errors.push(`uw: ${e instanceof Error ? e.message : String(e)}`);
+      raw = await mcpCallToolAsData('get_congress_trades', { limit: 500 });
+    } catch (mcpErr) {
+      if (isUwRateLimit(mcpErr)) {
+        errors.push(`mcp_rate_limited`);
+        path = 'legacy';
+        raw = null;
+      } else {
+        const msg = mcpErr instanceof Error ? mcpErr.message : String(mcpErr);
+        await recordDecision(supabase, {
+          decision_type: 'stress_check',
+          model_tier: 'none',
+          reasoning: `MCP fallback on ct-political-ingester: ${msg.slice(0, 400)}`,
+        });
+        path = 'legacy';
+        try {
+          raw = await getCongressTrades();
+        } catch (e) {
+          errors.push(`uw: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
     }
     const data = extractData(raw);
 
@@ -132,6 +158,7 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
+      path,
       seen: data.length,
       rows: rows.length,
       inserted,

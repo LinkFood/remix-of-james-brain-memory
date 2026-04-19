@@ -15,6 +15,8 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getAnalystRatings } from '../_shared/uwClient.ts';
+import { mcpCallToolAsData, isUwRateLimit } from '../_shared/uwMcpClient.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
 type Row = {
@@ -113,11 +115,31 @@ serve(async (req) => {
   try {
     const watchlist = new Set((await getWatchlist(supabase)).map((t) => t.toUpperCase()));
 
+    // Wave N.2 — prefer UW MCP (`get_analyst_ratings`). Fall back to legacy
+    // REST on any MCP failure.
     let raw: unknown = null;
+    let path: 'mcp' | 'legacy' = 'mcp';
     try {
-      raw = await getAnalystRatings({ limit: 200 });
-    } catch (e) {
-      errors.push(`uw: ${e instanceof Error ? e.message : String(e)}`);
+      raw = await mcpCallToolAsData('get_analyst_ratings', { limit: 200 });
+    } catch (mcpErr) {
+      if (isUwRateLimit(mcpErr)) {
+        errors.push(`mcp_rate_limited`);
+        path = 'legacy';
+        raw = null;
+      } else {
+        const msg = mcpErr instanceof Error ? mcpErr.message : String(mcpErr);
+        await recordDecision(supabase, {
+          decision_type: 'stress_check',
+          model_tier: 'none',
+          reasoning: `MCP fallback on ct-analyst-ingester: ${msg.slice(0, 400)}`,
+        });
+        path = 'legacy';
+        try {
+          raw = await getAnalystRatings({ limit: 200 });
+        } catch (e) {
+          errors.push(`uw: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      }
     }
     const data = extractData(raw);
 
@@ -152,6 +174,7 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({
       success: true,
+      path,
       seen: data.length,
       watchlist_filtered: rows.length,
       inserted,

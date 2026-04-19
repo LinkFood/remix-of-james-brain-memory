@@ -381,6 +381,9 @@ verify_jwt = false
 [functions.ct-indicator-events-ingester]
 verify_jwt = false
 
+[functions.ct-mcp-shape-probe]
+verify_jwt = false
+
 [functions.ct-uw-endpoint-health-check]
 verify_jwt = false
 

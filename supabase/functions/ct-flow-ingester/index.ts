@@ -14,6 +14,8 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { getFlowAlerts, getDarkPoolRecent, getDarkPool, getNetPremiumTicks, getNope, getGreekFlow, getTopNetImpact, getSweepScreener, WATCHLIST } from '../_shared/uwClient.ts';
+import { mcpCallToolAsData, isUwRateLimit } from '../_shared/uwMcpClient.ts';
+import { recordDecision } from '../_shared/decisionJournal.ts';
 
 function numOrNull(v: unknown): number | null {
   if (v === null || v === undefined) return null;
@@ -28,11 +30,35 @@ function boolOrNull(v: unknown): boolean | null {
   return null;
 }
 
-async function ingestFlowAlerts(supabase: SupabaseClient): Promise<{ seen: number; inserted: number }> {
+async function ingestFlowAlerts(supabase: SupabaseClient): Promise<{ seen: number; inserted: number; path: 'mcp' | 'legacy' }> {
+  // Wave N.2 — prefer MCP `get_flow_alerts`. Fall back to legacy REST on failure.
+  let raw: unknown = null;
+  let path: 'mcp' | 'legacy' = 'mcp';
   try {
-    const raw = await getFlowAlerts({ limit: 100 });
+    raw = await mcpCallToolAsData('get_flow_alerts', { limit: 100 });
+  } catch (mcpErr) {
+    if (isUwRateLimit(mcpErr)) {
+      console.warn('[ct-flow] flow-alerts MCP rate-limited, skipping');
+      return { seen: 0, inserted: 0, path: 'legacy' };
+    }
+    const msg = mcpErr instanceof Error ? mcpErr.message : String(mcpErr);
+    await recordDecision(supabase, {
+      decision_type: 'stress_check',
+      model_tier: 'none',
+      reasoning: `MCP fallback on ct-flow-ingester/flow_alerts: ${msg.slice(0, 400)}`,
+    });
+    path = 'legacy';
+    try {
+      raw = await getFlowAlerts({ limit: 100 });
+    } catch (e) {
+      console.warn('[ct-flow] flow-alerts legacy pull failed:', e instanceof Error ? e.message : e);
+      return { seen: 0, inserted: 0, path };
+    }
+  }
+
+  try {
     const data = (raw && typeof raw === 'object') ? (raw as { data?: unknown }).data : null;
-    if (!Array.isArray(data) || data.length === 0) return { seen: 0, inserted: 0 };
+    if (!Array.isArray(data) || data.length === 0) return { seen: 0, inserted: 0, path };
 
     const rows = (data as Array<Record<string, unknown>>).map((r) => ({
       alert_id: (r.id as string | undefined) ?? (r.alert_id as string | undefined) ?? `${r.ticker_symbol}-${r.executed_at ?? r.timestamp ?? ''}-${r.option_symbol ?? ''}`,
@@ -61,12 +87,12 @@ async function ingestFlowAlerts(supabase: SupabaseClient): Promise<{ seen: numbe
       .upsert(rows, { onConflict: 'alert_id', ignoreDuplicates: true, count: 'exact' });
     if (error) {
       console.warn('[ct-flow] flow upsert failed:', error.message);
-      return { seen: rows.length, inserted: 0 };
+      return { seen: rows.length, inserted: 0, path };
     }
-    return { seen: rows.length, inserted: count ?? rows.length };
+    return { seen: rows.length, inserted: count ?? rows.length, path };
   } catch (e) {
-    console.warn('[ct-flow] flow-alerts pull failed:', e instanceof Error ? e.message : e);
-    return { seen: 0, inserted: 0 };
+    console.warn('[ct-flow] flow-alerts shape failed:', e instanceof Error ? e.message : e);
+    return { seen: 0, inserted: 0, path };
   }
 }
 
@@ -74,8 +100,31 @@ async function ingestDarkPool(
   supabase: SupabaseClient,
   ticker: string | null,
 ): Promise<{ seen: number; inserted: number }> {
+  // Wave N.2 — prefer MCP `get_dark_pool_trades`. Fall back to legacy.
+  let raw: unknown = null;
   try {
-    const raw = ticker ? await getDarkPool(ticker) : await getDarkPoolRecent();
+    const mcpArgs: Record<string, unknown> = { limit: 100 };
+    if (ticker) mcpArgs.ticker = ticker;
+    raw = await mcpCallToolAsData('get_dark_pool_trades', mcpArgs);
+  } catch (mcpErr) {
+    if (isUwRateLimit(mcpErr)) {
+      return { seen: 0, inserted: 0 };
+    }
+    const msg = mcpErr instanceof Error ? mcpErr.message : String(mcpErr);
+    await recordDecision(supabase, {
+      decision_type: 'stress_check',
+      model_tier: 'none',
+      reasoning: `MCP fallback on ct-flow-ingester/dark_pool ${ticker ?? 'recent'}: ${msg.slice(0, 300)}`,
+    });
+    try {
+      raw = ticker ? await getDarkPool(ticker) : await getDarkPoolRecent();
+    } catch (e) {
+      console.warn(`[ct-flow] dark-pool legacy failed (${ticker ?? 'recent'}):`, e instanceof Error ? e.message : e);
+      return { seen: 0, inserted: 0 };
+    }
+  }
+
+  try {
     const data = (raw && typeof raw === 'object') ? (raw as { data?: unknown }).data : null;
     if (!Array.isArray(data) || data.length === 0) return { seen: 0, inserted: 0 };
 
@@ -272,8 +321,35 @@ async function ingestTopMovers(supabase: SupabaseClient): Promise<{ seen: number
 }
 
 async function ingestSweeps(supabase: SupabaseClient): Promise<{ seen: number; inserted: number }> {
+  // Wave N.2 — prefer MCP `get_options_screener` (sweep preset params).
+  let raw: unknown = null;
   try {
-    const raw = await getSweepScreener(60);
+    raw = await mcpCallToolAsData('get_options_screener', {
+      limit: 60,
+      min_premium: 100_000,
+      min_sweep_volume_ratio: 0.7,
+      vol_greater_oi: true,
+      is_otm: true,
+    });
+  } catch (mcpErr) {
+    if (isUwRateLimit(mcpErr)) {
+      return { seen: 0, inserted: 0 };
+    }
+    const msg = mcpErr instanceof Error ? mcpErr.message : String(mcpErr);
+    await recordDecision(supabase, {
+      decision_type: 'stress_check',
+      model_tier: 'none',
+      reasoning: `MCP fallback on ct-flow-ingester/sweeps: ${msg.slice(0, 300)}`,
+    });
+    try {
+      raw = await getSweepScreener(60);
+    } catch (e) {
+      console.warn('[ct-flow] sweeps legacy failed:', e instanceof Error ? e.message : e);
+      return { seen: 0, inserted: 0 };
+    }
+  }
+
+  try {
     const data = (raw && typeof raw === 'object') ? (raw as { data?: unknown }).data : null;
     if (!Array.isArray(data) || data.length === 0) return { seen: 0, inserted: 0 };
     const snapshotAt = new Date().toISOString();

@@ -311,8 +311,7 @@ function coercePrompts(result: unknown): McpPrompt[] {
  * transparently — returns the flattened list.
  */
 export async function mcpListTools(): Promise<McpTool[]> {
-  const state = newState();
-  await initialize(state);
+  const state = await getSharedState();
 
   const out: McpTool[] = [];
   let cursor: string | undefined = undefined;
@@ -331,8 +330,7 @@ export async function mcpListTools(): Promise<McpTool[]> {
  * handling as mcpListTools.
  */
 export async function mcpListPrompts(): Promise<McpPrompt[]> {
-  const state = newState();
-  await initialize(state);
+  const state = await getSharedState();
 
   const out: McpPrompt[] = [];
   let cursor: string | undefined = undefined;
@@ -347,13 +345,122 @@ export async function mcpListPrompts(): Promise<McpPrompt[]> {
 }
 
 /**
+ * Module-scoped cached client state for the lifetime of one edge-function
+ * isolate. Initializing on every `mcpCallTool` call doubles our UW rate-limit
+ * budget (initialize + tools/call = 2 requests per logical op), which at 120
+ * req/min is the difference between a tech-indicators ingester that finishes
+ * and one that 429-storms. Per edge-function isolate boot we initialize once
+ * and reuse. Isolates are already scoped per-invocation by Supabase — session
+ * leakage across requests is not possible.
+ */
+let _sharedState: McpClientState | null = null;
+async function getSharedState(): Promise<McpClientState> {
+  if (_sharedState && _sharedState.initialized) return _sharedState;
+  _sharedState = newState();
+  await initialize(_sharedState);
+  return _sharedState;
+}
+
+/**
  * Call a tool by name. Returns the raw MCP tool result object — caller decides
  * how to interpret the content blocks.
  */
 export async function mcpCallTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
-  const state = newState();
-  await initialize(state);
+  const state = await getSharedState();
   return await rpc(state, 'tools/call', { name, arguments: args });
+}
+
+/**
+ * Convenience wrapper for ingester migration (Wave N).
+ *
+ * MCP `tools/call` returns shape:
+ *   { content: [{ type: 'text', text: '<JSON string>' }, ...], isError?: bool, structuredContent?: ... }
+ *
+ * Legacy uwClient wrappers returned JSON objects like `{ data: [...] }` —
+ * ingesters build rows off that shape. This helper:
+ *   1. Calls the MCP tool.
+ *   2. Throws UwMcpError if isError=true.
+ *   3. Prefers `structuredContent` when the server ships it.
+ *   4. Else concatenates `content[*].text` blocks and parses the first
+ *      well-formed JSON object/array out of them.
+ *   5. Returns the parsed payload. Ingester dedupe logic can then run
+ *      unchanged (extractData(raw) keeps working whether the shape is
+ *      `{data: [...]}`, `{data: {...}}`, or a bare array).
+ *
+ * If parsing fails, wraps the failure in UwMcpError('mcp_shape') so the
+ * ingester's catch can fall back to its legacy HTTP path with a clear
+ * diagnostic.
+ */
+export async function mcpCallToolAsData(
+  name: string,
+  args: Record<string, unknown> = {},
+): Promise<unknown> {
+  const result = await mcpCallTool(name, args) as {
+    content?: Array<{ type?: string; text?: string }>;
+    structuredContent?: unknown;
+    isError?: boolean;
+  };
+
+  if (result?.isError) {
+    // Pull the first text block as the error message if present.
+    const firstText = Array.isArray(result.content)
+      ? result.content.find(b => b?.type === 'text' && typeof b.text === 'string')?.text
+      : null;
+    throw new UwMcpError(`MCP tool ${name} returned isError=true: ${firstText ?? '(no text)'}`, 200, 'tool_error', result);
+  }
+
+  // Prefer structuredContent — spec-compliant, unambiguous.
+  // UW's MCP server wraps successful tool output as
+  //   structuredContent: { result: [...] | {...} }
+  // We unwrap the `result` key and re-shape to legacy `{data: ...}` so
+  // ingester `extractData()` helpers keep working. If `result` isn't there
+  // for some tool, fall back to returning structuredContent as-is.
+  if (result?.structuredContent !== undefined && result.structuredContent !== null) {
+    const sc = result.structuredContent as { result?: unknown };
+    if (sc && typeof sc === 'object' && 'result' in sc) {
+      const r = sc.result;
+      if (Array.isArray(r)) return { data: r };
+      if (r !== null && typeof r === 'object') return { data: r };
+      // Primitive or null result — return wrapped.
+      return { data: r };
+    }
+    return result.structuredContent;
+  }
+
+  // Fall back to joined text blocks → parse as JSON.
+  const texts: string[] = [];
+  if (Array.isArray(result?.content)) {
+    for (const b of result.content) {
+      if (b?.type === 'text' && typeof b.text === 'string') texts.push(b.text);
+    }
+  }
+  const joined = texts.join('').trim();
+  if (!joined) {
+    throw new UwMcpError(`MCP tool ${name} returned no content blocks`, 200, 'mcp_shape', result);
+  }
+
+  // First attempt: straight JSON.parse.
+  let parsed: unknown;
+  try { parsed = JSON.parse(joined); }
+  catch {
+    // Second attempt: extract first {...} or [...] substring.
+    const objMatch = joined.match(/[\{\[][\s\S]*[\}\]]/);
+    if (objMatch) {
+      try { parsed = JSON.parse(objMatch[0]); } catch { /* fall through */ }
+    }
+  }
+  if (parsed === undefined) {
+    throw new UwMcpError(`MCP tool ${name} payload not JSON-parseable: ${joined.slice(0, 200)}`, 200, 'mcp_shape', result);
+  }
+
+  // UW's MCP server often returns a bare JSON array at the top level
+  // (observed in `ct_mcp_calls` live traffic, 2026-04-17). The legacy REST
+  // client always returned `{data: [...]}`, and ingester `extractData()`
+  // helpers look for `.data`. Normalize so migration is drop-in: if the
+  // parsed payload is a bare array, wrap it; if it's an object that already
+  // has a `data` key (or looks like a single-object response), return as-is.
+  if (Array.isArray(parsed)) return { data: parsed };
+  return parsed;
 }
 
 /**
@@ -362,8 +469,7 @@ export async function mcpCallTool(name: string, args: Record<string, unknown> = 
  * if the result is not shaped as expected.
  */
 export async function mcpGetPrompt(name: string, args: Record<string, unknown> = {}): Promise<string> {
-  const state = newState();
-  await initialize(state);
+  const state = await getSharedState();
   const result = await rpc(state, 'prompts/get', { name, arguments: args }) as {
     messages?: Array<{ role?: string; content?: { type?: string; text?: string } | Array<{ type?: string; text?: string }> }>;
   };
@@ -380,6 +486,17 @@ export async function mcpGetPrompt(name: string, args: Record<string, unknown> =
     }
   }
   return chunks.length ? chunks.join('\n\n') : JSON.stringify(result);
+}
+
+/**
+ * Predicate for callers that want to treat UW rate-limit hits differently
+ * from other MCP failures. The UW 120 req/min bucket is SHARED with the
+ * legacy REST path — falling back to REST on a 429 just burns another
+ * request on the same saturated bucket.
+ */
+export function isUwRateLimit(err: unknown): boolean {
+  if (!(err instanceof UwMcpError)) return false;
+  return err.status === 429 || /429/.test(err.message) || /rate limit/i.test(err.message);
 }
 
 // Re-export the discovered endpoint so scout fn can put it in telemetry.
