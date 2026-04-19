@@ -60,6 +60,7 @@ import { TradeLogTab } from '@/components/workspace/TradeLogTab';
 import { ClaudesBookTab } from '@/components/workspace/ClaudesBookTab';
 import { DivergenceTab } from '@/components/workspace/DivergenceTab';
 import { ClaudeStateDashboard } from '@/components/workspace/ClaudeStateDashboard';
+import { LineageTab } from '@/components/workspace/LineageTab';
 import { useRecentDecisions } from '@/hooks/useClaudeState';
 
 // ---------------------------------------------------------------------------
@@ -137,9 +138,9 @@ function authorBorderClass(editedByJames: boolean): string {
 // Divergence. The Theses tab renders the original 3-col workspace; the other
 // three render dedicated components.
 // ---------------------------------------------------------------------------
-type WorkspaceView = 'state' | 'theses' | 'trades' | 'book' | 'divergence' | 'decisions';
+type WorkspaceView = 'state' | 'theses' | 'trades' | 'book' | 'divergence' | 'lineage' | 'decisions';
 const VALID_VIEWS: readonly WorkspaceView[] = [
-  'state', 'theses', 'trades', 'book', 'divergence', 'decisions',
+  'state', 'theses', 'trades', 'book', 'divergence', 'lineage', 'decisions',
 ] as const;
 
 export default function Workspace() {
@@ -177,12 +178,13 @@ export default function Workspace() {
         </header>
 
         <Tabs value={view} onValueChange={(v) => setView(v as WorkspaceView)}>
-          <TabsList className="grid w-full md:w-auto md:inline-flex grid-cols-3 md:grid-cols-6 gap-1">
+          <TabsList className="grid w-full md:w-auto md:inline-flex grid-cols-4 md:grid-cols-7 gap-1">
             <TabsTrigger value="state" className="text-xs">State</TabsTrigger>
             <TabsTrigger value="theses" className="text-xs">Theses</TabsTrigger>
             <TabsTrigger value="trades" className="text-xs">Trade Log</TabsTrigger>
             <TabsTrigger value="book" className="text-xs">Claude's Book</TabsTrigger>
             <TabsTrigger value="divergence" className="text-xs">Divergence</TabsTrigger>
+            <TabsTrigger value="lineage" className="text-xs">Lineage</TabsTrigger>
             <TabsTrigger value="decisions" className="text-xs">Decisions</TabsTrigger>
           </TabsList>
 
@@ -200,6 +202,9 @@ export default function Workspace() {
           </TabsContent>
           <TabsContent value="divergence" className="mt-3">
             <DivergenceTab />
+          </TabsContent>
+          <TabsContent value="lineage" className="mt-3">
+            <LineageTab />
           </TabsContent>
           <TabsContent value="decisions" className="mt-3">
             <DecisionsFullTab />

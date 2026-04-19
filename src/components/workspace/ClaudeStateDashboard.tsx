@@ -15,6 +15,7 @@
  * everything. Old tabs (Theses, Trade Log, Book, Divergence) move to a top
  * sub-view router in Workspace.tsx.
  */
+import { GenerationStatusCard } from './GenerationStatusCard';
 import { StatusStrip } from './StatusStrip';
 import { BriefSummaryCard } from './BriefSummaryCard';
 import { LiveActionStrip } from './LiveActionStrip';
@@ -24,6 +25,7 @@ import { ReviewQueueCompact } from './ReviewQueueCompact';
 export function ClaudeStateDashboard() {
   return (
     <div className="space-y-3">
+      <GenerationStatusCard />
       <StatusStrip />
       <BriefSummaryCard />
       <LiveActionStrip />

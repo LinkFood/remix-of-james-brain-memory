@@ -8,11 +8,17 @@
  * This is the Day-3 tenet made visible: every decision Claude makes is
  * captured and glanceable.
  */
+import { useMemo, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Activity, ExternalLink } from 'lucide-react';
+import { Activity, ExternalLink, Flame } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useRecentDecisions, type ClaudeDecisionRow } from '@/hooks/useClaudeState';
+import {
+  useCurrentGeneration,
+  usePastGenerations,
+  type ClaudeGeneration,
+} from '@/hooks/useClaudeGeneration';
 
 function chipClass(decisionType: string): string {
   switch (decisionType) {
@@ -65,9 +71,31 @@ function linkTarget(d: ClaudeDecisionRow): { label: string; kind: string } | nul
   return null;
 }
 
+// Generation-end markers — we flag reflections whose reasoning mentions the
+// generation-ending vocabulary. Cheap heuristic; zero false positives on
+// ordinary reflections ("reviewed today's fills", "updated thesis" etc).
+const GEN_END_REGEX =
+  /\b(generation (?:ended|fired|succeeded|abandoned)|fire reason|survival breach|performance floor|target hit)\b/i;
+
+function isGenerationEnd(d: ClaudeDecisionRow): boolean {
+  if (d.decision_type !== 'reflection') return false;
+  return GEN_END_REGEX.test(d.reasoning);
+}
+
 export function DecisionLogFeed() {
   const { data: decisions = [], isLoading } = useRecentDecisions(15);
+  const { data: currentGen } = useCurrentGeneration();
+  const { data: pastGens = [] } = usePastGenerations(50);
   const navigate = useNavigate();
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // id → gen_number lookup for the chip. Current + past merged.
+  const genMap = useMemo(() => {
+    const m = new Map<string, ClaudeGeneration>();
+    if (currentGen) m.set(currentGen.id, currentGen);
+    for (const g of pastGens) m.set(g.id, g);
+    return m;
+  }, [currentGen, pastGens]);
 
   return (
     <Card className="p-4">
@@ -94,33 +122,108 @@ export function DecisionLogFeed() {
         <div className="divide-y divide-border max-h-[420px] overflow-y-auto">
           {decisions.map((d) => {
             const link = linkTarget(d);
+            const gen = d.generation_id ? genMap.get(d.generation_id) : null;
+            const genEnd = isGenerationEnd(d);
+            const isExpanded = expandedId === d.id;
             return (
-              <div key={d.id} className="py-1.5 flex items-start gap-2 text-[11px]">
-                <span className="font-mono text-muted-foreground shrink-0 w-8">
-                  {timeAgo(d.created_at)}
-                </span>
-                <Badge
-                  variant="outline"
-                  className={`text-[9px] px-1 py-0 h-4 shrink-0 ${chipClass(d.decision_type)}`}
-                  title={d.decision_type}
+              <div
+                key={d.id}
+                className={`py-1.5 ${
+                  genEnd
+                    ? 'px-2 -mx-2 border-l-2 border-red-500/60 bg-red-500/5'
+                    : ''
+                }`}
+              >
+                <div
+                  className={`flex items-start gap-2 text-[11px] ${
+                    genEnd ? 'cursor-pointer' : ''
+                  }`}
+                  onClick={() => {
+                    if (genEnd) setExpandedId(isExpanded ? null : d.id);
+                  }}
                 >
-                  {d.decision_type.replace(/_/g, ' ')}
-                </Badge>
-                <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 shrink-0 uppercase font-mono">
-                  {d.model_tier}
-                </Badge>
-                {d.hallucination_flag && (
-                  <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 shrink-0 bg-red-500/15 text-red-400 border-red-500/40">
-                    halluc
-                  </Badge>
-                )}
-                <span className="text-muted-foreground leading-snug line-clamp-2 flex-1">
-                  {d.reasoning}
-                </span>
-                {link && (
-                  <span className="text-[10px] text-muted-foreground shrink-0">
-                    → {link.label}
+                  <span className="font-mono text-muted-foreground shrink-0 w-8">
+                    {timeAgo(d.created_at)}
                   </span>
+                  <Badge
+                    variant="outline"
+                    className={`text-[9px] px-1 py-0 h-4 shrink-0 ${chipClass(d.decision_type)}`}
+                    title={d.decision_type}
+                  >
+                    {d.decision_type.replace(/_/g, ' ')}
+                  </Badge>
+                  <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 shrink-0 uppercase font-mono">
+                    {d.model_tier}
+                  </Badge>
+                  {gen && (
+                    <Badge
+                      variant="outline"
+                      className="text-[9px] px-1 py-0 h-4 shrink-0 font-mono bg-primary/10 text-primary border-primary/30"
+                      title={`Generation ${gen.generation_number}`}
+                    >
+                      G{gen.generation_number}
+                    </Badge>
+                  )}
+                  {genEnd && (
+                    <Badge
+                      variant="outline"
+                      className="text-[9px] px-1 py-0 h-4 shrink-0 bg-red-500/15 text-red-400 border-red-500/40 font-semibold"
+                    >
+                      <Flame className="w-2.5 h-2.5 mr-0.5" />
+                      GEN END
+                    </Badge>
+                  )}
+                  {d.hallucination_flag && (
+                    <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 shrink-0 bg-red-500/15 text-red-400 border-red-500/40">
+                      halluc
+                    </Badge>
+                  )}
+                  <span className={`leading-snug flex-1 ${
+                    isExpanded
+                      ? 'text-foreground whitespace-pre-wrap'
+                      : 'text-muted-foreground line-clamp-2'
+                  }`}>
+                    {d.reasoning}
+                  </span>
+                  {link && (
+                    <span className="text-[10px] text-muted-foreground shrink-0">
+                      → {link.label}
+                    </span>
+                  )}
+                </div>
+                {genEnd && isExpanded && gen && (
+                  <div className="mt-1.5 ml-10 pl-2 border-l border-red-500/40 text-[10px] text-muted-foreground space-y-0.5">
+                    <div>
+                      GEN {gen.generation_number} · started {new Date(gen.started_at).toLocaleDateString()}
+                    </div>
+                    {gen.ending_balance_usd != null && (
+                      <div>
+                        ended at <span className="font-mono">${Math.round(gen.ending_balance_usd).toLocaleString()}</span>
+                        {gen.total_return_pct != null && (
+                          <span className={`ml-2 font-mono ${
+                            gen.total_return_pct >= 0 ? 'text-green-400' : 'text-red-400'
+                          }`}>
+                            {gen.total_return_pct >= 0 ? '+' : ''}{gen.total_return_pct.toFixed(1)}%
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {gen.fire_reason && (
+                      <div className="text-red-400">
+                        fire reason: {gen.fire_reason.replace(/_/g, ' ')}
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate('/workspace?view=lineage');
+                      }}
+                      className="text-primary hover:underline"
+                    >
+                      open lineage →
+                    </button>
+                  </div>
                 )}
               </div>
             );

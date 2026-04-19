@@ -22,6 +22,7 @@ import {
   useClaudeTodayBook,
   type HeartbeatLiveness,
 } from '@/hooks/useClaudeState';
+import { useGenerationProgress } from '@/hooks/useClaudeGeneration';
 
 function heartbeatLabel(status: HeartbeatLiveness, mins: number | null): string {
   switch (status) {
@@ -51,6 +52,7 @@ export function StatusStrip() {
   const { data: openTrades = [] } = useOpenClaudeTrades();
   const { data: armedIdeas = [] } = useArmedTradeIdeas();
   const { data: book } = useClaudeTodayBook();
+  const genProgress = useGenerationProgress();
 
   const unrealized = openTrades.reduce((sum, t) => sum + (t.live_pnl_usd ?? 0), 0);
 
@@ -153,8 +155,15 @@ export function StatusStrip() {
         </div>
       </Card>
 
-      {/* Paper balance + YTD */}
-      <Card className="p-2.5 flex items-center gap-2">
+      {/* Paper balance + delta to target (YTD in tooltip) */}
+      <Card
+        className="p-2.5 flex items-center gap-2"
+        title={
+          ytdPct != null
+            ? `YTD: ${ytdPct >= 0 ? '+' : ''}${ytdPct.toFixed(1)}%`
+            : 'YTD: —'
+        }
+      >
         <Wallet className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
         <div className="min-w-0">
           <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Paper</div>
@@ -162,9 +171,18 @@ export function StatusStrip() {
             <span className="font-mono truncate">
               {todayBalance != null ? `$${Math.round(todayBalance).toLocaleString()}` : '—'}
             </span>
-            {ytdPct != null && (
-              <span className={`font-mono ${ytdPct >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {ytdPct >= 0 ? '+' : ''}{ytdPct.toFixed(1)}%
+            {genProgress.distanceToTarget != null && genProgress.generation && (
+              <span
+                className={`font-mono ${
+                  genProgress.distanceToTarget === 0
+                    ? 'text-green-400'
+                    : 'text-muted-foreground'
+                }`}
+                title={`Target: $${Math.round(genProgress.generation.target_balance_usd).toLocaleString()}`}
+              >
+                {genProgress.distanceToTarget === 0
+                  ? 'target hit'
+                  : `−$${Math.round(genProgress.distanceToTarget).toLocaleString()}`}
               </span>
             )}
           </div>

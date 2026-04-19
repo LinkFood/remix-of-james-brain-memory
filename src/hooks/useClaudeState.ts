@@ -257,6 +257,7 @@ export interface ClaudeDecisionRow {
   linked_trade_idea_id: string | null;
   linked_trade_id: string | null;
   linked_brief_id: string | null;
+  generation_id: string | null;
   created_at: string;
 }
 
@@ -269,7 +270,8 @@ export function useRecentDecisions(limit = 15) {
         .from('ct_claude_decisions')
         .select(
           'id, decision_type, model_tier, reasoning, outcome, hallucination_flag, ' +
-            'linked_hypothesis_id, linked_trade_idea_id, linked_trade_id, linked_brief_id, created_at',
+            'linked_hypothesis_id, linked_trade_idea_id, linked_trade_id, linked_brief_id, ' +
+            'generation_id, created_at',
         )
         .order('created_at', { ascending: false })
         .limit(limit);
