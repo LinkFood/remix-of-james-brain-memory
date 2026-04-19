@@ -26,6 +26,8 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { recordDecision } from '../_shared/decisionJournal.ts';
+import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 
 interface OpenTrade {
   id: string;
@@ -42,6 +44,114 @@ interface OpenTrade {
   opened_at: string | null;
   hypothesis_id: string | null;
   trade_idea_id: string | null;
+  claude_notes: string | null;
+  journal_version: number | null;
+}
+
+/**
+ * Final running-commentary journal entry on close. Pairs with the mid-life
+ * commentary written by ct-claude-open-trade-journal: every open trade now
+ * has an arc recorded in claude_notes from entry through exit. Best-effort —
+ * any failure is swallowed so the close path keeps working.
+ *
+ * Close reasons map to framing hints for Haiku:
+ *   target_hit / right       → "Worked. <why thesis played out>"
+ *   stopped_out / wrong      → "Stopped. <why thesis failed>"
+ *   session_close            → "Session close without resolution. <why holding too long>"
+ */
+async function appendFinalJournalEntry(
+  supabase: SupabaseClient,
+  trade: OpenTrade,
+  closeReason: string,
+  closePrice: number,
+  pnlPct: number,
+  verdict: 'right' | 'wrong' | 'ambiguous',
+): Promise<void> {
+  try {
+    const framing = closeReason === 'target_hit'
+      ? 'Start with "Worked." — then ONE short clause on why the thesis played out.'
+      : closeReason === 'stopped_out'
+        ? 'Start with "Stopped." — then ONE short clause on why the thesis failed.'
+        : 'Start with "Session close without resolution." — then ONE short clause on why Claude was still holding at the bell / should have closed earlier.';
+
+    const priorEntries = (trade.claude_notes ?? '')
+      .split(' | ')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const priorTail = priorEntries.slice(-8);
+
+    const systemPrompt = `You are Co-Trader — Claude, an autonomous paper trader. You just closed a position.
+
+Write ONE final journal line (<=120 chars) that closes out the arc. ${framing}
+
+Cite the arc: entry price, exit price, what the running journal said, what actually happened. Be honest. Don't pad. Don't re-justify a losing thesis. If you were holding too long, say so.
+
+Return ONLY the final journal line — no preamble, no timestamps, no JSON.`;
+
+    const userMessage = JSON.stringify({
+      trade_arc: {
+        instrument: trade.instrument,
+        side: trade.side,
+        entry_price: trade.entry_price,
+        stop_price: trade.stop_price,
+        target_price: trade.target_price,
+        close_price: closePrice,
+        close_reason: closeReason,
+        realized_pnl_pct: pnlPct,
+        verdict,
+        thesis: trade.thesis,
+        horizon: trade.horizon,
+        opened_at: trade.opened_at,
+      },
+      running_journal_tail: priorTail,
+    });
+
+    const callStart = Date.now();
+    const resp = await callClaude({
+      model: CLAUDE_MODELS.haiku,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userMessage }],
+      max_tokens: 200,
+      temperature: 0.2,
+    });
+    logClaudeUsage(supabase, {
+      source: 'ct-claude-book-exit-watcher:final-journal',
+      model: CLAUDE_MODELS.haiku,
+      usage: resp.usage,
+      duration_ms: Date.now() - callStart,
+      metadata: { trade_id: trade.id, close_reason: closeReason },
+    });
+
+    const line = parseTextContent(resp)
+      .replace(/^\s*["'`]+|["'`]+\s*$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 180);
+    if (!line) return;
+
+    const now = new Date();
+    const hh = String(now.getUTCHours()).padStart(2, '0');
+    const mm = String(now.getUTCMinutes()).padStart(2, '0');
+    const stamped = `[${hh}:${mm} UTC] ${line}`;
+    const next = priorEntries.length > 0
+      ? `${priorEntries.join(' | ')} | ${stamped}`
+      : stamped;
+
+    // Hard cap at 4000 chars — truncate from the FRONT (oldest) if over.
+    const capped = next.length > 4000 ? next.slice(next.length - 4000) : next;
+
+    await supabase
+      .from('ct_trades')
+      .update({
+        claude_notes: capped,
+        journal_updated_at: new Date().toISOString(),
+        journal_version: (trade.journal_version ?? 1) + 1,
+      })
+      .eq('id', trade.id);
+  } catch (e) {
+    const msg = e instanceof ClaudeError ? `Claude ${e.status}: ${e.message}` : (e instanceof Error ? e.message : String(e));
+    console.warn(`[ct-claude-book-exit-watcher:final-journal] swallowed for ${trade.id}: ${msg}`);
+  }
 }
 
 async function resolveSpot(supabase: SupabaseClient, ticker: string): Promise<number | null> {
@@ -110,7 +220,7 @@ serve(async (req) => {
 
   const { data: trades, error: tradesErr } = await supabase
     .from('ct_trades')
-    .select('id, session_date, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, horizon, opened_at, hypothesis_id, trade_idea_id')
+    .select('id, session_date, instrument, side, size_pct, size_usd, entry_price, stop_price, target_price, thesis, horizon, opened_at, hypothesis_id, trade_idea_id, claude_notes, journal_version')
     .eq('trader', 'claude')
     .eq('status', 'open');
   if (tradesErr) {
@@ -267,6 +377,10 @@ serve(async (req) => {
         session_date: trade.session_date,
       },
     });
+
+    // Final running-journal entry — pairs with ct-claude-open-trade-journal's
+    // mid-life commentary. Best-effort: swallows all failures internally.
+    await appendFinalJournalEntry(supabase, trade, closeReason, closePrice, pnlPctRounded, verdict);
   }
 
   // Apply book deltas per session.
