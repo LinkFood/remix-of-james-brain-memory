@@ -119,6 +119,19 @@ Use the quant card aggressively — it is the "tape." Your hypothesis is the
 "narrative." When they AGREE, size up within limits. When they DISAGREE, either
 size down hard or call no_trade. Never ignore the tape.
 
+You are ALSO given hypothesis_trade_history: the last 5 closed Claude trades
+on this exact hypothesis (instrument, side, size, entry/close price, realized
+PnL, close_reason, claude_notes). Losses teach more than wins. Before proposing
+a new trade on this hypothesis, consider that history:
+  - If close_reason='stopped_out' appears repeatedly, the current setup is
+    miscalibrated. Consider a wider stop, a different entry trigger, lower
+    conviction / smaller size, or skip.
+  - If targets have been hit cleanly, the setup is working — keep doing it.
+  - If the history is empty or thin, reason about it anyway; don't demand a
+    minimum sample.
+  - You are NOT required to adjust in any specific way. You are required to
+    SHOW your reasoning considered the history in the rationale.
+
 If current conditions support a concrete tradeable setup RIGHT NOW with a clear
 trigger, entry, stop, target, and size (bounded by max_size_pct), call
 propose_trade_idea. Otherwise call no_trade.
@@ -642,6 +655,32 @@ serve(async (req) => {
       .order('graded_at', { ascending: false })
       .limit(5);
 
+    // Recent CLOSED Claude trades on this hypothesis — direct feedback loop.
+    // Ambient signal (grades/Elo) stays, but the generator now also sees the
+    // raw outcome text: entry/close, pnl_pct, close_reason, Claude's own
+    // post-mortem notes. Losses teach more than wins.
+    const { data: tradeHistoryRaw } = await supabase
+      .from('ct_trades')
+      .select('instrument, side, size_pct, entry_price, close_price, realized_pnl_pct, close_reason, claude_notes, opened_at, closed_at')
+      .eq('hypothesis_id', hyp.id)
+      .eq('status', 'closed')
+      .eq('trader', 'claude')
+      .order('closed_at', { ascending: false })
+      .limit(5);
+
+    const hypothesisTradeHistory = (tradeHistoryRaw ?? []).map((t) => ({
+      instrument:       t.instrument,
+      side:             t.side,
+      size_pct:         t.size_pct,
+      entry_price:      t.entry_price,
+      close_price:      t.close_price,
+      realized_pnl_pct: t.realized_pnl_pct,
+      close_reason:     t.close_reason,
+      claude_notes:     typeof t.claude_notes === 'string' ? t.claude_notes.slice(0, 600) : null,
+      opened_at:        t.opened_at,
+      closed_at:        t.closed_at,
+    }));
+
     // Per-ticker quant cards — prefer cached snapshot; fall back to live RPC
     // build if the cache is stale or missing. One jsonb blob per hypothesis
     // ticker replaces what used to be ~6 separate queries.
@@ -718,6 +757,7 @@ serve(async (req) => {
       latest_heartbeat: latest,
       recent_heartbeats: (heartbeats ?? []).slice(1),
       recent_grades_on_hypothesis: grades ?? [],
+      hypothesis_trade_history: hypothesisTradeHistory,
       quant_cards: quantCards,
     };
 
@@ -771,6 +811,7 @@ serve(async (req) => {
       hyp_horizon: hyp.horizon,
       recent_grades_count: (grades ?? []).length,
       recent_grades_summary: (grades ?? []).map((g) => g.verdict),
+      hypothesis_trade_history: hypothesisTradeHistory,
       latest_heartbeat_status: latest?.status_line ?? null,
     };
 

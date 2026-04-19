@@ -306,6 +306,9 @@ verify_jwt = false
 [functions.ct-trade-idea-generator]
 verify_jwt = false
 
+[functions.ct-reflect-to-jac]
+verify_jwt = false
+
 [functions.ct-claude-book-writer]
 verify_jwt = false
 
