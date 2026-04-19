@@ -127,9 +127,17 @@ function expectedCadenceMinutes(schedule: string): number {
   const [minute, hour, dom, month, dow] = parts;
 
   // `*/N * * * *` → every N minutes
-  const everyNMatch = minute.match(/^\*\/(\d+)$/);
-  if (everyNMatch && hour === '*') {
-    return Math.max(1, parseInt(everyNMatch[1], 10));
+  const everyNMinMatch = minute.match(/^\*\/(\d+)$/);
+  if (everyNMinMatch && hour === '*') {
+    return Math.max(1, parseInt(everyNMinMatch[1], 10));
+  }
+
+  // `N */H * * *` → every H hours at minute N (e.g. `0 */4 * * *` = 240m).
+  // Must come before the `N * * * *` branch because `hour === '*'` is
+  // false here but the previous code's default of 60m was wrong.
+  const everyNHourMatch = hour.match(/^\*\/(\d+)$/);
+  if (/^\d+$/.test(minute) && everyNHourMatch) {
+    return Math.max(60, parseInt(everyNHourMatch[1], 10) * 60);
   }
 
   // `N * * * *` → once an hour
@@ -154,10 +162,11 @@ function expectedCadenceMinutes(schedule: string): number {
   return 60;
 }
 
-/** Staleness threshold for a given cadence. We allow a generous tail
- *  (1.33× cadence + 5min) so a single late tick doesn't red-flag us. */
+/** Staleness threshold for a given cadence. 1.25× cadence floored at 60m —
+ *  sub-hour crons still get a ≥1h tail; multi-hour crons scale up
+ *  proportionally (4h cron alerts at 5h, not 85m). */
 function stalenessThresholdMinutes(cadenceMin: number): number {
-  return Math.ceil(cadenceMin * 1.33) + 5;
+  return Math.max(60, Math.ceil(cadenceMin * 1.25));
 }
 
 // ---------------------------------------------------------------------------

@@ -78,13 +78,22 @@ function expectedCadenceMinutes(schedule: string): number {
 
   // `*/N * * * *` → every N minutes (works with restricted hour ranges too,
   // e.g. `*/5 13-20 * * 1-5` — intraday cadence is still 5m when active)
-  const everyNMatch = minute.match(/^\*\/(\d+)$/);
-  if (everyNMatch) {
-    return Math.max(1, parseInt(everyNMatch[1], 10));
+  const everyNMinMatch = minute.match(/^\*\/(\d+)$/);
+  if (everyNMinMatch) {
+    return Math.max(1, parseInt(everyNMinMatch[1], 10));
   }
 
   // `* 12-21 * * 1-5` → once a minute during window
   if (minute === '*') return 1;
+
+  // `N */H * * *` → every H hours at minute N. This is the form the
+  // ingester family uses (e.g. `0 */4 * * *` = every 4h on the hour).
+  // Must come BEFORE the `N * * * *` check so `hour === '*'` doesn't
+  // swallow the `*/H` case incorrectly.
+  const everyNHourMatch = hour.match(/^\*\/(\d+)$/);
+  if (/^\d+$/.test(minute) && everyNHourMatch) {
+    return Math.max(60, parseInt(everyNHourMatch[1], 10) * 60);
+  }
 
   // `N * * * *` → once an hour
   if (/^\d+$/.test(minute) && hour === '*') return 60;
@@ -108,9 +117,12 @@ function expectedCadenceMinutes(schedule: string): number {
 }
 
 function stalenessThresholdMinutes(cadenceMin: number): number {
-  // 1.33x + 5min buffer — tolerate one tardy tick. Same rule used in
-  // usePreflightChecks.
-  return Math.ceil(cadenceMin * 1.33) + 5;
+  // Cadence-aware threshold: 1.25× cadence, floored at 60min so sub-hour
+  // crons still get a generous tail. A 4h cron alerts at 5h; a 5min cron
+  // still alerts at 60min minimum (one tardy tick tolerated). This
+  // replaces the older fixed `1.33× + 5min` rule which misfired for
+  // multi-hour crons when the parser defaulted their cadence to 60m.
+  return Math.max(60, Math.ceil(cadenceMin * 1.25));
 }
 
 // ---------------------------------------------------------------------------
