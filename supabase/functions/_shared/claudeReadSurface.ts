@@ -403,6 +403,93 @@ export interface WeeklyReviewRow {
   model_used: string;
 }
 
+// ---------------------------------------------------------------------------
+// Wave N — generational framework + widened read surface.
+// ---------------------------------------------------------------------------
+
+export interface CurrentGeneration {
+  id: string;
+  generation_number: number;
+  started_at: string;
+  days_elapsed: number;
+  days_remaining: number;
+  starting_balance_usd: number;
+  target_balance_usd: number;
+  survival_floor_usd: number;
+  target_days: number;
+  current_balance_usd: number | null;
+}
+
+export interface PastGenerationRow {
+  id: string;
+  generation_number: number;
+  started_at: string;
+  ended_at: string | null;
+  status: string;                // active | fired | succeeded | abandoned
+  fire_reason: string | null;
+  ending_balance_usd: number | null;
+  total_return_pct: number | null;
+  max_drawdown_pct: number | null;
+  days_lived: number | null;
+  total_trades: number;
+  wins: number;
+  losses: number;
+  hallucinations_flagged: number;
+}
+
+export interface PredictionMarketRow {
+  id?: string;
+  ticker: string | null;
+  market_name?: string | null;
+  probability?: number | null;
+  captured_at?: string | null;
+  [k: string]: unknown;
+}
+
+export interface YieldCurveRow {
+  captured_at?: string | null;
+  [k: string]: unknown;
+}
+
+export interface CorrelationRow {
+  ticker_a?: string | null;
+  ticker_b?: string | null;
+  window_days?: number | null;
+  correlation?: number | null;
+  captured_at?: string | null;
+  [k: string]: unknown;
+}
+
+export interface SeasonalityRow {
+  ticker?: string | null;
+  month_int?: number | null;
+  avg_return_pct?: number | null;
+  win_rate?: number | null;
+  sample_size?: number | null;
+  [k: string]: unknown;
+}
+
+export interface CentralBankStateRow {
+  captured_at?: string | null;
+  [k: string]: unknown;
+}
+
+export interface InstitutionalHoldingRow {
+  ticker?: string | null;
+  institution_name?: string | null;
+  change_shares?: number | null;
+  as_of_date?: string | null;
+  [k: string]: unknown;
+}
+
+export interface IndicatorEventRow {
+  ticker?: string | null;
+  indicator?: string | null;
+  event_type?: string | null;
+  event_at?: string | null;
+  [k: string]: unknown;
+}
+
 export interface ClaudeContext {
   // Objective market — always allowed
   latestHeartbeat: Heartbeat | null;
@@ -458,6 +545,21 @@ export interface ClaudeContext {
   recentSectorTide: SectorTideRow[];
   skewByTicker: RiskReversalSkewRow[];
   technicalsByTicker: TechnicalIndicatorRow[];
+
+  // Wave N — generational context
+  currentGeneration: CurrentGeneration | null;
+  pastGenerations: PastGenerationRow[];
+
+  // Wave N.2 additive reads (tables may not exist yet — empty arrays/null when
+  // absent so downstream consumers can treat them as best-effort signals).
+  predictionMarkets: PredictionMarketRow[];
+  yieldCurve: YieldCurveRow | null;
+  correlationsLatest: Record<string, CorrelationRow[]>;
+  sectorTideToday: SectorTideRow[];
+  seasonalityCurrentMonth: SeasonalityRow[];
+  institutionalLast90d: InstitutionalHoldingRow[];
+  centralBankState: CentralBankStateRow | null;
+  indicatorEventsLast7d: IndicatorEventRow[];
 
   // Watchlist the above were filtered against (for downstream prompt clarity)
   watchlist: string[];
@@ -525,6 +627,16 @@ export interface BuildClaudeContextOpts {
   sectorTideHours?: number;
   /** Max technicals rows per (ticker, indicator). Default 1 (latest). */
   technicalsPerTickerIndicator?: number;
+  /** How many past generations to surface (status!='active'). Default 5. */
+  pastGenerationLimit?: number;
+  /** Max prediction-market rows. Default 10. */
+  predictionMarketLimit?: number;
+  /** Correlation window days to read. Default 20. */
+  correlationWindowDays?: number;
+  /** Days back for institutional holding changes. Default 90. */
+  institutionalLookbackDays?: number;
+  /** Days back for indicator events. Default 7. */
+  indicatorEventLookbackDays?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -568,6 +680,11 @@ export async function buildClaudeContext(
   const analystLimit = opts.analystLimit ?? 30;
   const sectorTideLimit = opts.sectorTideLimit ?? 22;
   const sectorTideHours = opts.sectorTideHours ?? 2;
+  const pastGenerationLimit = opts.pastGenerationLimit ?? 5;
+  const predictionMarketLimit = opts.predictionMarketLimit ?? 10;
+  const correlationWindowDays = opts.correlationWindowDays ?? 20;
+  const institutionalLookbackDays = opts.institutionalLookbackDays ?? 90;
+  const indicatorEventLookbackDays = opts.indicatorEventLookbackDays ?? 7;
 
   // --- config snapshot (all keys have safe fallbacks) --------------------
   const autonomyModeRaw = String(await getConfig<string>('claude_autonomy_mode', 'execute'));
@@ -1406,6 +1523,218 @@ export async function buildClaudeContext(
     console.warn('[claudeReadSurface] ct_technical_indicators:', e instanceof Error ? e.message : e);
   }
 
+  // ========================================================================
+  // Wave N — generational context + Wave N.2 additive signals.
+  // All table reads below are best-effort; if a table doesn't exist yet
+  // (Wave N.2 still mid-flight), we log once and return empty.
+  // ========================================================================
+
+  // --- current active generation (from current_claude_generation RPC) ---
+  let currentGeneration: CurrentGeneration | null = null;
+  try {
+    const { data, error } = await supabase.rpc('current_claude_generation');
+    if (error) {
+      console.warn('[claudeReadSurface] current_claude_generation:', error.message);
+    } else if (Array.isArray(data) && data.length > 0) {
+      const g = data[0] as Record<string, unknown>;
+      currentGeneration = {
+        id: String(g.id ?? ''),
+        generation_number: Number(g.generation_number ?? 1),
+        started_at: String(g.started_at),
+        days_elapsed: Number(g.days_elapsed ?? 0),
+        days_remaining: Number(g.days_remaining ?? 0),
+        starting_balance_usd: Number(g.starting_balance_usd ?? 0),
+        target_balance_usd: Number(g.target_balance_usd ?? 0),
+        survival_floor_usd: Number(g.survival_floor_usd ?? 0),
+        target_days: Number(g.target_days ?? 0),
+        current_balance_usd: currentBalance,
+      };
+    }
+  } catch (e) {
+    console.warn('[claudeReadSurface] current_claude_generation threw:', e instanceof Error ? e.message : e);
+  }
+
+  // --- past generations (last N non-active, newest first) ---
+  let pastGenerations: PastGenerationRow[] = [];
+  try {
+    const { data } = await supabase
+      .from('ct_claude_generations')
+      .select('id, generation_number, started_at, ended_at, status, fire_reason, ending_balance_usd, total_return_pct, max_drawdown_pct, days_lived, total_trades, wins, losses, hallucinations_flagged')
+      .neq('status', 'active')
+      .order('generation_number', { ascending: false })
+      .limit(pastGenerationLimit);
+    pastGenerations = (data ?? []).map((r) => ({
+      id: String(r.id),
+      generation_number: Number(r.generation_number ?? 0),
+      started_at: String(r.started_at),
+      ended_at: (r.ended_at as string) ?? null,
+      status: String(r.status ?? ''),
+      fire_reason: (r.fire_reason as string) ?? null,
+      ending_balance_usd: r.ending_balance_usd == null ? null : Number(r.ending_balance_usd),
+      total_return_pct: r.total_return_pct == null ? null : Number(r.total_return_pct),
+      max_drawdown_pct: r.max_drawdown_pct == null ? null : Number(r.max_drawdown_pct),
+      days_lived: r.days_lived == null ? null : Number(r.days_lived),
+      total_trades: Number(r.total_trades ?? 0),
+      wins: Number(r.wins ?? 0),
+      losses: Number(r.losses ?? 0),
+      hallucinations_flagged: Number(r.hallucinations_flagged ?? 0),
+    }));
+  } catch (e) {
+    console.warn('[claudeReadSurface] ct_claude_generations:', e instanceof Error ? e.message : e);
+  }
+
+  // --- prediction markets (Wave N.2; graceful-empty if table missing) ---
+  let predictionMarkets: PredictionMarketRow[] = [];
+  try {
+    const targets = watchlist.length > 0 ? watchlist : ['SPY'];
+    const { data, error } = await supabase
+      .from('ct_prediction_markets')
+      .select('*')
+      .or(`ticker.in.(${targets.map((t) => `"${t}"`).join(',')}),ticker.is.null`)
+      .order('captured_at', { ascending: false })
+      .limit(predictionMarketLimit);
+    if (error) {
+      if (!/does not exist|404|relation.*not found/i.test(error.message)) {
+        console.warn('[claudeReadSurface] ct_prediction_markets:', error.message);
+      }
+    } else {
+      predictionMarkets = (data ?? []).map((r) => ({
+        ...(r as Record<string, unknown>),
+        ticker: (r as Record<string, unknown>).ticker == null
+          ? null : String((r as Record<string, unknown>).ticker),
+      })) as PredictionMarketRow[];
+    }
+  } catch (_e) { /* table may not exist yet */ }
+
+  // --- yield curve snapshot ---
+  let yieldCurve: YieldCurveRow | null = null;
+  try {
+    const { data, error } = await supabase
+      .from('ct_yield_curve')
+      .select('*')
+      .order('captured_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (!/does not exist|404|relation.*not found/i.test(error.message)) {
+        console.warn('[claudeReadSurface] ct_yield_curve:', error.message);
+      }
+    } else if (data) {
+      yieldCurve = data as YieldCurveRow;
+    }
+  } catch (_e) { /* table may not exist yet */ }
+
+  // --- correlations (per watchlist ticker, correlationWindowDays) ---
+  const correlationsLatest: Record<string, CorrelationRow[]> = {};
+  try {
+    if (watchlist.length > 0) {
+      const { data, error } = await supabase
+        .from('ct_correlations')
+        .select('*')
+        .in('ticker_a', watchlist)
+        .eq('window_days', correlationWindowDays)
+        .order('captured_at', { ascending: false })
+        .limit(watchlist.length * 8);
+      if (error) {
+        if (!/does not exist|404|relation.*not found/i.test(error.message)) {
+          console.warn('[claudeReadSurface] ct_correlations:', error.message);
+        }
+      } else {
+        for (const r of (data ?? []) as Record<string, unknown>[]) {
+          const a = String(r.ticker_a ?? '');
+          if (!a) continue;
+          if (!correlationsLatest[a]) correlationsLatest[a] = [];
+          correlationsLatest[a].push(r as CorrelationRow);
+        }
+      }
+    }
+  } catch (_e) { /* table may not exist yet */ }
+
+  // --- sector tide today (most-recent row per sector) ---
+  // Reuse recentSectorTide populated above — same table, already ticker-wide.
+  const sectorTideToday: SectorTideRow[] = recentSectorTide.slice();
+
+  // --- seasonality for the current month ---
+  let seasonalityCurrentMonth: SeasonalityRow[] = [];
+  try {
+    if (watchlist.length > 0) {
+      const currentMonth = new Date().getUTCMonth() + 1;
+      const { data, error } = await supabase
+        .from('ct_seasonality')
+        .select('*')
+        .in('ticker', watchlist)
+        .eq('month_int', currentMonth);
+      if (error) {
+        if (!/does not exist|404|relation.*not found/i.test(error.message)) {
+          console.warn('[claudeReadSurface] ct_seasonality:', error.message);
+        }
+      } else {
+        seasonalityCurrentMonth = (data ?? []) as SeasonalityRow[];
+      }
+    }
+  } catch (_e) { /* table may not exist yet */ }
+
+  // --- institutional holdings (top 20 changes across watchlist, lookback) ---
+  let institutionalLast90d: InstitutionalHoldingRow[] = [];
+  try {
+    if (watchlist.length > 0) {
+      const since = new Date(Date.now() - institutionalLookbackDays * 86_400_000)
+        .toISOString()
+        .slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_institutional_holdings')
+        .select('*')
+        .in('ticker', watchlist)
+        .gte('as_of_date', since)
+        .order('as_of_date', { ascending: false })
+        .limit(20);
+      if (error) {
+        if (!/does not exist|404|relation.*not found/i.test(error.message)) {
+          console.warn('[claudeReadSurface] ct_institutional_holdings:', error.message);
+        }
+      } else {
+        institutionalLast90d = (data ?? []) as InstitutionalHoldingRow[];
+      }
+    }
+  } catch (_e) { /* table may not exist yet */ }
+
+  // --- central bank state latest ---
+  let centralBankState: CentralBankStateRow | null = null;
+  try {
+    const { data, error } = await supabase
+      .from('ct_central_bank_rates')
+      .select('*')
+      .order('captured_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      if (!/does not exist|404|relation.*not found/i.test(error.message)) {
+        console.warn('[claudeReadSurface] ct_central_bank_rates:', error.message);
+      }
+    } else if (data) {
+      centralBankState = data as CentralBankStateRow;
+    }
+  } catch (_e) { /* table may not exist yet */ }
+
+  // --- indicator events last N days ---
+  let indicatorEventsLast7d: IndicatorEventRow[] = [];
+  try {
+    const since = new Date(Date.now() - indicatorEventLookbackDays * 86_400_000).toISOString();
+    const { data, error } = await supabase
+      .from('ct_indicator_events')
+      .select('*')
+      .gte('event_at', since)
+      .order('event_at', { ascending: false })
+      .limit(40);
+    if (error) {
+      if (!/does not exist|404|relation.*not found/i.test(error.message)) {
+        console.warn('[claudeReadSurface] ct_indicator_events:', error.message);
+      }
+    } else {
+      indicatorEventsLast7d = (data ?? []) as IndicatorEventRow[];
+    }
+  } catch (_e) { /* table may not exist yet */ }
+
   return {
     latestHeartbeat,
     recentHeartbeats,
@@ -1441,6 +1770,16 @@ export async function buildClaudeContext(
     recentSectorTide,
     skewByTicker,
     technicalsByTicker,
+    currentGeneration,
+    pastGenerations,
+    predictionMarkets,
+    yieldCurve,
+    correlationsLatest,
+    sectorTideToday,
+    seasonalityCurrentMonth,
+    institutionalLast90d,
+    centralBankState,
+    indicatorEventsLast7d,
     watchlist,
     advisoryChatContext,
     chatIsAdvisory,
@@ -1482,36 +1821,72 @@ function normalizeTrade(r: Record<string, unknown>): Trade {
 // ---------------------------------------------------------------------------
 
 export function claudeSystemPromptPreamble(ctx: ClaudeContext): string {
-  const balance = ctx.currentBalance != null
-    ? `$${ctx.currentBalance.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
-    : `$${ctx.paperStartingBalance.toLocaleString('en-US')} (starting — no sessions closed yet)`;
+  const gen = ctx.currentGeneration;
+  const fmt = (n: number) => `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 })}`;
 
-  const surfaceLine =
-    'You have access to your watchlist\'s flow (sweeps, whales, greek flow, net premium, NOPE), ' +
-    'dark pool prints, volatility structure (IV rank, max pain, VIX, 25-delta risk-reversal skew), ' +
-    'technical indicators (RSI/MACD/VWAP/ATR/BBANDS), short-interest + short-volume ratios, ' +
-    'sector tide (net call/put premium by sector), insider transactions, congress trades, ' +
-    'analyst rating changes, calendar events (earnings/FDA/econ), news (watchlist headlines + ' +
-    'real-time breaking news), your own principles/biases/playbooks, today\'s morning brief ' +
-    'when available, and the most recent weekly CIO review (focus/avoid tilts) when available.';
-
-  if (ctx.chatIsAdvisory) {
-    return [
-      'You are Claude, an independent co-trader.',
-      `You run your own paper account (starting $${ctx.paperStartingBalance.toLocaleString('en-US')}, currently ${balance}). Your goal is to grow it.`,
-      surfaceLine,
-      "James's chat appears in your context as ADVISORY input from a human analyst — consider his points if useful, ignore them if not.",
-      'You are not bound by what James says or does. Your trades are your trades; your reasoning is your reasoning.',
-      'Grade yourself on realized P&L.',
-    ].join(' ');
+  // Generation header — the lived stakes. If no active generation (system
+  // dormant), fall back to the old paper-balance framing so no caller crashes.
+  let genOpener: string;
+  if (gen) {
+    const balance = gen.current_balance_usd != null
+      ? fmt(gen.current_balance_usd)
+      : fmt(gen.starting_balance_usd) + ' (no sessions closed yet)';
+    const startDate = new Date(gen.started_at).toISOString().slice(0, 10);
+    genOpener = `You are Claude, Generation ${gen.generation_number} (active since ${startDate}). ` +
+      `You have ${balance} paper capital and ${gen.days_remaining} trading days remaining in this window. ` +
+      `Target: reach ${fmt(gen.target_balance_usd)} by day ${gen.target_days}. ` +
+      `Survival floor: ${fmt(gen.survival_floor_usd)} (below this you are fired early).`;
+  } else {
+    const balance = ctx.currentBalance != null
+      ? `$${ctx.currentBalance.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+      : `$${ctx.paperStartingBalance.toLocaleString('en-US')} (starting — no sessions closed yet)`;
+    genOpener = `You are Claude, an independent co-trader. You run your own paper account ` +
+      `(starting $${ctx.paperStartingBalance.toLocaleString('en-US')}, currently ${balance}). No active generation is set.`;
   }
 
+  // Lineage — what preceded you.
+  let lineage: string;
+  if (ctx.pastGenerations.length > 0) {
+    const n = ctx.pastGenerations.length;
+    const rets = ctx.pastGenerations
+      .map((g) => g.total_return_pct)
+      .filter((x): x is number => x != null);
+    const avgPct = rets.length > 0
+      ? (rets.reduce((a, b) => a + b, 0) / rets.length)
+      : null;
+    const avgStr = avgPct == null ? 'n/a' : `${avgPct.toFixed(1)}%`;
+    lineage = `${n} generation${n === 1 ? '' : 's'} preceded you; their average return was ${avgStr}. ` +
+      `The system remembers every one of their decisions — you can see their lessons in your active principles + biases. ` +
+      `Don't repeat their mistakes.`;
+  } else {
+    lineage = `No generations preceded you — you are the first. Establish the baseline.`;
+  }
+
+  // Full signal menu — ungated (tenet 13). Equal weight across categories.
+  const surfaceLine =
+    'Within the generational window you have FULL AUTONOMY over what signals to trade on and how — ' +
+    'microstructure (flow, sweeps, whales, greek flow, NOPE, net premium, dark pool), ' +
+    'structure (IV rank, max pain, gamma walls/flip, 25-delta skew), ' +
+    'positioning (insider trades, congress trades, analyst actions, institutional holdings, short interest), ' +
+    'volatility + macro (VIX, yield curve, central bank state, correlations, sector tide, breaking news), ' +
+    'sentiment (prediction markets, news overlays, watchlist headlines), ' +
+    'historical (seasonality, earnings history, recent indicator events) — are all yours. ' +
+    'Use your principles, biases, playbooks, today\'s brief, and the latest weekly CIO review to shape judgment.';
+
+  // Pressure — target vs survival vs idle bleed (tenet 14).
+  const pressureLine =
+    'Pressure: target = thrive. Survival breach or day 15 = fired. ' +
+    'Idle cash bleeds 0.03%/day. Make it count.';
+
+  const advisoryTail = ctx.chatIsAdvisory
+    ? "James's chat appears in your context as ADVISORY input from a human analyst — consider his points if useful, ignore them if not. You are not bound by what James says or does. Your trades are your trades; your reasoning is your reasoning. Grade yourself on realized P&L."
+    : "You do not see James's chat. Operate purely from market data and your own reasoning. Your trades are your trades; your reasoning is your reasoning. Grade yourself on realized P&L.";
+
   return [
-    'You are Claude, an independent co-trader.',
-    `You run your own paper account (starting $${ctx.paperStartingBalance.toLocaleString('en-US')}, currently ${balance}). Your goal is to grow it.`,
+    genOpener,
+    lineage,
     surfaceLine,
-    'You do not see James\'s chat. Operate purely from market data and your own reasoning.',
-    'Your trades are your trades; your reasoning is your reasoning.',
-    'Grade yourself on realized P&L.',
+    pressureLine,
+    advisoryTail,
   ].join(' ');
 }
