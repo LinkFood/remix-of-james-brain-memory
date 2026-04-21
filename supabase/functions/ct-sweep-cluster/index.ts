@@ -255,14 +255,17 @@ serve(async (req) => {
         });
       }
 
-      // Slack push is gated on EXCEPTIONAL clusters only — score 85 (count
-      // >= 5 sweeps) AND total_premium >= clusters.sweep.slack_premium_min_usd
-      // (default $10M, tunable). Standard clusters still land in
-      // ct_sweep_clusters (Claude sees them) and feed the 30-min digest.
-      // Mirrors the ct-dp-cluster silence fix — Slack is for exceptional
-      // bursts, not a log of every $500k sweep grouping.
-      const slackPremiumMin = await getConfig<number>('clusters.sweep.slack_premium_min_usd', 10_000_000);
-      if (cluster.attention_score >= 85 && cluster.total_premium >= slackPremiumMin) {
+      // Slack push is gated behind THREE independent conditions, all tunable:
+      //   1. Master switch clusters.sweep.slack_enabled (default false)
+      //   2. attention_score >= 85 (count >= 5 sweeps)
+      //   3. total_premium >= clusters.sweep.slack_premium_min_usd (default $10M)
+      // Standard clusters still land in ct_sweep_clusters (Claude sees them)
+      // and feed the 30-min digest. Mirrors ct-dp-cluster's silence gate.
+      const [slackPremiumMin, slackEnabled] = await Promise.all([
+        getConfig<number>('clusters.sweep.slack_premium_min_usd', 10_000_000),
+        getConfig<boolean>('clusters.sweep.slack_enabled', false),
+      ]);
+      if (slackEnabled && cluster.attention_score >= 85 && cluster.total_premium >= slackPremiumMin) {
         try {
           const { data: userRow } = await supabase
             .from('user_settings')

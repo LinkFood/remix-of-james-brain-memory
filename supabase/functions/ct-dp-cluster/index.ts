@@ -170,7 +170,7 @@ serve(async (req) => {
 
   try {
     // Pull tunable thresholds from ct_config (60s cache TTL).
-    const [windowMin, countMin, notionalUsd, slackNotionalMin, cooldownMin] = await Promise.all([
+    const [windowMin, countMin, notionalUsd, slackNotionalMin, cooldownMin, slackEnabled] = await Promise.all([
       getConfig<number>('clusters.dp.window_min', 10),
       getConfig<number>('clusters.dp.count_min', 3),
       getConfig<number>('clusters.dp.notional_usd', 1_000_000),
@@ -181,8 +181,13 @@ serve(async (req) => {
       // Per-ticker slack cooldown. 30 min default (was 15) — DP clusters
       // on the same ticker re-firing twice an hour is operator noise.
       getConfig<number>('clusters.dp.slack_cooldown_min', 30),
+      // Master kill: default OFF. Operator explicitly opts back in via
+      // /ct-settings once they want per-cluster pings. Until flipped true,
+      // clusters still land in ct_dp_clusters (Claude reads them) and feed
+      // the 30-min digest + FLAG convergence — they just don't page Slack.
+      getConfig<boolean>('clusters.dp.slack_enabled', false),
     ]);
-    console.log(`[ct-dp-cluster] thresholds: window=${windowMin}min count=${countMin} notional=$${notionalUsd} slack_min=$${slackNotionalMin} cooldown=${cooldownMin}min`);
+    console.log(`[ct-dp-cluster v2] thresholds: window=${windowMin}min count=${countMin} notional=$${notionalUsd} slack_enabled=${slackEnabled} slack_min=$${slackNotionalMin} cooldown=${cooldownMin}min`);
 
     const windowEnd = new Date();
     const windowStart = new Date(windowEnd.getTime() - windowMin * 60_000);
@@ -237,12 +242,13 @@ serve(async (req) => {
         });
       }
 
-      // Slack push is gated on EXCEPTIONAL clusters only — score 85 (count
-      // >= 5 prints) AND total_notional above the configured floor. Standard
-      // clusters still land in ct_dp_clusters (Claude sees them) and feed
-      // the 30-min digest + FLAG convergence path. This intentionally lets
-      // routine $10-30M institutional prints pass silently.
-      if (cluster.attention_score >= 85 && cluster.total_notional >= slackNotionalMin) {
+      // Slack push is gated behind THREE independent conditions, all tunable:
+      //   1. Master switch clusters.dp.slack_enabled (default false)
+      //   2. attention_score >= 85 (count >= 5 prints)
+      //   3. total_notional >= clusters.dp.slack_notional_min_usd (default $250M)
+      // Standard clusters still land in ct_dp_clusters (Claude sees them)
+      // and feed the 30-min digest + FLAG convergence path.
+      if (slackEnabled && cluster.attention_score >= 85 && cluster.total_notional >= slackNotionalMin) {
         try {
           const { data: userRow } = await supabase
             .from('user_settings')
