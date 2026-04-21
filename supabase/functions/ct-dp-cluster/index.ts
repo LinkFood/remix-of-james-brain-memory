@@ -66,8 +66,11 @@ function fmtMoney(n: number): string {
 
 /**
  * Dedupe: has this ticker already been emitted as a cluster in the last
- * cooldownMin minutes? If so, skip it. Cheap index hit on
- * (ticker, created_at DESC). Cooldown is tunable via ct_config.
+ * cooldownMin minutes? If so, skip the DB insert. Cheap index hit on
+ * (ticker, created_at DESC). The DB-insert cooldown is kept at 15 min so
+ * Claude's convergence/FLAG path sees fresh DP data every 15min per ticker.
+ * The Slack-push cooldown is separate (clusters.dp.slack_cooldown_min) so
+ * operator noise can be cranked higher without starving the signal side.
  */
 async function recentlyEmitted(
   supabase: SupabaseClient,
@@ -169,25 +172,22 @@ serve(async (req) => {
   const startedAt = Date.now();
 
   try {
-    // Pull tunable thresholds from ct_config (60s cache TTL).
-    const [windowMin, countMin, notionalUsd, slackNotionalMin, cooldownMin, slackEnabled] = await Promise.all([
+    // Pull tunable thresholds from ct_config (60s cache TTL). Insert cooldown
+    // (clusters.dp.cooldown_min, default 15) and Slack cooldown
+    // (clusters.dp.slack_cooldown_min, default 30) are independent — DB
+    // inserts feed Claude every 15 min regardless of Slack posture.
+    const [windowMin, countMin, notionalUsd, insertCooldownMin, slackNotionalMin, slackCooldownMin, slackEnabled] = await Promise.all([
       getConfig<number>('clusters.dp.window_min', 10),
       getConfig<number>('clusters.dp.count_min', 3),
       getConfig<number>('clusters.dp.notional_usd', 1_000_000),
-      // Slack gate — only push clusters above this total notional. $250M
-      // default empirically drops ~90% of Monday's pings (routine $10-30M
-      // institutional flow) while preserving truly notable bursts.
+      getConfig<number>('clusters.dp.cooldown_min', 15),
       getConfig<number>('clusters.dp.slack_notional_min_usd', 250_000_000),
-      // Per-ticker slack cooldown. 30 min default (was 15) — DP clusters
-      // on the same ticker re-firing twice an hour is operator noise.
       getConfig<number>('clusters.dp.slack_cooldown_min', 30),
       // Master kill: default OFF. Operator explicitly opts back in via
-      // /ct-settings once they want per-cluster pings. Until flipped true,
-      // clusters still land in ct_dp_clusters (Claude reads them) and feed
-      // the 30-min digest + FLAG convergence — they just don't page Slack.
+      // /ct-settings once they want per-cluster pings.
       getConfig<boolean>('clusters.dp.slack_enabled', false),
     ]);
-    console.log(`[ct-dp-cluster v2] thresholds: window=${windowMin}min count=${countMin} notional=$${notionalUsd} slack_enabled=${slackEnabled} slack_min=$${slackNotionalMin} cooldown=${cooldownMin}min`);
+    console.log(`[ct-dp-cluster v3] thresholds: window=${windowMin}min count=${countMin} notional=$${notionalUsd} insert_cooldown=${insertCooldownMin}min slack_enabled=${slackEnabled} slack_min=$${slackNotionalMin} slack_cooldown=${slackCooldownMin}min`);
 
     const windowEnd = new Date();
     const windowStart = new Date(windowEnd.getTime() - windowMin * 60_000);
@@ -207,7 +207,7 @@ serve(async (req) => {
         continue;
       }
 
-      const deduped = await recentlyEmitted(supabase, ticker, cooldownMin);
+      const deduped = await recentlyEmitted(supabase, ticker, insertCooldownMin);
       if (deduped) {
         perTicker[ticker] = { count: cluster.print_count, total_notional: cluster.total_notional, emitted: false, reason: 'dedupe_15min' };
         continue;
