@@ -4,12 +4,25 @@
  */
 import { ChartSafe } from '@/components/ChartSafe';
 import { useBookHistory } from '@/hooks/useCoTraderData';
+import { useCurrentGeneration } from '@/hooks/useClaudeGeneration';
 import { Card } from '@/components/ui/card';
 import { TrendingUp } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, ReferenceLine } from 'recharts';
 
 export function EquityCurvePanel() {
   const { data: history, isLoading } = useBookHistory(30);
+  const { data: generation } = useCurrentGeneration();
+
+  // Tenet 14 — use the active generation's starting balance as the baseline.
+  // Hardcoded $10k made a +0.03% book look like +399%. Fallbacks: first
+  // ct_book row's starting_balance, then $50k (the Gen 1 default).
+  const genSeed = generation?.starting_balance_usd;
+  const firstBookSeed = history && history.length > 0 ? history[0].starting_balance : undefined;
+  const startingSeed = genSeed && genSeed > 0
+    ? genSeed
+    : firstBookSeed && firstBookSeed > 0
+      ? firstBookSeed
+      : 50000;
 
   const points = (history ?? []).map(b => ({
     date: b.session_date,
@@ -17,8 +30,8 @@ export function EquityCurvePanel() {
     hwm: b.high_water_mark ?? b.starting_balance,
   }));
 
-  const latest = points[points.length - 1]?.balance ?? 10000;
-  const totalPct = ((latest - 10000) / 10000) * 100;
+  const latest = points[points.length - 1]?.balance ?? startingSeed;
+  const totalPct = startingSeed > 0 ? ((latest - startingSeed) / startingSeed) * 100 : 0;
   const wins = (history ?? []).filter(b => b.goal_hit === true).length;
   const losses = (history ?? []).filter(b => b.goal_hit === false).length;
 
@@ -51,7 +64,7 @@ export function EquityCurvePanel() {
                 contentStyle={{ background: 'hsl(var(--popover))', border: '1px solid hsl(var(--border))', fontSize: '10px', padding: '4px 6px' }}
                 formatter={(v: number) => `$${v.toLocaleString('en-US', { maximumFractionDigits: 2 })}`}
               />
-              <ReferenceLine y={10000} stroke="hsl(var(--border))" strokeDasharray="2 2" />
+              <ReferenceLine y={startingSeed} stroke="hsl(var(--border))" strokeDasharray="2 2" />
               <Line type="monotone" dataKey="balance" stroke="hsl(var(--primary))" strokeWidth={2} dot={false} isAnimationActive={false} />
             </LineChart>
           </ResponsiveContainer></ChartSafe>

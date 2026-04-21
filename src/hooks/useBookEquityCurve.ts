@@ -9,10 +9,21 @@
  * ct_trades does NOT store a live/unrealized P&L per trade — intraday P&L is
  * rolled up to ct_book.unrealized_pnl. So per-trade open rows show "unresolved"
  * for running P&L; only closed trades have realized_pnl_pct/usd.
+ *
+ * Tenet 14 — generational baseline. The curve's starting seed and total-%
+ * denominator come from the active Claude generation's starting_balance
+ * (currently $50,000 for Gen 1), NOT a hardcoded $10k. Prior fixed seed
+ * produced the infamous +399% bug on the panel when the real book sat at
+ * +0.03%. Falls back to the first ct_book row's starting_balance, then to
+ * $50k, so a cold state still draws something sane.
  */
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import type { CtBookRow, CtTradeRow } from './useCoTraderData';
+
+// Default only used when neither ct_claude_generations nor ct_book has a
+// starting_balance to offer. Matches tenet 14's $50k generational seed.
+const DEFAULT_GENERATION_SEED = 50_000;
 
 export interface EquityPoint {
   date: string;             // session_date (YYYY-MM-DD)
@@ -28,7 +39,7 @@ export interface BookEquityCurve {
   todayTrades: CtTradeRow[];        // today's trades (open + closed)
   points: EquityPoint[];            // chart-ready points
   stats: {
-    starting: number;               // $10,000 seed
+    starting: number;               // active generation's starting seed
     current: number;                // latest balance (intraday if today is open)
     currentDelta: number;           // current - starting, $
     currentPct: number;             // (current - starting) / starting * 100
@@ -48,8 +59,6 @@ export interface BookEquityCurve {
   };
 }
 
-const STARTING_SEED = 10_000;
-
 function isToday(dateStr: string): boolean {
   return dateStr === new Date().toISOString().slice(0, 10);
 }
@@ -61,7 +70,9 @@ export function useBookEquityCurve() {
     queryFn: async () => {
       const todayStr = new Date().toISOString().slice(0, 10);
 
-      const [bookRes, tradesRes] = await Promise.all([
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sb = supabase as any;
+      const [bookRes, tradesRes, genRes] = await Promise.all([
         supabase
           .from('ct_book')
           .select('*')
@@ -71,6 +82,8 @@ export function useBookEquityCurve() {
           .select('*')
           .eq('session_date', todayStr)
           .order('created_at', { ascending: true }),
+        // Tenet 14 — active generation supplies the true starting seed.
+        sb.rpc('current_claude_generation'),
       ]);
 
       if (bookRes.error) throw bookRes.error;
@@ -79,10 +92,21 @@ export function useBookEquityCurve() {
       const history = (bookRes.data ?? []) as CtBookRow[];
       const todayTrades = (tradesRes.data ?? []) as CtTradeRow[];
 
+      // Resolve the generation seed with three fallbacks so the hook
+      // still draws something sane if the RPC or ct_book is cold.
+      const genRow = Array.isArray(genRes?.data) ? genRes.data[0] : genRes?.data;
+      const genSeed = Number(genRow?.starting_balance_usd);
+      const firstBookSeed = history.length > 0 ? Number(history[0].starting_balance) : NaN;
+      const startingSeed = Number.isFinite(genSeed) && genSeed > 0
+        ? genSeed
+        : Number.isFinite(firstBookSeed) && firstBookSeed > 0
+          ? firstBookSeed
+          : DEFAULT_GENERATION_SEED;
+
       // Build chart points. For today (if session not closed), use live balance:
       //   live = starting_balance + realized_pnl + unrealized_pnl
       // Otherwise use ending_balance (closed) or starting_balance (morning).
-      let runningHwm = STARTING_SEED;
+      let runningHwm = startingSeed;
       const points: EquityPoint[] = history.map(b => {
         const live = b.starting_balance + (b.realized_pnl ?? 0) + (b.unrealized_pnl ?? 0);
         const balance = b.ending_balance ?? live;
@@ -98,27 +122,24 @@ export function useBookEquityCurve() {
         };
       });
 
-      // Seed the chart at $10k on day 0 so a single-session book still draws
-      // a line from the origin rather than a lone dot.
-      if (points.length > 0 && points[0].balance !== STARTING_SEED) {
-        const first = points[0];
+      // Seed the chart at the generation's starting balance on day 0 so a
+      // single-session book still draws a line from the origin.
+      if (points.length > 0 && points[0].balance !== startingSeed) {
         points.unshift({
           date: 'seed',
           label: 'start',
-          balance: STARTING_SEED,
-          starting: STARTING_SEED,
-          hwm: STARTING_SEED,
+          balance: startingSeed,
+          starting: startingSeed,
+          hwm: startingSeed,
           isToday: false,
         });
-        // Don't let the synthetic seed pull HWM below the real first session
-        void first;
       }
 
       // Stats
-      const current = points.length > 0 ? points[points.length - 1].balance : STARTING_SEED;
-      const hwm = points.length > 0 ? points[points.length - 1].hwm : STARTING_SEED;
-      const currentDelta = current - STARTING_SEED;
-      const currentPct = (currentDelta / STARTING_SEED) * 100;
+      const current = points.length > 0 ? points[points.length - 1].balance : startingSeed;
+      const hwm = points.length > 0 ? points[points.length - 1].hwm : startingSeed;
+      const currentDelta = current - startingSeed;
+      const currentPct = startingSeed > 0 ? (currentDelta / startingSeed) * 100 : 0;
       const drawdownPct = hwm > 0 ? ((current - hwm) / hwm) * 100 : 0;
 
       const realSessions = history; // exclude synthetic seed from session count
@@ -141,7 +162,7 @@ export function useBookEquityCurve() {
       const todayRealizedUsd = todayRow?.realized_pnl ?? 0;
       const todayUnrealizedUsd = todayRow?.unrealized_pnl ?? 0;
       const todayTotalUsd = todayRealizedUsd + todayUnrealizedUsd;
-      const todayStarting = todayRow?.starting_balance ?? STARTING_SEED;
+      const todayStarting = todayRow?.starting_balance ?? startingSeed;
       const todayPct = todayStarting > 0 ? (todayTotalUsd / todayStarting) * 100 : 0;
 
       return {
@@ -149,7 +170,7 @@ export function useBookEquityCurve() {
         todayTrades,
         points,
         stats: {
-          starting: STARTING_SEED,
+          starting: startingSeed,
           current,
           currentDelta,
           currentPct,

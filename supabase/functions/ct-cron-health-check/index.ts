@@ -117,12 +117,13 @@ function expectedCadenceMinutes(schedule: string): number {
 }
 
 function stalenessThresholdMinutes(cadenceMin: number): number {
-  // Cadence-aware threshold: 1.25× cadence, floored at 60min so sub-hour
-  // crons still get a generous tail. A 4h cron alerts at 5h; a 5min cron
-  // still alerts at 60min minimum (one tardy tick tolerated). This
-  // replaces the older fixed `1.33× + 5min` rule which misfired for
-  // multi-hour crons when the parser defaulted their cadence to 60m.
-  return Math.max(60, Math.ceil(cadenceMin * 1.25));
+  // Cadence-aware threshold: 2× cadence, floored at 90min so sub-hour
+  // crons still get a generous tail. A 4h cron alerts at 8h; a 5min cron
+  // still alerts at 90min minimum. Raised from 1.25× → 2× because
+  // Monday-morning Slack kept flaring `stale 1.3h` on 60-min-cadence
+  // ingesters that were simply one-tick late coming back from weekend
+  // idle. The alert is for breakage, not tardiness.
+  return Math.max(90, Math.ceil(cadenceMin * 2));
 }
 
 // ---------------------------------------------------------------------------
@@ -176,23 +177,15 @@ function isRthRestrictedSchedule(schedule: string): boolean {
   return hourRestricted && dowRestricted;
 }
 
-/** True if the schedule's day-of-week field restricts to weekdays only
- *  (i.e. excludes 0 and 6). Examples that return true:
- *    `1-5`, `1,2,3,4,5`, `1-4`, `2-5`
- *  Examples that return false:
- *    `*`, `0-6`, `*\/1`, `1,3,5`, `0,6` (weekend-only), anything with 0 or 6
- *
- *  Used independently of hour restrictions — a `30 13 * * 1-5` cron should
- *  NOT be flagged as `never_ran` or `stale` on a Saturday/Sunday, because
- *  pg_cron simply won't fire it then.
+/** Parse the dow field into a set of day-of-week numbers.
+ *  Returns null when the field is `*`, a step expression, or otherwise
+ *  unparseable — callers should treat null as "not restricted".
  */
-function isWeekdayOnlySchedule(schedule: string): boolean {
+function parseDowSet(schedule: string): Set<number> | null {
   const parts = (schedule ?? '').trim().split(/\s+/);
-  if (parts.length !== 5) return false;
+  if (parts.length !== 5) return null;
   const dow = parts[4];
-  if (!dow || dow === '*') return false;
-
-  // Normalize: extract individual day numbers from ranges and lists.
+  if (!dow || dow === '*') return null;
   const days = new Set<number>();
   for (const seg of dow.split(',')) {
     const rangeMatch = seg.match(/^(\d+)-(\d+)$/);
@@ -206,14 +199,42 @@ function isWeekdayOnlySchedule(schedule: string): boolean {
       days.add(parseInt(seg, 10));
       continue;
     }
-    // Unknown token (e.g. `*/2`) — don't claim weekday-only.
-    return false;
+    return null;
   }
-  if (days.size === 0) return false;
-  // Must exclude Sunday (0) and Saturday (6), and contain at least one weekday.
+  return days.size > 0 ? days : null;
+}
+
+/** True if the schedule's day-of-week field restricts to weekdays only
+ *  (i.e. excludes 0 and 6). `30 13 * * 1-5` → true; `30 13 * * *` → false.
+ */
+function isWeekdayOnlySchedule(schedule: string): boolean {
+  const days = parseDowSet(schedule);
+  if (!days) return false;
   if (days.has(0) || days.has(6)) return false;
   for (const d of days) if (d >= 1 && d <= 5) return true;
   return false;
+}
+
+/** True if the schedule's day-of-week field restricts to weekends only
+ *  (i.e. contains only Saturday and/or Sunday). Mirrors isWeekdayOnlySchedule
+ *  so Monday-morning alerts don't scream about `ct-news-ingester-weekend`
+ *  being stale — by design it won't tick again until Saturday.
+ */
+function isWeekendOnlySchedule(schedule: string): boolean {
+  const days = parseDowSet(schedule);
+  if (!days) return false;
+  for (const d of days) if (d !== 0 && d !== 6) return false;
+  return days.has(0) || days.has(6);
+}
+
+/** Is a cron's declared day-of-week active *right now* in UTC (pg_cron's
+ *  scheduling clock)? Returns true when the schedule's dow field isn't
+ *  restricted or today matches one of the listed days.
+ */
+function isCronDayActive(schedule: string, d: Date = new Date()): boolean {
+  const days = parseDowSet(schedule);
+  if (!days) return true;
+  return days.has(d.getUTCDay());
 }
 
 /** True if today (in UTC — pg_cron uses UTC) is Saturday or Sunday. */
@@ -270,9 +291,15 @@ function classify(row: CronRow, now: Date): Classification {
   const rthRestricted = isRthRestrictedSchedule(row.schedule);
   const windowOpen = isScheduleWindowOpen(row.schedule, now);
   const weekdayOnly = isWeekdayOnlySchedule(row.schedule);
+  const weekendOnly = isWeekendOnlySchedule(row.schedule);
+  const dayActiveNow = isCronDayActive(row.schedule, now);
   const weekendNow = isWeekendUtc(now);
+  // Off-hours for THIS cron specifically — covers weekday-only-on-weekend,
+  // weekend-only-on-weekday, and RTH-hour-restricted-outside-window in one
+  // predicate. Used to suppress both `stale` and `never_ran` symmetrically.
+  const offHoursForCron = !dayActiveNow || (rthRestricted && !windowOpen);
 
-  // failed: trumps everything. Even an RTH-only cron that failed should
+  // failed: trumps everything. Even an off-hours cron that failed should
   // alert — the failure happened, regardless of current hour.
   if ((row.last_run_status ?? '') === 'failed') {
     return {
@@ -289,9 +316,13 @@ function classify(row: CronRow, now: Date): Classification {
   // never_ran: null last_run_at AND scheduled more than 1h ago. Brand-new
   // crons whose first tick hasn't landed yet stay quiet.
   if (!row.last_run_at) {
-    // Weekday-only cron on a weekend — pg_cron won't fire it, so null
-    // last_run_at is expected. Suppress.
-    if (weekdayOnly && weekendNow) {
+    // Off-hours for this cron (weekday-only on weekend, weekend-only on
+    // weekday, or RTH-hour-restricted outside the window). pg_cron won't
+    // fire it right now, so absence of a run is expected. Suppress.
+    if (offHoursForCron) {
+      const reason = weekdayOnly && weekendNow ? 'weekday-only cron, weekend'
+        : weekendOnly && !weekendNow ? 'weekend-only cron, weekday'
+        : 'schedule window closed';
       return {
         jobname: row.jobname,
         status: 'skipped_off_hours',
@@ -299,7 +330,7 @@ function classify(row: CronRow, now: Date): Classification {
         last_run_status: row.last_run_status,
         ageMin,
         cadenceMin,
-        note: 'no run yet (weekday-only cron, weekend — suppressed)',
+        note: `no run yet (${reason} — suppressed)`,
       };
     }
     // We can't tell from the RPC when the cron was created, so use a
@@ -330,13 +361,14 @@ function classify(row: CronRow, now: Date): Classification {
     };
   }
 
-  // stale: succeeded, but the tick is older than 1.33x cadence + buffer.
-  // RTH-only carve-out: if the cron's window isn't open right now, suppress
-  // stale alerts — overnight/weekend silence is expected.
+  // stale: succeeded, but the tick is older than the cadence-scaled
+  // threshold. Any off-hours state for this cron suppresses the alert —
+  // the silence is expected.
   if (ageMin > threshold) {
-    // Weekday-only cron on a weekend — pg_cron won't fire it, so staleness
-    // is expected until Monday. Suppress.
-    if (weekdayOnly && weekendNow) {
+    if (offHoursForCron) {
+      const reason = weekdayOnly && weekendNow ? 'weekday-only cron, weekend'
+        : weekendOnly && !weekendNow ? 'weekend-only cron, weekday'
+        : 'schedule window closed';
       return {
         jobname: row.jobname,
         status: 'skipped_off_hours',
@@ -344,18 +376,7 @@ function classify(row: CronRow, now: Date): Classification {
         last_run_status: row.last_run_status,
         ageMin,
         cadenceMin,
-        note: `stale ${Math.round(ageMin)}m (weekday-only cron, weekend — suppressed)`,
-      };
-    }
-    if (rthRestricted && !windowOpen) {
-      return {
-        jobname: row.jobname,
-        status: 'skipped_off_hours',
-        last_run_at: row.last_run_at,
-        last_run_status: row.last_run_status,
-        ageMin,
-        cadenceMin,
-        note: `stale ${Math.round(ageMin)}m (RTH cron, window closed — suppressed)`,
+        note: `stale ${Math.round(ageMin)}m (${reason} — suppressed)`,
       };
     }
     return {

@@ -409,8 +409,26 @@ Rules:
       totalSurfaced++;
       console.log(`[jac-heartbeat] Surfaced insight for user ${userId}: "${decision.title}"`);
 
-      // 6. Optionally notify via Slack
+      // 6. Optionally notify via Slack — quiet-hours + priority gate.
+      //
+      // The heartbeat insight still lands in brain_insights regardless, so
+      // the user can read the full log on-demand. Slack is an interrupt
+      // channel, not a history channel. Rules:
+      //   - Quiet hours 21:00-07:00 ET: only priority=1 (urgent) pushes.
+      //   - Any other hour: priority 1 or 2 pushes; priority 3 stays silent.
+      // Gate at the *push*, not at the insight creation, so we still learn
+      // from every surfaced thought without spamming at 2 AM.
       try {
+        const priority = (decision.priority as number) || 2;
+        const etHourNow = parseInt(etNowSnapshot.time.split(':')[0], 10);
+        const quietHoursEt = etHourNow >= 21 || etHourNow < 7;
+        const slackAllowed = quietHoursEt ? priority === 1 : priority <= 2;
+
+        if (!slackAllowed) {
+          console.log(`[jac-heartbeat] Slack suppressed for user ${userId} (priority=${priority}, quietHours=${quietHoursEt}, etHour=${etHourNow})`);
+          continue;
+        }
+
         const { data: settings } = await supabase
           .from('user_settings')
           .select('settings')

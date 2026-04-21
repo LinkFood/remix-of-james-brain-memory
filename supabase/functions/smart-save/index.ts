@@ -259,13 +259,32 @@ serve(async (req) => {
       }
     }
 
-    // Safety net: override to 'event' if content has calendar keywords + a date
-    // Haiku misclassifies "add to calendar" ~50% of the time
+    // Safety net: override to 'event' if content is an EXPLICIT scheduling
+    // command. The prior net was too broad — research briefs containing a
+    // section heading like "Schedule" plus any month name ("April 17")
+    // tripped it and became phantom calendar events, which then bled into
+    // the morning brief as "overdue items". Tenet 4: fix the class, not the
+    // instance. New rules:
+    //   (a) Imperative command verb: "remind me", "add to calendar",
+    //       "schedule a ...", "book a ..." — not the noun "schedule".
+    //   (b) Plus a concrete date signal: month+day together ("March 15"),
+    //       slash date ("3/15"), ISO date ("2026-03-15"), weekday name, or
+    //       a relative token ("tomorrow", "next friday").
+    // Standalone small numbers no longer qualify. Any research or briefing
+    // text that happens to mention "April" falls through to real Haiku
+    // classification like everything else.
     if (classification.type !== 'event' && classification.type !== 'reminder') {
       const lower = content.toLowerCase();
-      const hasCalendarKeyword = /\b(calendar|calender|schedule|add.{0,10}(to|on).{0,10}cal)\b/i.test(lower);
-      const hasDateKeyword = /\b(january|february|march|april|may|june|july|august|september|october|november|december|monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next\s+\w+|\d{1,2}(st|nd|rd|th)?)\b/i.test(lower);
-      if (hasCalendarKeyword && hasDateKeyword) {
+      const hasImperativeCalendarCommand =
+        /\b(remind\s+me|add\s+(to|this\s+to)\s+(the\s+)?cal(endar)?|(put|book|schedule)\s+(an?|this|that|a\s+meeting|a\s+call|a\s+reminder)\b|create\s+(an?\s+)?(event|reminder|appointment)\b|set\s+(up\s+)?(an?\s+)?(reminder|alarm|appointment))\b/i.test(lower);
+      const hasConcreteDate =
+        /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(st|nd|rd|th)?\b/i.test(lower)
+        || /\b(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(day)?\b/i.test(lower)
+        || /\b(tomorrow|tonight|today)\b/i.test(lower)
+        || /\bnext\s+(week|month|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i.test(lower)
+        || /\b\d{1,2}\/\d{1,2}(\/\d{2,4})?\b/.test(lower)
+        || /\b\d{4}-\d{2}-\d{2}\b/.test(lower);
+      if (hasImperativeCalendarCommand && hasConcreteDate) {
         console.log('[smart-save] Calendar override: forcing type=event');
         classification.type = 'event';
         // Try to extract date if Haiku didn't

@@ -277,6 +277,47 @@ serve(async (req) => {
   );
   const startedAt = Date.now();
 
+  // Tenet 4 — respect the circuit breaker at every writer, not just trade
+  // execution. Yesterday's Slack timeline showed the hallucination detector
+  // firing 8+ times while this proposer kept generating conv-flipping
+  // hypotheses on the same tickers. Self-awareness without self-correction
+  // is not self-correction. If ct_claude_circuit_breakers has tripped
+  // (hallucination_rate, session_loss, concurrent_cascade, manual_halt) we
+  // log the skip to the decision journal and exit. Breaker clears itself
+  // at next session; config-tunable trip thresholds live in ct_config.
+  try {
+    const { data: haltRows } = await supabase.rpc('is_claude_trading_halted');
+    const halt = Array.isArray(haltRows) ? haltRows[0] : haltRows;
+    if (halt?.halted) {
+      await recordDecision(supabase, {
+        decision_type: 'no_trade',
+        model_tier: 'sonnet',
+        reasoning: `Proposer halted by circuit breaker (${halt.breaker_type ?? 'unknown'}): ${halt.reason ?? 'no reason'}. No new hypotheses proposed this run.`,
+        outcome: `breaker_halted_${halt.breaker_type ?? 'unknown'}`,
+        context_snapshot: {
+          breaker_type: halt.breaker_type ?? null,
+          reason: halt.reason ?? null,
+          tripped_at: halt.tripped_at ?? null,
+          duration_ms: Date.now() - startedAt,
+        },
+        tool_calls_summary: { called: 'is_claude_trading_halted' },
+      });
+      return new Response(JSON.stringify({
+        ok: true,
+        skipped: true,
+        reason: 'circuit_breaker',
+        breaker_type: halt.breaker_type ?? null,
+        breaker_reason: halt.reason ?? null,
+      }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+  } catch (e) {
+    // Breaker RPC failure shouldn't block proposer — fail open, log only.
+    console.warn(`[ct-hypothesis-proposer] circuit breaker check failed (fail-open): ${e instanceof Error ? e.message : String(e)}`);
+  }
+
   const maxPerDay = Number(await getConfig<number>('hypothesis_proposer_max_per_day', 3));
   const lookbackHours = Number(await getConfig<number>('hypothesis_proposer_lookback_hours', 36));
 
