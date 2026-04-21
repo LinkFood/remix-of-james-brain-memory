@@ -142,16 +142,32 @@ export async function callClaude(options: ClaudeOptions): Promise<ClaudeResponse
     const errorText = await response.text();
     console.error(`Claude API error (attempt ${attempt + 1}/${MAX_RETRIES + 1}):`, response.status, errorText);
 
+    // Propagate a compact slice of the response body into the thrown message so
+    // the downstream error sink (heartbeat status_line, decision journal,
+    // dashboard) can show the actual reason rather than a bare status code.
+    // Anthropic's error bodies are {"type":"error","error":{"type":"...",
+    // "message":"..."}} — try to extract `message` and fall back to the raw
+    // body. Truncated to 400 chars to stay readable in Slack + heartbeat.
+    let detail = '';
+    try {
+      const parsed = JSON.parse(errorText);
+      const msg = parsed?.error?.message ?? parsed?.message ?? '';
+      detail = typeof msg === 'string' && msg.length > 0 ? msg : errorText;
+    } catch {
+      detail = errorText;
+    }
+    detail = String(detail).slice(0, 400);
+
     // 4xx errors are permanent — don't retry (auth, billing, bad request)
     if (response.status < 500) {
       if (response.status === 429) {
-        throw new ClaudeError('Rate limit exceeded', 429);
+        throw new ClaudeError(`Rate limit exceeded — ${detail}`, 429);
       }
       if ((response.status === 402 || response.status === 400) &&
           (errorText.includes('credit') || errorText.includes('billing'))) {
-        throw new ClaudeError('API credits exhausted', 402);
+        throw new ClaudeError(`API credits exhausted — ${detail}`, 402);
       }
-      throw new ClaudeError(`Claude API request failed: ${response.status}`, response.status);
+      throw new ClaudeError(`Claude API ${response.status}: ${detail}`, response.status);
     }
 
     // 5xx errors (500, 502, 503, 529 overloaded) — retry with exponential backoff
@@ -162,7 +178,7 @@ export async function callClaude(options: ClaudeOptions): Promise<ClaudeResponse
       continue;
     }
 
-    throw new ClaudeError(`Claude API request failed: ${response.status} (after ${MAX_RETRIES + 1} attempts)`, response.status);
+    throw new ClaudeError(`Claude API ${response.status} after ${MAX_RETRIES + 1} attempts: ${detail}`, response.status);
   }
 
   throw new ClaudeError('Claude API request failed: unknown error', 500);
