@@ -162,11 +162,95 @@ function expectedCadenceMinutes(schedule: string): number {
   return 60;
 }
 
-/** Staleness threshold for a given cadence. 1.25× cadence floored at 60m —
- *  sub-hour crons still get a ≥1h tail; multi-hour crons scale up
- *  proportionally (4h cron alerts at 5h, not 85m). */
+/** Staleness threshold for a given cadence. 2× cadence floored at 90m —
+ *  Monday-morning tardy ticks on 60m-cadence ingesters should not flare.
+ *  Kept in sync with the staleness rule in
+ *  supabase/functions/ct-cron-health-check/index.ts. */
 function stalenessThresholdMinutes(cadenceMin: number): number {
-  return Math.max(60, Math.ceil(cadenceMin * 1.25));
+  return Math.max(90, Math.ceil(cadenceMin * 2));
+}
+
+// ---------------------------------------------------------------------------
+// Schedule day-of-week awareness. Mirrors ct-cron-health-check so Preflight
+// and the Slack alerter agree about whether a cron is *supposed* to be
+// running right now. Without this, weekend-only crons flare red on
+// weekdays and weekday-only crons flare red on weekends.
+// ---------------------------------------------------------------------------
+
+/** Parse the dow field of a cron schedule into a set of day-of-week numbers.
+ *  Returns null for `*`, step expressions, and other "unrestricted" cases. */
+function parseDowSet(schedule: string): Set<number> | null {
+  const parts = (schedule ?? '').trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const dow = parts[4];
+  if (!dow || dow === '*') return null;
+  const days = new Set<number>();
+  for (const seg of dow.split(',')) {
+    const rangeMatch = seg.match(/^(\d+)-(\d+)$/);
+    if (rangeMatch) {
+      const lo = parseInt(rangeMatch[1], 10);
+      const hi = parseInt(rangeMatch[2], 10);
+      for (let d = lo; d <= hi; d++) days.add(d);
+      continue;
+    }
+    if (/^\d+$/.test(seg)) {
+      days.add(parseInt(seg, 10));
+      continue;
+    }
+    return null;
+  }
+  return days.size > 0 ? days : null;
+}
+
+/** Today matches the cron's dow field (UTC — pg_cron clock). */
+function isCronDayActive(schedule: string, d: Date = new Date()): boolean {
+  const days = parseDowSet(schedule);
+  if (!days) return true;
+  return days.has(d.getUTCDay());
+}
+
+/** Hour-restricted + weekday-only (e.g. `* 12-21 * * 1-5`) — the RTH-extended
+ *  family of crons that pause overnight + weekends. */
+function isRthRestrictedSchedule(schedule: string): boolean {
+  const parts = (schedule ?? '').trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  const [, hour, , , dow] = parts;
+  const hourRestricted = /^\d+-\d+$/.test(hour) || /^\d+(,\d+)+$/.test(hour);
+  const dowRestricted = /^1-5$/.test(dow) || /^[1-5](,[1-5])+$/.test(dow);
+  return hourRestricted && dowRestricted;
+}
+
+/** Is the schedule's hour-range window open right now (UTC)? */
+function isScheduleWindowOpen(schedule: string, d: Date = new Date()): boolean {
+  if (!isRthRestrictedSchedule(schedule)) return true;
+  const parts = schedule.trim().split(/\s+/);
+  if (parts.length !== 5) return true;
+  const hour = parts[1];
+  const utcHour = d.getUTCHours();
+  const utcDay = d.getUTCDay();
+  if (utcDay === 0 || utcDay === 6) return false;
+  const rangeMatch = hour.match(/^(\d+)-(\d+)$/);
+  if (rangeMatch) {
+    const lo = parseInt(rangeMatch[1], 10);
+    const hi = parseInt(rangeMatch[2], 10);
+    return utcHour >= lo && utcHour <= hi;
+  }
+  const listMatch = hour.match(/^(\d+)(,\d+)*$/);
+  if (listMatch) {
+    const hours = hour.split(',').map((h) => parseInt(h, 10));
+    return hours.includes(utcHour);
+  }
+  return true;
+}
+
+/** Combined "off-hours for THIS cron" predicate — dow-inactive OR
+ *  RTH-window-closed. Used to suppress both `never_ran` and `stale` in a
+ *  single check so weekend-only crons on weekdays, weekday-only crons on
+ *  weekends, and RTH crons overnight are all treated consistently. */
+function isOffHoursForCron(schedule: string, d: Date = new Date()): boolean {
+  if (!isCronDayActive(schedule, d)) return true;
+  if (isRthRestrictedSchedule(schedule) && !isScheduleWindowOpen(schedule, d)) return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +288,6 @@ async function runCronCheck(now: Date): Promise<PreflightCheck> {
       };
     }
 
-    const marketActive = isMarketActive(now);
     const details: PreflightDetail[] = [];
     let broken = 0;
     let stale = 0;
@@ -213,26 +296,42 @@ async function runCronCheck(now: Date): Promise<PreflightCheck> {
       const cadence = expectedCadenceMinutes(r.schedule);
       const threshold = stalenessThresholdMinutes(cadence);
       const ageMin = minutesAgo(r.last_run_at);
-
-      // Off-hours carve-out: short-cadence crons legitimately don't run overnight.
-      // Only treat "stale" as failing when the market is active OR the cron is
-      // a daily/weekly one that should fire regardless of market hours.
-      const isIntraday = cadence <= 60;
-      const staleApplies = marketActive || !isIntraday;
+      const offHours = isOffHoursForCron(r.schedule, now);
 
       const statusOk = (r.last_run_status ?? '') === 'succeeded';
-      const isStale = staleApplies && ageMin > threshold;
-      const isBroken = !statusOk || isStale;
+      const neverRan = r.last_run_at == null;
+      const isStale = !neverRan && ageMin > threshold;
 
       let itemStatus: CheckStatus = 'green';
       let note = '';
+
       if (!r.active) {
         itemStatus = 'yellow';
         note = 'disabled';
-      } else if (!statusOk) {
+      } else if (offHours && (neverRan || isStale || !statusOk)) {
+        // Cron is not scheduled to run right now — suppress false-positive
+        // never_ran / stale / failed. If the last run really failed, that's
+        // still worth knowing about, but it's not preflight-blocking outside
+        // the cron's window. Collapse to a quiet note rather than red.
+        itemStatus = 'green';
+        note = neverRan ? 'off-hours (no run yet — expected)'
+          : isStale ? `off-hours (last run ${Math.round(ageMin)}m ago — expected)`
+          : `off-hours (status ${r.last_run_status ?? 'unknown'})`;
+      } else if (!statusOk && !neverRan) {
         itemStatus = 'red';
-        note = `last status: ${r.last_run_status ?? 'never ran'}`;
+        note = `last status: ${r.last_run_status ?? 'unknown'}`;
         broken += 1;
+      } else if (neverRan && cadence <= 60) {
+        // Short-cadence cron that's supposed to be running now but has no
+        // last_run_at — that's a real problem, but only inside its window.
+        itemStatus = 'red';
+        note = 'never ran (no last_run_at)';
+        broken += 1;
+      } else if (neverRan) {
+        // Long-cadence crons without a run yet are quiet — next tick will
+        // populate last_run_at.
+        itemStatus = 'green';
+        note = 'awaiting first run (long cadence)';
       } else if (isStale) {
         itemStatus = 'red';
         note = `stale: ${Math.round(ageMin)}m ago (cadence ~${cadence}m)`;
@@ -241,7 +340,7 @@ async function runCronCheck(now: Date): Promise<PreflightCheck> {
         note = `${Math.round(ageMin)}m ago`;
       }
 
-      if (isBroken || itemStatus !== 'green') {
+      if (itemStatus !== 'green') {
         details.push({ label: r.jobname, status: itemStatus, note });
       }
     }

@@ -517,6 +517,29 @@ serve(async (req) => {
       r.status === 'failed' || r.status === 'stale' || r.status === 'never_ran',
     );
 
+    // 3b) Auto-resolve legacy false positives. When a cron's current state is
+    // healthy OR skipped_off_hours, clear any prior `never_ran` / `stale`
+    // rows for that cron whose resolved_at is still NULL. Keeps real
+    // `failed` rows alone — those stand until a successful tick reliably
+    // indicates recovery. Fixes the "14 unresolved failures in last 6h"
+    // Preflight card that's reflecting weekend-only crons tagged on Monday
+    // morning by the pre-schedule-awareness classifier.
+    const nowResolvable = results.filter(
+      (r) => r.status === 'healthy' || r.status === 'skipped_off_hours',
+    );
+    if (nowResolvable.length > 0) {
+      const names = nowResolvable.map((r) => r.jobname);
+      const { error: resolveErr } = await supabase
+        .from('ct_cron_failures')
+        .update({ resolved_at: now.toISOString() })
+        .is('resolved_at', null)
+        .in('cron_name', names)
+        .in('status', ['never_ran', 'stale']);
+      if (resolveErr) {
+        console.warn('[ct-cron-health-check] auto-resolve failed:', resolveErr.message);
+      }
+    }
+
     // 4) Insert audit rows for each unhealthy cron. We always write a row
     //    per detection pass — dedupe is *only* on the Slack push side.
     const insertedIds: Record<string, string> = {};
