@@ -2,19 +2,24 @@
  * ct-dp-cluster — always-on flag pattern for dark pool blocks. No UW calls.
  *
  * Thresholds live in ct_config (keys: clusters.dp.window_min,
- * clusters.dp.count_min, clusters.dp.notional_usd). Tune via /ct-settings.
- * 60s cache TTL — changes propagate within ~1 minute.
+ * clusters.dp.count_min, clusters.dp.notional_usd,
+ * clusters.dp.slack_notional_min_usd, clusters.dp.slack_cooldown_min).
+ * Tune via /ct-settings. 60s cache TTL — changes propagate within ~1 minute.
  *
  * Every minute during weekday market hours, scan ct_dark_pool_prints for the
  * last window_min minutes where notional_value >= notional_usd, group by
  * ticker, and emit a "DP CLUSTER" finding for any ticker with count >= count_min.
  *
- * Dedupe: per-ticker 15-min cooldown — DP blocks arrive slower and chunkier
- * than sweeps, so the cooldown is more generous than the sweep cluster's 10m.
- * Fail-closed: if the dedupe query errors, treat as recently-emitted and skip.
+ * Dedupe: per-ticker cooldown (default 30min, tunable). Fail-closed: if the
+ * dedupe query errors, treat as recently-emitted and skip.
  *
  * Attention score:  count >= 5 → 85   count >= 4 → 75   count >= count_min → 65
- * Slack push:       score >= 75       (count >= 4)
+ * Slack push:       score >= 85 AND total_notional >= slack_notional_min_usd.
+ *                   Monday's live-open run pushed 70+ per-ticker standalone
+ *                   pings on routine $10-30M institutional prints — noise.
+ *                   Slack is now reserved for exceptional clusters; the rest
+ *                   still land in ct_dp_clusters (Claude sees them) and get
+ *                   rolled into the Co-Trader 30-min digest / FLAG convergence.
  *
  * Window defaults to 10min (not 5 like sweeps) because DP prints trickle in slower.
  * Threshold defaults to $1M per print (vs $500k for sweeps) — DP blocks are chunkier.
@@ -60,14 +65,16 @@ function fmtMoney(n: number): string {
 }
 
 /**
- * Dedupe: has this ticker already been emitted as a cluster in the last 15
- * minutes? If so, skip it. Cheap index hit on (ticker, created_at DESC).
+ * Dedupe: has this ticker already been emitted as a cluster in the last
+ * cooldownMin minutes? If so, skip it. Cheap index hit on
+ * (ticker, created_at DESC). Cooldown is tunable via ct_config.
  */
 async function recentlyEmitted(
   supabase: SupabaseClient,
   ticker: string,
+  cooldownMin: number,
 ): Promise<boolean> {
-  const cutoff = new Date(Date.now() - 15 * 60_000).toISOString();
+  const cutoff = new Date(Date.now() - cooldownMin * 60_000).toISOString();
   const { data, error } = await supabase
     .from('ct_dp_clusters')
     .select('id')
@@ -162,14 +169,20 @@ serve(async (req) => {
   const startedAt = Date.now();
 
   try {
-    // Pull tunable thresholds from ct_config (60s cache TTL, defaults preserve
-    // legacy behavior if the row is missing or the RPC errors).
-    const [windowMin, countMin, notionalUsd] = await Promise.all([
+    // Pull tunable thresholds from ct_config (60s cache TTL).
+    const [windowMin, countMin, notionalUsd, slackNotionalMin, cooldownMin] = await Promise.all([
       getConfig<number>('clusters.dp.window_min', 10),
       getConfig<number>('clusters.dp.count_min', 3),
       getConfig<number>('clusters.dp.notional_usd', 1_000_000),
+      // Slack gate — only push clusters above this total notional. $250M
+      // default empirically drops ~90% of Monday's pings (routine $10-30M
+      // institutional flow) while preserving truly notable bursts.
+      getConfig<number>('clusters.dp.slack_notional_min_usd', 250_000_000),
+      // Per-ticker slack cooldown. 30 min default (was 15) — DP clusters
+      // on the same ticker re-firing twice an hour is operator noise.
+      getConfig<number>('clusters.dp.slack_cooldown_min', 30),
     ]);
-    console.log(`[ct-dp-cluster] thresholds: window=${windowMin}min count=${countMin} notional=$${notionalUsd}`);
+    console.log(`[ct-dp-cluster] thresholds: window=${windowMin}min count=${countMin} notional=$${notionalUsd} slack_min=$${slackNotionalMin} cooldown=${cooldownMin}min`);
 
     const windowEnd = new Date();
     const windowStart = new Date(windowEnd.getTime() - windowMin * 60_000);
@@ -189,7 +202,7 @@ serve(async (req) => {
         continue;
       }
 
-      const deduped = await recentlyEmitted(supabase, ticker);
+      const deduped = await recentlyEmitted(supabase, ticker, cooldownMin);
       if (deduped) {
         perTicker[ticker] = { count: cluster.print_count, total_notional: cluster.total_notional, emitted: false, reason: 'dedupe_15min' };
         continue;
@@ -224,10 +237,12 @@ serve(async (req) => {
         });
       }
 
-      // Slack push only on attention_score >= 75 (count >= 4 prints). Best-effort,
-      // use the first user we find so the push has a channel. No dedupe here
-      // beyond the 15-min cluster cooldown.
-      if (cluster.attention_score >= 75) {
+      // Slack push is gated on EXCEPTIONAL clusters only — score 85 (count
+      // >= 5 prints) AND total_notional above the configured floor. Standard
+      // clusters still land in ct_dp_clusters (Claude sees them) and feed
+      // the 30-min digest + FLAG convergence path. This intentionally lets
+      // routine $10-30M institutional prints pass silently.
+      if (cluster.attention_score >= 85 && cluster.total_notional >= slackNotionalMin) {
         try {
           const { data: userRow } = await supabase
             .from('user_settings')
