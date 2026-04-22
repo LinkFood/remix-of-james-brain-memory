@@ -29,6 +29,7 @@ import { now as clockNow } from '../_shared/clock.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { CT_SYSTEM_PROMPT_V1, CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
+import { fetchFormattedEdgePriors } from '../_shared/edgePriors.ts';
 import { buildMemoryBundle, getRecentSelfCorrections, getActiveBiases } from '../_shared/memoryRecall.ts';
 import { embedCtItem, buildCtRichText } from '../_shared/ctEmbed.ts';
 import { condenseWatcherState, type CondensedState } from '../_shared/ctStateCondense.ts';
@@ -1435,7 +1436,11 @@ ${m.macro_label} in ~${m.hours_remaining.toFixed(1)}h (${m.event_date}${m.event_
 ${m.macro_label} in ~${m.hours_remaining.toFixed(1)}h (${m.event_date}${m.event_time ? ` ${m.event_time}` : ''}). Pre-event positioning: flows become noise signal around Fed / macro-release windows. Tighter stops, shorter horizons, smaller size. Dealer gamma often compresses into the print then releases violently. If a glance mentions SPY/QQQ/IWM direction, tag it with "${m.macro_label} ${m.threshold_hours}h" so downstream grading knows the window. Advisory only — no auto-close.`;
       }
     }
-    const promptAddendum = earningsAddendum + macroAddendum;
+    // Empirical priors from /edge attribution — anchor Claude's reasoning to
+    // signals that have measurably beaten SPY, so he cites them when matching
+    // setups arise and acknowledges their absence when not. See edgePriors.ts.
+    const priorsBlock = await fetchFormattedEdgePriors(supabase);
+    const promptAddendum = earningsAddendum + macroAddendum + priorsBlock;
 
     try {
       const response = await callClaude({
