@@ -353,20 +353,33 @@ async function ingestSweeps(supabase: SupabaseClient): Promise<{ seen: number; i
     const data = (raw && typeof raw === 'object') ? (raw as { data?: unknown }).data : null;
     if (!Array.isArray(data) || data.length === 0) return { seen: 0, inserted: 0 };
     const snapshotAt = new Date().toISOString();
-    const rows = (data as Array<Record<string, unknown>>).map((r) => ({
-      ticker: (r.ticker_symbol as string | undefined) ?? (r.ticker as string | undefined) ?? 'UNKNOWN',
-      option_symbol: (r.option_symbol as string | undefined) ?? null,
-      strike: numOrNull(r.strike),
-      expiry: (r.expiry as string | undefined) ?? (r.expiration as string | undefined) ?? null,
-      type: (r.type as string | undefined) ?? null,
-      premium: numOrNull(r.premium ?? r.total_premium),
-      volume: numOrNull(r.volume ?? r.total_volume),
-      open_interest: numOrNull(r.open_interest),
-      sweep_ratio: numOrNull(r.sweep_volume_ratio ?? r.sweep_ratio),
-      ask_side_perc: numOrNull(r.ask_side_perc),
-      snapshot_at: snapshotAt,
-      raw: r,
-    })).filter(r => r.option_symbol);
+    const rows = (data as Array<Record<string, unknown>>).map((r) => {
+      const optionSymbol = (r.option_symbol as string | undefined) ?? null;
+      // OCC format: ROOT+YYMMDD+C/P+StrikeX1000(8 digits)
+      const occ = optionSymbol ? optionSymbol.match(/^([A-Z0-9]+?)(\d{6})([CP])(\d{8})$/) : null;
+      const derivedType = occ ? occ[3] : null;
+      const derivedExpiry = occ ? `20${occ[2].slice(0, 2)}-${occ[2].slice(2, 4)}-${occ[2].slice(4, 6)}` : null;
+      const derivedStrike = occ ? parseInt(occ[4], 10) / 1000 : null;
+      const askVol = numOrNull(r.ask_side_volume);
+      const bidVol = numOrNull(r.bid_side_volume);
+      const askPerc = (askVol != null && bidVol != null && (askVol + bidVol) > 0)
+        ? (askVol / (askVol + bidVol)) * 100
+        : numOrNull(r.ask_side_perc);
+      return {
+        ticker: (r.ticker_symbol as string | undefined) ?? (r.ticker as string | undefined) ?? 'UNKNOWN',
+        option_symbol: optionSymbol,
+        strike: numOrNull(r.strike) ?? derivedStrike,
+        expiry: (r.expiry as string | undefined) ?? (r.expiration as string | undefined) ?? derivedExpiry,
+        type: (r.type as string | undefined) ?? derivedType,
+        premium: numOrNull(r.premium ?? r.total_premium),
+        volume: numOrNull(r.volume ?? r.total_volume),
+        open_interest: numOrNull(r.open_interest),
+        sweep_ratio: numOrNull(r.sweep_volume_ratio ?? r.sweep_ratio),
+        ask_side_perc: askPerc,
+        snapshot_at: snapshotAt,
+        raw: r,
+      };
+    }).filter(r => r.option_symbol);
     const { error, count } = await supabase
       .from('ct_sweeps')
       .upsert(rows, { onConflict: 'option_symbol,snapshot_at', ignoreDuplicates: true, count: 'exact' });
