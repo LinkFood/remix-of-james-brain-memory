@@ -392,3 +392,6 @@ verify_jwt = false
 
 [functions.ct-uw-mcp-scout]
 verify_jwt = false
+
+[functions.ct-price-backfill]
+verify_jwt = false
