@@ -27,6 +27,7 @@ interface EdgeRow {
   conviction_bucket: string;
   horizon_mins: number;
   lookback_days: number;
+  instrument: string; // '' = aggregate, else ticker
   n: number;
   mean_alpha_pct: number | null;
   median_alpha_pct: number | null;
@@ -38,6 +39,8 @@ interface EdgeRow {
   mean_spy_return_pct: number | null;
   computed_at: string;
 }
+
+const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','NVDA','META','GOOGL','AMZN','TSLA','GLD','USO'];
 
 type SortKey =
   | 'sharpe' | 'mean_alpha_pct' | 'n' | 't_stat'
@@ -83,19 +86,28 @@ export default function Edge() {
   const qc = useQueryClient();
   const [lookback, setLookback] = useState<number>(7);
   const [minN, setMinN] = useState<number>(20);
+  const [instrumentFilter, setInstrumentFilter] = useState<string>(''); // '' = aggregate; 'ALL_TICKERS' = all per-ticker; else ticker
   const [sortKey, setSortKey] = useState<SortKey>('sharpe');
   const [sortAsc, setSortAsc] = useState(false);
   const [recomputing, setRecomputing] = useState(false);
 
   const { data: rows, isLoading, error, dataUpdatedAt } = useQuery<EdgeRow[]>({
-    queryKey: ['ct_edge_attribution', lookback],
+    queryKey: ['ct_edge_attribution', lookback, instrumentFilter],
     queryFn: async () => {
-      const { data, error } = await supabase
+      let q = supabase
         .from('ct_edge_attribution' as never)
         .select('*')
         .eq('lookback_days', lookback)
         .order('sharpe', { ascending: false, nullsFirst: false })
-        .limit(500);
+        .limit(1500);
+      if (instrumentFilter === '') {
+        q = q.eq('instrument', '');
+      } else if (instrumentFilter === 'ALL_TICKERS') {
+        q = q.neq('instrument', '');
+      } else {
+        q = q.eq('instrument', instrumentFilter);
+      }
+      const { data, error } = await q;
       if (error) throw error;
       return (data ?? []) as unknown as EdgeRow[];
     },
@@ -208,6 +220,36 @@ export default function Edge() {
               </Button>
             ))}
           </div>
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">Ticker:</span>
+            <Button
+              size="sm"
+              variant={instrumentFilter === '' ? 'default' : 'outline'}
+              onClick={() => setInstrumentFilter('')}
+              className="h-7 px-2 text-[11px]"
+            >
+              Aggregate
+            </Button>
+            <Button
+              size="sm"
+              variant={instrumentFilter === 'ALL_TICKERS' ? 'default' : 'outline'}
+              onClick={() => setInstrumentFilter('ALL_TICKERS')}
+              className="h-7 px-2 text-[11px]"
+            >
+              All (per-ticker)
+            </Button>
+            {TICKERS.map((t) => (
+              <Button
+                key={t}
+                size="sm"
+                variant={instrumentFilter === t ? 'default' : 'outline'}
+                onClick={() => setInstrumentFilter(t)}
+                className="h-7 px-2 text-[10px] font-mono"
+              >
+                {t}
+              </Button>
+            ))}
+          </div>
           {stats && (
             <div className="ml-auto flex items-center gap-4 text-[11px]">
               <span className="text-muted-foreground">
@@ -262,6 +304,9 @@ export default function Edge() {
               <Table>
                 <TableHeader className="sticky top-0 bg-card z-10">
                   <TableRow>
+                    {instrumentFilter !== '' && (
+                      <TableHead className="text-[10px] uppercase tracking-wider">Ticker</TableHead>
+                    )}
                     <TableHead onClick={() => toggleSort('signal_type')} className="cursor-pointer text-[10px] uppercase tracking-wider">
                       Signal {sortKey === 'signal_type' && (sortAsc ? '▲' : '▼')}
                     </TableHead>
@@ -312,6 +357,11 @@ export default function Edge() {
                 <TableBody>
                   {filtered.map((r) => (
                     <TableRow key={r.id} className="hover:bg-muted/30">
+                      {instrumentFilter !== '' && (
+                        <TableCell className="py-1.5 text-[11px] font-mono font-semibold text-primary">
+                          {r.instrument || '—'}
+                        </TableCell>
+                      )}
                       <TableCell className="py-1.5 text-[11px] font-mono">{r.signal_type}</TableCell>
                       <TableCell className="py-1.5 text-[11px] text-muted-foreground truncate max-w-[140px]">
                         {r.signal_subtype}

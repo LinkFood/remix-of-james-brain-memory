@@ -73,3 +73,60 @@ export async function fetchFormattedEdgePriors(
   const priors = await fetchEdgePriors(supabase, opts);
   return formatEdgePriorsBlock(priors);
 }
+
+/**
+ * Fetch per-ticker priors across all watchlist tickers that clear
+ * significance. Most edges turn out to be ticker-concentrated (META,
+ * QQQ, IWM) — per-ticker priors expose that.
+ */
+export async function fetchPerTickerEdgePriors(
+  supabase: SupabaseClient,
+  opts?: { minN?: number; minAbsT?: number; lookbackDays?: number; maxPerTicker?: number }
+): Promise<EdgePrior[]> {
+  const tickers = ['SPY','QQQ','IWM','AAPL','MSFT','NVDA','META','GOOGL','AMZN','TSLA','GLD','USO'];
+  const all: EdgePrior[] = [];
+  for (const t of tickers) {
+    try {
+      const { data, error } = await supabase.rpc('ct_top_edge_priors', {
+        p_max_priors: opts?.maxPerTicker ?? 3,
+        p_min_n: opts?.minN ?? 10,
+        p_min_abs_t: opts?.minAbsT ?? 2.5,
+        p_lookback: opts?.lookbackDays ?? 7,
+        p_instrument: t,
+      });
+      if (!error && data) all.push(...(data as EdgePrior[]));
+    } catch (_e) {
+      // swallow — one ticker failing doesn't tank the rest
+    }
+  }
+  // Sort by |t_stat| desc, keep top 10 overall
+  return all
+    .sort((a, b) => Math.abs(b.t_stat) - Math.abs(a.t_stat))
+    .slice(0, 10);
+}
+
+/**
+ * Mixed block: aggregate priors + top per-ticker priors. This is what the
+ * watcher/generator see — so Claude can reason from both "sweep bearish
+ * 60m beats SPY" AND "META specifically drives that edge."
+ */
+export async function fetchFormattedMixedEdgePriors(
+  supabase: SupabaseClient,
+): Promise<string> {
+  const [agg, perTicker] = await Promise.all([
+    fetchEdgePriors(supabase, { maxPriors: 6, minN: 30, minAbsT: 3.0 }),
+    fetchPerTickerEdgePriors(supabase, { maxPerTicker: 3, minN: 10, minAbsT: 2.5 }),
+  ]);
+  if (agg.length === 0 && perTicker.length === 0) return '';
+  const aggBlock = agg.length
+    ? `\nAGGREGATE (across all tickers, n≥30, |t|≥3):\n${agg.map((p) => `- ${p.summary}`).join('\n')}`
+    : '';
+  const tkBlock = perTicker.length
+    ? `\n\nPER-TICKER (n≥10, |t|≥2.5 — edges are often ticker-concentrated; cite if your call is on this ticker):\n${perTicker.map((p) => `- ${p.summary}`).join('\n')}`
+    : '';
+  return `
+
+EMPIRICAL PRIORS (from /edge attribution, last 7d):${aggBlock}${tkBlock}
+
+When your call matches a prior's (signal_type, direction, horizon [, ticker]), CITE it and raise conviction. When your call has NO matching prior here, say so — absence is itself signal. Do not fabricate priors not in the list above. Priors refresh nightly 22:40 UTC.`;
+}

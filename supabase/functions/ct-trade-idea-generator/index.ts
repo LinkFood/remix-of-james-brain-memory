@@ -27,7 +27,7 @@ import {
   getCachedTickerSnapshot,
   TickerQuantCard,
 } from '../_shared/tickerQuantCard.ts';
-import { fetchFormattedEdgePriors } from '../_shared/edgePriors.ts';
+import { fetchFormattedMixedEdgePriors } from '../_shared/edgePriors.ts';
 
 const VALID_HORIZONS = new Set(['intraday', 'session', 'swing', 'multi_day']);
 const VALID_TRIGGER_TYPES = new Set(['price_cross', 'break_above', 'break_below', 'touch_level', 'time_gate']);
@@ -621,10 +621,9 @@ serve(async (req) => {
   const results: Array<{ hypothesis_id: string; outcome: string; reason?: string; idea_id?: string }> = [];
   const cooldownIso = new Date(Date.now() - cooldownMinutes * 60_000).toISOString();
 
-  // Empirical priors from /edge attribution — fetched once per run, reused
-  // across every hypothesis. Claude cites matching priors in his decision
-  // rationale instead of reasoning from raw signal vibes.
-  const edgePriorsBlock = await fetchFormattedEdgePriors(supabase);
+  // Empirical priors from /edge attribution — aggregate + per-ticker.
+  // Fetched once per run, reused across every hypothesis.
+  const edgePriorsBlock = await fetchFormattedMixedEdgePriors(supabase);
   const systemWithPriors = edgePriorsBlock ? SYSTEM + edgePriorsBlock : SYSTEM;
 
   for (const hyp of hyps as HypothesisRow[]) {
