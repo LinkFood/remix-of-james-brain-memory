@@ -69,7 +69,26 @@ serve(async (req) => {
   );
   const startedAt = Date.now();
 
-  const decayPct = Number(await getConfig<number>('claude_cash_decay_daily_pct', 0.03));
+  const baseDecayPct = Number(await getConfig<number>('claude_cash_decay_daily_pct', 0.5));
+
+  // Inaction multiplier — volume mode. If Claude hasn't opened a new trade
+  // in 48h of RTH, decay doubles; 72h triples. Keeps "sit flat" from being
+  // the optimal policy during the learning phase.
+  const inactionMultiplier = await (async () => {
+    const h48 = new Date(Date.now() - 48 * 3600_000).toISOString();
+    const h72 = new Date(Date.now() - 72 * 3600_000).toISOString();
+    const [{ count: c48 }, { count: c72 }] = await Promise.all([
+      supabase.from('ct_trades').select('id', { count: 'exact', head: true })
+        .eq('trader', 'claude').gte('opened_at', h48),
+      supabase.from('ct_trades').select('id', { count: 'exact', head: true })
+        .eq('trader', 'claude').gte('opened_at', h72),
+    ]);
+    if ((c72 ?? 0) === 0) return 3;  // 72h flat
+    if ((c48 ?? 0) === 0) return 2;  // 48h flat
+    return 1;
+  })();
+
+  const decayPct = +(baseDecayPct * inactionMultiplier).toFixed(3);
 
   // 1. Active generation gate.
   const { data: activeGen } = await supabase
