@@ -44,17 +44,34 @@ function normalizeRow(
   snapshot: string,
   idx: number,
 ): Row {
+  // UW get_prediction_whales/smart_money returns MARKET POSITIONS, not user
+  // profiles. Shape verified via shape-probe 2026-04-23:
+  //   { amount, asset_id, avg_price, category, current_price, image, ... }
+  // Map asset_id → user_id_external as the anchor (it identifies the position
+  // in the unique constraint), stash actual market metrics in volume/profit.
+  const assetId    = (obj.asset_id ?? obj.user_id ?? obj.id ?? obj.wallet_id ?? null) as string | null;
+  const amount     = parseNum(obj.amount ?? obj.invested_usd ?? obj.size_usd);
+  const avgPrice   = parseNum(obj.avg_price);
+  const currPrice  = parseNum(obj.current_price);
+  // Implied profit: (current - avg) / avg * amount (proxy when no explicit pnl field)
+  const impliedProfit = (amount != null && avgPrice != null && currPrice != null && avgPrice > 0)
+    ? ((currPrice - avgPrice) / avgPrice) * amount
+    : parseNum(obj.profit ?? obj.pnl);
+
+  const marketCategory = (obj.category ?? null) as string | null;
+  const categories = marketCategory ? [marketCategory] : null;
+
   return {
     snapshot_ts: snapshot,
     category,
-    user_id_external: (obj.user_id ?? obj.id ?? obj.wallet_id ?? obj.wallet ?? null) as string | null,
-    display_name: (obj.display_name ?? obj.name ?? obj.username ?? null) as string | null,
-    profit_usd: parseNum(obj.profit ?? obj.profit_usd ?? obj.pnl ?? obj.realized_pnl),
-    volume_usd: parseNum(obj.volume ?? obj.volume_usd ?? obj.total_volume),
-    win_rate:   parseNum(obj.win_rate ?? obj.winrate),
-    trade_count: parseInt64(obj.trade_count ?? obj.trades ?? obj.trades_count),
+    user_id_external: assetId,  // asset_id used as the position anchor
+    display_name: (obj.question ?? obj.market_name ?? obj.title ?? obj.display_name ?? null) as string | null,
+    profit_usd: impliedProfit,
+    volume_usd: amount,
+    win_rate: null,
+    trade_count: null,
     rank_position: idx + 1,
-    categories: Array.isArray(obj.categories) ? (obj.categories as string[]) : null,
+    categories,
     raw: obj,
   };
 }

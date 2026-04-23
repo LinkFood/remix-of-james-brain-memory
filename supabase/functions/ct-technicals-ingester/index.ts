@@ -1,279 +1,186 @@
 /**
- * ct-technicals-ingester — RSI(14), MACD, VWAP, ATR(14), BBANDS(20) per
- * watchlist ticker.
+ * ct-technicals-ingester — pull indicator time series from UW MCP
+ * get_ticker_indicator_series per watchlist ticker, write to ct_technicals.
  *
- * Each indicator is a separate UW call per ticker. Paths verified 2026-04-18:
- *   /api/stock/{ticker}/technical-indicator/{FUNCTION}  (FUNCTION must be UPPERCASE)
+ * Params verified via shape-probe 2026-04-23:
+ *   indicators: array (NOT 'indicator' singular)
+ *   range:      bar size — '1m','5m','15m','30m','1h','1d'
+ *   interval:   lookback start anchor — '1d','5d','ytd'
+ *   end_interval: lookback end anchor — '0d'
  *
- * Interval enum: 1min | 5min | 15min | 30min | 60min | daily | weekly | monthly.
- * We use 5min for intraday cadence. VWAP is intraday-only.
- *
- * We store the latest observation as a scalar `value`, and dump the full row
- * into `raw`. Every 15 min during RTH weekdays.
+ * Two calls per ticker: a daily bundle (RSI, MACD, BB, ATR, SMA, VWAP over
+ * 3 months) and an hourly bundle (RSI, VWAP over 5 days).
  */
 
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getTechnicalIndicator, type TechnicalInterval } from '../_shared/uwClient.ts';
-import { mcpCallToolAsData, isUwRateLimit } from '../_shared/uwMcpClient.ts';
-import { recordDecision } from '../_shared/decisionJournal.ts';
+import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
+import { mcpCallToolAsData } from '../_shared/uwMcpClient.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
-type Row = {
-  ticker: string;
-  indicator_name: string;
-  period: number | null;
-  captured_at: string;
-  value: number | null;
-  raw: Record<string, unknown>;
-};
-
-// Names stored lowercase in DB (indicator_name column), wrapper upcases for
-// the path. `period` is null when the indicator doesn't take one (MACD, VWAP).
-//
-// INTERVAL CHOICE: `daily` is the portable default — every indicator returns
-// daily outside market hours. Intraday intervals (5min) frequently 422 or
-// return empty series for lower-tier UW subscriptions. VWAP is intraday-only
-// per UW spec, so it uses 5min explicitly; if the 5min call returns empty
-// (e.g. outside RTH), we simply skip the upsert for that ticker/indicator.
-const INDICATORS: Array<{ name: string; period: number | null; interval: TechnicalInterval }> = [
-  { name: 'rsi',    period: 14,   interval: 'daily' },
-  { name: 'macd',   period: null, interval: 'daily' },
-  { name: 'vwap',   period: null, interval: '5min'  }, // intraday-only per UW spec
-  { name: 'atr',    period: 14,   interval: 'daily' },
-  { name: 'bbands', period: 20,   interval: 'daily' },
+const INDICATOR_BUNDLE: Array<{
+  indicators: string[]; range: string; interval: string; end_interval: string; label_prefix: string;
+}> = [
+  { indicators: ['RSI','MACD','BBANDS','ATR','SMA','VWAP'], range: '1d', interval: '3m', end_interval: '0d', label_prefix: '1d' },
+  { indicators: ['RSI','VWAP'],                              range: '1h', interval: '5d', end_interval: '0d', label_prefix: '1h' },
 ];
 
-function numOrNull(v: unknown): number | null {
-  if (v === null || v === undefined || v === '') return null;
-  const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.\-]/g, ''));
+function parseNum(v: unknown): number | null {
+  if (v == null) return null;
+  const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : null;
 }
-
-function pickTimestamp(v: unknown): string | null {
-  if (typeof v !== 'string') return null;
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) return v;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return v + 'T00:00:00Z';
-  return null;
+function parseTs(v: unknown): string | null {
+  if (v == null) return null;
+  if (typeof v === 'number') return new Date(v * (v > 1e12 ? 1 : 1000)).toISOString();
+  const s = String(v);
+  const d = new Date(s);
+  return !Number.isNaN(d.getTime()) ? d.toISOString() : null;
 }
 
-/**
- * UW's technical-indicator payload varies by function:
- *   - { data: [{timestamp, value}, ...] }           (most indicators)
- *   - { data: { "2026-04-18": { "RSI": "..." }, ... } }   (AlphaVantage-style
- *     date-keyed object; observed on live API)
- *   - { data: { values: [...] } }                   (defensive fallback)
- *
- * Normalize to Array<{timestamp, <fields>}>.
- */
-function extractSeries(raw: unknown): Array<Record<string, unknown>> {
-  if (!raw || typeof raw !== 'object') return [];
-  const d = (raw as { data?: unknown }).data;
-  if (Array.isArray(d)) return d as Array<Record<string, unknown>>;
-  if (d && typeof d === 'object') {
-    const asObj = d as Record<string, unknown>;
-    // Nested array under common keys.
-    for (const k of ['values', 'series', 'indicator', 'results']) {
-      const v = asObj[k];
-      if (Array.isArray(v)) return v as Array<Record<string, unknown>>;
-    }
-    // Date-keyed object: { "2026-04-18": {...}, "2026-04-17": {...} }
-    const entries = Object.entries(asObj);
-    const dateShaped = entries.filter(([k, v]) =>
-      /^\d{4}-\d{2}-\d{2}/.test(k) && v && typeof v === 'object'
-    );
-    if (dateShaped.length > 0) {
-      return dateShaped.map(([k, v]) => ({ timestamp: k, ...(v as Record<string, unknown>) }));
-    }
-  }
-  return [];
+interface Row {
+  ticker: string;
+  indicator: string;
+  timeframe: string;
+  ts: string;
+  value: number | null;
+  extras: Record<string, unknown> | null;
+  raw: Record<string, unknown>;
 }
 
-/**
- * Pull the "primary value" out of a UW indicator row. UW returns:
- *   { date, values: { RSI: "64.1753" }, ticker, indicator, ... }
- * so the real scalar lives at row.values.<INDICATOR_UPPERCASE>. BBANDS has
- * three bands (UPPER/MIDDLE/LOWER) — we pick MIDDLE. MACD has MACD/SIGNAL/
- * HIST — we pick MACD.
- */
-function pickPrimary(indicator: string, row: Record<string, unknown>): number | null {
-  const vals = row.values;
-  const valuesObj = (vals && typeof vals === 'object' && !Array.isArray(vals))
-    ? (vals as Record<string, unknown>)
-    : null;
-  const upper = indicator.toUpperCase();
-
-  if (valuesObj) {
-    switch (indicator) {
-      case 'bbands': {
-        const mid = valuesObj.MIDDLE ?? valuesObj.MIDDLE_BAND ?? valuesObj.BBANDS_MIDDLE ?? valuesObj.MA;
-        const n = numOrNull(mid);
-        if (n !== null) return n;
-        break;
-      }
-      case 'macd': {
-        const n = numOrNull(valuesObj.MACD ?? valuesObj.MACD_LINE);
-        if (n !== null) return n;
-        break;
-      }
-      default: {
-        const n = numOrNull(valuesObj[upper]);
-        if (n !== null) return n;
-      }
-    }
-  }
-
-  // Legacy fallbacks (for when UW returns value at root).
-  const direct = numOrNull(row.value);
-  if (direct !== null) return direct;
-  switch (indicator) {
-    case 'macd': return numOrNull(row.macd ?? row.macd_line);
-    case 'bbands': return numOrNull(row.middle ?? row.middle_band ?? row.ma);
-    case 'vwap': return numOrNull(row.vwap ?? row.value);
-    case 'atr': return numOrNull(row.atr ?? row.value);
-    case 'rsi': return numOrNull(row.rsi ?? row.value);
-    default: return null;
-  }
-}
-
-async function restUpsert(rows: Row[]): Promise<{ ok: boolean; count: number; error?: string }> {
-  const supabaseUrl = Deno.env.get('SUPABASE_URL');
-  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  if (!supabaseUrl || !serviceKey) return { ok: false, count: 0, error: 'missing env' };
+async function fetchBundle(
+  ticker: string,
+  indicators: string[],
+  range: string,
+  interval: string,
+  end_interval: string,
+  labelPrefix: string,
+): Promise<Row[]> {
+  let raw: unknown = null;
   try {
-    const res = await fetch(
-      `${supabaseUrl}/rest/v1/ct_technical_indicators?on_conflict=ticker,indicator_name,period,captured_at`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'apikey': serviceKey,
-          'Authorization': `Bearer ${serviceKey}`,
-          'Prefer': 'resolution=ignore-duplicates,return=minimal,count=exact',
-        },
-        body: JSON.stringify(rows),
-      },
-    );
-    if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      return { ok: false, count: 0, error: `${res.status} ${body.slice(0, 200)}` };
-    }
-    const range = res.headers.get('content-range') ?? '';
-    const m = range.match(/\/(\d+)$/);
-    return { ok: true, count: m ? parseInt(m[1], 10) : 0 };
+    raw = await mcpCallToolAsData('get_ticker_indicator_series', {
+      ticker, indicators, range, interval, end_interval,
+    });
   } catch (e) {
-    return { ok: false, count: 0, error: e instanceof Error ? e.message : String(e) };
+    console.warn(`[ct-technicals] ${ticker} ${range}/${interval}:`, e instanceof Error ? e.message : e);
+    return [];
   }
+  if (!raw) return [];
+
+  // UW's series response: typically { data: [{ timestamp, <ind>: val, ... }] }
+  // or { data: { <indicator>: [{ timestamp, value }, ...] } }
+  const rowsArr: unknown[] = Array.isArray(raw) ? raw
+    : (raw && typeof raw === 'object' && Array.isArray((raw as { data?: unknown }).data))
+      ? (raw as { data: unknown[] }).data
+      : [];
+
+  const out: Row[] = [];
+
+  if (rowsArr.length > 0) {
+    // Flat shape: each row has timestamp + indicator values
+    for (const r of rowsArr) {
+      if (!r || typeof r !== 'object') continue;
+      const obj = r as Record<string, unknown>;
+      const ts = parseTs(obj.timestamp ?? obj.t ?? obj.time ?? obj.date ?? obj.ts ?? obj.start_time);
+      if (!ts) continue;
+      for (const ind of indicators) {
+        const lower = ind.toLowerCase();
+        const v = parseNum(obj[lower]) ?? parseNum(obj[ind]);
+        if (v == null) continue;
+        const extras: Record<string, unknown> = {};
+        const prefix = `${lower}_`;
+        for (const [k, val] of Object.entries(obj)) {
+          if (k.startsWith(prefix) && (typeof val === 'number' || typeof val === 'string')) {
+            extras[k.slice(prefix.length)] = val;
+          }
+        }
+        out.push({
+          ticker,
+          indicator: lower === 'sma' ? 'sma50' : lower === 'bbands' ? 'bb' : lower,
+          timeframe: labelPrefix,
+          ts, value: v,
+          extras: Object.keys(extras).length ? extras : null,
+          raw: obj,
+        });
+      }
+    }
+  } else if (raw && typeof raw === 'object' && typeof (raw as { data?: unknown }).data === 'object') {
+    // Nested shape: { data: { RSI: [{ timestamp, value }], ... } }
+    const byIndicator = (raw as { data: Record<string, unknown> }).data;
+    for (const [indKey, arr] of Object.entries(byIndicator)) {
+      if (!Array.isArray(arr)) continue;
+      const lower = indKey.toLowerCase();
+      for (const r of arr) {
+        if (!r || typeof r !== 'object') continue;
+        const obj = r as Record<string, unknown>;
+        const ts = parseTs(obj.timestamp ?? obj.t ?? obj.time ?? obj.date);
+        if (!ts) continue;
+        const v = parseNum(obj.value ?? obj[lower] ?? obj[indKey]);
+        if (v == null) continue;
+        out.push({
+          ticker,
+          indicator: lower === 'sma' ? 'sma50' : lower === 'bbands' ? 'bb' : lower,
+          timeframe: labelPrefix,
+          ts, value: v,
+          extras: null,
+          raw: obj,
+        });
+      }
+    }
+  }
+
+  return out;
+}
+
+async function upsert(supabase: SupabaseClient, rows: Row[]): Promise<number> {
+  if (rows.length === 0) return 0;
+  const { error, count } = await supabase
+    .from('ct_technicals')
+    .upsert(rows, { onConflict: 'ticker,indicator,timeframe,ts', ignoreDuplicates: true, count: 'exact' });
+  if (error) {
+    console.warn('[ct-technicals] upsert failed:', error.message);
+    return 0;
+  }
+  return count ?? rows.length;
 }
 
 serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   const corsHeaders = getCorsHeaders(req);
   if (!isServiceRoleRequest(req)) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+    return new Response(JSON.stringify({ error: 'Unauthorized' }),
+      { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
-
-  const supabase: SupabaseClient = createClient(
+  const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
-  const startedAt = Date.now();
-  const errors: Array<{ ticker: string; indicator: string; error: string }> = [];
-  let mcpCalls = 0;
-  let legacyCalls = 0;
-
-  try {
-    const watchlist = await getWatchlist(supabase);
-    const rows: Row[] = [];
-
-    for (const ticker of watchlist) {
-      const upper = ticker.toUpperCase();
-      for (const { name, period, interval } of INDICATORS) {
-        let raw: unknown = null;
-
-        // Wave N.2 — prefer UW MCP `get_av_technical_indicator` (Alpha Vantage
-        // tech indicator set — same shape UW's legacy REST already proxied).
-        // Fall back to legacy on per-indicator failure. One stress_check row
-        // per failing MCP call — noisy first day, drops to zero as MCP proves.
-        const mcpArgs: Record<string, unknown> = {
-          ticker: upper,
-          function: name.toUpperCase(),
-          interval,
-        };
-        if (period !== null) mcpArgs.time_period = period;
-
-        let source: 'mcp' | 'legacy' = 'mcp';
-        try {
-          raw = await mcpCallToolAsData('get_av_technical_indicator', mcpArgs);
-          mcpCalls++;
-        } catch (mcpErr) {
-          if (isUwRateLimit(mcpErr)) {
-            // Shared bucket — falling back to legacy REST just burns a second
-            // request on the same saturated 120/min limit. Skip this indicator
-            // this cycle; next cron tick will backfill.
-            errors.push({ ticker: upper, indicator: name, error: 'mcp_rate_limited' });
-            continue;
-          }
-          const msg = mcpErr instanceof Error ? mcpErr.message : String(mcpErr);
-          await recordDecision(supabase, {
-            decision_type: 'stress_check',
-            model_tier: 'none',
-            reasoning: `MCP fallback on ct-technicals-ingester ${upper}/${name}: ${msg.slice(0, 300)}`,
-          });
-          source = 'legacy';
-          try {
-            const params: { interval: TechnicalInterval; time_period?: number } = { interval };
-            if (period !== null) params.time_period = period;
-            raw = await getTechnicalIndicator(upper, name, params);
-            legacyCalls++;
-          } catch (e) {
-            errors.push({ ticker: upper, indicator: name, error: e instanceof Error ? e.message : String(e) });
-            continue;
-          }
-        }
-        void source; // used for read-flow clarity; accounted in mcpCalls/legacyCalls
-        const series = extractSeries(raw);
-        if (series.length === 0) continue;
-        // UW returns the series in descending date order — most recent first.
-        // Fall back to last element if first lacks a date (defensive).
-        const firstWithDate = series.find((r) => pickTimestamp(r.timestamp ?? r.time ?? r.date) !== null) ?? series[0];
-        const latest = firstWithDate;
-        const captured_at = pickTimestamp(latest.timestamp ?? latest.time ?? latest.date) ?? new Date().toISOString();
-        const value = pickPrimary(name, latest);
-        rows.push({
-          ticker: upper,
-          indicator_name: name,
-          period,
-          captured_at,
-          value,
-          raw: latest,
-        });
-      }
-    }
-
-    let inserted = 0;
-    if (rows.length > 0) {
-      const result = await restUpsert(rows);
-      if (!result.ok) errors.push({ ticker: 'BATCH', indicator: 'upsert', error: result.error ?? 'unknown' });
-      else inserted = result.count;
-    }
-
-    return new Response(JSON.stringify({
-      success: true,
-      rows: rows.length,
-      inserted,
-      mcp_calls: mcpCalls,
-      legacy_calls: legacyCalls,
-      errors,
-      duration_ms: Date.now() - startedAt,
-    }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-  } catch (e) {
-    console.error('[ct-technicals-ingester] fatal:', e);
-    return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'failed', errors }), {
-      status: 500,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+  if (await isKillSwitchActive(supabase)) {
+    return killSwitchSkipResponse(supabase, 'ct-technicals-ingester', corsHeaders);
   }
+
+  const started = Date.now();
+  const watchlist = await getWatchlist(supabase);
+  const per: Record<string, number> = {};
+  let grand = 0;
+
+  // 12 tickers × 2 bundles = 24 MCP calls. Pace 500ms.
+  for (const ticker of watchlist) {
+    let inserted = 0;
+    for (const b of INDICATOR_BUNDLE) {
+      const rows = await fetchBundle(
+        ticker, b.indicators, b.range, b.interval, b.end_interval, b.label_prefix,
+      );
+      inserted += await upsert(supabase, rows);
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    per[ticker] = inserted;
+    grand += inserted;
+  }
+
+  return new Response(JSON.stringify({
+    ok: true, rows_inserted: grand, elapsed_ms: Date.now() - started, per_ticker: per,
+  }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 });

@@ -1,13 +1,13 @@
 /**
- * ct-interval-flow-ingester — pull UW MCP get_interval_flow for each watchlist
- * ticker, write to ct_interval_flow. Minute-by-minute options activity.
+ * ct-interval-flow-ingester — UW MCP get_interval_flow per watchlist ticker.
  *
- * Defensive parser: UW payload shapes vary. We accept multiple field names
- * and store the raw row in jsonb so downstream queries can adapt without
- * an ingester rewrite.
+ * UW returns per-option-contract flow rows (NOT minute-bucketed as the tool
+ * description suggested). Each row is a contract that saw activity, with
+ * fields like option_symbol, strike, volume, bid_side_volume,
+ * total_ask_side_volume, avg_price, high/low.
  *
- * Scheduled every 15 min during RTH.
- * Auth: service role.
+ * We snapshot each MCP response with a run_ts and store all rows — each
+ * row is one contract's state at call time.
  */
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -20,32 +20,33 @@ import { getWatchlist } from '../_shared/watchlist.ts';
 
 function parseNum(v: unknown): number | null {
   if (v == null) return null;
-  const n = typeof v === 'number' ? v : Number(v);
+  const n = typeof v === 'number' ? v : Number(String(v).replace(/[,\s]/g, ''));
   return Number.isFinite(n) ? n : null;
 }
-
 function parseInt64(v: unknown): number | null {
   const n = parseNum(v);
   return n == null ? null : Math.round(n);
 }
-
-function normalizeSide(v: unknown): string | null {
+function parseDate(v: unknown): string | null {
   if (v == null) return null;
-  const s = String(v).toLowerCase();
-  if (s.startsWith('c')) return 'call';
-  if (s.startsWith('p')) return 'put';
-  return null;
+  const s = String(v).slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null;
 }
 
-function parseTs(v: unknown): string | null {
-  if (v == null) return null;
-  const s = String(v);
-  const d = new Date(s);
-  if (!Number.isNaN(d.getTime())) return d.toISOString();
-  return null;
+// OCC option symbol: ROOT+YYMMDD+C/P+strikeX1000 (8 digits)
+function parseOcc(symbol: string | null | undefined): { side: 'call'|'put'|null; strike: number|null; expiry: string|null } {
+  if (!symbol) return { side: null, strike: null, expiry: null };
+  const m = symbol.match(/^([A-Z0-9]+?)(\d{6})([CP])(\d{8})$/);
+  if (!m) return { side: null, strike: null, expiry: null };
+  const [, , exp, cp, strikeStr] = m;
+  return {
+    side: cp === 'C' ? 'call' : 'put',
+    strike: parseInt(strikeStr, 10) / 1000,
+    expiry: `20${exp.slice(0,2)}-${exp.slice(2,4)}-${exp.slice(4,6)}`,
+  };
 }
 
-interface IntervalRow {
+interface Row {
   ticker: string;
   interval_start: string;
   side: string | null;
@@ -58,75 +59,100 @@ interface IntervalRow {
   raw: Record<string, unknown>;
 }
 
-async function fetchIntervalFlow(ticker: string): Promise<IntervalRow[]> {
-  let raw: unknown;
+async function fetchForTicker(ticker: string, runTs: string): Promise<Row[]> {
+  let raw: unknown = null;
   try {
     raw = await mcpCallToolAsData('get_interval_flow', {
       ticker_symbol: ticker,
-      limit: 60,
+      limit: 50,
     });
   } catch (e) {
-    console.warn(`[ct-interval-flow] ${ticker} mcp error:`, e instanceof Error ? e.message : e);
+    console.warn(`[ct-interval-flow] ${ticker}:`, e instanceof Error ? e.message : e);
     return [];
   }
 
-  const rows: unknown[] = Array.isArray(raw) ? raw
+  const arr: unknown[] = Array.isArray(raw) ? raw
     : (raw && typeof raw === 'object' && Array.isArray((raw as { data?: unknown }).data))
       ? (raw as { data: unknown[] }).data
       : [];
 
-  const out: IntervalRow[] = [];
-  for (const r of rows) {
+  const out: Row[] = [];
+  for (const r of arr) {
     if (!r || typeof r !== 'object') continue;
     const obj = r as Record<string, unknown>;
+    const sym = (obj.option_symbol ?? obj.symbol) as string | undefined;
+    const { side } = parseOcc(sym);
+    const ask = parseInt64(obj.total_ask_side_volume ?? obj.ask_side_volume ?? obj.ask_volume);
+    const bid = parseInt64(obj.total_bid_side_volume ?? obj.bid_side_volume ?? obj.bid_volume);
+    const askPerc = (ask != null && bid != null && (ask + bid) > 0) ? ask / (ask + bid) : null;
+    const bidPerc = (ask != null && bid != null && (ask + bid) > 0) ? bid / (ask + bid) : null;
 
-    const ts = parseTs(
-      obj.interval_start ??
-      obj.start ??
-      obj.timestamp ??
-      obj.bucket_start ??
-      obj.minute ??
-      obj.time
-    );
-    if (!ts) continue;
-
-    const side = normalizeSide(obj.side ?? obj.type ?? obj.option_side);
-    const ask  = parseInt64(obj.ask_side_volume ?? obj.ask_volume);
-    const bid  = parseInt64(obj.bid_side_volume ?? obj.bid_volume);
-
-    // Prefer UW's perc if provided, else compute from volumes
-    let askPerc = parseNum(obj.ask_side_perc ?? obj.ask_perc);
-    let bidPerc = parseNum(obj.bid_side_perc ?? obj.bid_perc);
-    if (askPerc == null && ask != null && bid != null && (ask + bid) > 0) {
-      askPerc = ask / (ask + bid);
-    }
-    if (bidPerc == null && ask != null && bid != null && (ask + bid) > 0) {
-      bidPerc = bid / (ask + bid);
-    }
-
+    // Use runTs as interval_start (UW doesn't provide per-row timestamps).
+    // To preserve per-contract granularity within a run, we set side to the
+    // option's side (call/put) and let the unique constraint permit both
+    // sides per contract per run — but since we have one side per symbol,
+    // the unique (ticker, interval_start, side) constraint lets one call and
+    // one put per run through. To capture MULTIPLE contracts per side in
+    // one run, we'd need a schema change. For now, aggregate by side below.
     out.push({
       ticker,
-      interval_start: ts,
+      interval_start: runTs,
       side,
-      premium:         parseNum(obj.premium ?? obj.total_premium),
-      volume:          parseInt64(obj.volume ?? obj.total_volume),
+      premium: parseNum(obj.total_premium ?? obj.premium),
+      volume: parseInt64(obj.volume),
       ask_side_volume: ask,
       bid_side_volume: bid,
-      ask_side_perc:   askPerc,
-      bid_side_perc:   bidPerc,
+      ask_side_perc: askPerc,
+      bid_side_perc: bidPerc,
       raw: obj,
     });
   }
   return out;
 }
 
-async function upsert(supabase: SupabaseClient, rows: IntervalRow[]): Promise<number> {
+/**
+ * Aggregate per-contract rows into per-side totals for the run. Since the
+ * table's unique constraint is (ticker, interval_start, side), one row per
+ * side per run — we sum across all contracts UW returned.
+ */
+function aggregateBySide(ticker: string, runTs: string, rows: Row[]): Row[] {
+  const buckets = new Map<string, { premium: number; volume: number; ask: number; bid: number; rawSamples: Row[] }>();
+  for (const r of rows) {
+    const key = r.side ?? 'other';
+    const b = buckets.get(key) ?? { premium: 0, volume: 0, ask: 0, bid: 0, rawSamples: [] };
+    b.premium += r.premium ?? 0;
+    b.volume  += r.volume  ?? 0;
+    b.ask     += r.ask_side_volume ?? 0;
+    b.bid     += r.bid_side_volume ?? 0;
+    b.rawSamples.push(r);
+    buckets.set(key, b);
+  }
+  const out: Row[] = [];
+  for (const [side, b] of buckets) {
+    const askPerc = (b.ask + b.bid) > 0 ? b.ask / (b.ask + b.bid) : null;
+    out.push({
+      ticker,
+      interval_start: runTs,
+      side: side === 'other' ? null : side,
+      premium: b.premium,
+      volume: b.volume,
+      ask_side_volume: b.ask,
+      bid_side_volume: b.bid,
+      ask_side_perc: askPerc,
+      bid_side_perc: askPerc != null ? 1 - askPerc : null,
+      raw: { contract_count: b.rawSamples.length, sample: b.rawSamples[0]?.raw ?? null },
+    });
+  }
+  return out;
+}
+
+async function upsert(supabase: SupabaseClient, rows: Row[]): Promise<number> {
   if (rows.length === 0) return 0;
   const { error, count } = await supabase
     .from('ct_interval_flow')
     .upsert(rows, { onConflict: 'ticker,interval_start,side', ignoreDuplicates: true, count: 'exact' });
   if (error) {
-    console.warn('[ct-interval-flow] upsert failed:', error.message);
+    console.warn('[ct-interval-flow] upsert:', error.message);
     return 0;
   }
   return count ?? rows.length;
@@ -139,7 +165,6 @@ serve(async (req) => {
     return new Response(JSON.stringify({ error: 'Unauthorized' }),
       { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
-
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
@@ -148,21 +173,22 @@ serve(async (req) => {
     return killSwitchSkipResponse(supabase, 'ct-interval-flow-ingester', corsHeaders);
   }
 
-  const startedAt = Date.now();
+  const started = Date.now();
+  const runTs = new Date().toISOString();
   const watchlist = await getWatchlist(supabase);
-  const perTicker: Record<string, { seen: number; inserted: number }> = {};
+  const per: Record<string, { contracts: number; rows_inserted: number }> = {};
   let grand = 0;
 
   for (const t of watchlist) {
-    const rows = await fetchIntervalFlow(t);
-    const inserted = await upsert(supabase, rows);
-    perTicker[t] = { seen: rows.length, inserted };
+    const perContract = await fetchForTicker(t, runTs);
+    const aggregated  = aggregateBySide(t, runTs, perContract);
+    const inserted    = await upsert(supabase, aggregated);
+    per[t] = { contracts: perContract.length, rows_inserted: inserted };
     grand += inserted;
-    // Polite pause — UW MCP at 120/min; 12 tickers × 1 call = 12 calls/run
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 300));
   }
 
   return new Response(JSON.stringify({
-    ok: true, rows_inserted: grand, elapsed_ms: Date.now() - startedAt, per_ticker: perTicker,
+    ok: true, run_ts: runTs, rows_inserted: grand, elapsed_ms: Date.now() - started, per_ticker: per,
   }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 });
