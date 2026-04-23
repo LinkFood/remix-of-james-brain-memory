@@ -38,6 +38,7 @@ import Principles from "./pages/Principles";
 import Book from "./pages/Book";
 import Health from "./pages/Health";
 import Edge from "./pages/Edge";
+import Pulse from "./pages/Pulse";
 import CostDashboard from "./pages/CostDashboard";
 import Preflight from "./pages/Preflight";
 import SessionTimeline from "./pages/SessionTimeline";
@@ -88,6 +89,7 @@ const TrackedRoutes = () => {
       <Route path="/book" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/book"><Book /></RouteBoundary></AuthLayout>} />
       <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/health"><Health /></RouteBoundary></AuthLayout>} />
       <Route path="/edge" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/edge"><Edge /></RouteBoundary></AuthLayout>} />
+      <Route path="/pulse" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/pulse"><Pulse /></RouteBoundary></AuthLayout>} />
       <Route path="/cost" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/cost"><CostDashboard /></RouteBoundary></AuthLayout>} />
       <Route path="/preflight" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/preflight"><Preflight /></RouteBoundary></AuthLayout>} />
       <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/session"><SessionTimeline /></RouteBoundary></AuthLayout>} />
