@@ -28,7 +28,7 @@ const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','NVDA','META','GOOGL','AMZN','T
 
 const SIGNAL_TYPES = [
   { key: 'sweep',        label: 'Sweeps',     color: '#60a5fa' },
-  { key: 'dp_cluster',   label: 'Dark Pool',  color: '#a78bfa' },
+  // dp_cluster RETIRED 2026-04-23 (direction unreliable)
   { key: 'news',         label: 'News',       color: '#f59e0b' },
   { key: 'insider',      label: 'Insider',    color: '#34d399' },
   { key: 'congress',     label: 'Congress',   color: '#f472b6' },

@@ -9,8 +9,10 @@ import { JamesVsClaude } from '@/components/command/JamesVsClaude';
 import { JamesViewForm } from '@/components/command/JamesViewForm';
 // ChatBox replaced by docked ChatPanel (rendered by AuthLayout via sidebar prop)
 import { FlowTape } from '@/components/command/FlowTape';
-import { DarkPoolTape } from '@/components/command/DarkPoolTape';
-import { DarkPoolChart } from '@/components/command/DarkPoolChart';
+// DarkPoolTape + DarkPoolChart RETIRED 2026-04-23. Imports kept commented
+// so bring-back is a one-line uncomment if we ever classify DP direction.
+// import { DarkPoolTape } from '@/components/command/DarkPoolTape';
+// import { DarkPoolChart } from '@/components/command/DarkPoolChart';
 import { FlowPerStrike } from '@/components/command/FlowPerStrike';
 import { NetPremiumLine } from '@/components/command/NetPremiumLine';
 import { NetPremiumCumulative } from '@/components/command/NetPremiumCumulative';
@@ -23,7 +25,7 @@ import { GexHeatmap } from '@/components/command/GexHeatmap';
 import { GexRadar } from '@/components/command/GexRadar';
 import { AlwaysOnFlagStrip } from '@/components/command/AlwaysOnFlagStrip';
 import { SweepClusterStrip } from '@/components/command/SweepClusterStrip';
-import { DpClusterStrip } from '@/components/command/DpClusterStrip';
+// import { DpClusterStrip } from '@/components/command/DpClusterStrip'; // RETIRED 2026-04-23
 import { AttentionLeaderboard } from '@/components/command/AttentionLeaderboard';
 import { LinkGexDeep } from '@/components/command/LinkGexDeep';
 import { Sheet, SheetContent } from '@/components/ui/sheet';
@@ -161,12 +163,8 @@ export default function CommandStation() {
           <SweepClusterStrip />
         </div>
 
-        {/* Dark-pool cluster strip — parallel pattern for block-print bursts.
-            3+ prints >= $1M on same ticker in a 10-min window. Click pill →
-            focuses DarkPoolTape via ct:darkpool:filter window event. */}
-        <div id="co-dp-strip">
-          <DpClusterStrip />
-        </div>
+        {/* Dark-pool cluster strip RETIRED 2026-04-23 (direction unreliable).
+            Component preserved on disk for historical reference. */}
 
         <div id="co-market-banner">
           <MarketBanner />
@@ -209,8 +207,7 @@ export default function CommandStation() {
             {/* Biases — Claude's self-identified blindspots, weekly cadence.
                 Below CuriosityFeed: calibration data, not real-time tape. */}
             <BiasesPanel />
-            <DarkPoolTape />
-            <DarkPoolChart />
+            {/* DarkPoolTape + DarkPoolChart RETIRED 2026-04-23 (direction unreliable). */}
             <NewsFeed />
           </div>
           <div className="lg:col-span-4 space-y-4">

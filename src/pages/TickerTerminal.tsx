@@ -1037,15 +1037,12 @@ export default function TickerTerminal() {
           </div>
         </div>
 
-        {/* ─── Row 3: flow · dark pool · news ────────────────────── */}
+        {/* ─── Row 3: flow · news (dark pool retired 2026-04-23) ──── */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-          <div className="lg:col-span-4">
+          <div className="lg:col-span-6">
             <FlowAlertsList rows={data?.flowAlerts ?? []} />
           </div>
-          <div className="lg:col-span-4">
-            <DarkPoolList rows={data?.darkPoolPrints ?? []} />
-          </div>
-          <div className="lg:col-span-4">
+          <div className="lg:col-span-6">
             <NewsList rows={data?.news ?? []} />
           </div>
         </div>

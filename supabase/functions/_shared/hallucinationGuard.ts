@@ -257,10 +257,15 @@ export async function validateHypothesisClaims(
     if (!bullet || typeof bullet !== 'string') continue;
 
     try {
+      // DP claims flagged if Claude cites them post-retirement (2026-04-23).
+      // System prompts no longer mention DP; this guard catches drift.
       const dp = parseDarkPoolClaim(bullet);
       if (dp) {
-        const r = await validateDarkPool(supabase, dp);
-        if (!r.ok) flagged.push({ bullet, reason: `dark-pool: ${r.detail}`, actual: r.actual });
+        flagged.push({
+          bullet,
+          reason: 'dark-pool: cited after retirement 2026-04-23 (signal unreliable, should not be referenced)',
+          actual: 'dp_retired',
+        });
         continue;
       }
       const gex = parseGexFlipClaim(bullet);

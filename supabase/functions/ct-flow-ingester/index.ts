@@ -442,26 +442,28 @@ serve(async (req) => {
   try {
     // Market-wide
     const flow = await ingestFlowAlerts(supabase);
-    const dpRecent = await ingestDarkPool(supabase, null);
+    // Dark pool removed 2026-04-23 — we can't reliably classify direction
+    // and it was burning ~14% of UW budget for noise. Freed calls reallocated
+    // to net-premium ticks (more often) + greek-flow (all 12 tickers).
     const topMovers = await ingestTopMovers(supabase);
     const sweeps = await ingestSweeps(supabase);
 
-    // Per-ticker dark pool + net premium (every invocation — 24 calls for 12 tickers)
-    // NOPE + greek-flow only for SPY, QQQ, IWM (regime-critical indexes).
-    const perTicker: Record<string, { dp: { seen: number; inserted: number }; npt: { seen: number; inserted: number }; nope?: { seen: number; inserted: number }; greek?: { seen: number; inserted: number } }> = {};
+    // Per-ticker net premium + greek flow for ALL watchlist (previously
+    // greek was index-only; now all 12 since DP calls freed the budget).
+    // NOPE stays index-only (SPY/QQQ/IWM) — less useful on individual names.
+    const perTicker: Record<string, { npt: { seen: number; inserted: number }; nope?: { seen: number; inserted: number }; greek?: { seen: number; inserted: number } }> = {};
     const indexTickers = new Set(['SPY', 'QQQ', 'IWM']);
     for (const ticker of WATCHLIST) {
       perTicker[ticker] = {
-        dp: await ingestDarkPool(supabase, ticker),
         npt: await ingestNetPremiumTicks(supabase, ticker),
+        greek: await ingestGreekFlow(supabase, ticker),
       };
       if (indexTickers.has(ticker)) {
         perTicker[ticker].nope = await ingestNope(supabase, ticker);
-        perTicker[ticker].greek = await ingestGreekFlow(supabase, ticker);
       }
     }
 
-    const totalDpNew = dpRecent.inserted + Object.values(perTicker).reduce((s, t) => s + t.dp.inserted, 0);
+    const totalDpNew = 0;
     const totalNptNew = Object.values(perTicker).reduce((s, t) => s + t.npt.inserted, 0);
     const totalNopeNew = Object.values(perTicker).reduce((s, t) => s + (t.nope?.inserted ?? 0), 0);
     const totalGreekNew = Object.values(perTicker).reduce((s, t) => s + (t.greek?.inserted ?? 0), 0);

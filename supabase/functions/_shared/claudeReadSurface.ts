@@ -878,26 +878,13 @@ export async function buildClaudeContext(
     console.warn('[claudeReadSurface] ct_flow_alerts:', e instanceof Error ? e.message : e);
   }
 
-  // --- Dark pool prints (>=$500K notional, compacted) --------------------
-  let recentDarkPool: DarkPoolCompact[] = [];
-  try {
-    const { data } = await supabase
-      .from('ct_dark_pool_prints')
-      .select('id, ticker, size, price, notional_value, executed_at')
-      .gte('notional_value', darkPoolMinNotional)
-      .order('executed_at', { ascending: false, nullsFirst: false })
-      .limit(darkPoolLimit);
-    recentDarkPool = (data ?? []).map((r) => ({
-      id: String(r.id),
-      ticker: String(r.ticker ?? ''),
-      size: Number(r.size ?? 0),
-      price: Number(r.price ?? 0),
-      notional_value: r.notional_value == null ? null : Number(r.notional_value),
-      executed_at: (r.executed_at as string) ?? null,
-    }));
-  } catch (e) {
-    console.warn('[claudeReadSurface] ct_dark_pool_prints:', e instanceof Error ? e.message : e);
-  }
+  // --- Dark pool — RETIRED 2026-04-23 ------------------------------------
+  // Direction unreliable; retired from Claude's read surface. Historical
+  // data stays in ct_dark_pool_prints for /edge attribution. Field returns
+  // empty array to preserve downstream shape without removing it.
+  const recentDarkPool: DarkPoolCompact[] = [];
+  // @ts-expect-error — keep params referenced so signature is stable
+  void darkPoolMinNotional; void darkPoolLimit;
 
   // --- NOPE latest per watchlist ticker (1 row each) ---------------------
   const recentNope: NopeLatest[] = [];
@@ -1865,7 +1852,7 @@ export function claudeSystemPromptPreamble(ctx: ClaudeContext): string {
   // Full signal menu — ungated (tenet 13). Equal weight across categories.
   const surfaceLine =
     'Within the generational window you have FULL AUTONOMY over what signals to trade on and how — ' +
-    'microstructure (flow, sweeps, whales, greek flow, NOPE, net premium, dark pool), ' +
+    'microstructure (flow, sweeps, whales, greek flow, NOPE, net premium), ' +
     'structure (IV rank, max pain, gamma walls/flip, 25-delta skew), ' +
     'positioning (insider trades, congress trades, analyst actions, institutional holdings, short interest), ' +
     'volatility + macro (VIX, yield curve, central bank state, correlations, sector tide, breaking news), ' +
