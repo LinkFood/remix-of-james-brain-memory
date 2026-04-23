@@ -20,11 +20,23 @@ import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitc
 import { mcpCallToolAsData } from '../_shared/uwMcpClient.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
+// UW enum (verified via shape-probe 2026-04-23):
+//   indicators allowed: sma, ema, atr, atr_levels, rsi, macd, bollinger,
+//                       vwap, stochastic, williams_r, adx_di, supertrend,
+//                       donchian, obv, cmf
+//   range allowed:      1m, 5m, 10m, 15m, 30m, 1h, 4h
+//                       (NOTE: no daily/1d — use REST path for daily.)
+//   interval lookback:  1d, 5d, 2w, 1m, 3m, 1y, ytd
+//   end_interval:       0d, 1d, 5d, ...
+//
+// Intraday-only MCP path. Daily indicators covered by the legacy REST
+// ingester (if still wired) — kept out of scope here.
 const INDICATOR_BUNDLE: Array<{
   indicators: string[]; range: string; interval: string; end_interval: string; label_prefix: string;
 }> = [
-  { indicators: ['RSI','MACD','BBANDS','ATR','SMA','VWAP'], range: '1d', interval: '3m', end_interval: '0d', label_prefix: '1d' },
-  { indicators: ['RSI','VWAP'],                              range: '1h', interval: '5d', end_interval: '0d', label_prefix: '1h' },
+  // Longer lookback gives RSI(14) / MACD(26+9) enough warmup bars to compute.
+  { indicators: ['rsi','macd','bollinger','atr','sma','vwap'], range: '1h',  interval: '1m', end_interval: '0d', label_prefix: '1h'  },
+  { indicators: ['rsi','vwap'],                                range: '15m', interval: '5d', end_interval: '0d', label_prefix: '15m' },
 ];
 
 function parseNum(v: unknown): number | null {
@@ -79,29 +91,55 @@ async function fetchBundle(
   const out: Row[] = [];
 
   if (rowsArr.length > 0) {
-    // Flat shape: each row has timestamp + indicator values
+    // UW shape: each row has OHLC + indicator_values nested object.
+    //   { close, start, start_time, indicator_values: { rsi: 64.2, macd: { line, signal, histogram }, ... } }
     for (const r of rowsArr) {
       if (!r || typeof r !== 'object') continue;
       const obj = r as Record<string, unknown>;
-      const ts = parseTs(obj.timestamp ?? obj.t ?? obj.time ?? obj.date ?? obj.ts ?? obj.start_time);
+      const ts = parseTs(obj.start_time ?? obj.start ?? obj.timestamp ?? obj.t ?? obj.time ?? obj.date);
       if (!ts) continue;
+
+      const indValues = obj.indicator_values;
+      const iv = (indValues && typeof indValues === 'object' && !Array.isArray(indValues))
+        ? indValues as Record<string, unknown>
+        : null;
+
       for (const ind of indicators) {
         const lower = ind.toLowerCase();
-        const v = parseNum(obj[lower]) ?? parseNum(obj[ind]);
-        if (v == null) continue;
-        const extras: Record<string, unknown> = {};
-        const prefix = `${lower}_`;
-        for (const [k, val] of Object.entries(obj)) {
-          if (k.startsWith(prefix) && (typeof val === 'number' || typeof val === 'string')) {
-            extras[k.slice(prefix.length)] = val;
+        // Try nested indicator_values first, then flat row
+        const nested = iv ? iv[lower] : undefined;
+        let v: number | null = null;
+        let extras: Record<string, unknown> | null = null;
+
+        if (nested != null) {
+          if (typeof nested === 'object' && !Array.isArray(nested)) {
+            // Multi-value indicator (macd, bollinger): extract primary scalar
+            const o = nested as Record<string, unknown>;
+            if (lower === 'macd') {
+              v = parseNum(o.line ?? o.macd ?? o.value);
+              extras = { signal: parseNum(o.signal), histogram: parseNum(o.histogram) };
+            } else if (lower === 'bollinger') {
+              v = parseNum(o.middle ?? o.ma ?? o.basis ?? o.value);
+              extras = { upper: parseNum(o.upper), lower: parseNum(o.lower) };
+            } else {
+              v = parseNum(o.value) ?? parseNum(o.line);
+              extras = o as Record<string, unknown>;
+            }
+          } else {
+            v = parseNum(nested);
           }
+        } else {
+          v = parseNum(obj[lower]) ?? parseNum(obj[ind]);
         }
+
+        if (v == null) continue;
+
         out.push({
           ticker,
-          indicator: lower === 'sma' ? 'sma50' : lower === 'bbands' ? 'bb' : lower,
+          indicator: lower === 'sma' ? 'sma50' : lower === 'bollinger' ? 'bb' : lower,
           timeframe: labelPrefix,
           ts, value: v,
-          extras: Object.keys(extras).length ? extras : null,
+          extras,
           raw: obj,
         });
       }
