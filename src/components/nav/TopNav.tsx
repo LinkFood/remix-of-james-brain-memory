@@ -74,6 +74,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Review',
     items: [
+      { path: '/edge', label: 'Edge' },
       { path: '/scorecard', label: 'Scorecard' },
       { path: '/workspace', label: 'Workspace' },
       { path: '/debates', label: 'Debates' },
