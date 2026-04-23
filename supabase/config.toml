@@ -401,3 +401,9 @@ verify_jwt = false
 
 [functions.ct-interval-flow-ingester]
 verify_jwt = false
+
+[functions.ct-options-screener-ingester]
+verify_jwt = false
+
+[functions.ct-prediction-smart-money-ingester]
+verify_jwt = false
