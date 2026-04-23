@@ -19,7 +19,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
-import { mcpCallTool } from '../_shared/uwMcpClient.ts';
+import { mcpCallToolAsData } from '../_shared/uwMcpClient.ts';
 
 interface IndexRow {
   symbol?: string;
@@ -80,7 +80,7 @@ serve(async (req) => {
   // requires `date` param, omitting silently returns empty).
   try {
     const today = new Date().toISOString().slice(0, 10);
-    const result = await mcpCallTool('get_ticker_ohlc_latest_or_date', {
+    const result = await mcpCallToolAsData('get_ticker_ohlc_latest_or_date', {
       ticker: 'VIX', date: today,
     });
     const data = (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>))
@@ -102,7 +102,7 @@ serve(async (req) => {
   // Attempt 2: market_state aggregate
   if (!found) {
     try {
-      const result = await mcpCallTool('get_market_state', {});
+      const result = await mcpCallToolAsData('get_market_state', {});
       const data = (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>))
         ? (result as { data: unknown }).data
         : result;
@@ -127,7 +127,7 @@ serve(async (req) => {
     ];
     for (const cat of categoriesToTry) {
       try {
-        const result = await mcpCallTool('get_futures_indices', { type: cat });
+        const result = await mcpCallToolAsData('get_futures_indices', { type: cat });
         const data = (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>))
           ? (result as { data: unknown }).data
           : result;

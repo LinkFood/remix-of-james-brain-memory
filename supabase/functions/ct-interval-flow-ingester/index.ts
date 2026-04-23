@@ -111,9 +111,11 @@ async function fetchForTicker(ticker: string, runTs: string): Promise<Row[]> {
 }
 
 /**
- * Aggregate per-contract rows into per-side totals for the run. Since the
- * table's unique constraint is (ticker, interval_start, side), one row per
- * side per run — we sum across all contracts UW returned.
+ * Aggregate per-contract rows into per-side totals for the run. Unique key
+ * is (ticker, interval_start, side) so one row per side per run. We stash
+ * the top 5 contracts by premium per side inside `raw.top_contracts` so
+ * Claude can cite specific strikes without needing a separate per-contract
+ * table.
  */
 function aggregateBySide(ticker: string, runTs: string, rows: Row[]): Row[] {
   const buckets = new Map<string, { premium: number; volume: number; ask: number; bid: number; rawSamples: Row[] }>();
@@ -130,6 +132,25 @@ function aggregateBySide(ticker: string, runTs: string, rows: Row[]): Row[] {
   const out: Row[] = [];
   for (const [side, b] of buckets) {
     const askPerc = (b.ask + b.bid) > 0 ? b.ask / (b.ask + b.bid) : null;
+    // Top 5 by premium
+    const topByPremium = [...b.rawSamples]
+      .filter(s => (s.premium ?? 0) > 0)
+      .sort((x, y) => (y.premium ?? 0) - (x.premium ?? 0))
+      .slice(0, 5)
+      .map(s => {
+        const raw = s.raw as Record<string, unknown>;
+        const sym = raw.option_symbol ?? raw.symbol;
+        const m = sym && typeof sym === 'string' ? sym.match(/^([A-Z0-9]+?)(\d{6})([CP])(\d{8})$/) : null;
+        return {
+          option_symbol: sym,
+          strike: m ? parseInt(m[4], 10) / 1000 : null,
+          expiry: m ? `20${m[2].slice(0,2)}-${m[2].slice(2,4)}-${m[2].slice(4,6)}` : null,
+          premium: s.premium,
+          volume: s.volume,
+          ask_side_volume: s.ask_side_volume,
+          bid_side_volume: s.bid_side_volume,
+        };
+      });
     out.push({
       ticker,
       interval_start: runTs,
@@ -140,7 +161,7 @@ function aggregateBySide(ticker: string, runTs: string, rows: Row[]): Row[] {
       bid_side_volume: b.bid,
       ask_side_perc: askPerc,
       bid_side_perc: askPerc != null ? 1 - askPerc : null,
-      raw: { contract_count: b.rawSamples.length, sample: b.rawSamples[0]?.raw ?? null },
+      raw: { contract_count: b.rawSamples.length, top_contracts: topByPremium },
     });
   }
   return out;
