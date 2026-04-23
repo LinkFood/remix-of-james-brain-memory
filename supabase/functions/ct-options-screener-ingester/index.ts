@@ -61,6 +61,19 @@ interface Row {
   raw: Record<string, unknown>;
 }
 
+// OCC option symbol: ROOT+YYMMDD+C/P+strikeX1000 (8 digits)
+function parseOcc(sym: string | null | undefined): { type: 'Calls'|'Puts'|null; strike: number|null; expiry: string|null } {
+  if (!sym) return { type: null, strike: null, expiry: null };
+  const m = sym.match(/^([A-Z0-9]+?)(\d{6})([CP])(\d{8})$/);
+  if (!m) return { type: null, strike: null, expiry: null };
+  const [, , exp, cp, strikeStr] = m;
+  return {
+    type: cp === 'C' ? 'Calls' : 'Puts',
+    strike: parseInt(strikeStr, 10) / 1000,
+    expiry: `20${exp.slice(0,2)}-${exp.slice(2,4)}-${exp.slice(4,6)}`,
+  };
+}
+
 function normalizeRow(
   obj: Record<string, unknown>,
   runId: string,
@@ -70,6 +83,10 @@ function normalizeRow(
   const option_symbol = (obj.option_symbol ?? obj.symbol) as string | undefined;
   const ticker = (obj.ticker_symbol ?? obj.ticker ?? obj.underlying ?? null) as string | null;
   if (!option_symbol && !ticker) return null;
+
+  // UW's screener response doesn't include a `type` field — derive from
+  // option_symbol's OCC encoding (C/P char between expiry and strike).
+  const occ = parseOcc(option_symbol ?? null);
 
   const vol = parseInt64(obj.volume ?? obj.total_volume);
   const oi  = parseInt64(obj.open_interest);
@@ -81,9 +98,9 @@ function normalizeRow(
     run_ts: runTs,
     ticker: ticker ? String(ticker).toUpperCase() : null,
     option_symbol: option_symbol ?? null,
-    type: (obj.type ?? obj.option_type ?? null) as string | null,
-    strike: parseNum(obj.strike),
-    expiry: parseDate(obj.expiry ?? obj.expiration),
+    type: (obj.type ?? obj.option_type ?? occ.type ?? null) as string | null,
+    strike: parseNum(obj.strike) ?? occ.strike,
+    expiry: parseDate(obj.expiry ?? obj.expiration) ?? occ.expiry,
     dte: parseInt64(obj.dte ?? obj.days_to_expiry),
     volume: vol,
     open_interest: oi,

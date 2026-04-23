@@ -76,9 +76,13 @@ serve(async (req) => {
   let found: { level: number; change_pct: number | null; raw: unknown; via: string } | null = null;
   const errors: string[] = [];
 
-  // Attempt 1: direct VIX OHLC
+  // Attempt 1: direct VIX OHLC (verified via shape-probe 2026-04-23 —
+  // requires `date` param, omitting silently returns empty).
   try {
-    const result = await mcpCallTool('get_ticker_ohlc_latest_or_date', { ticker: 'VIX' });
+    const today = new Date().toISOString().slice(0, 10);
+    const result = await mcpCallTool('get_ticker_ohlc_latest_or_date', {
+      ticker: 'VIX', date: today,
+    });
     const data = (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>))
       ? (result as { data: unknown }).data
       : result;

@@ -172,6 +172,67 @@ async function fetchBundle(
   return out;
 }
 
+// Daily indicators via get_av_technical_indicator (AlphaVantage-style).
+// Response shape (verified 2026-04-23):
+//   { data: [{ date, values: { RSI: "73.59" }, ticker, interval, indicator,
+//              series_type, time_period }, ...] }
+async function fetchAvIndicator(ticker: string, fn: string): Promise<Row[]> {
+  let raw: unknown = null;
+  try {
+    raw = await mcpCallToolAsData('get_av_technical_indicator', {
+      ticker, function: fn, interval: 'daily',
+      ...(fn === 'RSI' || fn === 'ATR' ? { time_period: 14 } : {}),
+      ...(fn === 'SMA' ? { time_period: 50 } : {}),
+      ...(fn === 'BBANDS' ? { time_period: 20 } : {}),
+    });
+  } catch (e) {
+    console.warn(`[ct-technicals:av] ${ticker}/${fn}:`, e instanceof Error ? e.message : e);
+    return [];
+  }
+  const arr: unknown[] = Array.isArray(raw) ? raw
+    : (raw && typeof raw === 'object' && Array.isArray((raw as { data?: unknown }).data))
+      ? (raw as { data: unknown[] }).data
+      : [];
+
+  const out: Row[] = [];
+  const canonical = fn === 'BBANDS' ? 'bb' : fn === 'SMA' ? 'sma50' : fn.toLowerCase();
+  for (const r of arr) {
+    if (!r || typeof r !== 'object') continue;
+    const obj = r as Record<string, unknown>;
+    const ts = parseTs(obj.date ?? obj.timestamp);
+    if (!ts) continue;
+    const vals = (obj.values && typeof obj.values === 'object' && !Array.isArray(obj.values))
+      ? obj.values as Record<string, unknown>
+      : null;
+
+    let value: number | null = null;
+    let extras: Record<string, unknown> | null = null;
+    if (vals) {
+      if (fn === 'MACD') {
+        value = parseNum(vals.MACD ?? vals.macd);
+        extras = { signal: parseNum(vals.MACD_Signal ?? vals.signal), histogram: parseNum(vals.MACD_Hist ?? vals.histogram) };
+      } else if (fn === 'BBANDS') {
+        value = parseNum(vals.Real_Middle_Band ?? vals.MIDDLE ?? vals.MA);
+        extras = { upper: parseNum(vals.Real_Upper_Band ?? vals.UPPER), lower: parseNum(vals.Real_Lower_Band ?? vals.LOWER) };
+      } else {
+        value = parseNum(vals[fn]) ?? parseNum(vals[fn.toUpperCase()]) ?? parseNum(vals[canonical]);
+      }
+    }
+    if (value == null) value = parseNum(obj.value);
+    if (value == null) continue;
+
+    out.push({
+      ticker,
+      indicator: canonical,
+      timeframe: '1d',
+      ts, value,
+      extras,
+      raw: obj,
+    });
+  }
+  return out;
+}
+
 async function upsert(supabase: SupabaseClient, rows: Row[]): Promise<number> {
   if (rows.length === 0) return 0;
   const { error, count } = await supabase
@@ -204,7 +265,7 @@ serve(async (req) => {
   const per: Record<string, number> = {};
   let grand = 0;
 
-  // 12 tickers × 2 bundles = 24 MCP calls. Pace 500ms.
+  // 12 tickers × 2 bundles intraday = 24 MCP calls. Pace 500ms.
   for (const ticker of watchlist) {
     let inserted = 0;
     for (const b of INDICATOR_BUNDLE) {
@@ -213,6 +274,13 @@ serve(async (req) => {
       );
       inserted += await upsert(supabase, rows);
       await new Promise((r) => setTimeout(r, 500));
+    }
+    // Daily bundle via get_av_technical_indicator — separate tool, uppercase
+    // FUNCTION names, returns { date, values: { RSI: "73.5972" } }.
+    for (const fn of ['RSI','MACD','ATR','VWAP','BBANDS']) {
+      const rows = await fetchAvIndicator(ticker, fn);
+      inserted += await upsert(supabase, rows);
+      await new Promise((r) => setTimeout(r, 400));
     }
     per[ticker] = inserted;
     grand += inserted;
