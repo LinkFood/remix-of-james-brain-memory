@@ -398,3 +398,6 @@ verify_jwt = false
 
 [functions.ct-flag-book-commit]
 verify_jwt = false
+
+[functions.ct-interval-flow-ingester]
+verify_jwt = false

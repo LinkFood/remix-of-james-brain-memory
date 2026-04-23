@@ -69,31 +69,76 @@ serve(async (req) => {
     return killSwitchSkipResponse(supabase, 'ct-vix-capture', corsHeaders);
   }
 
-  // Try categories likely to include VIX. UW's `type` param isn't
-  // strictly documented in the schema, so we try 'indices' first and
-  // fall through on empty/error.
-  const categoriesToTry = ['indices', 'index', 'global indices', 'global-indices'];
-  let found: { level: number; change_pct: number | null; raw: unknown; category: string } | null = null;
+  // Try 3 MCP tool paths in priority order:
+  //   1. get_ticker_ohlc_latest_or_date(ticker='VIX') — purpose-built per-ticker
+  //   2. get_market_state — market-wide snapshot may embed VIX
+  //   3. get_futures_indices with a dozen plausible category values
+  let found: { level: number; change_pct: number | null; raw: unknown; via: string } | null = null;
   const errors: string[] = [];
 
-  for (const cat of categoriesToTry) {
+  // Attempt 1: direct VIX OHLC
+  try {
+    const result = await mcpCallTool('get_ticker_ohlc_latest_or_date', { ticker: 'VIX' });
+    const data = (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>))
+      ? (result as { data: unknown }).data
+      : result;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (row && typeof row === 'object') {
+      const r = row as IndexRow;
+      const level = parseNum(r.close ?? r.last_price ?? r.price ?? r.level);
+      if (level && level > 0) {
+        const change = parseNum(r.change_pct) ?? parseNum(r.percent_change);
+        found = { level, change_pct: change, raw: r, via: 'get_ticker_ohlc_latest_or_date' };
+      }
+    }
+  } catch (e) {
+    errors.push(`ohlc: ${e instanceof Error ? e.message : String(e)}`.slice(0, 120));
+  }
+
+  // Attempt 2: market_state aggregate
+  if (!found) {
     try {
-      const result = await mcpCallTool('get_futures_indices', { type: cat });
+      const result = await mcpCallTool('get_market_state', {});
       const data = (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>))
         ? (result as { data: unknown }).data
         : result;
-      const v = findVix(data);
-      if (v) { found = { ...v, category: cat }; break; }
+      if (data && typeof data === 'object' && !Array.isArray(data)) {
+        const r = data as Record<string, unknown>;
+        const level = parseNum(r.vix) ?? parseNum(r.vix_level) ?? parseNum(r.vix_close);
+        if (level && level > 0) {
+          found = { level, change_pct: parseNum(r.vix_change_pct), raw: r, via: 'get_market_state' };
+        }
+      }
     } catch (e) {
-      errors.push(`${cat}: ${e instanceof Error ? e.message : String(e)}`.slice(0, 120));
+      errors.push(`market_state: ${e instanceof Error ? e.message : String(e)}`.slice(0, 120));
+    }
+  }
+
+  // Attempt 3: wide sweep of get_futures_indices categories
+  if (!found) {
+    const categoriesToTry = [
+      'indices', 'index', 'global_indices', 'us_indices', 'volatility',
+      'vix', 'futures', 'index_futures', 'all', 'global', 'commodities',
+      'equity_indices', 'equities',
+    ];
+    for (const cat of categoriesToTry) {
+      try {
+        const result = await mcpCallTool('get_futures_indices', { type: cat });
+        const data = (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>))
+          ? (result as { data: unknown }).data
+          : result;
+        const v = findVix(data);
+        if (v) { found = { ...v, via: `get_futures_indices[${cat}]` }; break; }
+      } catch (e) {
+        errors.push(`fi[${cat}]: ${e instanceof Error ? e.message : String(e)}`.slice(0, 100));
+      }
     }
   }
 
   if (!found) {
-    console.error('[ct-vix-capture] VIX not found in get_futures_indices. Errors:', errors);
+    console.error('[ct-vix-capture] VIX unavailable via any path. Errors:', errors);
     return new Response(JSON.stringify({
-      error: 'VIX unavailable via get_futures_indices',
-      categories_tried: categoriesToTry,
+      error: 'VIX unavailable',
       errors,
     }), { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
@@ -117,7 +162,7 @@ serve(async (req) => {
       level: +found.level.toFixed(4),
       prev_close: prevClose != null ? +Number(prevClose).toFixed(4) : null,
       source: 'VIX',
-      endpoint: `mcp:get_futures_indices[${found.category}]`,
+      endpoint: `mcp:${found.via}`,
     }, { onConflict: 'date' });
 
   if (upsertErr) {
