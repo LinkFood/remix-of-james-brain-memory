@@ -113,12 +113,19 @@ serve(async (req) => {
     heartbeatRes,
     spxThesisRes,
   ] = await Promise.all([
+    // Co-Trader digest is Claude's activity report — filter to trader='claude'.
+    // Without this, maybeSingle() errors when both james + claude rows exist
+    // for the same session_date (common after james takes a paper trade).
     supabase.from('ct_book')
       .select('starting_balance, realized_pnl, unrealized_pnl, trades_count, wins, losses')
-      .eq('session_date', sessionDate).maybeSingle(),
+      .eq('session_date', sessionDate)
+      .eq('trader', 'claude')
+      .maybeSingle(),
     supabase.from('ct_trades')
       .select('instrument, side, size_pct, entry_price, opened_at')
-      .eq('session_date', sessionDate).eq('status', 'open'),
+      .eq('session_date', sessionDate)
+      .eq('trader', 'claude')
+      .eq('status', 'open'),
     supabase.from('ct_heartbeats')
       .select('status_line, current_reads, created_at')
       .order('created_at', { ascending: false }).limit(1).maybeSingle(),

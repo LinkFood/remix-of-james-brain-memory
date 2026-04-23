@@ -257,17 +257,36 @@ serve(async (req) => {
       }
       // === END HEALTH CHECK ===
 
-      // 2. Rate limit: max 3 heartbeat insights per day
-      const { count: heartbeatCount } = await supabase
+      // 2. Rate limit: max 2 heartbeat insights per day AND at least 6 hours
+      // between them. Prior 3/day was spam in practice — Claude kept landing
+      // on the same narrative loop ("Your blind spot is...") and firing
+      // priority=1 so quiet hours didn't suppress. Lower cap + inter-insight
+      // gap forces structural dedupe without relying on title similarity.
+      const DAILY_HEARTBEAT_CAP = 2;
+      const MIN_HEARTBEAT_GAP_MS = 6 * 60 * 60 * 1000;
+
+      const { data: recentHeartbeats } = await supabase
         .from('brain_insights')
-        .select('id', { count: 'exact', head: true })
+        .select('created_at')
         .eq('user_id', userId)
         .eq('type', 'heartbeat')
-        .gte('created_at', todayStart.toISOString());
+        .gte('created_at', todayStart.toISOString())
+        .order('created_at', { ascending: false });
 
-      if ((heartbeatCount ?? 0) >= 3) {
-        console.log(`[jac-heartbeat] Rate limit reached for user ${userId} (${heartbeatCount}/3 today)`);
+      const heartbeatCount = recentHeartbeats?.length ?? 0;
+      if (heartbeatCount >= DAILY_HEARTBEAT_CAP) {
+        console.log(`[jac-heartbeat] Daily cap reached for user ${userId} (${heartbeatCount}/${DAILY_HEARTBEAT_CAP} today)`);
         continue;
+      }
+
+      const lastHeartbeatAt = recentHeartbeats?.[0]?.created_at;
+      if (lastHeartbeatAt) {
+        const msSinceLast = Date.now() - Date.parse(lastHeartbeatAt);
+        if (msSinceLast < MIN_HEARTBEAT_GAP_MS) {
+          const hoursSinceLast = (msSinceLast / 3_600_000).toFixed(1);
+          console.log(`[jac-heartbeat] Gap too short for user ${userId} (${hoursSinceLast}h since last, need 6h)`);
+          continue;
+        }
       }
 
       // 3. Load context
