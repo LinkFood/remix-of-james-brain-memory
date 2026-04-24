@@ -143,7 +143,101 @@ function outcomeColor(outcome: string): string {
   return 'bg-slate-500/15 text-slate-300 border-slate-500/40';
 }
 
-function FlagTile({ flag, onOpen }: { flag: Flag; onOpen: (flag: Flag) => void }) {
+type ProgressBucket = 'won' | 'on_track' | 'drifting' | 'underwater';
+
+function computeProgress(
+  direction: Direction,
+  entry: number | null,
+  target: number | null,
+  spot: number | null | undefined,
+): { pct: number; bucket: ProgressBucket } | null {
+  if (entry == null || target == null || spot == null) return null;
+  if (!Number.isFinite(entry) || !Number.isFinite(target) || !Number.isFinite(spot)) return null;
+  const denom = direction === 'bearish' ? entry - target : target - entry;
+  if (denom === 0) return null;
+  const numer = direction === 'bearish' ? entry - spot : spot - entry;
+  const pct = (numer / denom) * 100;
+  let bucket: ProgressBucket;
+  if (pct >= 100) bucket = 'won';
+  else if (pct >= 25) bucket = 'on_track';
+  else if (pct >= 0) bucket = 'drifting';
+  else bucket = 'underwater';
+  return { pct, bucket };
+}
+
+function ProgressChip({
+  flag,
+  spot,
+}: {
+  flag: Flag;
+  spot: number | null | undefined;
+}) {
+  // TODO(flags): ct_flags.invalidation is prose not a price — when we add
+  // invalidation_price column (tier 2 grader work), expand this chip to show
+  // stop-buffer state ('at_risk' / 'invalidated').
+  const { entry_price, target_price, direction } = flag;
+  if (entry_price == null || target_price == null || spot == null) {
+    return (
+      <div className="text-[10px] text-muted-foreground tabular-nums">
+        spot — · target {target_price != null ? `$${target_price.toFixed(2)}` : '—'}
+      </div>
+    );
+  }
+  const prog = computeProgress(direction, entry_price, target_price, spot);
+  if (!prog) return null;
+  const { pct, bucket } = prog;
+  const clamped = Math.max(0, Math.min(100, pct));
+  const targetMovePct = entry_price !== 0 ? ((target_price - entry_price) / entry_price) * 100 : 0;
+
+  const barColor =
+    bucket === 'won' || bucket === 'on_track'
+      ? 'bg-emerald-500'
+      : bucket === 'underwater'
+      ? 'bg-rose-500'
+      : 'bg-slate-500';
+
+  const labelColor =
+    bucket === 'won' || bucket === 'on_track'
+      ? 'text-emerald-300'
+      : bucket === 'underwater'
+      ? 'text-rose-300'
+      : 'text-slate-400';
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="text-[10px] text-muted-foreground tabular-nums">
+        spot <span className="text-foreground font-mono">${spot.toFixed(2)}</span>
+        {' · '}
+        target <span className="text-foreground font-mono">${target_price.toFixed(2)}</span>
+        {' '}
+        <span className="text-muted-foreground">
+          ({targetMovePct >= 0 ? '+' : ''}{targetMovePct.toFixed(1)}%)
+        </span>
+      </div>
+      <div className="flex items-center gap-2">
+        <div className="relative h-1.5 flex-1 rounded bg-muted/40 overflow-hidden">
+          <div
+            className={cn('h-full transition-all', barColor)}
+            style={{ width: `${clamped}%` }}
+          />
+        </div>
+        <span className={cn('text-[10px] font-mono tabular-nums shrink-0', labelColor)}>
+          {Math.round(pct)}% toward target
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function FlagTile({
+  flag,
+  onOpen,
+  spot,
+}: {
+  flag: Flag;
+  onOpen: (flag: Flag) => void;
+  spot: number | null | undefined;
+}) {
   const [expanded, setExpanded] = useState(false);
   const grade = flag.ct_flag_grades?.[0] ?? null;
   const isGraded = flag.status === 'graded' || flag.status === 'invalidated';
@@ -230,6 +324,9 @@ function FlagTile({ flag, onOpen }: { flag: Flag; onOpen: (flag: Flag) => void }
           )}
         </div>
       )}
+
+      {/* Live progress chip — target-direction only. Skipped for terminal grades. */}
+      {!isGraded && <ProgressChip flag={flag} spot={spot} />}
 
       {/* Thesis — 2 lines truncated, expand on click. stopPropagation so the
           tile-level click (which opens the detail sheet) doesn't fire here. */}
@@ -401,6 +498,36 @@ export default function Flags() {
     },
     refetchInterval: 30_000,
     enabled: mineActive,
+  });
+
+  // Unique tickers we need live spot for — only non-terminal specialist flags with entry+target.
+  const tickersNeedingSpot = useMemo(() => {
+    if (!flags) return [] as string[];
+    const set = new Set<string>();
+    for (const f of flags) {
+      if (f.status === 'graded' || f.status === 'invalidated') continue;
+      if (f.entry_price == null || f.target_price == null) continue;
+      if (f.specialist_ticker) set.add(f.specialist_ticker);
+    }
+    return Array.from(set).sort();
+  }, [flags]);
+
+  const { data: spotMap } = useQuery<Map<string, number>>({
+    queryKey: ['ct_flags_spot_map', tickersNeedingSpot],
+    enabled: tickersNeedingSpot.length > 0,
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('ct_ticker_snapshots' as never) as any)
+        .select('ticker, spot')
+        .in('ticker', tickersNeedingSpot);
+      if (error) throw error;
+      const m = new Map<string, number>();
+      for (const row of (data ?? []) as Array<{ ticker: string; spot: number | null }>) {
+        if (row.spot != null) m.set(row.ticker, row.spot);
+      }
+      return m;
+    },
   });
 
   const toggleSpecialist = (t: string) => {
@@ -646,7 +773,12 @@ export default function Flags() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {merged.map((item) =>
               item.origin === 'claude' ? (
-                <FlagTile key={item.key} flag={item.flag} onOpen={setSelectedFlag} />
+                <FlagTile
+                  key={item.key}
+                  flag={item.flag}
+                  onOpen={setSelectedFlag}
+                  spot={spotMap?.get(item.flag.specialist_ticker)}
+                />
               ) : (
                 <JamesFlagTile
                   key={item.key}
