@@ -155,6 +155,36 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
     // stale state — reset when swapping tickers via parent
   }
 
+  // Lean score — our composite bull/bear score per ticker, 0-100.
+  // Refreshes every 15min RTH via cron; each ticker also carries a
+  // momentum delta vs the prior live score and a confidence chip.
+  interface LeanScoreRow {
+    score: number;
+    lean: string;
+    confidence: string;
+    n_inputs: number;
+    momentum_delta: number | null;
+    score_at: string;
+    is_closing: boolean;
+    breakdown: Record<string, { contribution: number; [k: string]: unknown }>;
+  }
+  const { data: leanScore } = useQuery<LeanScoreRow | null>({
+    queryKey: ['ticker_lean_score', ticker],
+    enabled: !!ticker && open,
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      if (!ticker) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase.from('ct_ticker_lean_score' as never) as any)
+        .select('score,lean,confidence,n_inputs,momentum_delta,score_at,is_closing,breakdown')
+        .eq('ticker', ticker)
+        .order('score_at', { ascending: false })
+        .limit(1);
+      const rows = (data ?? []) as LeanScoreRow[];
+      return rows[0] ?? null;
+    },
+  });
+
   // Breaking news affecting this ticker (Tavily sweep + macro watcher).
   // Separate from the UW news in ct_ticker_snapshots.recent_news — this is
   // fresher (every 10min) and covers geopolitical / policy / sector events
@@ -319,6 +349,74 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
                 </span>
               </div>
             </div>
+
+            {/* Lean score — our 0-100 composite. */}
+            {leanScore && (
+              <div className="flex items-center gap-2 pt-1">
+                <div className={cn(
+                  'flex items-baseline gap-1.5 px-2.5 py-1 rounded border',
+                  leanScore.lean === 'bullish' && 'bg-emerald-500/10 border-emerald-500/40',
+                  leanScore.lean === 'bearish' && 'bg-red-500/10 border-red-500/40',
+                  leanScore.lean === 'neutral' && 'bg-slate-500/10 border-slate-500/40',
+                )}>
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Lean</span>
+                  <span className={cn(
+                    'font-mono tabular-nums font-bold text-xl',
+                    leanScore.lean === 'bullish' && 'text-emerald-300',
+                    leanScore.lean === 'bearish' && 'text-red-300',
+                    leanScore.lean === 'neutral' && 'text-slate-300',
+                  )}>
+                    {Math.round(leanScore.score)}
+                  </span>
+                  {leanScore.momentum_delta != null && Math.abs(leanScore.momentum_delta) >= 1 && (
+                    <span className={cn(
+                      'font-mono tabular-nums text-[10px]',
+                      leanScore.momentum_delta > 0 ? 'text-emerald-400' : 'text-red-400',
+                    )}>
+                      {leanScore.momentum_delta > 0 ? '↑' : '↓'}{Math.abs(leanScore.momentum_delta).toFixed(1)}
+                    </span>
+                  )}
+                </div>
+                <span className={cn(
+                  'text-[10px] font-mono uppercase px-1.5 py-0.5 rounded border',
+                  leanScore.confidence === 'high' && 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+                  leanScore.confidence === 'med' && 'bg-amber-500/10 text-amber-300 border-amber-500/30',
+                  leanScore.confidence === 'low' && 'bg-muted/40 text-muted-foreground border-border',
+                )} title={`${leanScore.n_inputs} data points across ${Object.keys(leanScore.breakdown).length} components`}>
+                  {leanScore.confidence} conf
+                </span>
+                <span className="text-[10px] text-muted-foreground tabular-nums">
+                  {leanScore.n_inputs} inputs
+                </span>
+                {leanScore.is_closing && (
+                  <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-primary/10 text-primary">
+                    close
+                  </span>
+                )}
+                <span className="text-[10px] text-muted-foreground ml-auto">
+                  {timeAgo(leanScore.score_at)}
+                </span>
+              </div>
+            )}
+
+            {/* Breakdown row — tiny component contributions */}
+            {leanScore && (
+              <div className="flex items-center gap-1 text-[10px] font-mono text-muted-foreground flex-wrap">
+                {(['flow', 'specialist', 'news', 'walls', 'oi_momentum', 'iv'] as const).map((k) => {
+                  const c = leanScore.breakdown?.[k];
+                  if (!c) return null;
+                  const v = Number(c.contribution ?? 0);
+                  const col = v > 0.5 ? 'text-emerald-400' : v < -0.5 ? 'text-red-400' : 'text-muted-foreground/60';
+                  return (
+                    <span key={k} className="inline-flex gap-0.5" title={JSON.stringify(c)}>
+                      <span className="opacity-60">{k}</span>
+                      <span className={cn('tabular-nums', col)}>{v >= 0 ? '+' : ''}{v.toFixed(1)}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
             <SheetDescription className="text-[11px]">
               Today's hot contracts + what the {ticker} specialist is thinking.
             </SheetDescription>
@@ -848,7 +946,30 @@ function PriceChart({ ticker, open }: PriceChartProps) {
         .order('ts', { ascending: true })
         .limit(2000);
       if (error) return [];
-      return (data ?? []) as PriceBar[];
+      const primary = (data ?? []) as PriceBar[];
+
+      // 1D fallback: if today has no bars (pre-market / weekend / holiday),
+      // fall back to the last trading session's intraday data so the chart
+      // isn't empty. Walk back one day at a time up to 7 days.
+      if (window === '1D' && primary.length === 0) {
+        for (let daysBack = 1; daysBack <= 7; daysBack++) {
+          const since = new Date(Date.now() - daysBack * 86_400_000);
+          since.setUTCHours(0, 0, 0, 0);
+          const until = new Date(since.getTime() + 86_400_000);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data: prior } = await (supabase.from('ct_price_bars' as never) as any)
+            .select('ts,close')
+            .eq('ticker', ticker)
+            .gte('ts', since.toISOString())
+            .lt('ts', until.toISOString())
+            .order('ts', { ascending: true })
+            .limit(2000);
+          const rows = (prior ?? []) as PriceBar[];
+          if (rows.length > 0) return rows;
+        }
+      }
+
+      return primary;
     },
   });
 
@@ -870,6 +991,18 @@ function PriceChart({ ticker, open }: PriceChartProps) {
   const color = trend === 'up' ? '#10b981' : trend === 'down' ? '#ef4444' : '#64748b';
   const pctClass = trend === 'up' ? 'text-emerald-400' : trend === 'down' ? 'text-red-400' : 'text-muted-foreground';
   const gradId = `tkr-price-grad-${ticker}-${window}`;
+
+  // If 1D data is from a prior session (market closed), surface the date.
+  const sessionLabel = useMemo(() => {
+    if (window !== '1D' || points.length === 0) return null;
+    const firstTs = new Date(points[0].t);
+    const today = new Date();
+    const sameDay = firstTs.getUTCFullYear() === today.getUTCFullYear()
+      && firstTs.getUTCMonth() === today.getUTCMonth()
+      && firstTs.getUTCDate() === today.getUTCDate();
+    if (sameDay) return 'intraday';
+    return `last session · ${firstTs.toLocaleDateString('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric' })}`;
+  }, [points, window]);
 
   return (
     <div>
@@ -906,7 +1039,7 @@ function PriceChart({ ticker, open }: PriceChartProps) {
             </span>
           )}
           <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground">
-            {window === '1D' ? 'intraday' : window === '5D' ? 'last 5 days' : 'last 30 days'}
+            {window === '1D' ? (sessionLabel ?? 'intraday') : window === '5D' ? 'last 5 days' : 'last 30 days'}
           </span>
         </div>
         <div className="h-[180px]">
