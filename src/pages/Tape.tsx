@@ -34,8 +34,14 @@ import { TickerSheet } from '@/components/command/TickerSheet';
 import { MacroBanner } from '@/components/command/MacroBanner';
 import { TapeReaderBanner } from '@/components/command/TapeReaderBanner';
 import { OvernightPositioning } from '@/components/command/OvernightPositioning';
+import { StackingPatterns } from '@/components/command/StackingPatterns';
 import { FlowPulse } from '@/components/command/FlowPulse';
 import { RegimeChip } from '@/hooks/useTickerIntradayContext';
+import {
+  useContractStacking,
+  formatStackCount,
+  formatStackPremium,
+} from '@/hooks/useContractStacking';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -403,6 +409,11 @@ export default function Tape() {
   // Refetch interval scales with LIVE mode — 5s when on, 20s baseline.
   const tapeInterval = filters.liveMode ? 5_000 : 20_000;
 
+  // Contract stacking — lookup map for per-row badges. 6h window, 3+ prints.
+  // Leaderboard UI (StackingPatterns) mounts above OvernightPositioning and
+  // calls its own hook instance; TanStack dedupes so this is one network call.
+  const { bySymbol: stackBySymbol } = useContractStacking(360, 50);
+
   // Scored flow — primary source
   const { data: scored, isLoading: loadingScored } = useQuery<ScoredRow[]>({
     queryKey: ['ct_tape_scored', {
@@ -749,6 +760,7 @@ export default function Tape() {
         <TapeReaderBanner />
         <MacroBanner onTickerClick={(t) => setActiveTicker(t)} />
         <FlowPulse onTickerClick={(t) => setActiveTicker(t)} />
+        <StackingPatterns onContractClick={(sym) => setActiveSymbol(sym)} />
         <OvernightPositioning
           onContractClick={(sym) => setActiveSymbol(sym)}
           onTickerClick={(t) => setActiveTicker(t)}
@@ -1081,18 +1093,19 @@ export default function Tape() {
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-center w-10">
                     <Star className="w-3.5 h-3.5 inline" />
                   </TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Stack</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loadingScored && !scored ? (
                   <TableRow>
-                    <TableCell colSpan={17} className="text-center text-xs text-muted-foreground py-8">
+                    <TableCell colSpan={18} className="text-center text-xs text-muted-foreground py-8">
                       Loading tape…
                     </TableCell>
                   </TableRow>
                 ) : rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={17} className="text-center text-xs text-muted-foreground py-8">
+                    <TableCell colSpan={18} className="text-center text-xs text-muted-foreground py-8">
                       No flow matches current filters. Loosen min premium, drop min score, or enable "Show unscored".
                     </TableCell>
                   </TableRow>
@@ -1105,7 +1118,7 @@ export default function Tape() {
                           className="hover:bg-transparent border-b border-border/50"
                         >
                           <TableCell
-                            colSpan={17}
+                            colSpan={18}
                             className="py-1.5 px-2 bg-muted/40 text-[10px] uppercase tracking-widest text-muted-foreground"
                           >
                             <div className="flex items-center gap-3">
@@ -1287,6 +1300,25 @@ export default function Tape() {
                             );
                           })()}
                         </div>
+                      </TableCell>
+                      <TableCell className="py-2 px-2 text-right whitespace-nowrap">
+                        {(() => {
+                          const stack = stackBySymbol.get(r.option_symbol);
+                          if (!stack || stack.prints_count < 3) return null;
+                          const askStr = stack.ask_dominant_pct != null
+                            ? `${Math.round(stack.ask_dominant_pct)}% ask-side`
+                            : 'ask-side pct unknown';
+                          return (
+                            <span
+                              className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-200 border border-slate-500/30 tabular-nums"
+                              title={`This contract has ${stack.prints_count} prints today totaling ${formatStackPremium(stack.premium_total)} cum (${askStr})`}
+                            >
+                              <span className="font-semibold">{formatStackCount(stack.prints_count)}</span>
+                              <span className="text-slate-300/70">·</span>
+                              <span>{formatStackPremium(stack.premium_total)}</span>
+                            </span>
+                          );
+                        })()}
                       </TableCell>
                     </TableRow>
                     );
