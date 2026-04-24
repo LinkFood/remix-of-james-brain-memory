@@ -217,15 +217,16 @@ export function ContractSheet({ optionSymbol, open, onOpenChange, onTickerClick 
     refetchInterval: 60_000,
     queryFn: async () => {
       if (!ticker) return [];
-      const since = new Date(Date.now() - 6 * 3600_000).toISOString();
+      // 7-day window — Friday news can still explain Monday's tape.
+      const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data } = await (supabase.from('ct_breaking_news' as never) as any)
         .select('headline,source,severity,sentiment,summary,macro_wide,tickers_affected,ingested_at')
         .gte('ingested_at', since)
         .order('ingested_at', { ascending: false })
-        .limit(30);
+        .limit(200);
       const rows = (data ?? []) as BreakingNewsRow[];
-      return rows.filter((r) => (r.tickers_affected ?? []).includes(ticker) || r.macro_wide === true).slice(0, 4);
+      return rows.filter((r) => (r.tickers_affected ?? []).includes(ticker) || r.macro_wide === true).slice(0, 20);
     },
   });
 
@@ -446,9 +447,32 @@ export function ContractSheet({ optionSymbol, open, onOpenChange, onTickerClick 
           {/* Breaking news (Tavily sweep) — last 6h for this ticker */}
           {breakingNews && breakingNews.length > 0 && (
             <section>
-              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5 flex-wrap">
                 <Newspaper className="w-3 h-3" />
-                Breaking news · last 6h · {ticker}
+                Breaking news · last 7d · {ticker}
+                {(() => {
+                  let bullScore = 0, bearScore = 0, counted = 0;
+                  for (const n of breakingNews) {
+                    const sev = n.severity ?? 1;
+                    if (n.sentiment === 'bullish') { bullScore += sev; counted++; }
+                    else if (n.sentiment === 'bearish') { bearScore += sev; counted++; }
+                  }
+                  if (counted < 2 || (bullScore + bearScore) === 0) return null;
+                  const bullPct = Math.round((bullScore / (bullScore + bearScore)) * 100);
+                  const skew = bullPct >= 65 ? 'bullish' : bullPct <= 35 ? 'bearish' : 'mixed';
+                  return (
+                    <span className={cn(
+                      'ml-auto normal-case text-[10px] font-mono px-1.5 py-0.5 rounded border',
+                      skew === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+                      skew === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
+                      skew === 'mixed' && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
+                    )}
+                    title={`Severity-weighted: bullish=${bullScore}, bearish=${bearScore}, counted=${counted}`}
+                    >
+                      {bullPct}% bull · {counted}
+                    </span>
+                  );
+                })()}
               </div>
               <div className="space-y-1.5">
                 {breakingNews.map((n, i) => (

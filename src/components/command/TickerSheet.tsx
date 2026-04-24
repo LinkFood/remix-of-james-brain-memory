@@ -175,16 +175,19 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
     refetchInterval: 60_000,
     queryFn: async () => {
       if (!ticker) return [];
-      const since = new Date(Date.now() - 6 * 3600_000).toISOString();
+      // 7-day window. Old catalysts often explain today's tape — a
+      // Friday headline might be why something's moving Monday. Sheet
+      // scrolls naturally when there are many items.
+      const since = new Date(Date.now() - 7 * 86_400_000).toISOString();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase.from('ct_breaking_news' as never) as any)
         .select('headline,source,severity,sentiment,summary,macro_wide,tickers_affected,ingested_at')
         .gte('ingested_at', since)
         .order('ingested_at', { ascending: false })
-        .limit(30);
+        .limit(200);
       if (error) return [];
       const rows = (data ?? []) as BreakingNewsRow[];
-      return rows.filter((r) => (r.tickers_affected ?? []).includes(ticker) || r.macro_wide === true).slice(0, 6);
+      return rows.filter((r) => (r.tickers_affected ?? []).includes(ticker) || r.macro_wide === true).slice(0, 25);
     },
   });
 
@@ -453,12 +456,37 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
               </div>
             )}
 
-            {/* Breaking news (Tavily sweep + macro watcher) — last 6h */}
+            {/* Breaking news (Tavily sweep + macro watcher) — last 7d */}
             {breakingNews && breakingNews.length > 0 && (
               <div>
-                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2 flex-wrap">
                   <Globe className="w-3.5 h-3.5" />
-                  Breaking news · last 6h
+                  Breaking news · last 7d
+                  {(() => {
+                    // Rolling severity-weighted sentiment chip.
+                    // Bullish=+1, Bearish=-1, weight by severity (1-5).
+                    let bullScore = 0, bearScore = 0, counted = 0;
+                    for (const n of breakingNews) {
+                      const sev = n.severity ?? 1;
+                      if (n.sentiment === 'bullish') { bullScore += sev; counted++; }
+                      else if (n.sentiment === 'bearish') { bearScore += sev; counted++; }
+                    }
+                    if (counted < 2 || (bullScore + bearScore) === 0) return null;
+                    const bullPct = Math.round((bullScore / (bullScore + bearScore)) * 100);
+                    const skew = bullPct >= 65 ? 'bullish' : bullPct <= 35 ? 'bearish' : 'mixed';
+                    return (
+                      <span className={cn(
+                        'ml-auto normal-case text-[10px] font-mono px-1.5 py-0.5 rounded border',
+                        skew === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+                        skew === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
+                        skew === 'mixed' && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
+                      )}
+                      title={`Severity-weighted: bullish=${bullScore}, bearish=${bearScore}, counted=${counted} of ${breakingNews.length}`}
+                      >
+                        sentiment {bullPct}% bull · {counted}
+                      </span>
+                    );
+                  })()}
                 </div>
                 <div className="space-y-1.5">
                   {breakingNews.map((n, i) => (
