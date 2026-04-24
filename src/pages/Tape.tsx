@@ -33,6 +33,7 @@ import { ContractSheet } from '@/components/command/ContractSheet';
 import { TickerSheet } from '@/components/command/TickerSheet';
 import { MacroBanner } from '@/components/command/MacroBanner';
 import { TapeReaderBanner } from '@/components/command/TapeReaderBanner';
+import { OvernightPositioning } from '@/components/command/OvernightPositioning';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -640,6 +641,9 @@ export default function Tape() {
       <div className="max-w-[1800px] mx-auto p-4 space-y-4">
         <TapeReaderBanner />
         <MacroBanner onTickerClick={(t) => setActiveTicker(t)} />
+        <OvernightPositioning
+          onContractClick={(sym) => setActiveSymbol(sym)}
+        />
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">

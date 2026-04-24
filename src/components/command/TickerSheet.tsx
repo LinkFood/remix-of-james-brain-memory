@@ -18,11 +18,18 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { Flame, Activity, Brain, TrendingUp, ArrowUp, ArrowDown, Minus, Newspaper, Globe, Loader2, Target, Gauge, LineChart } from 'lucide-react';
+import { Flame, Activity, Brain, TrendingUp, TrendingDown, ArrowUp, ArrowDown, Minus, Newspaper, Globe, Loader2, Target, Gauge, LineChart } from 'lucide-react';
 import { toast } from 'sonner';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ChartSafe } from '@/components/ChartSafe';
 import { ContractSheet } from './ContractSheet';
+import {
+  useOvernightPositioning,
+  normalizeSide,
+  formatDollarsCompact,
+  formatDeltaContracts,
+  formatMoneyness,
+} from '@/hooks/useOvernightPositioning';
 
 interface HotContractRow {
   option_symbol: string;
@@ -552,6 +559,11 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
                   )}
                 </Card>
               </div>
+            )}
+
+            {/* OI Shifts (overnight) — per-ticker view of ct_top_oi_shifts */}
+            {ticker && (
+              <TickerOiShifts ticker={ticker} onContractClick={setDrillSymbol} />
             )}
 
             {/* Breaking news (Tavily sweep + macro watcher) — last 7d */}
@@ -1100,6 +1112,99 @@ function PriceChart({ ticker, open }: PriceChartProps) {
           )}
         </div>
       </Card>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// TickerOiShifts — compact table of ct_top_oi_shifts filtered to this ticker.
+// ---------------------------------------------------------------------------
+
+interface TickerOiShiftsProps {
+  ticker: string;
+  onContractClick: (optionSymbol: string) => void;
+}
+
+function TickerOiShifts({ ticker, onContractClick }: TickerOiShiftsProps) {
+  const { data, isLoading } = useOvernightPositioning(ticker, 10);
+  const rows = data ?? [];
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+        <TrendingUp className="w-3.5 h-3.5" />
+        OI Shifts · overnight
+      </div>
+      {isLoading && rows.length === 0 ? (
+        <div className="text-[11px] text-muted-foreground py-1">Loading…</div>
+      ) : rows.length === 0 ? (
+        <div className="text-[11px] text-muted-foreground italic py-1">
+          No significant OI shifts for {ticker} overnight.
+        </div>
+      ) : (
+        <Card className="p-0 overflow-hidden">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-[10px] uppercase tracking-wider text-muted-foreground border-b border-border">
+                <th className="text-left font-normal px-2 py-1.5">Strike</th>
+                <th className="text-left font-normal px-2 py-1.5">Side</th>
+                <th className="text-right font-normal px-2 py-1.5">Δ ctr</th>
+                <th className="text-right font-normal px-2 py-1.5">$ risk</th>
+                <th className="text-right font-normal px-2 py-1.5">Dist</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => {
+                const side = normalizeSide(r.side);
+                const { label: moneyLabel } = formatMoneyness(r.distance_from_spot_pct, side);
+                const delta = r.delta_contracts;
+                const isAccum = delta != null && delta > 0;
+                return (
+                  <tr
+                    key={r.option_symbol + (r.snap_date ?? '') + (r.snap_slot ?? '')}
+                    onClick={() => onContractClick(r.option_symbol)}
+                    className="cursor-pointer border-b border-border/40 hover:bg-muted/40"
+                  >
+                    <td className="px-2 py-1.5 font-mono tabular-nums font-semibold">
+                      {r.strike != null ? `$${Math.round(r.strike)}` : '-'}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'text-[9px] font-mono px-1 py-0 font-bold',
+                          side === 'call' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+                          side === 'put' && 'bg-rose-500/15 text-rose-300 border-rose-500/40',
+                          !side && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
+                        )}
+                      >
+                        {side === 'call' ? 'CALL' : side === 'put' ? 'PUT' : '?'}
+                      </Badge>
+                    </td>
+                    <td className={cn(
+                      'px-2 py-1.5 font-mono tabular-nums text-right font-bold',
+                      isAccum ? 'text-emerald-400' : 'text-rose-400',
+                    )}>
+                      <span className="inline-flex items-center justify-end gap-0.5">
+                        {isAccum
+                          ? <TrendingUp className="w-3 h-3" />
+                          : <TrendingDown className="w-3 h-3" />}
+                        {formatDeltaContracts(delta)}
+                      </span>
+                    </td>
+                    <td className="px-2 py-1.5 font-mono tabular-nums text-right text-foreground/90">
+                      {formatDollarsCompact(r.dollars_at_risk)}
+                    </td>
+                    <td className="px-2 py-1.5 font-mono tabular-nums text-right text-muted-foreground">
+                      {moneyLabel}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
+      )}
     </div>
   );
 }
