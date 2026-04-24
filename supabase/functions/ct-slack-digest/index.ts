@@ -60,6 +60,28 @@ function divider(): Record<string, unknown> {
 
 const COMBO_TICKERS = ['SPY', 'QQQ', 'IWM'];
 
+type StackRow = {
+  option_symbol: string; ticker: string; strike: number | null; expiry: string | null;
+  side: string; prints_count: number; premium_total: number;
+  ask_dominant_pct: number | null;
+  opening_buy_count: number; opening_sell_count: number;
+  is_accelerating: boolean;
+};
+
+function labelStack(r: StackRow): string {
+  const side = (r.side || '').toUpperCase().startsWith('C') ? 'C' : 'P';
+  const total = Math.max(1, r.opening_buy_count + r.opening_sell_count);
+  const buyDom = r.opening_buy_count / total >= 0.8;
+  const sellDom = r.opening_sell_count / total >= 0.8;
+  const askLow = r.ask_dominant_pct != null && r.ask_dominant_pct < 30;
+  if (buyDom && side === 'C') return '🟢 call accum';
+  if (buyDom && side === 'P') return '🔴 put accum';
+  if (sellDom && askLow && side === 'P') return '🟢 put writing';
+  if (sellDom && askLow && side === 'C') return '🔴 call writing';
+  if (sellDom) return '🟡 distribution';
+  return '🟡 2-sided';
+}
+
 // ---- handler ---------------------------------------------------------------
 
 serve(async (req) => {
@@ -106,6 +128,7 @@ serve(async (req) => {
     flagsTodayRes,            // specialist flags written since 13:30 UTC today
     flowPulseRes,             // current market-wide directional imbalance
     topPrintRes,              // biggest scored flow print in last 30 min
+    stacksRes,                // top institutional repetition patterns (6h)
     attentionRes,
     activeFlagsRes,            // combo-verdict proxy: recent SPY/QQQ/IWM flags
     regimeInversionsRes,
@@ -128,6 +151,9 @@ serve(async (req) => {
       .order('premium', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    supabase.rpc('ct_contract_stacking', {
+      p_window_min: 360, p_min_prints: 5, p_min_premium: 500000, p_ticker: null, p_limit: 3,
+    }),
     supabase.from('ct_attention_stream')
       .select('kind, id, created_at, attention_score, summary')
       .gte('created_at', cutoff30m)
@@ -181,6 +207,7 @@ serve(async (req) => {
     ticker: string; option_symbol: string | null; classification: string;
     premium: number | null; score: number | null; event_ts: string;
   } | null;
+  const stacks = (stacksRes.data ?? []) as StackRow[];
   const attention = (attentionRes.data ?? []) as Array<{
     kind: string; id: string; attention_score: number | null; summary: string | null; created_at: string;
   }>;
@@ -244,6 +271,18 @@ serve(async (req) => {
       ? `*Market flow:* ${mktCp.toFixed(2)}x call:put · net ${fmtUsd(mktNet)} ${mktBiasLabel}${unusualTickers.length ? ` · ⚠ unusual: ${unusualTickers.slice(0, 3).join(', ')}` : ''}`
       : `*Market flow:* no data`,
     `*Last 30m top print:* ${topPrintLine}`,
+    stacks.length > 0
+      ? `*Top stacks:* ${stacks.map(s => {
+          const strike = s.strike != null ? `$${Math.round(s.strike)}` : '?';
+          const expiry = s.expiry ? s.expiry.slice(5).replace('-', '/') : '?';
+          const side = (s.side || '').toUpperCase().startsWith('C') ? 'C' : 'P';
+          const premCompact = s.premium_total >= 1e6
+            ? `$${(s.premium_total / 1e6).toFixed(1)}M`
+            : `$${Math.round(s.premium_total / 1e3)}K`;
+          const accel = s.is_accelerating ? ' ⚡' : '';
+          return `${s.ticker} ${strike}${side} ${expiry} ×${s.prints_count} ${premCompact} ${labelStack(s)}${accel}`;
+        }).join(' · ')}`
+      : `*Top stacks:* none yet`,
   ];
 
   // ==========================================================================
