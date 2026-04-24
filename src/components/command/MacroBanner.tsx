@@ -6,12 +6,14 @@
  *      when ct_market_tide is available. VIX and tide hide gracefully if
  *      source data isn't present (ct_market_tide doesn't exist yet as of
  *      2026-04-23; guarded with try/catch in query).
- *   2. Watchlist tiles — 10 tiles, one per specialist ticker, each with a
- *      NOPE sparkline (today only, 09:30 ET onwards) pulled from
- *      ct_nope_minute. Line + 10% fill colored by sign of the latest value.
+ *   2. Watchlist tiles — 10 MacroTiles, one per specialist ticker, each
+ *      with an intraday price sparkline (from useMacroSparklines), a
+ *      flag-count chip, and a Lean-score footer.
  *
- * All network reads batched via .in('ticker', TICKERS) — two queries total
- * for the tile grid (price bars + NOPE), one for the macro strip overlap.
+ * All network reads are batched at this level: ct_price_bars (via
+ * useMacroSparklines + macro-strip 48h), ct_ticker_lean_score,
+ * ct_flags (active-only), ct_vix_history, ct_market_tide, plus the
+ * intraday-context RPC. Maps are passed down to each tile by key.
  */
 
 import { useMemo } from 'react';
@@ -19,9 +21,9 @@ import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { Area, AreaChart, ReferenceLine, ResponsiveContainer } from 'recharts';
-import { ChartSafe } from '@/components/ChartSafe';
-import { useAllTickersIntradayContext, RegimeChip } from '@/hooks/useTickerIntradayContext';
+import { useAllTickersIntradayContext } from '@/hooks/useTickerIntradayContext';
+import { useMacroSparklines } from '@/hooks/useMacroSparklines';
+import { MacroTile, type MacroLeanSummary } from '@/components/command/MacroTile';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'] as const;
 const MACRO_TICKERS = ['SPY','QQQ','IWM','VIX'] as const;
@@ -30,12 +32,6 @@ interface PriceBarRow {
   ticker: string;
   ts: string;
   close: number | string;
-}
-
-interface NopeRow {
-  ticker: string;
-  tick_timestamp: string;
-  nope: number | string;
 }
 
 interface MarketTideRow {
@@ -47,6 +43,18 @@ interface MarketTideRow {
 interface PriceSummary {
   spot: number | null;
   pct: number | null;  // today's % change (close vs first close today)
+}
+
+interface LeanScoreRow {
+  ticker: string;
+  score: number | string | null;
+  momentum_delta: number | string | null;
+  score_at: string;
+}
+
+interface FlagCountRow {
+  specialist_ticker: string;
+  status: string;
 }
 
 /**
@@ -137,20 +145,47 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
     },
   });
 
-  // 48h NOPE — same pre-market reasoning. Sparkline renders most recent
-  // session's data when today is still empty.
-  const { data: nopeRows } = useQuery<NopeRow[]>({
-    queryKey: ['ct_macro_nope', sinceIso.slice(0, 10)],
-    refetchInterval: 30_000,
+  // Intraday sparklines — one batch query, downsampled per ticker.
+  const { seriesMap } = useMacroSparklines();
+
+  // Lean scores — batched, one row per ticker (latest score_at per ticker).
+  // ct_ticker_lean_score can hold history; we only need the freshest per
+  // ticker. Pull the last 30min worth and reduce to the latest per ticker.
+  const { data: leanRows } = useQuery<LeanScoreRow[]>({
+    queryKey: ['ct_macro_lean_scores'],
+    refetchInterval: 60_000,
+    retry: false,
+    staleTime: 60_000,
     queryFn: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.from('ct_nope_minute' as never) as any)
-        .select('ticker,tick_timestamp,nope')
+      const { data, error } = await (supabase.from('ct_ticker_lean_score' as never) as any)
+        .select('ticker,score,momentum_delta,score_at')
         .in('ticker', Array.from(TICKERS))
-        .gte('tick_timestamp', sinceIso)
-        .order('tick_timestamp', { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as NopeRow[];
+        .order('score_at', { ascending: false })
+        .limit(TICKERS.length * 4);
+      if (error) return [];
+      return (data ?? []) as LeanScoreRow[];
+    },
+  });
+
+  // Active flag counts — single batched query, grouped in JS. "Today"
+  // bucket is since today's RTH open (13:30 UTC = 09:30 ET). Counts only
+  // non-terminal statuses (active, conviction). Cheap enough with a .in().
+  const { data: flagRows } = useQuery<FlagCountRow[]>({
+    queryKey: ['ct_macro_flag_counts'],
+    refetchInterval: 30_000,
+    retry: false,
+    queryFn: async () => {
+      const today = new Date();
+      const rthOpen = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 13, 30, 0)).toISOString();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('ct_flags' as never) as any)
+        .select('specialist_ticker,status')
+        .in('specialist_ticker', Array.from(TICKERS))
+        .in('status', ['active', 'conviction'])
+        .gte('created_at', rthOpen);
+      if (error) return [];
+      return (data ?? []) as FlagCountRow[];
     },
   });
 
@@ -199,16 +234,27 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
 
   const priceSummary = useMemo(() => summarize(priceBars ?? []), [priceBars]);
 
-  // Group NOPE by ticker for the tiles.
-  const nopeByTicker = useMemo(() => {
-    const m = new Map<string, NopeRow[]>();
-    for (const t of TICKERS) m.set(t, []);
-    for (const r of nopeRows ?? []) {
-      const arr = m.get(r.ticker);
-      if (arr) arr.push(r);
+  // Reduce lean score history to latest-per-ticker.
+  const leanByTicker = useMemo(() => {
+    const m = new Map<string, MacroLeanSummary>();
+    for (const r of leanRows ?? []) {
+      if (m.has(r.ticker)) continue; // rows pre-sorted desc by score_at → first wins
+      const score = toNum(r.score);
+      if (score == null) continue;
+      m.set(r.ticker, { score, momentum_delta: toNum(r.momentum_delta) });
     }
     return m;
-  }, [nopeRows]);
+  }, [leanRows]);
+
+  // Count active flags per ticker.
+  const flagsByTicker = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const t of TICKERS) m.set(t, 0);
+    for (const r of flagRows ?? []) {
+      m.set(r.specialist_ticker, (m.get(r.specialist_ticker) ?? 0) + 1);
+    }
+    return m;
+  }, [flagRows]);
 
   // Tide label + color.
   const tideLabel = useMemo(() => {
@@ -265,63 +311,27 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
         )}
       </Card>
 
-      {/* Section 2 — watchlist tiles with NOPE sparklines */}
+      {/* Section 2 — watchlist tiles with intraday sparkline + Lean footer */}
       <div className="flex gap-2 overflow-x-auto pb-1 -mx-1 px-1">
         {TICKERS.map((t) => {
-          const rows = nopeByTicker.get(t) ?? [];
-          const series = rows.map((r) => ({ t: r.tick_timestamp.slice(11, 16), n: toNum(r.nope) ?? 0 }));
-          const latest = series.length ? series[series.length - 1].n : null;
-          const positive = latest != null ? latest >= 0 : true;
-          const color = positive ? '#10b981' : '#ef4444';
-          const s = priceSummary.get(t);
+          // Prefer intraday-context spot/pct (from-prev-close) over the 48h
+          // window calc — it handles pre-market cleanly. Fall back to
+          // priceSummary if the RPC returned nothing for this ticker.
           const regime = intradayMap?.get(t) ?? null;
+          const summary = priceSummary.get(t);
+          const spot = regime?.spot ?? summary?.spot ?? null;
+          const pct = regime?.pct_from_prev_close ?? summary?.pct ?? null;
           return (
-            <button
-              type="button"
+            <MacroTile
               key={t}
+              ticker={t}
+              spot={spot}
+              pct={pct}
+              sparkline={seriesMap.get(t)}
+              lean={leanByTicker.get(t)}
+              flagCount={flagsByTicker.get(t) ?? 0}
               onClick={() => onTickerClick(t)}
-              className="shrink-0 w-28 h-24 text-left"
-            >
-              <Card className="w-full h-full p-1.5 flex flex-col gap-0.5 hover:border-primary/40 transition-colors">
-                <div className="flex items-baseline justify-between leading-none">
-                  <span className="font-mono font-bold text-[12px] text-foreground">{t}</span>
-                  <span className={cn('font-mono tabular-nums text-[9px]', pctColor(s?.pct ?? null))}>
-                    {fmtPct(s?.pct ?? null)}
-                  </span>
-                </div>
-                <div className="font-mono tabular-nums text-[10px] text-muted-foreground leading-none">
-                  {fmtSpot(s?.spot ?? null)}
-                </div>
-                {regime && (
-                  <div className="leading-none">
-                    <RegimeChip context={regime} variant="from-prev-close" withLabel={false} />
-                  </div>
-                )}
-                <div className="flex-1 -mx-1 min-h-0">
-                  <ChartSafe>
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={series} margin={{ top: 1, right: 1, left: 1, bottom: 1 }}>
-                        <defs>
-                          <linearGradient id={`macro-g-${t}`} x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor={color} stopOpacity={0.25} />
-                            <stop offset="100%" stopColor={color} stopOpacity={0.02} />
-                          </linearGradient>
-                        </defs>
-                        <ReferenceLine y={0} stroke="hsl(var(--border))" strokeDasharray="2 2" />
-                        <Area
-                          type="monotone"
-                          dataKey="n"
-                          stroke={color}
-                          strokeWidth={1.25}
-                          fill={`url(#macro-g-${t})`}
-                          isAnimationActive={false}
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </ChartSafe>
-                </div>
-              </Card>
-            </button>
+            />
           );
         })}
       </div>
