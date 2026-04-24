@@ -18,11 +18,20 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle,
 } from '@/components/ui/sheet';
 import { Badge } from '@/components/ui/badge';
+import { Card } from '@/components/ui/card';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
-import { Activity } from 'lucide-react';
+import { Activity, Gauge, Target, Newspaper } from 'lucide-react';
+
+/** Parse underlying ticker from OCC option symbol.
+ *  OCC format: ROOT + YYMMDD + (C|P) + 8-digit strike.
+ *  Strip the last 15 chars to get the ticker. */
+function parseOccTicker(sym: string | null | undefined): string | null {
+  if (!sym || sym.length < 16) return null;
+  return sym.slice(0, sym.length - 15).toUpperCase();
+}
 
 interface AlertRow {
   id: number;
@@ -62,6 +71,29 @@ interface FlagRef {
   status: string;
   thesis: string;
   created_at: string;
+}
+
+interface TickerSnapshot {
+  ticker: string;
+  spot: number | null;
+  iv_rank: number | null;
+  call_wall: number | null;
+  put_wall: number | null;
+  gamma_flip: number | null;
+  max_pain: number | null;
+  regime: string | null;
+  put_call_ratio: number | null;
+  next_earnings_date: string | null;
+  earnings_expected_move: number | null;
+  snapshot_at: string | null;
+  recent_news: Array<{
+    headline: string;
+    source: string | null;
+    impact: string | null;
+    significance: number | null;
+    claude_take: string | null;
+    created_at: string;
+  }> | null;
 }
 
 interface ContractSheetProps {
@@ -162,6 +194,27 @@ export function ContractSheet({ optionSymbol, open, onOpenChange }: ContractShee
     },
   });
 
+  // Underlying ticker inferred from OCC symbol.
+  const ticker = useMemo(() => parseOccTicker(optionSymbol), [optionSymbol]);
+
+  // Ticker-level micro snapshot + recent news. Same table TickerSheet uses;
+  // ct-watcher maintains one row per ticker with the quant card payload.
+  const { data: snapshot } = useQuery<TickerSnapshot | null>({
+    queryKey: ['contract_ticker_snapshot', ticker],
+    enabled: open && !!ticker,
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      if (!ticker) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('ct_ticker_snapshots' as never) as any)
+        .select('*')
+        .eq('ticker', ticker)
+        .maybeSingle();
+      if (error) return null;
+      return data as TickerSnapshot | null;
+    },
+  });
+
   const { data: flagRef } = useQuery<FlagRef | null>({
     queryKey: ['ct_contract_flag', optionSymbol],
     enabled: open && !!optionSymbol,
@@ -254,6 +307,139 @@ export function ContractSheet({ optionSymbol, open, onOpenChange }: ContractShee
                 {flagRef.thesis.length > 240 ? `${flagRef.thesis.slice(0, 240)}…` : flagRef.thesis}
               </div>
             </div>
+          )}
+
+          {/* Micro context: where spot sits vs this contract's strike, plus ticker-level structure */}
+          {snapshot && (
+            <section>
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+                <Gauge className="w-3 h-3" />
+                Micro context · {snapshot.ticker}
+                {snapshot.snapshot_at && (
+                  <span className="ml-auto text-muted-foreground/60 normal-case text-[10px]">{relativeTime(snapshot.snapshot_at)}</span>
+                )}
+              </div>
+              <Card className="p-3 grid grid-cols-2 md:grid-cols-4 gap-x-3 gap-y-2 text-xs">
+                <div>
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Spot</div>
+                  <div className="font-mono tabular-nums font-semibold">
+                    {snapshot.spot != null ? `$${snapshot.spot.toFixed(2)}` : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Strike dist</div>
+                  <div className={cn(
+                    'font-mono tabular-nums',
+                    (() => {
+                      if (snapshot.spot == null || strike == null || snapshot.spot <= 0) return 'text-muted-foreground';
+                      const pct = Math.abs(strike - snapshot.spot) / snapshot.spot;
+                      if (pct < 0.01) return 'text-muted-foreground';
+                      if (pct < 0.03) return 'text-foreground';
+                      if (pct < 0.07) return 'text-amber-300';
+                      return 'text-emerald-400 font-bold';
+                    })(),
+                  )}>
+                    {snapshot.spot != null && strike != null
+                      ? `${((strike - snapshot.spot) / snapshot.spot * 100).toFixed(1)}%`
+                      : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Regime</div>
+                  <div className={cn(
+                    'font-mono text-[11px]',
+                    snapshot.regime === 'positive_gamma' ? 'text-emerald-300' : snapshot.regime === 'negative_gamma' ? 'text-red-300' : 'text-muted-foreground',
+                  )}>
+                    {snapshot.regime?.replace('_', ' ') ?? '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider">IV rank</div>
+                  <div className="font-mono tabular-nums">
+                    {snapshot.iv_rank != null ? snapshot.iv_rank.toFixed(1) : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider inline-flex items-center gap-1">
+                    <Target className="w-2.5 h-2.5" /> Call wall
+                  </div>
+                  <div className="font-mono tabular-nums text-emerald-300">
+                    {snapshot.call_wall != null ? `$${snapshot.call_wall}` : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider inline-flex items-center gap-1">
+                    <Target className="w-2.5 h-2.5" /> Put wall
+                  </div>
+                  <div className="font-mono tabular-nums text-red-300">
+                    {snapshot.put_wall != null ? `$${snapshot.put_wall}` : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Max pain</div>
+                  <div className="font-mono tabular-nums">
+                    {snapshot.max_pain != null ? `$${snapshot.max_pain}` : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-[10px] text-muted-foreground uppercase tracking-wider">P/C</div>
+                  <div className="font-mono tabular-nums">
+                    {snapshot.put_call_ratio != null ? snapshot.put_call_ratio.toFixed(2) : '—'}
+                  </div>
+                </div>
+                {snapshot.next_earnings_date && (
+                  <div className="col-span-2 md:col-span-4 pt-2 border-t border-border/40">
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Earnings</div>
+                    <div className="font-mono text-amber-300">
+                      {snapshot.next_earnings_date}
+                      {snapshot.earnings_expected_move != null && (
+                        <span className="ml-2 text-muted-foreground">±{(snapshot.earnings_expected_move * 100).toFixed(1)}%</span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </Card>
+            </section>
+          )}
+
+          {/* Recent news for this ticker with Claude's take — news moves stocks, options front-run news */}
+          {snapshot?.recent_news && snapshot.recent_news.length > 0 && (
+            <section>
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+                <Newspaper className="w-3 h-3" />
+                Recent news · {snapshot.ticker}
+              </div>
+              <div className="space-y-1.5">
+                {snapshot.recent_news.slice(0, 4).map((n, i) => (
+                  <Card
+                    key={i}
+                    className={cn(
+                      'p-2.5',
+                      n.impact === 'bullish' && 'border-emerald-500/25',
+                      n.impact === 'bearish' && 'border-red-500/25',
+                    )}
+                  >
+                    <div className="flex items-baseline gap-2 mb-1">
+                      <Badge variant="outline" className={cn(
+                        'text-[9px] font-mono px-1 py-0 uppercase',
+                        n.impact === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+                        n.impact === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
+                        (!n.impact || n.impact === 'neutral') && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
+                      )}>
+                        {n.impact ?? 'neutral'}
+                      </Badge>
+                      {n.source && <span className="text-[10px] text-muted-foreground">{n.source}</span>}
+                      {n.significance != null && <span className="text-[10px] text-muted-foreground">· sig {n.significance}</span>}
+                      <span className="text-[10px] text-muted-foreground ml-auto">{relativeTime(n.created_at)}</span>
+                    </div>
+                    <div className="text-xs font-semibold text-foreground/90 leading-snug mb-1">{n.headline}</div>
+                    {n.claude_take && (
+                      <div className="text-[11px] text-muted-foreground leading-snug">{n.claude_take}</div>
+                    )}
+                  </Card>
+                ))}
+              </div>
+            </section>
           )}
 
           {/* Today's prints */}

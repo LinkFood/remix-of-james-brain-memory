@@ -282,6 +282,9 @@ verify_jwt = false
 [functions.ct-tavily-news-watcher]
 verify_jwt = false
 
+[functions.ct-news-sweep]
+verify_jwt = false
+
 [functions.ct-daily-brief]
 verify_jwt = false
 
