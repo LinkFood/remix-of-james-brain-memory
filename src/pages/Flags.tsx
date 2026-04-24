@@ -19,9 +19,12 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import {
-  Activity, RefreshCw, ArrowUp, ArrowDown, Minus, Send, ChevronDown, ChevronUp,
+  Activity, RefreshCw, ArrowUp, ArrowDown, Minus, Send, ChevronDown, ChevronUp, Star,
 } from 'lucide-react';
 import { FlagDetailSheet } from '@/components/command/FlagDetailSheet';
+import { ContractSheet } from '@/components/command/ContractSheet';
+
+type Mode = 'specialists' | 'mine' | 'both';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -69,6 +72,30 @@ interface Filters {
   minScore: number;
   onlySlacked: boolean;
 }
+
+interface JamesFlagGrade {
+  outcome: string;
+  price_change_pct: number | null;
+  move_to_strike_pct: number | null;
+  crossed_strike: boolean | null;
+  graded_at: string | null;
+}
+
+interface JamesFlag {
+  id: number;
+  option_symbol: string;
+  ticker: string | null;
+  source_flow_id: number | null;
+  source_alert_id: string | null;
+  direction_view: Direction | null;
+  note: string | null;
+  created_at: string;
+  ct_james_flag_grades: JamesFlagGrade[] | null;
+}
+
+type MergedItem =
+  | { origin: 'claude'; created_at: string; key: string; flag: Flag }
+  | { origin: 'james'; created_at: string; key: string; flag: JamesFlag };
 
 function relativeTime(iso: string): string {
   const ms = Date.now() - Date.parse(iso);
@@ -247,8 +274,95 @@ function FlagTile({ flag, onOpen }: { flag: Flag; onOpen: (flag: Flag) => void }
   );
 }
 
+function JamesFlagTile({
+  flag,
+  onOpen,
+  showOriginBadge,
+}: {
+  flag: JamesFlag;
+  onOpen: (optionSymbol: string) => void;
+  showOriginBadge?: boolean;
+}) {
+  const grade = flag.ct_james_flag_grades?.[0] ?? null;
+  const direction: Direction = flag.direction_view ?? 'neutral';
+  const hasGrade = grade != null && grade.outcome && grade.outcome !== 'pending';
+
+  return (
+    <Card
+      onClick={() => onOpen(flag.option_symbol)}
+      className="p-3 flex flex-col gap-2 hover:shadow-md transition-shadow cursor-pointer"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Badge
+            variant="outline"
+            className={cn('font-mono text-[11px] px-1.5 py-0', directionColor(direction))}
+          >
+            <DirectionIcon d={direction} />
+            <span className="ml-1">{flag.ticker ?? '—'}</span>
+          </Badge>
+          {showOriginBadge && (
+            <Badge
+              variant="outline"
+              className="text-[10px] px-1.5 py-0 font-mono border-amber-500/40 text-amber-300"
+            >
+              <Star className="w-2.5 h-2.5 mr-1" />
+              James
+            </Badge>
+          )}
+          {hasGrade && (
+            <Badge
+              variant="outline"
+              className={cn('text-[10px] px-1.5 py-0 font-mono uppercase', outcomeColor(grade!.outcome))}
+            >
+              {grade!.outcome}
+            </Badge>
+          )}
+          {!hasGrade && (
+            <Badge
+              variant="outline"
+              className="text-[10px] px-1.5 py-0 font-mono uppercase border-slate-500/40 text-slate-400"
+            >
+              pending
+            </Badge>
+          )}
+          {hasGrade && grade!.move_to_strike_pct != null && (
+            <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
+              {grade!.move_to_strike_pct >= 0 ? '+' : ''}
+              {grade!.move_to_strike_pct.toFixed(1)}% to strike
+              {grade!.crossed_strike && <span className="ml-1 text-emerald-300">✓</span>}
+            </span>
+          )}
+        </div>
+        <Star className="w-4 h-4 text-amber-400 shrink-0 fill-amber-400/40" />
+      </div>
+
+      {/* Contract */}
+      <div className="flex items-center justify-between text-[11px] text-muted-foreground gap-2">
+        <div className="font-mono truncate">{flag.option_symbol}</div>
+        {hasGrade && grade!.price_change_pct != null && (
+          <div className="shrink-0 text-[10px] tabular-nums">
+            spot {grade!.price_change_pct >= 0 ? '+' : ''}
+            {grade!.price_change_pct.toFixed(2)}%
+          </div>
+        )}
+      </div>
+
+      {/* Note */}
+      <div className="text-[12px] leading-snug text-foreground/90">
+        {flag.note?.trim() ? flag.note : <span className="text-muted-foreground italic">No note</span>}
+      </div>
+
+      <div className="text-[9px] text-muted-foreground/60 tabular-nums">
+        starred {relativeTime(flag.created_at)}
+      </div>
+    </Card>
+  );
+}
+
 export default function Flags() {
   const qc = useQueryClient();
+  const [mode, setMode] = useState<Mode>('specialists');
   const [filters, setFilters] = useState<Filters>({
     specialists: new Set(),
     status: 'all',
@@ -257,6 +371,10 @@ export default function Flags() {
     onlySlacked: false,
   });
   const [selectedFlag, setSelectedFlag] = useState<Flag | null>(null);
+  const [selectedContract, setSelectedContract] = useState<string | null>(null);
+
+  const specialistsActive = mode === 'specialists' || mode === 'both';
+  const mineActive = mode === 'mine' || mode === 'both';
 
   const { data: flags, isLoading } = useQuery<Flag[]>({
     queryKey: ['ct_flags_live', {
@@ -285,6 +403,31 @@ export default function Flags() {
       return (data ?? []) as unknown as Flag[];
     },
     refetchInterval: 30_000,
+    enabled: specialistsActive,
+  });
+
+  const { data: jamesFlags, isLoading: jamesLoading } = useQuery<JamesFlag[]>({
+    queryKey: ['ct_james_flags_live', {
+      specialists: Array.from(filters.specialists).sort(),
+      direction: filters.direction,
+    }],
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let q: any = supabase
+        .from('ct_james_flags' as never)
+        .select('id, option_symbol, ticker, source_flow_id, source_alert_id, direction_view, note, created_at, ct_james_flag_grades(outcome, price_change_pct, move_to_strike_pct, crossed_strike, graded_at)')
+        .order('created_at', { ascending: false })
+        .limit(200);
+      if (filters.specialists.size > 0) {
+        q = q.in('ticker', Array.from(filters.specialists));
+      }
+      if (filters.direction !== 'all') q = q.eq('direction_view', filters.direction);
+      const { data, error } = await q;
+      if (error) throw error;
+      return (data ?? []) as unknown as JamesFlag[];
+    },
+    refetchInterval: 30_000,
+    enabled: mineActive,
   });
 
   const toggleSpecialist = (t: string) => {
@@ -296,18 +439,39 @@ export default function Flags() {
   };
 
   const counts = useMemo(() => {
-    if (!flags) return { active: 0, conviction: 0, gradedToday: 0 };
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
     const todayMs = todayStart.getTime();
     let active = 0, conviction = 0, gradedToday = 0;
-    for (const f of flags) {
-      if (f.status === 'active') active++;
-      if (f.status === 'conviction') conviction++;
-      const g = f.ct_flag_grades?.[0];
-      if (g?.graded_at && Date.parse(g.graded_at) >= todayMs) gradedToday++;
+    if (flags) {
+      for (const f of flags) {
+        if (f.status === 'active') active++;
+        if (f.status === 'conviction') conviction++;
+        const g = f.ct_flag_grades?.[0];
+        if (g?.graded_at && Date.parse(g.graded_at) >= todayMs) gradedToday++;
+      }
     }
-    return { active, conviction, gradedToday };
-  }, [flags]);
+    const mine = jamesFlags?.length ?? 0;
+    return { active, conviction, gradedToday, mine };
+  }, [flags, jamesFlags]);
+
+  // Merged, chronologically sorted feed honoring mode.
+  const merged: MergedItem[] = useMemo(() => {
+    const items: MergedItem[] = [];
+    if (specialistsActive && flags) {
+      for (const f of flags) {
+        items.push({ origin: 'claude', created_at: f.created_at, key: `c-${f.id}`, flag: f });
+      }
+    }
+    if (mineActive && jamesFlags) {
+      for (const f of jamesFlags) {
+        items.push({ origin: 'james', created_at: f.created_at, key: `j-${f.id}`, flag: f });
+      }
+    }
+    items.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+    return items;
+  }, [flags, jamesFlags, specialistsActive, mineActive]);
+
+  const listLoading = (specialistsActive && isLoading && !flags) || (mineActive && jamesLoading && !jamesFlags);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -324,20 +488,32 @@ export default function Flags() {
           </div>
           <div className="flex items-center gap-3">
             <div className="text-[11px] text-muted-foreground tabular-nums flex items-center gap-3">
-              <span>
-                <span className="text-blue-300 font-semibold">{counts.active}</span> active
-              </span>
-              <span>
-                <span className="text-emerald-300 font-semibold">{counts.conviction}</span> conviction
-              </span>
-              <span>
-                <span className="text-foreground font-semibold">{counts.gradedToday}</span> graded today
-              </span>
+              {specialistsActive && (
+                <>
+                  <span>
+                    <span className="text-blue-300 font-semibold">{counts.active}</span> active
+                  </span>
+                  <span>
+                    <span className="text-emerald-300 font-semibold">{counts.conviction}</span> conviction
+                  </span>
+                  <span>
+                    <span className="text-foreground font-semibold">{counts.gradedToday}</span> graded today
+                  </span>
+                </>
+              )}
+              {mineActive && (
+                <span>
+                  <span className="text-amber-300 font-semibold">{counts.mine}</span> mine
+                </span>
+              )}
             </div>
             <Button
               size="sm"
               variant="outline"
-              onClick={() => qc.invalidateQueries({ queryKey: ['ct_flags_live'] })}
+              onClick={() => {
+                qc.invalidateQueries({ queryKey: ['ct_flags_live'] });
+                qc.invalidateQueries({ queryKey: ['ct_james_flags_live'] });
+              }}
               className="text-xs"
             >
               <RefreshCw className="w-3 h-3 mr-1" />
@@ -348,6 +524,23 @@ export default function Flags() {
 
         {/* Filter strip */}
         <Card className="p-3 space-y-3">
+          {/* Mode segmented control */}
+          <div className="flex items-center gap-1">
+            <span className="text-xs text-muted-foreground mr-1">View:</span>
+            {(['specialists', 'mine', 'both'] as const).map((m) => (
+              <Button
+                key={m}
+                size="sm"
+                variant={mode === m ? 'default' : 'outline'}
+                onClick={() => setMode(m)}
+                className="h-7 px-3 text-[11px] capitalize"
+              >
+                {m === 'mine' && <Star className="w-3 h-3 mr-1" />}
+                {m}
+              </Button>
+            ))}
+          </div>
+
           {/* Specialist chips */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-muted-foreground mr-1">Specialist:</span>
@@ -379,21 +572,23 @@ export default function Flags() {
           </div>
 
           <div className="flex items-center gap-4 flex-wrap">
-            {/* Status toggle */}
-            <div className="flex items-center gap-1">
-              <span className="text-xs text-muted-foreground mr-1">Status:</span>
-              {(['all', 'active', 'conviction', 'graded'] as const).map((s) => (
-                <Button
-                  key={s}
-                  size="sm"
-                  variant={filters.status === s ? 'default' : 'outline'}
-                  onClick={() => setFilters((p) => ({ ...p, status: s }))}
-                  className="h-7 px-2 text-[11px] capitalize"
-                >
-                  {s}
-                </Button>
-              ))}
-            </div>
+            {/* Status toggle — specialist-only */}
+            {specialistsActive && (
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted-foreground mr-1">Status:</span>
+                {(['all', 'active', 'conviction', 'graded'] as const).map((s) => (
+                  <Button
+                    key={s}
+                    size="sm"
+                    variant={filters.status === s ? 'default' : 'outline'}
+                    onClick={() => setFilters((p) => ({ ...p, status: s }))}
+                    className="h-7 px-2 text-[11px] capitalize"
+                  >
+                    {s}
+                  </Button>
+                ))}
+              </div>
+            )}
 
             {/* Direction toggle */}
             <div className="flex items-center gap-1">
@@ -411,62 +606,83 @@ export default function Flags() {
               ))}
             </div>
 
-            {/* Slacked toggle */}
-            <div className="flex items-center gap-2 ml-auto">
-              <span className="text-xs text-muted-foreground">Only Slacked</span>
-              <Switch
-                checked={filters.onlySlacked}
-                onCheckedChange={(v) => setFilters((p) => ({ ...p, onlySlacked: v }))}
-              />
-            </div>
+            {/* Slacked toggle — specialist-only */}
+            {specialistsActive && (
+              <div className="flex items-center gap-2 ml-auto">
+                <span className="text-xs text-muted-foreground">Only Slacked</span>
+                <Switch
+                  checked={filters.onlySlacked}
+                  onCheckedChange={(v) => setFilters((p) => ({ ...p, onlySlacked: v }))}
+                />
+              </div>
+            )}
           </div>
 
-          {/* Min score slider */}
-          <div className="flex items-center gap-3">
-            <span className="text-xs text-muted-foreground shrink-0">Min score: {filters.minScore}</span>
-            <div className="flex-1 max-w-sm">
-              <Slider
-                min={60}
-                max={100}
-                step={1}
-                value={[filters.minScore]}
-                onValueChange={(v) => setFilters((p) => ({ ...p, minScore: v[0] }))}
-              />
+          {/* Min score slider — specialist-only */}
+          {specialistsActive && (
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-muted-foreground shrink-0">Min score: {filters.minScore}</span>
+              <div className="flex-1 max-w-sm">
+                <Slider
+                  min={60}
+                  max={100}
+                  step={1}
+                  value={[filters.minScore]}
+                  onValueChange={(v) => setFilters((p) => ({ ...p, minScore: v[0] }))}
+                />
+              </div>
+              <div className="flex gap-1">
+                {[60, 70, 80, 90].map((n) => (
+                  <button
+                    key={n}
+                    onClick={() => setFilters((p) => ({ ...p, minScore: n }))}
+                    className={cn(
+                      'text-[10px] font-mono px-1.5 py-0.5 rounded transition-colors',
+                      filters.minScore === n
+                        ? 'bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="flex gap-1">
-              {[60, 70, 80, 90].map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setFilters((p) => ({ ...p, minScore: n }))}
-                  className={cn(
-                    'text-[10px] font-mono px-1.5 py-0.5 rounded transition-colors',
-                    filters.minScore === n
-                      ? 'bg-primary/10 text-primary'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {n}
-                </button>
-              ))}
-            </div>
-          </div>
+          )}
         </Card>
 
         {/* Flags list */}
-        {isLoading && !flags ? (
+        {listLoading ? (
           <Card className="p-8 text-center text-sm text-muted-foreground">
             Loading flags…
           </Card>
-        ) : !flags || flags.length === 0 ? (
+        ) : merged.length === 0 ? (
           <Card className="p-8 text-center text-sm text-muted-foreground">
-            No flags issued yet. Specialists wake up on scheduled cadence or when flow exceeds score 70.
-            First flag will appear here.
+            {mode === 'mine' ? (
+              <>No stars yet. Flag a print from the /tape page and it will show up here.</>
+            ) : mode === 'both' ? (
+              <>Nothing to show. No specialist flags at this threshold and no stars yet.</>
+            ) : (
+              <>
+                No flags issued yet. Specialists wake up on scheduled cadence or when flow exceeds score 70.
+                First flag will appear here.
+              </>
+            )}
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {flags.map((f) => (
-              <FlagTile key={f.id} flag={f} onOpen={setSelectedFlag} />
-            ))}
+            {merged.map((item) =>
+              item.origin === 'claude' ? (
+                <FlagTile key={item.key} flag={item.flag} onOpen={setSelectedFlag} />
+              ) : (
+                <JamesFlagTile
+                  key={item.key}
+                  flag={item.flag}
+                  onOpen={setSelectedContract}
+                  showOriginBadge={mode === 'both'}
+                />
+              ),
+            )}
           </div>
         )}
 
@@ -489,6 +705,13 @@ export default function Flags() {
         flag={selectedFlag}
         open={selectedFlag !== null}
         onOpenChange={(o) => { if (!o) setSelectedFlag(null); }}
+      />
+
+      {/* Contract sheet for James's stars */}
+      <ContractSheet
+        optionSymbol={selectedContract}
+        open={selectedContract !== null}
+        onOpenChange={(o) => { if (!o) setSelectedContract(null); }}
       />
     </div>
   );

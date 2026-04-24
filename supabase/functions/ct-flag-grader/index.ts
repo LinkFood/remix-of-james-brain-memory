@@ -290,6 +290,151 @@ async function gradeExpiredFlags(
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Job C — grade James's manual stars (ct_james_flags)
+//
+// For each star, check 24h / 72h / 168h horizons. If the horizon has
+// passed and we have price data at both endpoints, compute the move and
+// write a ct_james_flag_grades row. Outcome is based on move-to-strike:
+//
+//   crossed_strike               → win
+//   moved >= 2% toward strike    → partial
+//   moved flat (±0.5%)           → invalidated_early
+//   moved >= 2% away from strike → loss
+//
+// Stars have no built-in horizon_ts. We derive direction-aware target from
+// the OCC side (C or P) + James's direction_view when provided. If direction
+// is ambiguous, we default to "which way does the strike sit relative to
+// spot at star time?" (calls → predict up, puts → predict down).
+// ---------------------------------------------------------------------------
+
+interface JamesFlagRow {
+  id: number;
+  ticker: string;
+  option_symbol: string;
+  source_flow_id: number | null;
+  source_alert_id: string | null;
+  direction_view: string | null;
+  created_at: string;
+}
+
+const JAMES_HORIZONS = [24, 72, 168];
+
+function parseOccSide(sym: string | null | undefined): 'call' | 'put' | null {
+  if (!sym || sym.length < 9) return null;
+  const ch = sym.charAt(sym.length - 9);
+  if (ch === 'C' || ch === 'c') return 'call';
+  if (ch === 'P' || ch === 'p') return 'put';
+  return null;
+}
+
+function parseOccStrike(sym: string | null | undefined): number | null {
+  if (!sym || sym.length < 9) return null;
+  const strikeStr = sym.slice(sym.length - 8);
+  const n = parseInt(strikeStr, 10);
+  if (!Number.isFinite(n)) return null;
+  return n / 1000;  // OCC strike is in thousandths
+}
+
+async function gradeJamesFlags(
+  supabase: SupabaseClient,
+): Promise<{ graded: number; skipped: number; errors: string[] }> {
+  const errors: string[] = [];
+  let graded = 0;
+  let skipped = 0;
+
+  // Pull stars old enough to have hit at least the 24h horizon.
+  const cutoff = new Date(Date.now() - JAMES_HORIZONS[0] * 3600_000).toISOString();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: starsRaw, error: selErr } = await (supabase.from('ct_james_flags' as never) as any)
+    .select('id,ticker,option_symbol,source_flow_id,source_alert_id,direction_view,created_at')
+    .lte('created_at', cutoff)
+    .order('created_at', { ascending: false })
+    .limit(500);
+  if (selErr) {
+    errors.push(`james stars select: ${selErr.message}`);
+    return { graded, skipped, errors };
+  }
+  const stars = (starsRaw ?? []) as JamesFlagRow[];
+
+  for (const star of stars) {
+    const side = parseOccSide(star.option_symbol);
+    const strike = parseOccStrike(star.option_symbol);
+    if (side == null || strike == null) {
+      skipped++;
+      continue;
+    }
+
+    const spotAtFlag = await nearestClose(supabase, star.ticker, star.created_at, 2 * 3600_000);
+    if (spotAtFlag == null || spotAtFlag <= 0) {
+      skipped++;
+      continue;
+    }
+
+    for (const hrs of JAMES_HORIZONS) {
+      const horizonTs = new Date(Date.parse(star.created_at) + hrs * 3600_000);
+      // Skip horizons still in the future
+      if (horizonTs.getTime() > Date.now()) continue;
+
+      // Already graded for this horizon?
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: existing } = await (supabase.from('ct_james_flag_grades' as never) as any)
+        .select('id')
+        .eq('james_flag_id', star.id)
+        .eq('horizon_hours', hrs)
+        .limit(1);
+      if ((existing ?? []).length > 0) continue;
+
+      const spotAtHorizon = await nearestClose(supabase, star.ticker, horizonTs.toISOString(), 2 * 3600_000);
+      if (spotAtHorizon == null || spotAtHorizon <= 0) {
+        skipped++;
+        continue;
+      }
+
+      const priceChangePct = (spotAtHorizon - spotAtFlag) / spotAtFlag * 100;
+      const distBefore = Math.abs(strike - spotAtFlag);
+      const distAfter = Math.abs(strike - spotAtHorizon);
+      const moveTowardStrikeAbs = distBefore - distAfter;
+      const moveToStrikePct = (moveTowardStrikeAbs / spotAtFlag) * 100;
+      const crossedStrike =
+        (side === 'call' && spotAtHorizon >= strike && spotAtFlag < strike) ||
+        (side === 'put'  && spotAtHorizon <= strike && spotAtFlag > strike);
+
+      // Outcome classification
+      let outcome: 'win' | 'partial' | 'loss' | 'invalidated_early' = 'invalidated_early';
+      if (crossedStrike) outcome = 'win';
+      else if (moveToStrikePct >= 2) outcome = 'partial';
+      else if (moveToStrikePct <= -2) outcome = 'loss';
+      else outcome = 'invalidated_early';
+
+      const row = {
+        james_flag_id: star.id,
+        ticker: star.ticker,
+        option_symbol: star.option_symbol,
+        horizon_hours: hrs,
+        outcome,
+        spot_at_flag: Math.round(spotAtFlag * 10000) / 10000,
+        spot_at_horizon: Math.round(spotAtHorizon * 10000) / 10000,
+        price_change_pct: Math.round(priceChangePct * 1000) / 1000,
+        move_to_strike_pct: Math.round(moveToStrikePct * 1000) / 1000,
+        crossed_strike: crossedStrike,
+      };
+
+      const { error: insErr } = await supabase
+        .from('ct_james_flag_grades')
+        .upsert(row, { onConflict: 'james_flag_id,horizon_hours' });
+      if (insErr) {
+        errors.push(`james grade insert ${star.id}@${hrs}h: ${insErr.message}`);
+        continue;
+      }
+      graded++;
+    }
+  }
+
+  return { graded, skipped, errors };
+}
+
+// ---------------------------------------------------------------------------
 // Job B — T+1 OI confirmation
 // ---------------------------------------------------------------------------
 async function confirmT1OI(
@@ -409,14 +554,17 @@ serve(async (req) => {
   // Job B: T+1 OI confirmation upgrades.
   const jobB = await confirmT1OI(supabase);
 
+  // Job C: grade James's manual stars at 24/72/168h horizons.
+  const jobC = await gradeJamesFlags(supabase);
+
   const elapsedMs = Date.now() - startedAt;
 
   // Record a single decision-journal row per run for auditability.
   await recordDecision(supabase, {
     decision_type: 'flag_grader_run',
     model_tier: 'deterministic',
-    reasoning: `target=${targetThresholdPct}% — graded ${jobA.graded}, skipped ${jobA.skipped}, oi_upgrades ${jobB.upgraded}, still_active ${jobB.still_active}, errors ${jobA.errors.length + jobB.errors.length}`,
-    outcome: jobA.graded > 0 || jobB.upgraded > 0 ? 'progress' : 'noop',
+    reasoning: `target=${targetThresholdPct}% — graded ${jobA.graded}/skipped ${jobA.skipped}, oi_upgrades ${jobB.upgraded}/still_active ${jobB.still_active}, james_graded ${jobC.graded}/skipped ${jobC.skipped}, errors ${jobA.errors.length + jobB.errors.length + jobC.errors.length}`,
+    outcome: jobA.graded > 0 || jobB.upgraded > 0 || jobC.graded > 0 ? 'progress' : 'noop',
   });
 
   return new Response(JSON.stringify({
@@ -427,7 +575,9 @@ serve(async (req) => {
     skipped_count: jobA.skipped,
     conviction_upgraded_count: jobB.upgraded,
     still_active_count: jobB.still_active,
-    errors: [...jobA.errors, ...jobB.errors].slice(0, 20),
+    james_graded_count: jobC.graded,
+    james_skipped_count: jobC.skipped,
+    errors: [...jobA.errors, ...jobB.errors, ...jobC.errors].slice(0, 20),
   }), {
     status: 200,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },

@@ -135,6 +135,9 @@ verify_jwt = false
 [functions.ct-tape-reader]
 verify_jwt = false
 
+[functions.ct-score-self-grade]
+verify_jwt = false
+
 [functions.ct-event-calendar-ingester]
 verify_jwt = false
 

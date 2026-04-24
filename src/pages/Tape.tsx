@@ -404,6 +404,37 @@ export default function Tape() {
     return s;
   }, [jamesFlags]);
 
+  // Latest grade per starred option_symbol — shown as chip next to star.
+  interface JamesGradeRow {
+    option_symbol: string;
+    horizon_hours: number;
+    outcome: string;
+    move_to_strike_pct: number | null;
+    crossed_strike: boolean;
+  }
+  const { data: jamesGrades } = useQuery<JamesGradeRow[]>({
+    queryKey: ['ct_james_flag_grades_all'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('ct_james_flag_grades' as never) as any)
+        .select('option_symbol,horizon_hours,outcome,move_to_strike_pct,crossed_strike')
+        .order('graded_at', { ascending: false })
+        .limit(2000);
+      if (error) return [];
+      return (data ?? []) as JamesGradeRow[];
+    },
+  });
+  const latestGradeByOption = useMemo(() => {
+    const m = new Map<string, JamesGradeRow>();
+    // jamesGrades is sorted graded_at desc so first row per option_symbol
+    // is the most recently graded horizon.
+    for (const g of jamesGrades ?? []) {
+      if (!m.has(g.option_symbol)) m.set(g.option_symbol, g);
+    }
+    return m;
+  }, [jamesGrades]);
+
   // Pull alert_type + raw + side for the scored rows so the Tape column is accurate.
   // One batched call keyed on the set of alert_ids that scored rows point at.
   const scoredSourceIds = useMemo(() => {
@@ -1053,14 +1084,35 @@ export default function Tape() {
                           });
                         }}
                       >
-                        <Star
-                          className={cn(
-                            'w-3.5 h-3.5 inline cursor-pointer transition-colors',
-                            flaggedSymbols.has(r.option_symbol)
-                              ? 'fill-amber-400 text-amber-400'
-                              : 'text-muted-foreground/40 hover:text-amber-400',
-                          )}
-                        />
+                        <div className="inline-flex items-center gap-1">
+                          <Star
+                            className={cn(
+                              'w-3.5 h-3.5 cursor-pointer transition-colors',
+                              flaggedSymbols.has(r.option_symbol)
+                                ? 'fill-amber-400 text-amber-400'
+                                : 'text-muted-foreground/40 hover:text-amber-400',
+                            )}
+                          />
+                          {flaggedSymbols.has(r.option_symbol) && latestGradeByOption.has(r.option_symbol) && (() => {
+                            const g = latestGradeByOption.get(r.option_symbol)!;
+                            const mts = g.move_to_strike_pct;
+                            const color = g.outcome === 'win' ? 'text-emerald-400 font-bold'
+                              : g.outcome === 'partial' ? 'text-emerald-300'
+                              : g.outcome === 'loss' ? 'text-red-400'
+                              : 'text-muted-foreground';
+                            const label = g.crossed_strike ? 'ITM'
+                              : mts != null ? `${mts >= 0 ? '+' : ''}${mts.toFixed(1)}%`
+                              : g.outcome;
+                            return (
+                              <span
+                                className={cn('text-[9px] font-mono tabular-nums', color)}
+                                title={`${g.outcome} at ${g.horizon_hours}h horizon`}
+                              >
+                                {label}
+                              </span>
+                            );
+                          })()}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))
