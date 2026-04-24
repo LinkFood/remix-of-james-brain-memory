@@ -274,18 +274,15 @@ function FlagTile({ flag, onOpen }: { flag: Flag; onOpen: (flag: Flag) => void }
   );
 }
 
-function JamesFlagTile({
-  flag,
-  onOpen,
-  showOriginBadge,
-}: {
-  flag: JamesFlag;
-  onOpen: (optionSymbol: string) => void;
-  showOriginBadge?: boolean;
+function JamesFlagTile({ flag, onOpen, showOriginBadge }: {
+  flag: JamesFlag; onOpen: (s: string) => void; showOriginBadge?: boolean;
 }) {
   const grade = flag.ct_james_flag_grades?.[0] ?? null;
   const direction: Direction = flag.direction_view ?? 'neutral';
-  const hasGrade = grade != null && grade.outcome && grade.outcome !== 'pending';
+  const graded = !!(grade && grade.outcome && grade.outcome !== 'pending');
+  const outcomeClass = graded
+    ? outcomeColor(grade!.outcome)
+    : 'border-slate-500/40 text-slate-400';
 
   return (
     <Card
@@ -294,42 +291,21 @@ function JamesFlagTile({
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 flex-wrap">
-          <Badge
-            variant="outline"
-            className={cn('font-mono text-[11px] px-1.5 py-0', directionColor(direction))}
-          >
+          <Badge variant="outline" className={cn('font-mono text-[11px] px-1.5 py-0', directionColor(direction))}>
             <DirectionIcon d={direction} />
             <span className="ml-1">{flag.ticker ?? '—'}</span>
           </Badge>
           {showOriginBadge && (
-            <Badge
-              variant="outline"
-              className="text-[10px] px-1.5 py-0 font-mono border-amber-500/40 text-amber-300"
-            >
-              <Star className="w-2.5 h-2.5 mr-1" />
-              James
+            <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono border-amber-500/40 text-amber-300">
+              <Star className="w-2.5 h-2.5 mr-1" />James
             </Badge>
           )}
-          {hasGrade && (
-            <Badge
-              variant="outline"
-              className={cn('text-[10px] px-1.5 py-0 font-mono uppercase', outcomeColor(grade!.outcome))}
-            >
-              {grade!.outcome}
-            </Badge>
-          )}
-          {!hasGrade && (
-            <Badge
-              variant="outline"
-              className="text-[10px] px-1.5 py-0 font-mono uppercase border-slate-500/40 text-slate-400"
-            >
-              pending
-            </Badge>
-          )}
-          {hasGrade && grade!.move_to_strike_pct != null && (
+          <Badge variant="outline" className={cn('text-[10px] px-1.5 py-0 font-mono uppercase', outcomeClass)}>
+            {graded ? grade!.outcome : 'pending'}
+          </Badge>
+          {graded && grade!.move_to_strike_pct != null && (
             <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
-              {grade!.move_to_strike_pct >= 0 ? '+' : ''}
-              {grade!.move_to_strike_pct.toFixed(1)}% to strike
+              {grade!.move_to_strike_pct >= 0 ? '+' : ''}{grade!.move_to_strike_pct.toFixed(1)}% to strike
               {grade!.crossed_strike && <span className="ml-1 text-emerald-300">✓</span>}
             </span>
           )}
@@ -337,18 +313,15 @@ function JamesFlagTile({
         <Star className="w-4 h-4 text-amber-400 shrink-0 fill-amber-400/40" />
       </div>
 
-      {/* Contract */}
       <div className="flex items-center justify-between text-[11px] text-muted-foreground gap-2">
         <div className="font-mono truncate">{flag.option_symbol}</div>
-        {hasGrade && grade!.price_change_pct != null && (
+        {graded && grade!.price_change_pct != null && (
           <div className="shrink-0 text-[10px] tabular-nums">
-            spot {grade!.price_change_pct >= 0 ? '+' : ''}
-            {grade!.price_change_pct.toFixed(2)}%
+            spot {grade!.price_change_pct >= 0 ? '+' : ''}{grade!.price_change_pct.toFixed(2)}%
           </div>
         )}
       </div>
 
-      {/* Note */}
       <div className="text-[12px] leading-snug text-foreground/90">
         {flag.note?.trim() ? flag.note : <span className="text-muted-foreground italic">No note</span>}
       </div>
