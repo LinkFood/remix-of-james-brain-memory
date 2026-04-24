@@ -1133,6 +1133,7 @@ export default function Tape() {
         optionSymbol={activeSymbol}
         open={activeSymbol !== null}
         onOpenChange={(o) => { if (!o) setActiveSymbol(null); }}
+        onTickerClick={(t) => { setActiveSymbol(null); setActiveTicker(t); }}
       />
 
       {/* Ticker briefing sheet */}

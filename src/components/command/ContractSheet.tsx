@@ -100,6 +100,9 @@ interface ContractSheetProps {
   optionSymbol: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** Optional — if provided, contract header exposes a "Dashboard" button that
+   *  calls this with the inferred ticker to open TickerSheet. */
+  onTickerClick?: (ticker: string) => void;
 }
 
 function formatTimeET(iso: string): string {
@@ -146,7 +149,7 @@ function deriveTapeKind(alertType: string | null, raw: Record<string, unknown> |
   return 'ALERT';
 }
 
-export function ContractSheet({ optionSymbol, open, onOpenChange }: ContractSheetProps) {
+export function ContractSheet({ optionSymbol, open, onOpenChange, onTickerClick }: ContractSheetProps) {
   // Today-ET range for prints query.
   const todayBounds = useMemo(() => {
     const now = new Date();
@@ -297,6 +300,15 @@ export function ContractSheet({ optionSymbol, open, onOpenChange }: ContractShee
               )}
               {expiry && <span>exp <span className="text-foreground font-mono">{expiry.slice(5)}</span></span>}
               {dte != null && <span>{dte}d</span>}
+              {ticker && onTickerClick && (
+                <button
+                  type="button"
+                  onClick={() => onTickerClick(ticker)}
+                  className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-primary/40 bg-primary/10 text-primary hover:bg-primary/20 transition-colors"
+                >
+                  {ticker} dashboard →
+                </button>
+              )}
               <span className="ml-auto">today&apos;s prints <span className="text-foreground font-semibold">{prints?.length ?? 0}</span></span>
             </div>
           </SheetHeader>
