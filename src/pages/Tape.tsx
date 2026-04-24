@@ -265,7 +265,14 @@ function deriveTapeKind(alertType: string | null | undefined, raw: Record<string
   if (hasBlock) return { kind: 'BLOCK', isSweep: false };
   if (hasFloor) return { kind: 'FLOOR', isSweep: false };
   if (hasMultileg) return { kind: 'MLEG', isSweep: false };
-  if (alertType && typeof alertType === 'string') return { kind: alertType.toUpperCase().slice(0, 5), isSweep: false };
+  // UW's flow-alerts sometimes puts just 'call' / 'put' in alert_type
+  // when there's no special tape classification. That's the side, not a
+  // tape kind — fall back to 'ALERT'.
+  if (alertType && typeof alertType === 'string') {
+    const lc = alertType.toLowerCase();
+    if (lc === 'call' || lc === 'put') return { kind: 'ALERT', isSweep: false };
+    return { kind: alertType.toUpperCase().slice(0, 5), isSweep: false };
+  }
   return { kind: 'ALERT', isSweep: false };
 }
 

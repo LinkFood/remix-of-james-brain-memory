@@ -359,7 +359,18 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
                   <div>
                     <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Gamma flip</div>
                     <div className="font-mono tabular-nums text-amber-300">
-                      {snapshot.gamma_flip != null ? `$${snapshot.gamma_flip}` : '—'}
+                      {(() => {
+                        const g = snapshot.gamma_flip;
+                        const s = snapshot.spot;
+                        // Hide gamma flip when it's clearly unreliable
+                        // (>20% from spot). Cumulative-zero-crossing method
+                        // misfires when net_gex is one-signed across all
+                        // strikes. Real flip is always near spot; outliers
+                        // are noise.
+                        if (g == null) return '—';
+                        if (s != null && s > 0 && Math.abs(g - s) / s > 0.20) return '—';
+                        return `$${g}`;
+                      })()}
                     </div>
                   </div>
                   <div>
