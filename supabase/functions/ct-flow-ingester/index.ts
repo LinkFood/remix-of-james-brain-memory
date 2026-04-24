@@ -487,19 +487,19 @@ serve(async (req) => {
     const topMovers = await ingestTopMovers(supabase);
     const sweeps = await ingestSweeps(supabase);
 
-    // Per-ticker net premium + greek flow for ALL watchlist (previously
-    // greek was index-only; now all 12 since DP calls freed the budget).
-    // NOPE stays index-only (SPY/QQQ/IWM) — less useful on individual names.
+    // Per-ticker net premium + greek flow + NOPE for ALL watchlist tickers.
+    // NOPE was previously index-only (SPY/QQQ/IWM) under the theory that it's
+    // less useful on individual names. Reopened 2026-04-24: James wants the
+    // sparkline on every macro-banner tile, not just indexes. UW supports
+    // /nope for any ticker; ~10 extra calls per 3-min ingest cycle is a
+    // ~0.5% budget impact against the 20k daily cap.
     const perTicker: Record<string, { npt: { seen: number; inserted: number }; nope?: { seen: number; inserted: number }; greek?: { seen: number; inserted: number } }> = {};
-    const indexTickers = new Set(['SPY', 'QQQ', 'IWM']);
     for (const ticker of WATCHLIST) {
       perTicker[ticker] = {
         npt: await ingestNetPremiumTicks(supabase, ticker),
         greek: await ingestGreekFlow(supabase, ticker),
+        nope: await ingestNope(supabase, ticker),
       };
-      if (indexTickers.has(ticker)) {
-        perTicker[ticker].nope = await ingestNope(supabase, ticker);
-      }
     }
 
     const totalNptNew = Object.values(perTicker).reduce((s, t) => s + t.npt.inserted, 0);
