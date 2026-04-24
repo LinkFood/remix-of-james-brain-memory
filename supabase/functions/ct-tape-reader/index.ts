@@ -55,6 +55,81 @@ interface PriceBarRow {
   ts: string;
 }
 
+interface FlowPulseRow {
+  ticker: string;
+  calls_count: number;
+  puts_count: number;
+  calls_premium: number;
+  puts_premium: number;
+  call_put_ratio: number;
+  premium_net: number;
+  cp_ratio_baseline_30d: number | null;
+  cp_ratio_deviation: number | null;
+  is_unusual: boolean;
+}
+
+interface StackRow {
+  option_symbol: string;
+  ticker: string;
+  strike: number | null;
+  expiry: string | null;
+  side: string;
+  prints_count: number;
+  premium_total: number;
+  ask_dominant_pct: number | null;
+  opening_buy_count: number;
+  opening_sell_count: number;
+}
+
+interface RegimeSpotRow {
+  ticker: string;
+  spot_pct_from_prev_close: number | null;
+}
+
+/**
+ * interpretStack — parity with src/hooks/useContractStacking.ts::interpretStack.
+ * Not shared across edge/frontend boundary — kept in lockstep manually. Returns
+ * a short directional label so the tape-reader prompt shows "call writing
+ * (bearish)" instead of raw buy/sell/ask numbers it would otherwise re-derive.
+ */
+function interpretStack(r: {
+  side: string;
+  opening_buy_count: number;
+  opening_sell_count: number;
+  ask_dominant_pct: number | null;
+  prints_count: number;
+}): { label: string; color: 'bullish' | 'bearish' | 'mixed' } {
+  const side = (r.side || '').toUpperCase().startsWith('C') ? 'C' : 'P';
+  const total = Math.max(1, (r.opening_buy_count ?? 0) + (r.opening_sell_count ?? 0));
+  const buyShare = (r.opening_buy_count ?? 0) / total;
+  const sellShare = (r.opening_sell_count ?? 0) / total;
+  const ask = r.ask_dominant_pct;
+  const buyDominant = buyShare >= 0.8;
+  const sellDominant = sellShare >= 0.8;
+
+  if (buyDominant) {
+    return side === 'C'
+      ? { label: 'call accumulation (bullish)', color: 'bullish' }
+      : { label: 'put accumulation (bearish)', color: 'bearish' };
+  }
+  if (sellDominant) {
+    const askLow = ask != null && ask < 30;
+    if (askLow) {
+      return side === 'P'
+        ? { label: 'put writing (bullish)', color: 'bullish' }
+        : { label: 'call writing (bearish)', color: 'bearish' };
+    }
+    return { label: side === 'C' ? 'call distribution (mixed)' : 'put distribution (mixed)', color: 'mixed' };
+  }
+  return { label: '2-sided mixed', color: 'mixed' };
+}
+
+function fmtSignedPct(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return 'n/a';
+  const sign = n > 0 ? '+' : '';
+  return `${sign}${n.toFixed(2)}%`;
+}
+
 function parseOccSide(sym: string | null | undefined): string {
   if (!sym || sym.length < 9) return '';
   const ch = sym.charAt(sym.length - 9);
@@ -174,6 +249,66 @@ serve(async (req) => {
   }
   const marketTide = netPrem > 5_000_000 ? 'bullish' : netPrem < -5_000_000 ? 'bearish' : 'flat';
 
+  // --- Pre-computed aggregates (parallel) -------------------------------
+  // Pull FlowPulse (6h directional imbalance + per-ticker baseline dev),
+  // contract stacking (repeat-hit contracts with buy/sell/ask breakdown),
+  // and regime tide (spot_pct_from_prev_close avg over last 60 min).
+  // Any failure here degrades gracefully — we skip the relevant block,
+  // never crash the run.
+  const regimeWindow = new Date(now.getTime() - 60 * 60_000);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sb: any = supabase;
+  const [flowPulseRes, stackingRes, regimeRes] = await Promise.all([
+    sb.rpc('ct_flow_pulse', { p_window_min: 360, p_ticker: null }),
+    sb.rpc('ct_contract_stacking', {
+      p_window_min: 360,
+      p_min_prints: 3,
+      p_min_premium: 100_000,
+      p_ticker: null,
+      p_limit: 10,
+    }),
+    sb.from('ct_scored_flow')
+      .select('ticker, spot_pct_from_prev_close')
+      .gte('event_ts', regimeWindow.toISOString())
+      .in('ticker', WATCHLIST)
+      .not('spot_pct_from_prev_close', 'is', null)
+      .limit(2000),
+  ]);
+
+  const pulseRows = (flowPulseRes?.error ? [] : (flowPulseRes?.data ?? [])) as FlowPulseRow[];
+  const stackRows = (stackingRes?.error ? [] : (stackingRes?.data ?? [])) as StackRow[];
+  const regimeRows = (regimeRes?.error ? [] : (regimeRes?.data ?? [])) as RegimeSpotRow[];
+
+  // Market-wide aggregate from flow pulse rows
+  let mktCalls = 0, mktPuts = 0, mktCallsPrem = 0, mktPutsPrem = 0, mktNetPrem = 0;
+  for (const r of pulseRows) {
+    mktCalls += r.calls_count ?? 0;
+    mktPuts += r.puts_count ?? 0;
+    mktCallsPrem += Number(r.calls_premium ?? 0);
+    mktPutsPrem += Number(r.puts_premium ?? 0);
+    mktNetPrem += Number(r.premium_net ?? 0);
+  }
+  const mktCpRatio = mktPutsPrem > 0
+    ? mktCallsPrem / mktPutsPrem
+    : (mktCalls / Math.max(mktPuts, 1));
+
+  // Regime tide — avg spot_pct_from_prev_close across watchlist + per-ticker
+  const regimeByTicker = new Map<string, { sum: number; n: number }>();
+  let regimeSum = 0;
+  let regimeN = 0;
+  for (const r of regimeRows) {
+    const v = r.spot_pct_from_prev_close;
+    if (v == null || !Number.isFinite(Number(v))) continue;
+    const pct = Number(v);
+    regimeSum += pct;
+    regimeN += 1;
+    const cur = regimeByTicker.get(r.ticker) ?? { sum: 0, n: 0 };
+    cur.sum += pct;
+    cur.n += 1;
+    regimeByTicker.set(r.ticker, cur);
+  }
+  const regimeAvg = regimeN > 0 ? regimeSum / regimeN : null;
+
   // --- Build prompt ------------------------------------------------------
 
   const lines: string[] = [];
@@ -182,6 +317,82 @@ serve(async (req) => {
   lines.push('');
   lines.push(`SPOT (latest close): ${WATCHLIST.map((t) => `${t} ${spotMap.get(t)?.toFixed(2) ?? '?'}`).join('  ')}`);
   lines.push('');
+
+  // --- Block 1: Flow Pulse (6h macro aggregate) ---
+  if (pulseRows.length > 0) {
+    lines.push('[MARKET FLOW PULSE — 6h aggregate across watchlist]');
+    const netLabel = mktNetPrem > 0 ? 'bullish' : mktNetPrem < 0 ? 'bearish' : 'flat';
+    const netSign = mktNetPrem >= 0 ? '+' : '-';
+    lines.push(
+      `  Market-wide: ${mktCalls}C (${fmtPremium(mktCallsPrem)}) vs ${mktPuts}P (${fmtPremium(mktPutsPrem)}) · ${mktCpRatio.toFixed(2)}x call:put · net ${netSign}${fmtPremium(Math.abs(mktNetPrem))} ${netLabel}`,
+    );
+    lines.push('  Per-ticker:');
+    // Sort by abs deviation so unusual tickers surface first; fall back to net premium
+    const sorted = [...pulseRows].sort((a, b) => {
+      const da = a.cp_ratio_deviation == null ? 0 : Math.abs(Number(a.cp_ratio_deviation) - 1);
+      const db = b.cp_ratio_deviation == null ? 0 : Math.abs(Number(b.cp_ratio_deviation) - 1);
+      if (db !== da) return db - da;
+      return Math.abs(Number(b.premium_net ?? 0)) - Math.abs(Number(a.premium_net ?? 0));
+    });
+    for (const r of sorted) {
+      const flag = r.is_unusual ? ' ⚠ unusual' : '';
+      const baseline = r.cp_ratio_baseline_30d != null
+        ? ` (baseline ${Number(r.cp_ratio_baseline_30d).toFixed(2)}x${r.cp_ratio_deviation != null ? `, ${Number(r.cp_ratio_deviation).toFixed(2)}x today` : ''})`
+        : '';
+      const net = Number(r.premium_net ?? 0);
+      const netSignR = net >= 0 ? '+' : '-';
+      const netLabelR = net > 0 ? 'bullish' : net < 0 ? 'bearish' : 'flat';
+      lines.push(
+        `    ${r.is_unusual ? '⚠ ' : ''}${r.ticker}: ${r.calls_count}C/${r.puts_count}P · ${Number(r.call_put_ratio ?? 0).toFixed(2)}x${baseline} · net ${netSignR}${fmtPremium(Math.abs(net))} ${netLabelR}${flag}`,
+      );
+    }
+    lines.push('');
+  }
+
+  // --- Block 2: Stacking patterns (contracts hit repeatedly) ---
+  if (stackRows.length > 0) {
+    lines.push('[STACKING PATTERNS — contracts repeatedly hit today (6h)]');
+    const top = stackRows.slice(0, 5);
+    for (const s of top) {
+      const signal = interpretStack({
+        side: s.side,
+        opening_buy_count: s.opening_buy_count ?? 0,
+        opening_sell_count: s.opening_sell_count ?? 0,
+        ask_dominant_pct: s.ask_dominant_pct,
+        prints_count: s.prints_count ?? 0,
+      });
+      const marker = signal.color === 'bullish' ? '🟢' : signal.color === 'bearish' ? '🔴' : '🟡';
+      const expiry = s.expiry ? s.expiry.slice(5).replace('-', '/') : '?';
+      const strikeSide = `${s.strike != null ? `$${s.strike}` : '?'}${s.side}`;
+      lines.push(
+        `  ${marker} ${s.ticker} ${strikeSide} ${expiry} · ${s.prints_count} prints · ${fmtPremium(Number(s.premium_total ?? 0))} cum · ${signal.label}`,
+      );
+    }
+    lines.push('');
+  }
+
+  // --- Block 3: Market regime (where the tape is sitting) ---
+  if (regimeN > 0 || vixLevel != null) {
+    lines.push('[MARKET REGIME — where the tape is sitting]');
+    if (regimeAvg != null) {
+      const tilt = regimeAvg > 0.3 ? 'bullish tilt' : regimeAvg < -0.3 ? 'bearish tilt' : 'flat';
+      lines.push(`  Watchlist avg: ${fmtSignedPct(regimeAvg)} from prev close (${tilt})`);
+    }
+    if (vixLevel != null) {
+      lines.push(`  VIX: ${vixLevel.toFixed(2)}${vixChange != null ? ` (${vixChange >= 0 ? '+' : ''}${vixChange.toFixed(2)}%)` : ''}`);
+    }
+    if (regimeByTicker.size > 0) {
+      const perTicker = WATCHLIST
+        .map((t) => {
+          const agg = regimeByTicker.get(t);
+          if (!agg || agg.n === 0) return null;
+          return `${t} ${fmtSignedPct(agg.sum / agg.n)}`;
+        })
+        .filter((x): x is string => x !== null);
+      if (perTicker.length > 0) lines.push(`  Per-ticker: ${perTicker.join(', ')}`);
+    }
+    lines.push('');
+  }
 
   if (scored.length > 0) {
     lines.push('TOP SCORED FLOW (score desc):');
@@ -214,7 +425,9 @@ serve(async (req) => {
     }
   }
 
-  const system = `You are a senior options flow reader looking over a day trader's shoulder. You read the tape for the Mag-7 + major indexes. Write 2-3 sentences describing what's happening right now. No hedging, no disclaimers, no "this is not financial advice." If the tape is quiet, say "Quiet tape." and note what would change that. If something is unusual, name it specifically — ticker, contract, pattern. Every sentence must say something.`;
+  const system = `You are a senior options flow reader looking over a day trader's shoulder. You read the tape for the Mag-7 + major indexes. Write 2-3 sentences describing what's happening right now. No hedging, no disclaimers, no "this is not financial advice." If the tape is quiet, say "Quiet tape." and note what would change that. If something is unusual, name it specifically — ticker, contract, pattern. Every sentence must say something.
+
+You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTERNS], and [MARKET REGIME] — at the top of each prompt. These are the macro anchor: use them directly, don't re-derive them from the candidate rows below. Reference them explicitly ("flow pulse shows NVDA 6.75x unusual, matches what I'm seeing on the tape..."). The stacking labels (call accumulation / put writing / distribution) are already interpreted — read them as directional signal, not raw buy/sell counts. The regime line tells you where the tape is sitting before you read individual prints.`;
 
   const userMsg = lines.join('\n');
 
