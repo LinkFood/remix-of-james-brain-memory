@@ -229,6 +229,54 @@ async function loadRecentOiBuilds(supabase: SupabaseClient, ticker: string) {
 }
 
 /**
+ * Load the top overnight OI shifts for this ticker via the ct_top_oi_shifts
+ * RPC. Returns the biggest |oi_delta_1d| contracts between yesterday's
+ * close and this morning's open, with dollars-at-risk and distance-from-spot.
+ * Academic consensus (Lakonishok et al., Augustin et al.): positions held
+ * overnight cost margin and reveal conviction in a way intraday flow cannot.
+ */
+async function loadOvernightPositioning(supabase: SupabaseClient, ticker: string) {
+  const { data, error } = await supabase.rpc('ct_top_oi_shifts', {
+    p_limit: 10,
+    p_ticker: ticker,
+  });
+  if (error) {
+    console.warn(`[specialistRunner] ${ticker} overnight positioning load failed:`, error.message);
+    return [];
+  }
+  return (data ?? []) as Array<Record<string, unknown>>;
+}
+
+function formatOvernightPositioningBlock(ticker: string, rows: Array<Record<string, unknown>>): string {
+  if (!rows || rows.length === 0) {
+    return `[OVERNIGHT POSITIONING — no significant OI shifts detected overnight in ${ticker}]`;
+  }
+  const lines: string[] = [];
+  for (const r of rows) {
+    const sideRaw = String(r.side ?? '').toUpperCase();
+    const sideCode = sideRaw.startsWith('C') ? 'C' : sideRaw.startsWith('P') ? 'P' : '?';
+    const strike = Number(r.strike ?? 0);
+    const expiry = String(r.expiry ?? '');
+    const expiryShort = expiry.length >= 10 ? expiry.slice(5) : expiry; // MM-DD
+    const delta = Number(r.delta_contracts ?? 0);
+    const deltaSign = delta > 0 ? `+${delta.toLocaleString()}` : delta.toLocaleString();
+    const dollars = Number(r.dollars_at_risk ?? 0);
+    const dollarsM = (dollars / 1e6).toFixed(1);
+    const distPct = Number(r.distance_from_spot_pct ?? 0);
+    const distSign = distPct >= 0 ? `+${distPct.toFixed(1)}` : distPct.toFixed(1);
+    lines.push(
+      `  - ${sideCode} ${strike} ${expiryShort}: ${deltaSign} OI ($${dollarsM}M, ${distSign}% from spot)`,
+    );
+  }
+  return [
+    `[OVERNIGHT POSITIONING — what actually positioned in ${ticker} between yesterday's close and this morning's open]`,
+    `Top OI shifts (|Δ1d|):`,
+    ...lines,
+    `(If delta_contracts > 0 and side=C, that's bullish accumulation. Side=P with +delta is bearish accumulation. Negative delta = unwind.)`,
+  ].join('\n');
+}
+
+/**
  * Load recent news affecting this ticker from ct_breaking_news (Tavily
  * sweep + macro watcher). Last 6 hours, severity >= 2 OR tagged for this
  * ticker. News moves stocks; options front-run news — specialists need
@@ -439,14 +487,17 @@ export async function runSpecialistWakeup(
   }
 
   // 8-12. Context for Claude.
-  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news] = await Promise.all([
+  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight] = await Promise.all([
     loadTickerSnapshot(supabase, ticker),
     loadNextEarnings(supabase, ticker),
     loadRecentOiBuilds(supabase, ticker),
     loadSpecialistMemory(supabase, ticker),
     loadHitRateByTag(supabase, ticker),
     loadRecentNews(supabase, ticker),
+    loadOvernightPositioning(supabase, ticker),
   ]);
+
+  const overnightBlock = formatOvernightPositioningBlock(ticker, overnight);
 
   const tickerContext = {
     ticker,
@@ -466,6 +517,8 @@ ${JSON.stringify(tickerContext, null, 2)}
 
 [RECENT NEWS — last 6h affecting ${ticker} or macro-wide, Tavily + UW]
 ${JSON.stringify(news, null, 2)}
+
+${overnightBlock}
 
 [CANDIDATE FLOW EVENTS — last ${CANDIDATE_WINDOW_MIN}min, score >= ${wakeupThreshold}]
 ${JSON.stringify(events, null, 2)}
