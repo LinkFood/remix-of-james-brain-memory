@@ -775,8 +775,8 @@ function DebateTrackRecordLink() {
             <span className="text-muted-foreground"> · Claude's solo alerts: {claudePct}% (n={claudeN}, last 30d)</span>
           )}
         </div>
-        <Link to="/debates" className="text-primary hover:underline text-xs shrink-0">
-          View debates <ArrowRight className="w-3 h-3 inline" />
+        <Link to="/specialists" className="text-primary hover:underline text-xs shrink-0">
+          View specialists <ArrowRight className="w-3 h-3 inline" />
         </Link>
       </div>
     </Card>

@@ -415,7 +415,7 @@ function DebateCardView({
         </div>
         {pick != null && (
           <div className="text-[10px] text-muted-foreground/80 mt-1.5">
-            Locked in <span className="font-semibold">{pick.toUpperCase()}</span>. Outcome scorer resolves after horizon. Review on <a href="/debates" className="underline hover:text-foreground">/debates</a>.
+            Locked in <span className="font-semibold">{pick.toUpperCase()}</span>. Outcome scorer resolves after horizon. Review on <a href="/specialists" className="underline hover:text-foreground">/specialists</a>.
           </div>
         )}
       </div>

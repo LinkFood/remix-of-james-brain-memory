@@ -26,7 +26,6 @@ import {
   Bell,
   Zap,
   OctagonX,
-  FileCheck,
   Repeat,
   ClipboardCheck,
   TrendingUp,
@@ -55,18 +54,17 @@ interface RouteEntry {
 const ROUTES: RouteEntry[] = [
   // Trade
   { path: '/',             label: 'Station',        group: 'Trade' },
-  { path: '/commit',       label: 'Commit',         group: 'Trade' },
-  { path: '/book',         label: 'Book',           group: 'Trade' },
+  { path: '/flags',        label: 'Flags',          group: 'Trade' },
   { path: '/session',      label: 'Timeline',       group: 'Trade' },
   // Review
   { path: '/scorecard',    label: 'Scorecard',      group: 'Review' },
-  { path: '/playbooks',    label: 'Playbooks',      group: 'Review' },
+  { path: '/patterns',     label: 'Patterns',       group: 'Review' },
+  { path: '/specialists',  label: 'Specialists',    group: 'Review' },
   { path: '/principles',   label: 'Principles',     group: 'Review' },
   { path: '/prompts',      label: 'Prompt A/B',     group: 'Review' },
   { path: '/replay',       label: 'Replay',         group: 'Review' },
   { path: '/rules',        label: 'Custom Rules',   group: 'Review' },
   // System
-  { path: '/preflight',    label: 'Preflight',      group: 'System' },
   { path: '/health',       label: 'Health',         group: 'System' },
   { path: '/crons',        label: 'Crons',          group: 'System' },
   { path: '/agents',       label: 'Agents',         group: 'System' },
@@ -82,7 +80,6 @@ const ROUTES: RouteEntry[] = [
   { path: '/code',         label: 'Code',           group: 'More' },
   { path: '/ct-settings',  label: 'CT Config',      group: 'More' },
   { path: '/settings',     label: 'Settings',       group: 'More' },
-  { path: '/stress',       label: 'Stress',         group: 'More' },
 ];
 
 // ---------------------------------------------------------------------------
@@ -419,13 +416,6 @@ export function CommandPalette() {
         },
       },
       {
-        id: 'action:commit-trade',
-        label: 'Commit trade',
-        hint: '→ /commit',
-        icon: FileCheck,
-        execute: () => goRoute('/commit'),
-      },
-      {
         id: 'action:replay-today',
         label: 'Replay today',
         hint: '→ /replay',
@@ -433,11 +423,11 @@ export function CommandPalette() {
         execute: () => { goRoute('/replay'); },
       },
       {
-        id: 'action:view-preflight',
-        label: 'View preflight',
-        hint: '→ /preflight',
+        id: 'action:view-health',
+        label: 'View health',
+        hint: '→ /health',
         icon: ClipboardCheck,
-        execute: () => goRoute('/preflight'),
+        execute: () => goRoute('/health'),
       },
       {
         id: 'action:open-search',

@@ -1,7 +1,7 @@
 /**
  * PreflightChip — tiny readiness indicator for TopNav.
  *
- * Green/yellow/red dot + count of non-green checks. Click → /preflight.
+ * Green/yellow/red dot + count of non-green checks. Click → /health.
  * Uses the same usePreflightChecks hook as the page, so both views stay
  * in lockstep and the 60s refresh doesn't fire twice.
  */
@@ -29,7 +29,7 @@ export function PreflightChip() {
   if (loading) {
     return (
       <NavLink
-        to="/preflight"
+        to="/health"
         className="flex items-center gap-1.5 px-2 py-1 rounded-md text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
         title="Preflight — running checks..."
       >
@@ -46,7 +46,7 @@ export function PreflightChip() {
 
   return (
     <NavLink
-      to="/preflight"
+      to="/health"
       className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-xs hover:bg-muted/50 transition-colors ${fg}`}
       title={summary.headline}
     >

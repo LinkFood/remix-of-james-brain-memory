@@ -215,16 +215,10 @@ export function StreakPanel() {
               </div>
               <div className="flex items-center gap-3 text-[11px] pt-1">
                 <Link
-                  to="/preflight"
+                  to="/health"
                   className="text-red-300 hover:text-red-200 underline-offset-2 hover:underline flex items-center gap-1"
                 >
                   Pre-bell checklist <ArrowRight className="w-3 h-3" />
-                </Link>
-                <Link
-                  to="/book"
-                  className="text-red-300 hover:text-red-200 underline-offset-2 hover:underline flex items-center gap-1"
-                >
-                  Drawdown &amp; book <ArrowRight className="w-3 h-3" />
                 </Link>
               </div>
             </div>

@@ -202,12 +202,6 @@ export function BookEquityCurve() {
           >
             calibration <ArrowRight className="w-3 h-3" />
           </Link>
-          <Link
-            to="/book"
-            className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors"
-          >
-            full book <ArrowRight className="w-3 h-3" />
-          </Link>
           <FreshnessChip timestamp={bookTs} />
         </div>
         {bestWorstLine && (

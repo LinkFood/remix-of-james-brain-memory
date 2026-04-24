@@ -234,11 +234,11 @@ interface CheckSpec {
 const CHECKS: readonly CheckSpec[] = [
   { id: 'morning_brief',         label: 'Morning brief landed',         href: '/reports',           fn: checkMorningBrief },
   { id: 'premarket_scan',        label: 'Pre-market scan complete',     href: '/command#co-premarket-gaps', fn: checkPremarketScan },
-  { id: 'book_seeded',           label: 'Book seeded',                  href: '/book',              fn: checkBookSeeded },
+  { id: 'book_seeded',           label: 'Book seeded',                  href: '/flags',             fn: checkBookSeeded },
   { id: 'killswitch_disarmed',   label: 'Kill switch disarmed',         href: '/ct-settings',       fn: checkKillSwitchDisarmed },
   { id: 'uw_usage_reset',        label: 'UW usage reset',               href: '/ct-settings',       fn: checkUwUsageReset },
   { id: 'ui_errors_clean',       label: 'No UI errors in last 6h',      href: '/health',            fn: checkUiErrorsClean },
-  { id: 'concentration_headroom',label: 'Concentration headroom',       href: '/book',              fn: checkConcentrationHeadroom },
+  { id: 'concentration_headroom',label: 'Concentration headroom',       href: '/flags',             fn: checkConcentrationHeadroom },
   { id: 'biases_loaded',         label: 'Active biases loaded',         href: '/ct-settings',       fn: checkBiasesLoaded },
   { id: 'event_trigger_debounce',label: 'Event-trigger debounce is working', href: '/health',       fn: checkEventTriggerDebounce },
 ];

@@ -220,9 +220,6 @@ export class RouteBoundary extends Component<Props, State> {
                 <Activity className="w-3 h-3" />
                 Health
               </Link>
-              <Link to="/book" className="text-primary hover:underline">
-                Book
-              </Link>
               <Link to="/scorecard" className="text-primary hover:underline">
                 Scorecard
               </Link>

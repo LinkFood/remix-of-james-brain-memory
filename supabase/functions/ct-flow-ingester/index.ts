@@ -30,12 +30,14 @@ function boolOrNull(v: unknown): boolean | null {
   return null;
 }
 
-async function ingestFlowAlerts(supabase: SupabaseClient): Promise<{ seen: number; inserted: number; path: 'mcp' | 'legacy' }> {
+async function ingestFlowAlerts(supabase: SupabaseClient, extraArgs: Record<string, unknown> = {}): Promise<{ seen: number; inserted: number; path: 'mcp' | 'legacy' }> {
   // Wave N.2 — prefer MCP `get_flow_alerts`. Fall back to legacy REST on failure.
+  // extraArgs lets the per-ticker pass pin the call to a single ticker
+  // (see ingestFlowAlertsPerTicker). Empty = original market-wide behavior.
   let raw: unknown = null;
   let path: 'mcp' | 'legacy' = 'mcp';
   try {
-    raw = await mcpCallToolAsData('get_flow_alerts', { limit: 100 });
+    raw = await mcpCallToolAsData('get_flow_alerts', { limit: 100, ...extraArgs });
   } catch (mcpErr) {
     if (isUwRateLimit(mcpErr)) {
       console.warn('[ct-flow] flow-alerts MCP rate-limited, skipping');
@@ -49,7 +51,7 @@ async function ingestFlowAlerts(supabase: SupabaseClient): Promise<{ seen: numbe
     });
     path = 'legacy';
     try {
-      raw = await getFlowAlerts({ limit: 100 });
+      raw = await getFlowAlerts({ limit: 100, ...extraArgs });
     } catch (e) {
       console.warn('[ct-flow] flow-alerts legacy pull failed:', e instanceof Error ? e.message : e);
       return { seen: 0, inserted: 0, path };
@@ -394,6 +396,39 @@ async function ingestSweeps(supabase: SupabaseClient): Promise<{ seen: number; i
   }
 }
 
+/**
+ * ingestFlowAlertsPerTicker — loops the watchlist and calls
+ * `get_flow_alerts` per ticker. The market-wide pass in ingestFlowAlerts
+ * rarely includes index/mega-cap names (they don't look "unusual" on UW's
+ * market-wide screener), leaving v2 specialists with no scored flow to
+ * wake up on. This fixes the blocker: one MCP call per watchlist ticker,
+ * upserted to ct_flow_alerts with the same schema + dedupe key.
+ *
+ * Cost: 10 calls / ingester run. At 3-min cadence during RTH (~20 runs/hr
+ * * 7 hrs = 140 runs/day), that's 1,400 calls/day — well under UW's
+ * 50k/day budget. Errors per-ticker isolate (loop continues on failure).
+ */
+async function ingestFlowAlertsPerTicker(
+  supabase: SupabaseClient,
+  tickers: readonly string[],
+): Promise<{ seen: number; inserted: number; per_ticker: Record<string, { seen: number; inserted: number }> }> {
+  const perTicker: Record<string, { seen: number; inserted: number }> = {};
+  let totalSeen = 0;
+  let totalInserted = 0;
+  for (const ticker of tickers) {
+    try {
+      const r = await ingestFlowAlerts(supabase, { ticker_symbol: ticker, limit: 50 });
+      perTicker[ticker] = { seen: r.seen, inserted: r.inserted };
+      totalSeen += r.seen;
+      totalInserted += r.inserted;
+    } catch (e) {
+      console.warn(`[ct-flow] per-ticker flow-alerts failed (${ticker}):`, e instanceof Error ? e.message : e);
+      perTicker[ticker] = { seen: 0, inserted: 0 };
+    }
+  }
+  return { seen: totalSeen, inserted: totalInserted, per_ticker: perTicker };
+}
+
 async function ingestNetPremiumTicks(
   supabase: SupabaseClient,
   ticker: string,
@@ -442,6 +477,10 @@ serve(async (req) => {
   try {
     // Market-wide
     const flow = await ingestFlowAlerts(supabase);
+    // Per-watchlist flow alerts — the fix for "0 watchlist sweeps captured".
+    // Market-wide pass rarely lands on SPY/QQQ/IWM/Mag7; specialists need
+    // scored flow on the watchlist to wake up and write flags (Co-Trader v2).
+    const perTickerFlow = await ingestFlowAlertsPerTicker(supabase, WATCHLIST);
     // Dark pool removed 2026-04-23 — we can't reliably classify direction
     // and it was burning ~14% of UW budget for noise. Freed calls reallocated
     // to net-premium ticks (more often) + greek-flow (all 12 tickers).
@@ -463,7 +502,6 @@ serve(async (req) => {
       }
     }
 
-    const totalDpNew = 0;
     const totalNptNew = Object.values(perTicker).reduce((s, t) => s + t.npt.inserted, 0);
     const totalNopeNew = Object.values(perTicker).reduce((s, t) => s + (t.nope?.inserted ?? 0), 0);
     const totalGreekNew = Object.values(perTicker).reduce((s, t) => s + (t.greek?.inserted ?? 0), 0);
@@ -471,7 +509,11 @@ serve(async (req) => {
     return new Response(JSON.stringify({
       success: true,
       flow_alerts: { seen: flow.seen, inserted: flow.inserted },
-      dark_pool: { recent_inserted: dpRecent.inserted, per_ticker_inserted: totalDpNew - dpRecent.inserted, total_inserted: totalDpNew },
+      flow_alerts_per_ticker: {
+        seen: perTickerFlow.seen,
+        inserted: perTickerFlow.inserted,
+        per_ticker: perTickerFlow.per_ticker,
+      },
       net_premium_ticks: { total_inserted: totalNptNew },
       nope: { total_inserted: totalNopeNew },
       greek_flow: { total_inserted: totalGreekNew },
