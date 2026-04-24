@@ -232,11 +232,14 @@ serve(async (req) => {
     perTicker[ticker].latest = latest;
   }
 
-  // After inserts, score the new rows. Cheap — the RPC iterates its own way.
+  // After inserts, score the new rows. Pass p_since = floor_ts so the RPC
+  // reaches back the full backfill window (default is only last 2 hours —
+  // which silently left most backfilled rows unscored before this fix).
   let scoredCount: number | null = null;
   let scoreErr: string | null = null;
   try {
-    const { data, error } = await supabase.rpc('ct_score_existing_flow' as never, {});
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase.rpc as any)('ct_score_existing_flow', { p_since: floorIso });
     if (error) scoreErr = error.message;
     else scoredCount = typeof data === 'number' ? data : null;
   } catch (e) {
