@@ -48,16 +48,13 @@ interface PriceSummary {
   pct: number | null;  // today's % change (close vs first close today)
 }
 
-function startOfTodayUtcIso(): string {
-  const now = new Date();
-  // Use local-YYYY-MM-DD so "today" matches the trader's calendar day.
-  // Supabase stores UTC; using local date cutoff at 00:00 local is close enough
-  // for a daily % change for a U.S. session — refined via price-bars first
-  // row seen today.
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}T00:00:00Z`;
+/**
+ * 48h lookback. We can't use just "today" because pre-market + early hours
+ * before the first bar lands would leave the banner empty. 48h guarantees
+ * we always get at least yesterday's close.
+ */
+function lookbackIso(hours = 48): string {
+  return new Date(Date.now() - hours * 3600_000).toISOString();
 }
 
 function toNum(n: number | string | null | undefined): number | null {
@@ -87,8 +84,10 @@ function pctColor(n: number | null): string {
 }
 
 /**
- * Compute spot + today's % change per ticker from a flat price_bars set.
- * Picks the max-ts row as "spot" and the min-ts row today as the baseline.
+ * Compute spot + % change per ticker from a 48h price_bars window.
+ * Spot = latest bar. Baseline for % = first bar of the most-recent trading
+ * day (UTC date of the latest bar). Pre-market the latest bar is yesterday's
+ * close and the "first of that day" becomes the 09:30 bar → daily % holds.
  */
 function summarize(rows: PriceBarRow[]): Map<string, PriceSummary> {
   const byTicker = new Map<string, PriceBarRow[]>();
@@ -100,8 +99,13 @@ function summarize(rows: PriceBarRow[]): Map<string, PriceSummary> {
   const out = new Map<string, PriceSummary>();
   for (const [t, arr] of byTicker.entries()) {
     arr.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
-    const first = toNum(arr[0]?.close);
-    const last = toNum(arr[arr.length - 1]?.close);
+    const latestRow = arr[arr.length - 1];
+    const last = toNum(latestRow?.close);
+    // Pick the most-recent trading day based on the latest bar's UTC date
+    // and take its first bar as the "open" for % change.
+    const latestDay = latestRow?.ts?.slice(0, 10) ?? '';
+    const sameDayRows = latestDay ? arr.filter((r) => r.ts.slice(0, 10) === latestDay) : [latestRow];
+    const first = toNum(sameDayRows[0]?.close);
     const pct = first != null && last != null && first !== 0 ? ((last - first) / first) * 100 : null;
     out.set(t, { spot: last, pct });
   }
@@ -113,11 +117,11 @@ export interface MacroBannerProps {
 }
 
 export function MacroBanner({ onTickerClick }: MacroBannerProps) {
-  const todayIso = startOfTodayUtcIso();
+  const sinceIso = lookbackIso(48);
 
-  // One price-bars query covering watchlist + VIX. Batched via .in().
+  // 48h price bars — covers pre-market when "today" has zero bars yet.
   const { data: priceBars } = useQuery<PriceBarRow[]>({
-    queryKey: ['ct_macro_price_bars', todayIso],
+    queryKey: ['ct_macro_price_bars', sinceIso.slice(0, 10)],
     refetchInterval: 30_000,
     queryFn: async () => {
       const allTickers = Array.from(new Set<string>([...TICKERS, ...MACRO_TICKERS]));
@@ -125,23 +129,24 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
       const { data, error } = await (supabase.from('ct_price_bars' as never) as any)
         .select('ticker,ts,close')
         .in('ticker', allTickers)
-        .gte('ts', todayIso)
+        .gte('ts', sinceIso)
         .order('ts', { ascending: true });
       if (error) throw error;
       return (data ?? []) as PriceBarRow[];
     },
   });
 
-  // NOPE minute series for the watchlist — single batched query.
+  // 48h NOPE — same pre-market reasoning. Sparkline renders most recent
+  // session's data when today is still empty.
   const { data: nopeRows } = useQuery<NopeRow[]>({
-    queryKey: ['ct_macro_nope', todayIso],
+    queryKey: ['ct_macro_nope', sinceIso.slice(0, 10)],
     refetchInterval: 30_000,
     queryFn: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase.from('ct_nope_minute' as never) as any)
         .select('ticker,tick_timestamp,nope')
         .in('ticker', Array.from(TICKERS))
-        .gte('tick_timestamp', todayIso)
+        .gte('tick_timestamp', sinceIso)
         .order('tick_timestamp', { ascending: true });
       if (error) throw error;
       return (data ?? []) as NopeRow[];
