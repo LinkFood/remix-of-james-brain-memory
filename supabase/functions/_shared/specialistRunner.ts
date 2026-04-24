@@ -80,6 +80,18 @@ Return JSON: { "flags": [...], "pass_reason": string|null }.
 Each flag: { option_symbol, direction, tags[], thesis, invalidation, horizon_hours, target_price, score }.
 Max 3 flags per wakeup. Score 60-100. Every flag needs thesis + invalidation + horizon.`;
 
+// Appended to every specialist's system prompt — cross-facet reasoning
+// contract. Keeps per-ticker config portable while guaranteeing all
+// specialists reason against the three new anchors.
+const CROSS_FACET_PROMPT_SUFFIX = `
+
+You now see three cross-facet signals:
+- TAPE-READER'S CURRENT READ: the floor-level macro narrative. Use as macro anchor.
+- YOUR TICKER'S LEAN SCORE: your ticker's composite direction. Flag direction should align OR you must justify contrarian.
+- PEER SPECIALIST FLAGS: what your siblings just did. If peers are heavily bearish and you're bullish, say why.
+
+Your job is still ticker-specific, but you must reason against these anchors before firing.`;
+
 const DEFAULT_COOLDOWN_MIN = 15;
 const DEFAULT_WAKEUP_THRESHOLD = 60;
 const DEFAULT_MAX_FLAGS_PER_DAY = 10;
@@ -346,6 +358,151 @@ function formatOvernightPositioningBlock(ticker: string, rows: Array<Record<stri
 }
 
 /**
+ * Load the last 2 tape-reader commentaries — the floor-level macro narrative
+ * synthesized every 10 min during RTH. Specialists need macro anchor:
+ * if the reader says "VIX spike, risk-off pivot", a specialist flagging
+ * a bullish NVDA breakout should reconcile that against the tide.
+ */
+async function loadTapeReaderReads(supabase: SupabaseClient) {
+  try {
+    const { data, error } = await supabase
+      .from('ct_tape_commentary')
+      .select('created_at, commentary, market_tide, vix_level')
+      .order('created_at', { ascending: false })
+      .limit(2);
+    if (error) {
+      console.warn('[specialistRunner] tape reader load failed:', error.message);
+      return [];
+    }
+    return (data ?? []) as Array<Record<string, unknown>>;
+  } catch (e) {
+    console.warn('[specialistRunner] tape reader load threw:', String(e));
+    return [];
+  }
+}
+
+function relTimeFromNow(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return 'unknown';
+  const diffMin = Math.max(0, Math.round((Date.now() - then) / 60_000));
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const h = Math.floor(diffMin / 60);
+  const m = diffMin % 60;
+  return m === 0 ? `${h}h ago` : `${h}h${m}m ago`;
+}
+
+function formatTapeReaderBlock(rows: Array<Record<string, unknown>>): string {
+  if (!rows || rows.length === 0) {
+    return `[TAPE-READER'S CURRENT READ — no commentary yet this session]`;
+  }
+  const lines: string[] = [`[TAPE-READER'S CURRENT READ — what the floor-level reader just said]`];
+  rows.forEach((r, i) => {
+    const rel = relTimeFromNow(String(r.created_at ?? ''));
+    const tide = r.market_tide ?? 'n/a';
+    const vix = r.vix_level === null || r.vix_level === undefined ? 'n/a' : Number(r.vix_level).toFixed(1);
+    const commentary = String(r.commentary ?? '').slice(0, 600);
+    const prefix = i === 0 ? rel : `${rel} earlier`;
+    lines.push(`${prefix} (market_tide=${tide}, VIX ${vix}): ${commentary}`);
+  });
+  return lines.join('\n');
+}
+
+/**
+ * Load flags from peer specialists (other tickers) in the last 60 min.
+ * If AMZN just went bearish 3x and META once, NVDA specialist reasoning about
+ * a bullish flag should either align with the cross-book or explicitly justify
+ * the divergence. This is the "what are my siblings seeing" signal.
+ */
+async function loadPeerFlags(supabase: SupabaseClient, ticker: string) {
+  try {
+    const cutoff = new Date(Date.now() - 60 * 60_000).toISOString();
+    const { data, error } = await supabase
+      .from('ct_flags')
+      .select('specialist_ticker, direction, score, thesis, created_at')
+      .neq('specialist_ticker', ticker)
+      .gte('created_at', cutoff)
+      .order('created_at', { ascending: false })
+      .limit(10);
+    if (error) {
+      console.warn(`[specialistRunner] ${ticker} peer flags load failed:`, error.message);
+      return [];
+    }
+    return (data ?? []) as Array<Record<string, unknown>>;
+  } catch (e) {
+    console.warn(`[specialistRunner] ${ticker} peer flags load threw:`, String(e));
+    return [];
+  }
+}
+
+function formatPeerFlagsBlock(rows: Array<Record<string, unknown>>): string {
+  if (!rows || rows.length === 0) {
+    return `[PEER SPECIALIST FLAGS — no peer flags in last 60 min]`;
+  }
+  const lines: string[] = [`[PEER SPECIALIST FLAGS — other tickers last 60 min]`];
+  for (const r of rows) {
+    const tk = String(r.specialist_ticker ?? '?');
+    const dir = String(r.direction ?? '?');
+    const score = r.score === null || r.score === undefined ? '?' : String(r.score);
+    const thesisShort = String(r.thesis ?? '').slice(0, 80);
+    lines.push(`  ${tk} ${dir} ${score}: ${thesisShort}`);
+  }
+  lines.push(`(If peers are heavily one-direction today, note whether your read aligns or diverges and why.)`);
+  return lines.join('\n');
+}
+
+/**
+ * Load the current Lean score for this ticker — the pre-computed composite
+ * over flow + walls + news + OI momentum + IV. Specialist's flag direction
+ * should be consistent with this Lean OR have a thesis justifying contrarian.
+ */
+async function loadTickerLean(supabase: SupabaseClient, ticker: string) {
+  try {
+    const { data, error } = await supabase
+      .from('ct_ticker_lean_score')
+      .select('ticker, score, lean, confidence, momentum_delta, breakdown, score_at')
+      .eq('ticker', ticker)
+      .order('score_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn(`[specialistRunner] ${ticker} lean score load failed:`, error.message);
+      return null;
+    }
+    return (data ?? null) as Record<string, unknown> | null;
+  } catch (e) {
+    console.warn(`[specialistRunner] ${ticker} lean score load threw:`, String(e));
+    return null;
+  }
+}
+
+function formatLeanScoreBlock(ticker: string, row: Record<string, unknown> | null): string {
+  if (!row) {
+    return `[YOUR TICKER'S LEAN SCORE — no composite score yet for ${ticker}]`;
+  }
+  const score = row.score === null || row.score === undefined ? 'n/a' : Number(row.score).toFixed(1);
+  const lean = row.lean ?? 'n/a';
+  const conf = row.confidence ?? 'n/a';
+  const delta = row.momentum_delta === null || row.momentum_delta === undefined
+    ? 'n/a'
+    : (Number(row.momentum_delta) >= 0 ? `+${Number(row.momentum_delta).toFixed(1)}` : Number(row.momentum_delta).toFixed(1));
+
+  // Breakdown: each key has a .contribution number.
+  const b = (row.breakdown ?? {}) as Record<string, { contribution?: number | null } | null>;
+  const cmp = (k: string) => {
+    const v = b?.[k]?.contribution;
+    return v === null || v === undefined || !Number.isFinite(Number(v)) ? 'n/a' : Number(v).toFixed(1);
+  };
+
+  return [
+    `[YOUR TICKER'S LEAN SCORE — pre-computed composite (flow + walls + news + oi + iv)]`,
+    `${ticker}: Lean ${score}/100 · ${lean} · confidence ${conf} · momentum ${delta} vs 3h ago`,
+    `Breakdown: flow ${cmp('flow')}, specialist ${cmp('specialist')}, news ${cmp('news')}, walls ${cmp('walls')}, oi_momentum ${cmp('oi_momentum')}, iv ${cmp('iv')}`,
+    `(Your flag direction should be CONSISTENT with this Lean OR have a thesis explaining why you're contrarian.)`,
+  ].join('\n');
+}
+
+/**
  * Load recent news affecting this ticker from ct_breaking_news (Tavily
  * sweep + macro watcher). Last 6 hours, severity >= 2 OR tagged for this
  * ticker. News moves stocks; options front-run news — specialists need
@@ -556,7 +713,7 @@ export async function runSpecialistWakeup(
   }
 
   // 8-12. Context for Claude.
-  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse] = await Promise.all([
+  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse, tapeReads, peerFlags, leanScore] = await Promise.all([
     loadTickerSnapshot(supabase, ticker),
     loadNextEarnings(supabase, ticker),
     loadRecentOiBuilds(supabase, ticker),
@@ -565,10 +722,16 @@ export async function runSpecialistWakeup(
     loadRecentNews(supabase, ticker),
     loadOvernightPositioning(supabase, ticker),
     loadFlowPulse(supabase, ticker),
+    loadTapeReaderReads(supabase),
+    loadPeerFlags(supabase, ticker),
+    loadTickerLean(supabase, ticker),
   ]);
 
   const overnightBlock = formatOvernightPositioningBlock(ticker, overnight);
   const flowPulseBlock = formatFlowPulseBlock(ticker, flowPulse);
+  const tapeReaderBlock = formatTapeReaderBlock(tapeReads);
+  const peerFlagsBlock = formatPeerFlagsBlock(peerFlags);
+  const leanScoreBlock = formatLeanScoreBlock(ticker, leanScore);
 
   const tickerContext = {
     ticker,
@@ -586,24 +749,30 @@ export async function runSpecialistWakeup(
   const userPayload = `[TICKER CONTEXT]
 ${JSON.stringify(tickerContext, null, 2)}
 
-[RECENT NEWS — last 6h affecting ${ticker} or macro-wide, Tavily + UW]
-${JSON.stringify(news, null, 2)}
+${tapeReaderBlock}
 
-${overnightBlock}
+${leanScoreBlock}
 
 ${flowPulseBlock}
 
-[CANDIDATE FLOW EVENTS — last ${CANDIDATE_WINDOW_MIN}min, score >= ${wakeupThreshold}]
-${JSON.stringify(events, null, 2)}
+${overnightBlock}
 
-[RECENT OI BUILDS — last 2 days, delta_1d > 10k]
-${JSON.stringify(oiBuilds, null, 2)}
+${peerFlagsBlock}
+
+[RECENT NEWS — last 6h affecting ${ticker} or macro-wide, Tavily + UW]
+${JSON.stringify(news, null, 2)}
 
 [YOUR LAST 10 GRADED FLAGS]
 ${JSON.stringify(memory, null, 2)}
 
 [YOUR HIT RATE BY PATTERN SIGNATURE]
 ${JSON.stringify(hitRate, null, 2)}
+
+[RECENT OI BUILDS — last 2 days, delta_1d > 10k]
+${JSON.stringify(oiBuilds, null, 2)}
+
+[CANDIDATE FLOW EVENTS — last ${CANDIDATE_WINDOW_MIN}min, score >= ${wakeupThreshold}]
+${JSON.stringify(events, null, 2)}
 
 [WAKEUP REASON] ${reason}
 [FLAGS WRITTEN TODAY] ${flagsToday} / cap ${maxFlagsPerDay}
@@ -626,7 +795,7 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
   try {
     claudeRes = await callClaude({
       model,
-      system: prompt,
+      system: `${prompt}${CROSS_FACET_PROMPT_SUFFIX}`,
       messages: [{ role: 'user', content: userPayload }],
       max_tokens: 2000,
       temperature: 0.2,
