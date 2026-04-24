@@ -54,6 +54,7 @@ interface Flag {
   tags: string[];
   thesis: string;
   invalidation: string;
+  invalidation_price: number | null;
   horizon_hours: number;
   horizon_ts: string;
   entry_price: number | null;
@@ -65,10 +66,13 @@ interface Flag {
   ct_flag_grades: FlagGrade[] | null;
 }
 
+type OutcomeFilter = 'active' | 'won' | 'lost' | 'neutral' | 'all';
+
 interface Filters {
   specialists: Set<string>;
   status: 'all' | Status;
   direction: 'all' | Direction;
+  outcome: OutcomeFilter;
   minScore: number;
   onlySlacked: boolean;
 }
@@ -137,10 +141,22 @@ function DirectionIcon({ d }: { d: Direction }) {
 }
 
 function outcomeColor(outcome: string): string {
+  // WIN → emerald, LOSS → rose, NEUTRAL (partial) → slate,
+  // INVALIDATED_EARLY → amber. Maps the 4 grader buckets to the chip palette
+  // spec'd in the Tier 2 plan.
   if (outcome === 'win') return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40';
-  if (outcome === 'partial') return 'bg-amber-500/15 text-amber-300 border-amber-500/40';
-  if (outcome === 'loss') return 'bg-red-500/15 text-red-300 border-red-500/40';
+  if (outcome === 'loss') return 'bg-rose-500/15 text-rose-300 border-rose-500/40';
+  if (outcome === 'invalidated_early') return 'bg-amber-500/15 text-amber-300 border-amber-500/40';
+  // 'partial' and any unknown → neutral
   return 'bg-slate-500/15 text-slate-300 border-slate-500/40';
+}
+
+function outcomeLabel(outcome: string): string {
+  if (outcome === 'win') return 'WIN';
+  if (outcome === 'loss') return 'LOSS';
+  if (outcome === 'invalidated_early') return 'INVALIDATED_EARLY';
+  if (outcome === 'partial') return 'NEUTRAL';
+  return outcome.toUpperCase();
 }
 
 type ProgressBucket = 'won' | 'on_track' | 'drifting' | 'underwater';
@@ -279,9 +295,9 @@ function FlagTile({
           {isGraded && grade && (
             <Badge
               variant="outline"
-              className={cn('text-[10px] px-1.5 py-0 font-mono uppercase', outcomeColor(grade.outcome))}
+              className={cn('text-[10px] px-1.5 py-0 font-mono', outcomeColor(grade.outcome))}
             >
-              {grade.outcome}
+              {outcomeLabel(grade.outcome)}
               {grade.alpha_pct != null && (
                 <span className="ml-1 tabular-nums">
                   {grade.alpha_pct >= 0 ? '+' : ''}{grade.alpha_pct.toFixed(2)}%α
@@ -325,8 +341,32 @@ function FlagTile({
         </div>
       )}
 
-      {/* Live progress chip — target-direction only. Skipped for terminal grades. */}
-      {!isGraded && <ProgressChip flag={flag} spot={spot} />}
+      {/* Live progress chip while active; outcome chip once graded.
+          The graded chip replaces the progress bar in the same slot so the
+          row keeps a consistent vertical rhythm whether or not the grader
+          has fired. */}
+      {!isGraded ? (
+        <ProgressChip flag={flag} spot={spot} />
+      ) : grade ? (
+        <div className="flex items-center gap-2">
+          <Badge
+            variant="outline"
+            className={cn('text-[11px] px-2 py-0.5 font-mono', outcomeColor(grade.outcome))}
+          >
+            {outcomeLabel(grade.outcome)}
+          </Badge>
+          {grade.price_change_pct != null && (
+            <span className="text-[10px] text-muted-foreground tabular-nums">
+              spot {grade.price_change_pct >= 0 ? '+' : ''}{grade.price_change_pct.toFixed(2)}%
+            </span>
+          )}
+          {grade.alpha_pct != null && (
+            <span className="text-[10px] text-muted-foreground tabular-nums">
+              · α {grade.alpha_pct >= 0 ? '+' : ''}{grade.alpha_pct.toFixed(2)}%
+            </span>
+          )}
+        </div>
+      ) : null}
 
       {/* Thesis — 2 lines truncated, expand on click. stopPropagation so the
           tile-level click (which opens the detail sheet) doesn't fire here. */}
@@ -437,6 +477,7 @@ export default function Flags() {
     specialists: new Set(),
     status: 'all',
     direction: 'all',
+    outcome: 'active',
     minScore: 70,
     onlySlacked: false,
   });
@@ -476,6 +517,29 @@ export default function Flags() {
     enabled: specialistsActive,
   });
 
+  // Apply outcome-bucket filter client-side. Active = ungraded (no grade row).
+  // Won / Lost / Neutral map to grade.outcome buckets. All = passthrough.
+  const filteredFlags = useMemo(() => {
+    if (!flags) return flags;
+    if (filters.outcome === 'all') return flags;
+    return flags.filter((f) => {
+      const grade = f.ct_flag_grades?.[0] ?? null;
+      const outcome = grade?.outcome ?? null;
+      switch (filters.outcome) {
+        case 'active':
+          return outcome === null;
+        case 'won':
+          return outcome === 'win';
+        case 'lost':
+          return outcome === 'loss';
+        case 'neutral':
+          return outcome === 'partial' || outcome === 'invalidated_early';
+        default:
+          return true;
+      }
+    });
+  }, [flags, filters.outcome]);
+
   const { data: jamesFlags, isLoading: jamesLoading } = useQuery<JamesFlag[]>({
     queryKey: ['ct_james_flags_live', {
       specialists: Array.from(filters.specialists).sort(),
@@ -502,15 +566,15 @@ export default function Flags() {
 
   // Unique tickers we need live spot for — only non-terminal specialist flags with entry+target.
   const tickersNeedingSpot = useMemo(() => {
-    if (!flags) return [] as string[];
+    if (!filteredFlags) return [] as string[];
     const set = new Set<string>();
-    for (const f of flags) {
+    for (const f of filteredFlags) {
       if (f.status === 'graded' || f.status === 'invalidated') continue;
       if (f.entry_price == null || f.target_price == null) continue;
       if (f.specialist_ticker) set.add(f.specialist_ticker);
     }
     return Array.from(set).sort();
-  }, [flags]);
+  }, [filteredFlags]);
 
   const { data: spotMap } = useQuery<Map<string, number>>({
     queryKey: ['ct_flags_spot_map', tickersNeedingSpot],
@@ -538,6 +602,9 @@ export default function Flags() {
     });
   };
 
+  // Counts run against the unfiltered list so badge totals don't shift when
+  // the user narrows the outcome filter — they're meant to read like fixed
+  // status banners, not query-result counters.
   const counts = useMemo(() => {
     const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
     const todayMs = todayStart.getTime();
@@ -554,11 +621,11 @@ export default function Flags() {
     return { active, conviction, gradedToday, mine };
   }, [flags, jamesFlags]);
 
-  // Merged, chronologically sorted feed honoring mode.
+  // Merged, chronologically sorted feed honoring mode + outcome filter.
   const merged: MergedItem[] = useMemo(() => {
     const items: MergedItem[] = [];
-    if (specialistsActive && flags) {
-      for (const f of flags) {
+    if (specialistsActive && filteredFlags) {
+      for (const f of filteredFlags) {
         items.push({ origin: 'claude', created_at: f.created_at, key: `c-${f.id}`, flag: f });
       }
     }
@@ -569,7 +636,7 @@ export default function Flags() {
     }
     items.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
     return items;
-  }, [flags, jamesFlags, specialistsActive, mineActive]);
+  }, [filteredFlags, jamesFlags, specialistsActive, mineActive]);
 
   const listLoading = (specialistsActive && isLoading && !flags) || (mineActive && jamesLoading && !jamesFlags);
 
@@ -706,6 +773,32 @@ export default function Flags() {
               ))}
             </div>
 
+            {/* Outcome bucket toggle — specialist-only. Default 'active' so
+                page opens to ungraded flags; switching to Won/Lost/Neutral
+                surfaces grader output. */}
+            {specialistsActive && (
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted-foreground mr-1">Outcome:</span>
+                {([
+                  { key: 'active', label: 'Active' },
+                  { key: 'won', label: 'Won' },
+                  { key: 'lost', label: 'Lost' },
+                  { key: 'neutral', label: 'Neutral' },
+                  { key: 'all', label: 'All' },
+                ] as const).map(({ key, label }) => (
+                  <Button
+                    key={key}
+                    size="sm"
+                    variant={filters.outcome === key ? 'default' : 'outline'}
+                    onClick={() => setFilters((p) => ({ ...p, outcome: key }))}
+                    className="h-7 px-2 text-[11px]"
+                  >
+                    {label}
+                  </Button>
+                ))}
+              </div>
+            )}
+
             {/* Slacked toggle — specialist-only */}
             {specialistsActive && (
               <div className="flex items-center gap-2 ml-auto">
@@ -762,6 +855,12 @@ export default function Flags() {
               <>No stars yet. Flag a print from the /tape page and it will show up here.</>
             ) : mode === 'both' ? (
               <>Nothing to show. No specialist flags at this threshold and no stars yet.</>
+            ) : filters.outcome !== 'all' && filters.outcome !== 'active' ? (
+              <>
+                No <span className="lowercase">{filters.outcome}</span> flags yet at this threshold.
+                Switch the Outcome filter to <span className="font-medium">All</span> to widen,
+                or <span className="font-medium">Active</span> for ungraded flags.
+              </>
             ) : (
               <>
                 No flags issued yet. Specialists wake up on scheduled cadence or when flow exceeds score 70.
