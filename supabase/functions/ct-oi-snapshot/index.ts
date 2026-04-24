@@ -255,6 +255,87 @@ async function pullTopOIContracts(ticker: string): Promise<{
   };
 }
 
+/**
+ * Pull per-contract OI for every option_symbol in ct_scored_flow (last 24h)
+ * for this ticker that ISN'T already in the top-40 batch. Prevents the blank
+ * OI Δ1D column on /tape for flow contracts that are outside the top-40.
+ *
+ * Uses get_historic_chains (one MCP call per contract, returns up to 10 daily
+ * rows — we take today's row). Budget: ~30-50 extra calls per ticker per slot.
+ */
+async function pullFlowContractOIs(
+  supabase: SupabaseClient,
+  ticker: string,
+  existingSymbols: Set<string>,
+): Promise<{ rows: OIContractRow[]; errors: string[]; mcpCalls: number }> {
+  const errors: string[] = [];
+  let mcpCalls = 0;
+  const rows: OIContractRow[] = [];
+
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await supabase
+    .from('ct_scored_flow')
+    .select('option_symbol')
+    .eq('ticker', ticker)
+    .gte('event_ts', since)
+    .not('option_symbol', 'is', null)
+    .limit(2000);
+
+  if (error) {
+    errors.push(`flow_query: ${error.message.slice(0, 120)}`);
+    return { rows, errors, mcpCalls };
+  }
+
+  const flowSymbols = Array.from(new Set((data ?? []).map(r => r.option_symbol as string)))
+    .filter(s => s && !existingSymbols.has(s));
+
+  for (const sym of flowSymbols) {
+    try {
+      mcpCalls++;
+      const raw = await mcpCallToolAsData('get_historic_chains', { option_symbol: sym, limit: 3 });
+      // Defensive extraction — UW returns `{ data: [{ date, open_interest, volume, ... }] }`
+      const root = (raw && typeof raw === 'object') ? raw as Record<string, unknown> : null;
+      let arr: unknown = root?.data ?? root?.chains ?? raw;
+      if (!Array.isArray(arr) && arr && typeof arr === 'object') {
+        const d = arr as Record<string, unknown>;
+        arr = d.data ?? d.chains ?? d.rows;
+      }
+      if (!Array.isArray(arr) || arr.length === 0) continue;
+
+      // Take the newest row (UW returns newest-first typically, but be safe)
+      const rowsRaw = (arr as Array<Record<string, unknown>>)
+        .filter(r => r && typeof r === 'object')
+        .sort((a, b) => String(b.date ?? '').localeCompare(String(a.date ?? '')));
+      const r = rowsRaw[0];
+      if (!r) continue;
+
+      const oi = intOrNull(r.open_interest ?? r.oi ?? r.openInterest);
+      if (oi === null || oi <= 0) continue;
+
+      const parsed = parseOptionSymbol(sym);
+      rows.push({
+        ticker,
+        option_symbol: sym,
+        strike: parsed?.strike ?? null,
+        expiry: parsed?.expiry ?? null,
+        side: parsed?.side ?? null,
+        oi,
+        volume_today: intOrNull(r.volume ?? r.total_volume ?? r.vol),
+        raw: { source: 'get_historic_chains', date: r.date ?? null },
+      });
+    } catch (e) {
+      if (isUwRateLimit(e)) {
+        errors.push('flow_rate_limit');
+        break;  // stop — UW bucket is saturated
+      }
+      errors.push(`flow_hist:${sym.slice(0, 18)}: ${e instanceof Error ? e.message.slice(0, 80) : String(e).slice(0, 80)}`);
+      continue;
+    }
+  }
+
+  return { rows, errors, mcpCalls };
+}
+
 async function snapshotTicker(
   supabase: SupabaseClient,
   ticker: string,
@@ -262,8 +343,17 @@ async function snapshotTicker(
   snapSlot: SnapSlot,
 ): Promise<{ ticker: string; inserted: number; mcpCalls: number; errors: string[] }> {
   const { rows, errors, mcpCalls } = await pullTopOIContracts(ticker);
+
+  // Bolt-on: capture OI for flow contracts NOT in the top-40 batch so the
+  // /tape OI Δ1D column isn't blank on 99% of scored_flow rows.
+  const existingSymbols = new Set(rows.map(r => r.option_symbol));
+  const flowResult = await pullFlowContractOIs(supabase, ticker, existingSymbols);
+  rows.push(...flowResult.rows);
+  errors.push(...flowResult.errors);
+  const totalMcpCalls = mcpCalls + flowResult.mcpCalls;
+
   if (rows.length === 0) {
-    return { ticker, inserted: 0, mcpCalls, errors: errors.length ? errors : ['no_rows'] };
+    return { ticker, inserted: 0, mcpCalls: totalMcpCalls, errors: errors.length ? errors : ['no_rows'] };
   }
 
   const toUpsert = rows.map(r => ({
@@ -288,9 +378,9 @@ async function snapshotTicker(
 
   if (error) {
     errors.push(`upsert: ${error.message.slice(0, 200)}`);
-    return { ticker, inserted: 0, mcpCalls, errors };
+    return { ticker, inserted: 0, mcpCalls: totalMcpCalls, errors };
   }
-  return { ticker, inserted: count ?? toUpsert.length, mcpCalls, errors };
+  return { ticker, inserted: count ?? toUpsert.length, mcpCalls: totalMcpCalls, errors };
 }
 
 serve(async (req) => {

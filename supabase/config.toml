@@ -354,6 +354,9 @@ verify_jwt = false
 [functions.ct-oi-snapshot]
 verify_jwt = false
 
+[functions.ct-oi-backfill-historical]
+verify_jwt = false
+
 [functions.ct-flag-grader]
 verify_jwt = false
 
