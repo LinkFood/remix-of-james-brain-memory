@@ -195,6 +195,22 @@ function formatPrice(n: number | null): string {
   return `$${n.toFixed(2)}`;
 }
 
+/**
+ * Color the SPOT cell by distance from the strike. Inverted from the
+ * usual moneyness scheme: brighter = FURTHER from strike, because a
+ * far-OTM contract with real premium behind it is the conviction signal.
+ * Near-spot strikes are mundane — everyone trades ATM.
+ * Symmetric — doesn't care about call/put side, just |strike - spot| / spot.
+ */
+function spotDistanceColor(spot: number | null, strike: number | null): string {
+  if (spot == null || strike == null || spot <= 0) return 'text-foreground/90';
+  const pct = Math.abs(strike - spot) / spot;
+  if (pct < 0.01) return 'text-muted-foreground';                       // < 1% — ATM, boring
+  if (pct < 0.03) return 'text-foreground/90';                          // 1-3% — normal
+  if (pct < 0.07) return 'text-amber-300';                              // 3-7% — warm
+  return 'text-emerald-400 font-bold';                                  // >= 7% — conviction
+}
+
 function formatExpiry(iso: string | null): string {
   if (!iso) return '-';
   return iso.slice(5, 10).replace('-', '/');
@@ -919,7 +935,14 @@ export default function Tape() {
                           {r.ticker}
                         </span>
                       </TableCell>
-                      <TableCell className="py-2 px-2 font-mono tabular-nums text-right text-foreground/90">
+                      <TableCell
+                        className={cn('py-2 px-2 font-mono tabular-nums text-right', spotDistanceColor(r.underlying_price, r.strike))}
+                        title={
+                          r.underlying_price != null && r.strike != null
+                            ? `Strike is ${(Math.abs(r.strike - r.underlying_price) / r.underlying_price * 100).toFixed(1)}% from spot`
+                            : undefined
+                        }
+                      >
                         {formatPrice(r.underlying_price)}
                       </TableCell>
                       <TableCell className="py-2 px-2 font-mono tabular-nums text-right font-semibold">
