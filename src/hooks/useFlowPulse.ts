@@ -145,6 +145,58 @@ export function formatPulseInt(n: number | null | undefined): string {
   return Math.round(n).toLocaleString('en-US');
 }
 
+export interface FlowPulseSeriesPoint {
+  tick_time: string;
+  ticker: string;
+  premium_net: number;
+  call_put_ratio: number | null;
+  is_unusual: boolean;
+}
+
+/**
+ * Pulls today's per-ticker time-series + a synthesized 'MARKET' aggregate
+ * row at each tick. Returns a Map keyed by ticker → array of points sorted
+ * by tick_time asc — feed each array straight into the FlowPulseSparkline.
+ *
+ * Single RPC call covers all tickers + market line. RPC handles the today-
+ * floor (NY-tz midnight) and market aggregation server-side.
+ */
+export function useFlowPulseSeries() {
+  const query = useQuery<FlowPulseSeriesPoint[]>({
+    queryKey: ['flow-pulse-series'],
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    retry: false,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.rpc as any)('ct_flow_pulse_series', {});
+      if (error) throw error;
+      return (Array.isArray(data) ? data : []) as FlowPulseSeriesPoint[];
+    },
+  });
+
+  const seriesByTicker = useMemo(() => {
+    const map = new Map<string, FlowPulseSeriesPoint[]>();
+    const points = query.data;
+    if (!points) return map;
+    for (const p of points) {
+      const arr = map.get(p.ticker) ?? [];
+      arr.push(p);
+      map.set(p.ticker, arr);
+    }
+    for (const [, arr] of map) {
+      arr.sort((a, b) => new Date(a.tick_time).getTime() - new Date(b.tick_time).getTime());
+    }
+    return map;
+  }, [query.data]);
+
+  return {
+    seriesByTicker,
+    isLoading: query.isLoading,
+    isError: query.isError,
+  };
+}
+
 /**
  * Compute the default "Today" window in minutes — from today's 13:30 UTC
  * (RTH open ≈ 09:30 ET during EDT) to now. Falls back to 360 when we're
