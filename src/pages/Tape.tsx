@@ -30,6 +30,7 @@ import { cn } from '@/lib/utils';
 import { Waves, RefreshCw, ArrowUp, ArrowDown, Minus, Star, Radio } from 'lucide-react';
 import { toast } from 'sonner';
 import { ContractSheet } from '@/components/command/ContractSheet';
+import { TickerSheet } from '@/components/command/TickerSheet';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -110,6 +111,7 @@ interface TapeRow {
   vol_oi: number | null;
   oi_delta_1d: number | null;
   ask_side_perc: number | null;
+  underlying_price: number | null;
   score: number | null;
   direction: Direction | null;
   classification: Classification | null;
@@ -157,16 +159,38 @@ function parseOccSide(sym: string | null | undefined): 'call' | 'put' | null {
 
 function formatTimeET(iso: string): string {
   try {
+    // 12-hour clock, no seconds, lowercase am/pm — "3:56 pm" is easier to read
+    // than "15:56:32" when you're scanning tape fast.
     return new Date(iso).toLocaleTimeString('en-US', {
       timeZone: 'America/New_York',
-      hour12: false,
-      hour: '2-digit',
+      hour12: true,
+      hour: 'numeric',
       minute: '2-digit',
-      second: '2-digit',
-    });
+    }).toLowerCase().replace(' ', '');
   } catch {
-    return iso.slice(11, 19);
+    return iso.slice(11, 16);
   }
+}
+
+function premiumColor(n: number | null): string {
+  if (n == null) return 'text-muted-foreground';
+  if (n >= 1_000_000) return 'text-emerald-400 font-semibold';
+  if (n >= 500_000) return 'text-emerald-300';
+  if (n >= 100_000) return 'text-foreground';
+  return 'text-muted-foreground';
+}
+
+function dteColor(dte: number | null): string {
+  if (dte == null) return 'text-muted-foreground';
+  if (dte <= 1) return 'text-red-400 font-semibold';  // 0-DTE / next-day — high decay
+  if (dte <= 7) return 'text-orange-300';
+  return 'text-muted-foreground';
+}
+
+function formatPrice(n: number | null): string {
+  if (n == null) return '-';
+  if (n >= 1000) return `$${n.toFixed(0)}`;
+  return `$${n.toFixed(2)}`;
 }
 
 function formatExpiry(iso: string | null): string {
@@ -280,6 +304,7 @@ export default function Tape() {
     liveMode: false,
   });
   const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
+  const [activeTicker, setActiveTicker] = useState<string | null>(null);
   const [markDialog, setMarkDialog] = useState<MarkDialogState>({
     open: false, row: null, note: '', direction_view: null, saving: false,
   });
@@ -361,23 +386,35 @@ export default function Tape() {
     return Array.from(new Set(scored.filter((r) => r.source_table === 'flow_alerts').map((r) => r.source_id)));
   }, [scored]);
 
-  const { data: alertMeta } = useQuery<Map<string, { alert_type: string | null; raw: Record<string, unknown> | null; side: 'call' | 'put' | null; is_otm: boolean | null }>>({
+  interface AlertMetaRow {
+    alert_type: string | null;
+    raw: Record<string, unknown> | null;
+    side: 'call' | 'put' | null;
+    is_otm: boolean | null;
+    underlying_price: number | null;
+  }
+  const { data: alertMeta } = useQuery<Map<string, AlertMetaRow>>({
     queryKey: ['ct_tape_alert_meta', scoredSourceIds.sort().join(',')],
     enabled: scoredSourceIds.length > 0,
-    refetchInterval: 20_000,
+    refetchInterval: tapeInterval,
     queryFn: async () => {
-      const map = new Map<string, { alert_type: string | null; raw: Record<string, unknown> | null; side: 'call' | 'put' | null; is_otm: boolean | null }>();
-      // Chunk IN queries at 200 ids to keep URL length sane.
+      const map = new Map<string, AlertMetaRow>();
       const chunks: string[][] = [];
       for (let i = 0; i < scoredSourceIds.length; i += 200) chunks.push(scoredSourceIds.slice(i, i + 200));
       for (const chunk of chunks) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { data, error } = await (supabase.from('ct_flow_alerts' as never) as any)
-          .select('alert_id,alert_type,raw,side,is_otm')
+          .select('alert_id,alert_type,raw,side,is_otm,underlying_price')
           .in('alert_id', chunk);
         if (error) throw error;
-        for (const row of (data ?? []) as { alert_id: string; alert_type: string | null; raw: Record<string, unknown> | null; side: 'call' | 'put' | null; is_otm: boolean | null }[]) {
-          map.set(row.alert_id, { alert_type: row.alert_type, raw: row.raw, side: row.side, is_otm: row.is_otm });
+        for (const row of (data ?? []) as (AlertMetaRow & { alert_id: string })[]) {
+          map.set(row.alert_id, {
+            alert_type: row.alert_type,
+            raw: row.raw,
+            side: row.side,
+            is_otm: row.is_otm,
+            underlying_price: row.underlying_price,
+          });
         }
       }
       return map;
@@ -448,6 +485,7 @@ export default function Tape() {
         vol_oi: volOi,
         oi_delta_1d: oiMap?.get(r.option_symbol) ?? null,
         ask_side_perc: r.ask_side_perc,
+        underlying_price: meta?.underlying_price ?? null,
         score: r.score,
         direction: r.direction,
         classification: r.classification,
@@ -485,6 +523,7 @@ export default function Tape() {
           vol_oi: volOi,
           oi_delta_1d: oiMap?.get(a.option_symbol) ?? null,
           ask_side_perc: a.is_ask ? 100 : a.is_bid ? 0 : null,
+          underlying_price: a.underlying_price ?? null,
           score: null,
           direction: null,
           classification: null,
@@ -811,27 +850,27 @@ export default function Tape() {
         {/* Tape table */}
         <Card className="p-0 overflow-hidden">
           <div className="overflow-x-auto">
-            <Table className="text-[11px]">
+            <Table className="text-xs">
               <TableHeader>
                 <TableRow className="border-b border-border hover:bg-transparent">
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider">Time</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider">Tkr</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider">Contract</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">Strike</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider">Exp</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">DTE</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider">Side</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider">Tape</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">Prem</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">Vol</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">OI</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">V/OI</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">OI Δ1d</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">Ask%</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">Score</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider">Tags</TableHead>
-                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-center w-10">
-                    <Star className="w-3 h-3 inline" />
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Time</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Ticker</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Spot</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Strike</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Side</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Exp</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">DTE</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Tape</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Prem</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Vol</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">OI</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">V/OI</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">OI Δ1d</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Ask%</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Score</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Tags</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-center w-10">
+                    <Star className="w-3.5 h-3.5 inline" />
                   </TableHead>
                 </TableRow>
               </TableHeader>
@@ -855,31 +894,35 @@ export default function Tape() {
                       onClick={() => setActiveSymbol(r.option_symbol)}
                       className="cursor-pointer hover:bg-muted/40 border-b border-border/50"
                     >
-                      <TableCell className="py-1.5 px-2 font-mono tabular-nums text-muted-foreground">
+                      <TableCell className="py-2 px-2 font-mono tabular-nums text-muted-foreground">
                         {formatTimeET(r.event_ts)}
                       </TableCell>
-                      <TableCell className="py-1.5 px-2 font-mono font-semibold">{r.ticker}</TableCell>
-                      <TableCell className="py-1.5 px-2 font-mono text-[10px] text-foreground/80 truncate max-w-[220px]">
-                        {r.option_symbol}
+                      <TableCell
+                        className="py-2 px-2"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveTicker(r.ticker);
+                        }}
+                      >
+                        <span className="font-mono font-bold text-foreground hover:text-primary transition-colors underline decoration-dotted underline-offset-2">
+                          {r.ticker}
+                        </span>
                       </TableCell>
-                      <TableCell className="py-1.5 px-2 font-mono tabular-nums text-right">
+                      <TableCell className="py-2 px-2 font-mono tabular-nums text-right text-foreground/90">
+                        {formatPrice(r.underlying_price)}
+                      </TableCell>
+                      <TableCell className="py-2 px-2 font-mono tabular-nums text-right font-semibold">
                         {r.strike != null ? `$${r.strike}` : '-'}
                       </TableCell>
-                      <TableCell className="py-1.5 px-2 font-mono tabular-nums text-muted-foreground">
-                        {formatExpiry(r.expiry)}
-                      </TableCell>
-                      <TableCell className="py-1.5 px-2 font-mono tabular-nums text-right text-muted-foreground">
-                        {r.dte ?? '-'}
-                      </TableCell>
-                      <TableCell className="py-1.5 px-2">
+                      <TableCell className="py-2 px-2">
                         {r.side ? (
                           <Badge
                             variant="outline"
                             className={cn(
-                              'text-[9px] font-mono px-1 py-0',
+                              'text-[10px] font-mono px-1.5 py-0 font-bold',
                               r.side === 'call'
-                                ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
-                                : 'bg-red-500/15 text-red-300 border-red-500/40',
+                                ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
+                                : 'bg-red-500/20 text-red-300 border-red-500/50',
                             )}
                           >
                             {r.side === 'call' ? 'CALL' : 'PUT'}
@@ -888,24 +931,30 @@ export default function Tape() {
                           <span className="text-muted-foreground">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="py-1.5 px-2">
-                        <Badge variant="outline" className={cn('text-[9px] font-mono px-1 py-0', tapeKindClass(r.tape_kind))}>
+                      <TableCell className="py-2 px-2 font-mono tabular-nums text-muted-foreground">
+                        {formatExpiry(r.expiry)}
+                      </TableCell>
+                      <TableCell className={cn('py-2 px-2 font-mono tabular-nums text-right', dteColor(r.dte))}>
+                        {r.dte ?? '-'}
+                      </TableCell>
+                      <TableCell className="py-2 px-2">
+                        <Badge variant="outline" className={cn('text-[10px] font-mono px-1.5 py-0', tapeKindClass(r.tape_kind))}>
                           {r.tape_kind}
                         </Badge>
                       </TableCell>
-                      <TableCell className="py-1.5 px-2 font-mono tabular-nums text-right">
+                      <TableCell className={cn('py-2 px-2 font-mono tabular-nums text-right', premiumColor(r.premium))}>
                         {formatPremium(r.premium)}
                       </TableCell>
-                      <TableCell className="py-1.5 px-2 font-mono tabular-nums text-right text-muted-foreground">
+                      <TableCell className="py-2 px-2 font-mono tabular-nums text-right text-muted-foreground">
                         {formatInt(r.volume)}
                       </TableCell>
-                      <TableCell className="py-1.5 px-2 font-mono tabular-nums text-right text-muted-foreground">
+                      <TableCell className="py-2 px-2 font-mono tabular-nums text-right text-muted-foreground">
                         {formatInt(r.open_interest)}
                       </TableCell>
-                      <TableCell className={cn('py-1.5 px-2 font-mono tabular-nums text-right', volOiColor(r.vol_oi))}>
+                      <TableCell className={cn('py-2 px-2 font-mono tabular-nums text-right', volOiColor(r.vol_oi))}>
                         {r.vol_oi != null ? `${r.vol_oi.toFixed(2)}x` : '-'}
                       </TableCell>
-                      <TableCell className="py-1.5 px-2 font-mono tabular-nums text-right">
+                      <TableCell className="py-2 px-2 font-mono tabular-nums text-right">
                         {r.oi_delta_1d != null ? (
                           <span className={r.oi_delta_1d > 0 ? 'text-emerald-400' : r.oi_delta_1d < 0 ? 'text-red-400' : 'text-muted-foreground'}>
                             {r.oi_delta_1d > 0 ? '+' : ''}
@@ -915,26 +964,29 @@ export default function Tape() {
                           <span className="text-muted-foreground">-</span>
                         )}
                       </TableCell>
-                      <TableCell className="py-1.5 px-2 font-mono tabular-nums text-right text-muted-foreground">
+                      <TableCell className="py-2 px-2 font-mono tabular-nums text-right text-muted-foreground">
                         {r.ask_side_perc != null ? `${Math.round(r.ask_side_perc)}%` : '-'}
                       </TableCell>
-                      <TableCell className={cn('py-1.5 px-2 font-mono tabular-nums font-semibold text-right', scoreColor(r.score))}>
+                      <TableCell className={cn('py-2 px-2 font-mono tabular-nums font-bold text-right text-sm', scoreColor(r.score))}>
                         {r.score != null ? Math.round(r.score) : '-'}
                       </TableCell>
-                      <TableCell className="py-1.5 px-2">
+                      <TableCell className="py-2 px-2">
                         <div className="flex items-center gap-1">
                           {r.direction && (
-                            <Badge variant="outline" className={cn('text-[9px] font-mono px-1 py-0', directionPill(r.direction))}>
-                              {r.direction === 'bullish' ? <ArrowUp className="w-2.5 h-2.5" /> : r.direction === 'bearish' ? <ArrowDown className="w-2.5 h-2.5" /> : <Minus className="w-2.5 h-2.5" />}
+                            <Badge variant="outline" className={cn('text-[10px] font-mono px-1 py-0', directionPill(r.direction))}>
+                              {r.direction === 'bullish' ? <ArrowUp className="w-3 h-3" /> : r.direction === 'bearish' ? <ArrowDown className="w-3 h-3" /> : <Minus className="w-3 h-3" />}
                             </Badge>
                           )}
                           {r.classification && (
-                            <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-muted/40 text-muted-foreground">
+                            <span className={cn(
+                              'text-[10px] font-mono px-1.5 py-0.5 rounded',
+                              r.classification === 'opening_buy' ? 'bg-emerald-500/15 text-emerald-300 font-semibold' : 'bg-muted/40 text-muted-foreground',
+                            )}>
                               {r.classification.replace('_', ' ')}
                             </span>
                           )}
                           {r.is_otm === true && (
-                            <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-amber-500/15 text-amber-300">OTM</span>
+                            <span className="text-[10px] font-mono px-1 py-0.5 rounded bg-amber-500/15 text-amber-300">OTM</span>
                           )}
                         </div>
                       </TableCell>
@@ -979,6 +1031,13 @@ export default function Tape() {
         optionSymbol={activeSymbol}
         open={activeSymbol !== null}
         onOpenChange={(o) => { if (!o) setActiveSymbol(null); }}
+      />
+
+      {/* Ticker briefing sheet */}
+      <TickerSheet
+        ticker={activeTicker}
+        open={activeTicker !== null}
+        onOpenChange={(o) => { if (!o) setActiveTicker(null); }}
       />
 
       {/* Mark-as-interesting dialog */}
