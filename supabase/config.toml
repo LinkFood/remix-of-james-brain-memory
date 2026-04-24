@@ -354,6 +354,9 @@ verify_jwt = false
 [functions.ct-oi-snapshot]
 verify_jwt = false
 
+[functions.ct-price-live-poll]
+verify_jwt = false
+
 [functions.ct-oi-backfill-historical]
 verify_jwt = false
 
