@@ -63,7 +63,17 @@ interface Flag {
   confirmed_t1: boolean;
   slacked_at: string | null;
   created_at: string;
-  ct_flag_grades: FlagGrade[] | null;
+  ct_flag_grades: FlagGrade[] | FlagGrade | null;
+}
+
+/** PostgREST returns a 1:1 FK join as a single object, not an array.
+ *  ct_flag_grades has a UNIQUE constraint on flag_id, so the runtime shape is
+ *  the object form even though older code assumed array. Normalize here. */
+function pickGrade(flag: { ct_flag_grades: FlagGrade[] | FlagGrade | null }): FlagGrade | null {
+  const g = flag.ct_flag_grades;
+  if (!g) return null;
+  if (Array.isArray(g)) return g[0] ?? null;
+  return g;
 }
 
 type OutcomeFilter = 'active' | 'won' | 'lost' | 'neutral' | 'all';
@@ -255,7 +265,7 @@ function FlagTile({
   spot: number | null | undefined;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const grade = flag.ct_flag_grades?.[0] ?? null;
+  const grade = pickGrade(flag);
   const isGraded = flag.status === 'graded' || flag.status === 'invalidated';
 
   return (
@@ -523,7 +533,7 @@ export default function Flags() {
     if (!flags) return flags;
     if (filters.outcome === 'all') return flags;
     return flags.filter((f) => {
-      const grade = f.ct_flag_grades?.[0] ?? null;
+      const grade = pickGrade(f);
       const outcome = grade?.outcome ?? null;
       switch (filters.outcome) {
         case 'active':
@@ -613,7 +623,7 @@ export default function Flags() {
       for (const f of flags) {
         if (f.status === 'active') active++;
         if (f.status === 'conviction') conviction++;
-        const g = f.ct_flag_grades?.[0];
+        const g = pickGrade(f);
         if (g?.graded_at && Date.parse(g.graded_at) >= todayMs) gradedToday++;
       }
     }
