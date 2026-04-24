@@ -101,10 +101,11 @@ serve(async (req) => {
   // ==========================================================================
   // Parallel fetch — everything the digest needs in a single round-trip batch.
   // ==========================================================================
+  const todayOpenIso = new Date(`${sessionDate}T13:30:00Z`).toISOString();
   const [
-    bookRes,
-    openTradesRes,
-    tickerPricesRes,           // latest price per instrument from heartbeat snapshot
+    flagsTodayRes,            // specialist flags written since 13:30 UTC today
+    flowPulseRes,             // current market-wide directional imbalance
+    topPrintRes,              // biggest scored flow print in last 30 min
     attentionRes,
     activeFlagsRes,            // combo-verdict proxy: recent SPY/QQQ/IWM flags
     regimeInversionsRes,
@@ -113,22 +114,20 @@ serve(async (req) => {
     heartbeatRes,
     spxThesisRes,
   ] = await Promise.all([
-    // Co-Trader digest is Claude's activity report — filter to trader='claude'.
-    // Without this, maybeSingle() errors when both james + claude rows exist
-    // for the same session_date (common after james takes a paper trade).
-    supabase.from('ct_book')
-      .select('starting_balance, realized_pnl, unrealized_pnl, trades_count, wins, losses')
-      .eq('session_date', sessionDate)
-      .eq('trader', 'claude')
+    // Today's specialist flags — count + direction split + high score.
+    supabase.from('ct_flags')
+      .select('specialist_ticker, direction, score')
+      .gte('created_at', todayOpenIso),
+    // FlowPulse summary — one call to the 6h RPC, then aggregate market-wide.
+    supabase.rpc('ct_flow_pulse', { p_window_min: 360, p_ticker: null }),
+    // Single biggest premium print in last 30 min.
+    supabase.from('ct_scored_flow')
+      .select('ticker, option_symbol, classification, premium, score, event_ts')
+      .gte('event_ts', cutoff30m)
+      .in('classification', ['opening_buy','opening_sell'])
+      .order('premium', { ascending: false })
+      .limit(1)
       .maybeSingle(),
-    supabase.from('ct_trades')
-      .select('instrument, side, size_pct, entry_price, opened_at')
-      .eq('session_date', sessionDate)
-      .eq('trader', 'claude')
-      .eq('status', 'open'),
-    supabase.from('ct_heartbeats')
-      .select('status_line, current_reads, created_at')
-      .order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabase.from('ct_attention_stream')
       .select('kind, id, created_at, attention_score, summary')
       .gte('created_at', cutoff30m)
@@ -169,20 +168,19 @@ serve(async (req) => {
       .eq('instrument', 'SPX').maybeSingle(),
   ]);
 
-  const book = bookRes.data as {
-    starting_balance: number | null; realized_pnl: number | null; unrealized_pnl: number | null;
-    trades_count: number | null; wins: number | null; losses: number | null;
-  } | null;
-  const openTrades = (openTradesRes.data ?? []) as Array<{
-    instrument: string; side: string; size_pct: number; entry_price: number | null; opened_at: string;
+  const flagsToday = (flagsTodayRes.data ?? []) as Array<{
+    specialist_ticker: string; direction: string; score: number | null;
   }>;
-  const snapshotReads = (tickerPricesRes.data?.current_reads as { _snapshot?: { per_ticker?: Record<string, { price?: number | null }> } } | null)?._snapshot;
-  const priceByTicker: Record<string, number | null> = {};
-  if (snapshotReads?.per_ticker) {
-    for (const [t, v] of Object.entries(snapshotReads.per_ticker)) {
-      priceByTicker[t] = v?.price ?? null;
-    }
-  }
+  const flowPulse = (flowPulseRes.data ?? []) as Array<{
+    ticker: string; calls_count: number; puts_count: number;
+    calls_premium: number; puts_premium: number;
+    call_put_ratio: number | null; premium_net: number;
+    cp_ratio_deviation: number | null; is_unusual: boolean;
+  }>;
+  const topPrint = topPrintRes.data as {
+    ticker: string; option_symbol: string | null; classification: string;
+    premium: number | null; score: number | null; event_ts: string;
+  } | null;
   const attention = (attentionRes.data ?? []) as Array<{
     kind: string; id: string; attention_score: number | null; summary: string | null; created_at: string;
   }>;
@@ -204,45 +202,48 @@ serve(async (req) => {
   } | null;
 
   // ==========================================================================
-  // Section 1: Book state (always render, even if flat)
+  // Section 1: Today's status — flags + market flow + top print
+  // Replaces the old Book section (dead paper-trading cruft).
   // ==========================================================================
-  const starting = book?.starting_balance ?? 10000;
-  const realized = book?.realized_pnl ?? 0;
+  const flagBull = flagsToday.filter(f => f.direction === 'bullish').length;
+  const flagBear = flagsToday.filter(f => f.direction === 'bearish').length;
+  const flagNeutral = flagsToday.filter(f => f.direction === 'neutral').length;
+  const highestFlag = flagsToday.reduce<typeof flagsToday[0] | null>((hi, f) => {
+    const s = f.score ?? 0;
+    const hs = hi?.score ?? -1;
+    return s > hs ? f : hi;
+  }, null);
 
-  // Unrealized: prefer book.unrealized_pnl if populated; otherwise compute from
-  // open trades + latest snapshot prices (defensive — ct_book may lag).
-  let unrealized = book?.unrealized_pnl ?? 0;
-  if ((unrealized == null || unrealized === 0) && openTrades.length > 0) {
-    let sum = 0;
-    for (const t of openTrades) {
-      const mark = priceByTicker[t.instrument];
-      if (t.entry_price == null || mark == null) continue;
-      const notional = starting * (t.size_pct / 100);
-      const pctMove = t.side === 'long'
-        ? (mark - t.entry_price) / t.entry_price
-        : (t.entry_price - mark) / t.entry_price;
-      sum += notional * pctMove;
+  // Market-wide FlowPulse aggregate (sum counts + premium, premium-weighted C:P).
+  let mktCalls = 0, mktPuts = 0, mktCallsPrem = 0, mktPutsPrem = 0, mktNet = 0;
+  const unusualTickers: string[] = [];
+  for (const r of flowPulse) {
+    mktCalls += r.calls_count || 0;
+    mktPuts += r.puts_count || 0;
+    mktCallsPrem += Number(r.calls_premium) || 0;
+    mktPutsPrem += Number(r.puts_premium) || 0;
+    mktNet += Number(r.premium_net) || 0;
+    if (r.is_unusual) {
+      const dev = r.cp_ratio_deviation ?? 0;
+      unusualTickers.push(`${r.ticker} ${dev.toFixed(1)}x`);
     }
-    unrealized = sum;
   }
-  const equity = starting + (realized ?? 0) + (unrealized ?? 0);
-  const equityPct = starting > 0 ? ((equity - starting) / starting) * 100 : 0;
+  const mktCp = mktPutsPrem > 0 ? mktCallsPrem / mktPutsPrem : (mktCalls / Math.max(mktPuts, 1));
+  const mktBiasLabel = mktNet > 0 ? 'bullish' : mktNet < 0 ? 'bearish' : 'flat';
 
-  const openTradesRows = openTrades.map(t => {
-    const mark = priceByTicker[t.instrument];
-    if (t.entry_price == null || mark == null) return `${t.instrument} ${t.side} ${t.size_pct}% @ ${t.entry_price?.toFixed(2) ?? '—'} (mark n/a)`;
-    const pct = t.side === 'long'
-      ? ((mark - t.entry_price) / t.entry_price) * 100
-      : ((t.entry_price - mark) / t.entry_price) * 100;
-    return `${t.instrument} ${t.side} ${t.size_pct}% · ${fmtPct(pct)}`;
-  });
+  // Top print one-liner.
+  const topPrintLine = topPrint && topPrint.premium != null
+    ? `${topPrint.ticker} ${topPrint.classification.replace('_', ' ')} ${fmtUsd(Number(topPrint.premium))} score ${topPrint.score ?? '?'}`
+    : 'none above threshold';
 
-  const bookLines: string[] = [
-    `*Equity:* ${fmtEquity(equity)} (${fmtPct(equityPct)} vs $${starting.toLocaleString()} seed)`,
-    `*Today:* realized ${fmtUsd(realized)} · unrealized ${fmtUsd(unrealized)} · ${book?.trades_count ?? 0} trades (${book?.wins ?? 0}W/${book?.losses ?? 0}L)`,
-    openTrades.length > 0
-      ? `*Open (${openTrades.length}):* ${openTradesRows.slice(0, 3).join(' · ')}`
-      : `*Open:* flat`,
+  const statusLines: string[] = [
+    flagsToday.length > 0
+      ? `*Today's flags:* ${flagsToday.length} written · ${flagBull} bullish / ${flagBear} bearish${flagNeutral ? ` / ${flagNeutral} neutral` : ''}${highestFlag ? ` · high ${highestFlag.score} ${highestFlag.specialist_ticker} ${highestFlag.direction}` : ''}`
+      : `*Today's flags:* none yet`,
+    flowPulse.length > 0
+      ? `*Market flow:* ${mktCp.toFixed(2)}x call:put · net ${fmtUsd(mktNet)} ${mktBiasLabel}${unusualTickers.length ? ` · ⚠ unusual: ${unusualTickers.slice(0, 3).join(', ')}` : ''}`
+      : `*Market flow:* no data`,
+    `*Last 30m top print:* ${topPrintLine}`,
   ];
 
   // ==========================================================================
@@ -299,11 +300,11 @@ serve(async (req) => {
   // ==========================================================================
   // Build Block Kit payload
   // ==========================================================================
-  const quietFallbackText = `Quiet 30-min window — no new signals, equity ${fmtEquity(equity)}, watchlist stable.`;
+  const quietFallbackText = `Quiet 30-min window — no new signals, watchlist stable.`;
   const section2Empty = sigLines.length === 0;
   const section3Empty = clusterLines.length === 0;
   const section4Empty = readLines.length === 0;
-  const allQuiet = section2Empty && section3Empty && section4Empty && openTrades.length === 0;
+  const allQuiet = section2Empty && section3Empty && section4Empty && flagsToday.length === 0;
 
   const blocks: Array<Record<string, unknown>> = [];
   let fallbackText: string;
@@ -312,12 +313,12 @@ serve(async (req) => {
     // Collapsed mode: Section 1 + quiet fallback only.
     blocks.push(headerBlock(headerText));
     blocks.push(divider());
-    blocks.push(sectionBlock(bookLines.join('\n')));
+    blocks.push(sectionBlock(statusLines.join('\n')));
     if (allQuiet) {
       blocks.push(divider());
       blocks.push(sectionBlock(`:zzz: ${quietFallbackText}`));
     }
-    fallbackText = `Co-Trader digest ${etHour}:${etMin} ET · ${fmtEquity(equity)}`;
+    fallbackText = `Co-Trader digest ${etHour}:${etMin} ET · ${flagsToday.length} flags · ${mktBiasLabel}`;
   } else if (allQuiet) {
     // Verbose mode but nothing to report — single quiet line (keeps cadence
     // as signal without a bloated skeleton).
@@ -327,7 +328,7 @@ serve(async (req) => {
   } else {
     blocks.push(headerBlock(headerText));
     blocks.push(divider());
-    blocks.push(sectionBlock(`:ledger: *Book*\n${bookLines.join('\n')}`));
+    blocks.push(sectionBlock(`:bar_chart: *Today's status*\n${statusLines.join('\n')}`));
     if (!section2Empty) {
       blocks.push(divider());
       blocks.push(sectionBlock(`:satellite_antenna: *Signals (last 30m)*\n${sigLines.join('\n')}`));
@@ -340,7 +341,7 @@ serve(async (req) => {
       blocks.push(divider());
       blocks.push(sectionBlock(`:brain: *Current read*\n${readLines.join('\n')}`));
     }
-    fallbackText = `Co-Trader digest ${etHour}:${etMin} ET · ${fmtEquity(equity)} · ${attention.length} hot · ${sweepClusters.length + dpClusters.length} clusters`;
+    fallbackText = `Co-Trader digest ${etHour}:${etMin} ET · ${flagsToday.length} flags · ${mktCp.toFixed(1)}x C:P ${mktBiasLabel} · ${attention.length} hot`;
   }
 
   await ctSlackPushDirect(supabase, userId, fallbackText, 'digest', blocks);
@@ -350,7 +351,7 @@ serve(async (req) => {
     verbose,
     quiet: allQuiet,
     sections: {
-      book: bookLines.length,
+      status: statusLines.length,
       signals: sigLines.length,
       clusters: clusterLines.length,
       read: readLines.length,
