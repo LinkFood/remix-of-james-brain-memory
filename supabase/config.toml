@@ -335,3 +335,6 @@ verify_jwt = false
 
 [functions.ct-prediction-smart-money-ingester]
 verify_jwt = false
+
+[functions.ct-oi-snapshot]
+verify_jwt = false
