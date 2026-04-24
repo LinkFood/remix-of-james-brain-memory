@@ -5,7 +5,7 @@
  * Provides single useJacAgent instance shared across all pages via JacContext.
  */
 
-import { useEffect, useState, useRef } from 'react';
+import { useCallback, useEffect, useState, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useJacAgent } from '@/hooks/useJacAgent';
@@ -13,6 +13,59 @@ import { JacContext } from '@/contexts/JacContext';
 import { TopNav } from '@/components/nav/TopNav';
 import { JacSidebar } from '@/components/JacSidebar';
 import { useSidebarState } from '@/hooks/useSidebarState';
+import { ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react';
+
+const CHAT_SIDEBAR_STORAGE_KEY = 'ct-chat-sidebar-collapsed';
+
+/**
+ * CollapsibleSidebar — Wraps the per-page custom sidebar (e.g. Co-Trader ChatPanel)
+ * with a hide/show toggle. Persists collapsed state in localStorage so the user
+ * can banish the chat when they want tape real estate.
+ */
+function CollapsibleSidebar({ children }: { children: React.ReactNode }) {
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    try { return localStorage.getItem(CHAT_SIDEBAR_STORAGE_KEY) === '1'; }
+    catch { return false; }
+  });
+
+  const toggle = useCallback(() => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try { localStorage.setItem(CHAT_SIDEBAR_STORAGE_KEY, next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
+  if (collapsed) {
+    return (
+      <div className="w-9 shrink-0 border-r border-border bg-card/60 flex flex-col items-center py-2">
+        <button
+          onClick={toggle}
+          className="w-7 h-7 flex items-center justify-center rounded hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors"
+          aria-label="Open chat"
+          title="Open Claude chat"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
+        <MessageSquare className="w-3.5 h-3.5 text-muted-foreground/40 mt-2" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative shrink-0 transition-all duration-150">
+      <button
+        onClick={toggle}
+        className="absolute top-1.5 right-1.5 z-10 w-6 h-6 flex items-center justify-center rounded hover:bg-muted/60 text-muted-foreground hover:text-foreground transition-colors"
+        aria-label="Hide chat"
+        title="Hide Claude chat"
+      >
+        <ChevronLeft className="w-3.5 h-3.5" />
+      </button>
+      {children}
+    </div>
+  );
+}
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -88,7 +141,7 @@ export function AuthLayout({ children, hideSidebar = false, sidebar }: AuthLayou
         <div className="flex-1 flex overflow-hidden">
           {/* Custom sidebar takes priority (e.g. Co-Trader ChatPanel); else JacSidebar unless hidden */}
           {sidebar ? (
-            sidebar
+            <CollapsibleSidebar>{sidebar}</CollapsibleSidebar>
           ) : !hideSidebar ? (
             <JacSidebar
               isCollapsed={isCollapsed}

@@ -32,6 +32,7 @@ import { toast } from 'sonner';
 import { ContractSheet } from '@/components/command/ContractSheet';
 import { TickerSheet } from '@/components/command/TickerSheet';
 import { MacroBanner } from '@/components/command/MacroBanner';
+import { TapeReaderBanner } from '@/components/command/TapeReaderBanner';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -576,6 +577,7 @@ export default function Tape() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="max-w-[1800px] mx-auto p-4 space-y-4">
+        <TapeReaderBanner />
         <MacroBanner onTickerClick={(t) => setActiveTicker(t)} />
         <header className="flex items-center justify-between">
           <div>
@@ -982,7 +984,16 @@ export default function Tape() {
                           {r.classification && (
                             <span className={cn(
                               'text-[10px] font-mono px-1.5 py-0.5 rounded',
-                              r.classification === 'opening_buy' ? 'bg-emerald-500/15 text-emerald-300 font-semibold' : 'bg-muted/40 text-muted-foreground',
+                              // Color the classification pill by DIRECTION, not class.
+                              // opening_buy on a put is bearish; painting it green was
+                              // a bug — the row's direction is the real signal.
+                              r.classification === 'opening_buy' && r.direction === 'bullish'
+                                ? 'bg-emerald-500/15 text-emerald-300 font-semibold'
+                                : r.classification === 'opening_buy' && r.direction === 'bearish'
+                                  ? 'bg-red-500/15 text-red-300 font-semibold'
+                                  : r.classification === 'hedge'
+                                    ? 'bg-amber-500/15 text-amber-300'
+                                    : 'bg-muted/40 text-muted-foreground',
                             )}>
                               {r.classification.replace('_', ' ')}
                             </span>

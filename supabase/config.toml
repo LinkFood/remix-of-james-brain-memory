@@ -132,6 +132,9 @@ verify_jwt = false
 [functions.ct-tape-backfill]
 verify_jwt = false
 
+[functions.ct-tape-reader]
+verify_jwt = false
+
 [functions.ct-event-calendar-ingester]
 verify_jwt = false
 

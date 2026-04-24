@@ -17,7 +17,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { Flame, Activity, Brain, TrendingUp } from 'lucide-react';
+import { Flame, Activity, Brain, TrendingUp, ArrowUp, ArrowDown, Minus } from 'lucide-react';
 import { ContractSheet } from './ContractSheet';
 
 interface HotContractRow {
@@ -73,6 +73,25 @@ function sideColor(side: string | null): string {
   if (side === 'call') return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50';
   if (side === 'put') return 'bg-red-500/20 text-red-300 border-red-500/50';
   return 'bg-slate-500/20 text-slate-300 border-slate-500/50';
+}
+
+/**
+ * Parse call/put from an OCC option symbol. ct_scored_flow doesn't carry
+ * side, and ct_flow_alerts.side is frequently null (UW returns null on
+ * flow-alerts). OCC format: ROOT + YYMMDD + (C|P) + 8-digit strike.
+ */
+function parseOccSide(sym: string | null | undefined): 'call' | 'put' | null {
+  if (!sym || sym.length < 9) return null;
+  const ch = sym.charAt(sym.length - 9);
+  if (ch === 'C' || ch === 'c') return 'call';
+  if (ch === 'P' || ch === 'p') return 'put';
+  return null;
+}
+
+function directionPill(d: string | null): string {
+  if (d === 'bullish') return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40';
+  if (d === 'bearish') return 'bg-red-500/15 text-red-300 border-red-500/40';
+  return 'bg-slate-500/15 text-slate-300 border-slate-500/40';
 }
 
 function directionColor(d: string | null): string {
@@ -239,9 +258,14 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
                         onClick={() => setDrillSymbol(c.option_symbol)}
                         className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/40 transition-colors text-xs"
                       >
-                        <Badge variant="outline" className={cn('text-[10px] font-mono px-1.5 py-0 font-bold', sideColor(c.side))}>
-                          {c.side === 'call' ? 'C' : c.side === 'put' ? 'P' : '?'}
+                        <Badge variant="outline" className={cn('text-[10px] font-mono px-1.5 py-0 font-bold', sideColor(c.side ?? parseOccSide(c.option_symbol)))}>
+                          {(c.side ?? parseOccSide(c.option_symbol)) === 'call' ? 'CALL' : (c.side ?? parseOccSide(c.option_symbol)) === 'put' ? 'PUT' : '?'}
                         </Badge>
+                        {c.direction && (
+                          <Badge variant="outline" className={cn('text-[9px] font-mono px-1 py-0 gap-0.5', directionPill(c.direction))}>
+                            {c.direction === 'bullish' ? <ArrowUp className="w-2.5 h-2.5" /> : c.direction === 'bearish' ? <ArrowDown className="w-2.5 h-2.5" /> : <Minus className="w-2.5 h-2.5" />}
+                          </Badge>
+                        )}
                         <span className="font-mono tabular-nums font-semibold w-16 text-right">{c.strike != null ? `$${c.strike}` : '-'}</span>
                         <span className="font-mono tabular-nums text-muted-foreground w-14">
                           {c.expiry ? c.expiry.slice(5).replace('-', '/') : '-'}
@@ -289,9 +313,14 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
                         onClick={() => setDrillSymbol(c.option_symbol)}
                         className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-muted/40 transition-colors text-xs"
                       >
-                        <Badge variant="outline" className={cn('text-[10px] font-mono px-1.5 py-0 font-bold', sideColor(c.side))}>
-                          {c.side === 'call' ? 'C' : c.side === 'put' ? 'P' : '?'}
+                        <Badge variant="outline" className={cn('text-[10px] font-mono px-1.5 py-0 font-bold', sideColor(c.side ?? parseOccSide(c.option_symbol)))}>
+                          {(c.side ?? parseOccSide(c.option_symbol)) === 'call' ? 'CALL' : (c.side ?? parseOccSide(c.option_symbol)) === 'put' ? 'PUT' : '?'}
                         </Badge>
+                        {c.direction && (
+                          <Badge variant="outline" className={cn('text-[9px] font-mono px-1 py-0 gap-0.5', directionPill(c.direction))}>
+                            {c.direction === 'bullish' ? <ArrowUp className="w-2.5 h-2.5" /> : c.direction === 'bearish' ? <ArrowDown className="w-2.5 h-2.5" /> : <Minus className="w-2.5 h-2.5" />}
+                          </Badge>
+                        )}
                         <span className="font-mono tabular-nums font-semibold w-16 text-right">{c.strike != null ? `$${c.strike}` : '-'}</span>
                         <span className="font-mono tabular-nums text-muted-foreground w-14">
                           {c.expiry ? c.expiry.slice(5).replace('-', '/') : '-'}
