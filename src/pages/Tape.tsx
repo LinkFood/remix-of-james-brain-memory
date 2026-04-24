@@ -34,6 +34,7 @@ import { TickerSheet } from '@/components/command/TickerSheet';
 import { MacroBanner } from '@/components/command/MacroBanner';
 import { TapeReaderBanner } from '@/components/command/TapeReaderBanner';
 import { OvernightPositioning } from '@/components/command/OvernightPositioning';
+import { RegimeChip } from '@/hooks/useTickerIntradayContext';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -60,6 +61,10 @@ interface ScoredRow {
   volume: number | null;
   open_interest: number | null;
   ask_side_perc: number | null;
+  // Regime context at the time of the print — populated by backend scorer.
+  // Null for older rows or when the backfill hasn't landed yet.
+  spot_pct_from_prev_close: number | null;
+  spot_pct_from_today_open: number | null;
   // Not all ingesters populate these — keep nullable.
   alert_type?: string | null;
   raw?: Record<string, unknown> | null;
@@ -121,6 +126,9 @@ interface TapeRow {
   tape_kind: string;
   is_sweep: boolean;
   is_otm: boolean | null;
+  // Regime at the moment of the print — scored rows only. Alert-only rows stay null.
+  spot_pct_from_prev_close: number | null;
+  spot_pct_from_today_open: number | null;
 }
 
 interface Filters {
@@ -350,7 +358,7 @@ export default function Tape() {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let q: any = supabase
         .from('ct_scored_flow' as never)
-        .select('id,source_table,source_id,ticker,option_symbol,event_ts,classification,direction,score,strike,expiry,dte,delta_est,premium,volume,open_interest,ask_side_perc')
+        .select('id,source_table,source_id,ticker,option_symbol,event_ts,classification,direction,score,strike,expiry,dte,delta_est,premium,volume,open_interest,ask_side_perc,spot_pct_from_prev_close,spot_pct_from_today_open')
         .order('event_ts', { ascending: false })
         .limit(1500);
       if (filters.tickers.size > 0) q = q.in('ticker', Array.from(filters.tickers));
@@ -556,6 +564,8 @@ export default function Tape() {
         tape_kind: kind,
         is_sweep: isSweep,
         is_otm: meta?.is_otm ?? null,
+        spot_pct_from_prev_close: r.spot_pct_from_prev_close ?? null,
+        spot_pct_from_today_open: r.spot_pct_from_today_open ?? null,
       });
       if (r.source_table === 'flow_alerts' || r.source_table === 'ct_flow_alerts') seenScoredSourceIds.add(r.source_id);
     }
@@ -594,6 +604,8 @@ export default function Tape() {
           tape_kind: kind,
           is_sweep: isSweep,
           is_otm: a.is_otm,
+          spot_pct_from_prev_close: null,
+          spot_pct_from_today_open: null,
         });
       }
     }
@@ -973,9 +985,18 @@ export default function Tape() {
                           setActiveTicker(r.ticker);
                         }}
                       >
-                        <span className="font-mono font-bold text-foreground hover:text-primary transition-colors underline decoration-dotted underline-offset-2">
-                          {r.ticker}
-                        </span>
+                        <div className="flex flex-col leading-tight">
+                          <span className="font-mono font-bold text-foreground hover:text-primary transition-colors underline decoration-dotted underline-offset-2">
+                            {r.ticker}
+                          </span>
+                          {r.spot_pct_from_prev_close != null && (
+                            <RegimeChip
+                              pctFromPrevClose={r.spot_pct_from_prev_close}
+                              variant="from-prev-close"
+                              withLabel={false}
+                            />
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell
                         className={cn('py-2 px-2 font-mono tabular-nums text-right', spotDistanceColor(r.underlying_price, r.strike))}

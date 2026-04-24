@@ -30,6 +30,7 @@ import {
   formatDeltaContracts,
   formatMoneyness,
 } from '@/hooks/useOvernightPositioning';
+import { useTickerIntradayContext, RegimeChip } from '@/hooks/useTickerIntradayContext';
 
 interface HotContractRow {
   option_symbol: string;
@@ -155,6 +156,9 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
   const [drillSymbol, setDrillSymbol] = useState<string | null>(null);
   const [tavilyResults, setTavilyResults] = useState<TavilyResult[] | null>(null);
   const [tavilyLoading, setTavilyLoading] = useState(false);
+
+  // Regime context — % from prev close + % from today open. Quiet fetch.
+  const { data: regime } = useTickerIntradayContext(open ? ticker ?? undefined : undefined);
 
   // Clear Tavily when ticker changes
   const prevTickerRef = useMemo(() => ({ v: ticker }), [ticker]);
@@ -342,12 +346,15 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
         <SheetContent side="right" className="w-full sm:max-w-2xl overflow-y-auto">
           <SheetHeader className="space-y-2">
             <div className="flex items-baseline justify-between">
-              <SheetTitle className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              <SheetTitle className="text-2xl font-bold tracking-tight flex items-center gap-2 flex-wrap">
                 {ticker}
                 {latestPrice?.close != null && (
                   <span className="text-lg text-foreground/80 font-mono tabular-nums">
                     ${latestPrice.close.toFixed(2)}
                   </span>
+                )}
+                {regime && (regime.pct_from_prev_close != null || regime.pct_from_today_open != null) && (
+                  <RegimeChip context={regime} variant="both" />
                 )}
               </SheetTitle>
               <div className="flex items-center gap-2 text-xs">

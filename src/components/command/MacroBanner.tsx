@@ -21,6 +21,7 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { Area, AreaChart, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { ChartSafe } from '@/components/ChartSafe';
+import { useAllTickersIntradayContext, RegimeChip } from '@/hooks/useTickerIntradayContext';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'] as const;
 const MACRO_TICKERS = ['SPY','QQQ','IWM','VIX'] as const;
@@ -172,6 +173,9 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
     },
   });
 
+  // Regime context for all 10 tickers — single batched RPC, distributed to tiles.
+  const { data: intradayMap } = useAllTickersIntradayContext();
+
   // Market tide — check for table existence, tolerate 404.
   const { data: tide } = useQuery<MarketTideRow | null>({
     queryKey: ['ct_macro_market_tide'],
@@ -270,12 +274,13 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
           const positive = latest != null ? latest >= 0 : true;
           const color = positive ? '#10b981' : '#ef4444';
           const s = priceSummary.get(t);
+          const regime = intradayMap?.get(t) ?? null;
           return (
             <button
               type="button"
               key={t}
               onClick={() => onTickerClick(t)}
-              className="shrink-0 w-28 h-20 text-left"
+              className="shrink-0 w-28 h-24 text-left"
             >
               <Card className="w-full h-full p-1.5 flex flex-col gap-0.5 hover:border-primary/40 transition-colors">
                 <div className="flex items-baseline justify-between leading-none">
@@ -287,6 +292,11 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
                 <div className="font-mono tabular-nums text-[10px] text-muted-foreground leading-none">
                   {fmtSpot(s?.spot ?? null)}
                 </div>
+                {regime && (
+                  <div className="leading-none">
+                    <RegimeChip context={regime} variant="from-prev-close" withLabel={false} />
+                  </div>
+                )}
                 <div className="flex-1 -mx-1 min-h-0">
                   <ChartSafe>
                     <ResponsiveContainer width="100%" height="100%">
