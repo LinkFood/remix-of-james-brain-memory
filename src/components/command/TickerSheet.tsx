@@ -573,169 +573,6 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
               <TickerOiShifts ticker={ticker} onContractClick={setDrillSymbol} />
             )}
 
-            {/* Breaking news (Tavily sweep + macro watcher) — last 7d */}
-            {breakingNews && breakingNews.length > 0 && (
-              <div>
-                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2 flex-wrap">
-                  <Globe className="w-3.5 h-3.5" />
-                  Breaking news · last 7d
-                  {(() => {
-                    // Rolling severity-weighted sentiment chip.
-                    // Bullish=+1, Bearish=-1, weight by severity (1-5).
-                    let bullScore = 0, bearScore = 0, counted = 0;
-                    for (const n of breakingNews) {
-                      const sev = n.severity ?? 1;
-                      if (n.sentiment === 'bullish') { bullScore += sev; counted++; }
-                      else if (n.sentiment === 'bearish') { bearScore += sev; counted++; }
-                    }
-                    if (counted < 2 || (bullScore + bearScore) === 0) return null;
-                    const bullPct = Math.round((bullScore / (bullScore + bearScore)) * 100);
-                    const skew = bullPct >= 65 ? 'bullish' : bullPct <= 35 ? 'bearish' : 'mixed';
-                    return (
-                      <span className={cn(
-                        'ml-auto normal-case text-[10px] font-mono px-1.5 py-0.5 rounded border',
-                        skew === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
-                        skew === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
-                        skew === 'mixed' && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
-                      )}
-                      title={`Severity-weighted: bullish=${bullScore}, bearish=${bearScore}, counted=${counted} of ${breakingNews.length}`}
-                      >
-                        sentiment {bullPct}% bull · {counted}
-                      </span>
-                    );
-                  })()}
-                </div>
-                <div className="space-y-1.5">
-                  {breakingNews.map((n, i) => (
-                    <Card key={`bn-${i}`} className={cn(
-                      'p-2.5',
-                      n.sentiment === 'bullish' && 'border-emerald-500/25',
-                      n.sentiment === 'bearish' && 'border-red-500/25',
-                      (n.severity ?? 0) >= 4 && 'ring-1 ring-amber-500/40',
-                    )}>
-                      <div className="flex items-baseline gap-2 mb-1">
-                        <Badge variant="outline" className={cn(
-                          'text-[9px] font-mono px-1 py-0 uppercase',
-                          n.sentiment === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
-                          n.sentiment === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
-                          (!n.sentiment || n.sentiment === 'neutral' || n.sentiment === 'ambiguous') && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
-                        )}>
-                          {n.sentiment ?? 'neutral'}
-                        </Badge>
-                        {n.severity != null && (
-                          <span className={cn('text-[10px] font-mono tabular-nums', n.severity >= 4 ? 'text-amber-300 font-bold' : 'text-muted-foreground')}>
-                            sev {n.severity}
-                          </span>
-                        )}
-                        {n.source && <span className="text-[10px] text-muted-foreground">{n.source}</span>}
-                        {n.macro_wide && <span className="text-[10px] font-mono text-muted-foreground">macro</span>}
-                        <span className="text-[10px] text-muted-foreground ml-auto">{timeAgo(n.ingested_at)}</span>
-                      </div>
-                      <div className="text-xs font-semibold text-foreground/90 leading-snug mb-1">{n.headline}</div>
-                      {n.summary && (
-                        <div className="text-[11px] text-muted-foreground leading-snug">{n.summary}</div>
-                      )}
-                    </Card>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Recent news with Claude's take */}
-            {snapshot?.recent_news && snapshot.recent_news.length > 0 && (
-              <div>
-                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
-                  <Newspaper className="w-3.5 h-3.5" />
-                  Recent news · Claude's take
-                </div>
-                <div className="space-y-2">
-                  {snapshot.recent_news.slice(0, 6).map((n, i) => (
-                    <Card key={i} className={cn(
-                      'p-2.5',
-                      n.impact === 'bullish' && 'border-emerald-500/25',
-                      n.impact === 'bearish' && 'border-red-500/25',
-                    )}>
-                      <div className="flex items-baseline gap-2 mb-1">
-                        <Badge variant="outline" className={cn(
-                          'text-[9px] font-mono px-1 py-0 uppercase',
-                          n.impact === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
-                          n.impact === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
-                          (!n.impact || n.impact === 'neutral') && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
-                        )}>
-                          {n.impact ?? 'neutral'}
-                        </Badge>
-                        {n.source && <span className="text-[10px] text-muted-foreground">{n.source}</span>}
-                        {n.significance != null && (
-                          <span className="text-[10px] text-muted-foreground">· sig {n.significance}</span>
-                        )}
-                        <span className="text-[10px] text-muted-foreground ml-auto">{timeAgo(n.created_at)}</span>
-                      </div>
-                      <div className="text-xs font-semibold text-foreground/90 leading-snug mb-1">{n.headline}</div>
-                      {n.claude_take && (
-                        <div className="text-[11px] text-muted-foreground leading-snug">{n.claude_take}</div>
-                      )}
-                    </Card>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Tavily live search */}
-            <div>
-              <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
-                <Globe className="w-3.5 h-3.5" />
-                Live web search
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="ml-auto h-6 text-[10px] px-2"
-                  disabled={tavilyLoading || !ticker}
-                  onClick={async () => {
-                    if (!ticker) return;
-                    setTavilyLoading(true);
-                    setTavilyResults(null);
-                    try {
-                      const { data, error } = await supabase.functions.invoke('jac-web-search', {
-                        body: { query: `${ticker} stock news today`, max_results: 5 },
-                      });
-                      if (error) throw error;
-                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                      const results = ((data as any)?.results ?? (data as any)?.search_results ?? []) as TavilyResult[];
-                      setTavilyResults(results);
-                      if (results.length === 0) toast.info('No fresh results');
-                    } catch (e) {
-                      toast.error(`Search failed: ${e instanceof Error ? e.message : String(e)}`);
-                      setTavilyResults([]);
-                    } finally {
-                      setTavilyLoading(false);
-                    }
-                  }}
-                >
-                  {tavilyLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Search the web'}
-                </Button>
-              </div>
-              {tavilyResults && tavilyResults.length > 0 && (
-                <div className="space-y-1.5">
-                  {tavilyResults.map((r, i) => (
-                    <a
-                      key={i}
-                      href={r.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="block p-2.5 rounded border border-border hover:border-primary/40 transition-colors"
-                    >
-                      <div className="text-xs font-semibold text-foreground/90 mb-1 line-clamp-1">{r.title}</div>
-                      <div className="text-[11px] text-muted-foreground leading-snug line-clamp-2">{r.content}</div>
-                      <div className="text-[10px] text-primary/70 mt-1 truncate">{r.url}</div>
-                    </a>
-                  ))}
-                </div>
-              )}
-              {tavilyResults !== null && tavilyResults.length === 0 && !tavilyLoading && (
-                <div className="text-[11px] text-muted-foreground italic">No results — try clicking search again.</div>
-              )}
-            </div>
-
             {/* Hot by premium — window widens to last 24h if today is quiet */}
             <div>
               <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
@@ -833,6 +670,169 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
                       </button>
                     );
                   })}
+                </div>
+              </div>
+            )}
+
+            {/* Tavily live search */}
+            <div>
+              <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+                <Globe className="w-3.5 h-3.5" />
+                Live web search
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-6 text-[10px] px-2"
+                  disabled={tavilyLoading || !ticker}
+                  onClick={async () => {
+                    if (!ticker) return;
+                    setTavilyLoading(true);
+                    setTavilyResults(null);
+                    try {
+                      const { data, error } = await supabase.functions.invoke('jac-web-search', {
+                        body: { query: `${ticker} stock news today`, max_results: 5 },
+                      });
+                      if (error) throw error;
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      const results = ((data as any)?.results ?? (data as any)?.search_results ?? []) as TavilyResult[];
+                      setTavilyResults(results);
+                      if (results.length === 0) toast.info('No fresh results');
+                    } catch (e) {
+                      toast.error(`Search failed: ${e instanceof Error ? e.message : String(e)}`);
+                      setTavilyResults([]);
+                    } finally {
+                      setTavilyLoading(false);
+                    }
+                  }}
+                >
+                  {tavilyLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Search the web'}
+                </Button>
+              </div>
+              {tavilyResults && tavilyResults.length > 0 && (
+                <div className="space-y-1.5">
+                  {tavilyResults.map((r, i) => (
+                    <a
+                      key={i}
+                      href={r.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block p-2.5 rounded border border-border hover:border-primary/40 transition-colors"
+                    >
+                      <div className="text-xs font-semibold text-foreground/90 mb-1 line-clamp-1">{r.title}</div>
+                      <div className="text-[11px] text-muted-foreground leading-snug line-clamp-2">{r.content}</div>
+                      <div className="text-[10px] text-primary/70 mt-1 truncate">{r.url}</div>
+                    </a>
+                  ))}
+                </div>
+              )}
+              {tavilyResults !== null && tavilyResults.length === 0 && !tavilyLoading && (
+                <div className="text-[11px] text-muted-foreground italic">No results — try clicking search again.</div>
+              )}
+            </div>
+
+            {/* Recent news with Claude's take */}
+            {snapshot?.recent_news && snapshot.recent_news.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+                  <Newspaper className="w-3.5 h-3.5" />
+                  Recent news · Claude's take
+                </div>
+                <div className="space-y-2">
+                  {snapshot.recent_news.slice(0, 6).map((n, i) => (
+                    <Card key={i} className={cn(
+                      'p-2.5',
+                      n.impact === 'bullish' && 'border-emerald-500/25',
+                      n.impact === 'bearish' && 'border-red-500/25',
+                    )}>
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <Badge variant="outline" className={cn(
+                          'text-[9px] font-mono px-1 py-0 uppercase',
+                          n.impact === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+                          n.impact === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
+                          (!n.impact || n.impact === 'neutral') && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
+                        )}>
+                          {n.impact ?? 'neutral'}
+                        </Badge>
+                        {n.source && <span className="text-[10px] text-muted-foreground">{n.source}</span>}
+                        {n.significance != null && (
+                          <span className="text-[10px] text-muted-foreground">· sig {n.significance}</span>
+                        )}
+                        <span className="text-[10px] text-muted-foreground ml-auto">{timeAgo(n.created_at)}</span>
+                      </div>
+                      <div className="text-xs font-semibold text-foreground/90 leading-snug mb-1">{n.headline}</div>
+                      {n.claude_take && (
+                        <div className="text-[11px] text-muted-foreground leading-snug">{n.claude_take}</div>
+                      )}
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Breaking news (Tavily sweep + macro watcher) — last 7d */}
+            {breakingNews && breakingNews.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2 flex-wrap">
+                  <Globe className="w-3.5 h-3.5" />
+                  Breaking news · last 7d
+                  {(() => {
+                    // Rolling severity-weighted sentiment chip.
+                    // Bullish=+1, Bearish=-1, weight by severity (1-5).
+                    let bullScore = 0, bearScore = 0, counted = 0;
+                    for (const n of breakingNews) {
+                      const sev = n.severity ?? 1;
+                      if (n.sentiment === 'bullish') { bullScore += sev; counted++; }
+                      else if (n.sentiment === 'bearish') { bearScore += sev; counted++; }
+                    }
+                    if (counted < 2 || (bullScore + bearScore) === 0) return null;
+                    const bullPct = Math.round((bullScore / (bullScore + bearScore)) * 100);
+                    const skew = bullPct >= 65 ? 'bullish' : bullPct <= 35 ? 'bearish' : 'mixed';
+                    return (
+                      <span className={cn(
+                        'ml-auto normal-case text-[10px] font-mono px-1.5 py-0.5 rounded border',
+                        skew === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+                        skew === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
+                        skew === 'mixed' && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
+                      )}
+                      title={`Severity-weighted: bullish=${bullScore}, bearish=${bearScore}, counted=${counted} of ${breakingNews.length}`}
+                      >
+                        sentiment {bullPct}% bull · {counted}
+                      </span>
+                    );
+                  })()}
+                </div>
+                <div className="space-y-1.5">
+                  {breakingNews.map((n, i) => (
+                    <Card key={`bn-${i}`} className={cn(
+                      'p-2.5',
+                      n.sentiment === 'bullish' && 'border-emerald-500/25',
+                      n.sentiment === 'bearish' && 'border-red-500/25',
+                      (n.severity ?? 0) >= 4 && 'ring-1 ring-amber-500/40',
+                    )}>
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <Badge variant="outline" className={cn(
+                          'text-[9px] font-mono px-1 py-0 uppercase',
+                          n.sentiment === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+                          n.sentiment === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
+                          (!n.sentiment || n.sentiment === 'neutral' || n.sentiment === 'ambiguous') && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
+                        )}>
+                          {n.sentiment ?? 'neutral'}
+                        </Badge>
+                        {n.severity != null && (
+                          <span className={cn('text-[10px] font-mono tabular-nums', n.severity >= 4 ? 'text-amber-300 font-bold' : 'text-muted-foreground')}>
+                            sev {n.severity}
+                          </span>
+                        )}
+                        {n.source && <span className="text-[10px] text-muted-foreground">{n.source}</span>}
+                        {n.macro_wide && <span className="text-[10px] font-mono text-muted-foreground">macro</span>}
+                        <span className="text-[10px] text-muted-foreground ml-auto">{timeAgo(n.ingested_at)}</span>
+                      </div>
+                      <div className="text-xs font-semibold text-foreground/90 leading-snug mb-1">{n.headline}</div>
+                      {n.summary && (
+                        <div className="text-[11px] text-muted-foreground leading-snug">{n.summary}</div>
+                      )}
+                    </Card>
+                  ))}
                 </div>
               </div>
             )}
