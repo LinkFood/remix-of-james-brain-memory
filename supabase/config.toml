@@ -171,6 +171,9 @@ verify_jwt = false
 [functions.ct-slack-digest]
 verify_jwt = false
 
+[functions.ct-eod-summary]
+verify_jwt = false
+
 [functions.ct-slack-push-flag]
 verify_jwt = false
 

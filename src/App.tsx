@@ -38,6 +38,7 @@ import Specialists from "./pages/Specialists";
 import CostDashboard from "./pages/CostDashboard";
 import Patterns from "./pages/Patterns";
 import Budget from "./pages/Budget";
+import Eod from "./pages/Eod";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { useEffect, useState } from "react";
@@ -79,6 +80,7 @@ const TrackedRoutes = () => {
       <Route path="/cost" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/cost"><CostDashboard /></RouteBoundary></AuthLayout>} />
       <Route path="/patterns" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/patterns"><Patterns /></RouteBoundary></AuthLayout>} />
       <Route path="/budget" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/budget"><Budget /></RouteBoundary></AuthLayout>} />
+      <Route path="/eod" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/eod"><Eod /></RouteBoundary></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><RouteBoundary route="/dashboard"><Dashboard /></RouteBoundary></AuthLayout>} />

@@ -76,6 +76,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { path: '/edge', label: 'Edge' },
       { path: '/patterns', label: 'Patterns' },
+      { path: '/eod', label: 'EOD' },
     ],
   },
   {
