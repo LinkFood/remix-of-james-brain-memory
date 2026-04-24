@@ -16,7 +16,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { mcpCallToolAsData } from '../_shared/uwMcpClient.ts';
 
-const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','NVDA','META','GOOGL','AMZN','TSLA','GLD','USO'];
+const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
 interface PriceBarRow {
   ticker: string;

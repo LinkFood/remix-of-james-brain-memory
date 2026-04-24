@@ -15,9 +15,9 @@ import { useEffectiveSessionDate } from './useEffectiveSessionDate';
 
 export const DARK_POOL_CHART_TICKERS = [
   'SPY', 'QQQ', 'IWM',
-  'NVDA', 'AAPL', 'MSFT',
-  'META', 'GOOGL', 'AMZN',
-  'TSLA', 'GLD', 'USO',
+  'AAPL', 'MSFT', 'GOOGL',
+  'AMZN', 'META', 'NVDA',
+  'TSLA',
 ] as const;
 
 export type DarkPoolChartTicker = (typeof DARK_POOL_CHART_TICKERS)[number];

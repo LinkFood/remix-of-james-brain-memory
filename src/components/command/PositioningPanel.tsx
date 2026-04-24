@@ -14,7 +14,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import { Activity, Flame, Snowflake } from 'lucide-react';
 
-const WATCHLIST = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA','GLD','USO','SPX'] as const;
+const WATCHLIST = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA','SPX'] as const;
 
 interface IvLatest {
   ticker: string;

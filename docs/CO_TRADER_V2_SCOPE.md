@@ -126,23 +126,55 @@ This is the system's reason to exist. Every flag is a graded prediction. Every g
 
 ---
 
-## Flag Types (The Specialist's Vocabulary)
+## The Scoring Framework (0-100 Conviction Score)
 
-Each specialist can issue flags in these categories. Grader handles each based on its natural horizon.
+**Research-driven update 2026-04-23:** After deep-dive on UW / BullFlow / academic literature, switched from "9 flag types" to a single **0-100 conviction score** per flag with explicit feature weights. Flag types become descriptive tags, not categories.
 
-| Type | Description | Natural Horizon |
-|---|---|---|
-| **unusual_flow** | Whale print or sweep cluster >2× ticker baseline | 2h – 2d |
-| **oi_build_overnight** | Open interest built materially overnight on specific strike | 1–3d |
-| **oi_build_intraday** | Sudden OI accumulation during session | 2h – EOD |
-| **iv_anomaly** | IV spike/collapse without price move | 1–5d |
-| **skew_break** | Put/call IV skew diverges from baseline | 1–3d |
-| **news_flow_mismatch** | Direction of flow opposite news sentiment | 1–2d |
-| **catalyst_setup** | Flow building into earnings/event with clear directional bet | to event + 1d |
-| **pattern_match** | Similar signature to known historical pattern | varies |
-| **cross_asset_divergence** | SPY direction vs single-name flow divergence | 4h – 2d |
+Why: academic research (Pan-Poteshman 2006, Augustin et al. 2019, Hu 2014, Lakonishok et al. 2007) identifies specific factors that predict price moves — opening-buy intent + OI confirmation dominate. Also: no competitor ships a transparent composite score. Our lane.
 
-Flag types are **extensible** — if a specialist consistently generates a useful category not in this list, we add it in v2.
+### Positive factors (sum to 100)
+
+| Factor | Weight | Computation |
+|---|---:|---|
+| **Opening buy intent** | 25 | Ask-side ≥60% + size > OI + not multi-leg + not floor. Full points if all; partial credit per component. |
+| **T+1 OI confirmation** | 20 | Does OI at this strike rise ≥ volume next morning? Upgrades flag → "conviction flag." |
+| **Single-direction (not spread)** | 15 | No offsetting put/call activity on same name same day at similar size. |
+| **DTE 15-45 days** | 10 | Soft band: full in-band, half credit 7-14 or 46-60, zero outside. |
+| **Delta 20-70** | 10 | Not lottery (<20), not delta-1 (>80). |
+| **IV context** | 10 | IV rank < 30 at time of flow → full. IV rank > 70 → zero (flow into pumped IV is often seller). |
+| **Size vs ticker ADV** | 10 | Flow in top decile of ticker's 30d options ADV. Per-ticker baseline. |
+
+### Penalty overlays (subtract)
+
+| Penalty | Max deduct | Trigger |
+|---|---:|---|
+| Hedge probability | -30 | ETF + ITM + DTE>60 + paired opposite-side activity |
+| Earnings within 5 days | -20 | Calendar check; IV plays dominate this window |
+| Expiration week | -15 | Monthly / quarterly noise |
+| Dealer gamma hedging signature | -15 | Flow appears after large underlying move, aggressor side follows tape |
+
+### Threshold bands
+
+- **80-100** — "conviction flag" — core Slack push candidate
+- **60-79** — "flag" — tracked + graded, Slack only once specialist has track record (v2)
+- **40-59** — "watching" — logged, not flagged
+- **< 40** — ignored
+
+### All parameters live in `ct_config`
+
+No hardcoded thresholds. James can tune any weight or penalty via the config UI. Examples:
+- `score.opening_buy_ask_threshold` = 0.60 (tunable — James flagged wanting lower than 70%)
+- `score.dte_band_lo` = 15
+- `score.dte_band_hi` = 45
+- `score.slack_threshold` = 80 (initially)
+- `penalty.hedge_max` = 30
+
+### T+1 OI confirmation — two tracks
+
+- **Multi-day flags (horizon > 1d):** wait for T+1 OI read before Slack push. Slack fires on conviction upgrade, not initial flag. Dramatically higher hit rate per Lakonishok et al.
+- **Same-day / intraday flags (horizon ≤ 1d):** use fast-lane — continued ask-side pressure >10min + no reversal as same-day proxy for confirmation. Slack fires same session.
+
+This preserves speed for intraday while applying academic rigor to multi-day conviction.
 
 ---
 
@@ -204,11 +236,12 @@ Flag types are **extensible** — if a specialist consistently generates a usefu
 
 ## What Gets Built (New)
 
-### 1. Sharp-vs-hedge classifier
-- Heuristic layer in `ct-flow-ingester` (new step after sweep parse)
-- Tags each flow event: `sharp | hedge | retail | noise`
-- Factors: DTE (7-30 = sharp zone), strike distance from spot, repeated-strike pattern, opening vs closing volume, news proximity, directional agreement with underlying
-- Stored as `ct_sweeps.classification` + mirrored to `ct_flow_alerts`
+### 1. Flow scoring engine
+- New function `ct_score_flow_event(event_row) RETURNS JSONB` computes the 0-100 composite + tags + penalty breakdown
+- Called from `ct-flow-ingester` on every new sweep/flow alert
+- Writes to new `ct_scored_flow` table: `(source_id, ticker, score, tags[], factor_breakdown jsonb, classification)`
+- All weights + thresholds read from `ct_config` (tunable without redeploy)
+- Also classifies: `opening_buy | opening_sell | closing | hedge | ambiguous` based on ask-side + OI heuristics
 
 ### 2. Per-ticker baselines
 - Nightly rollup: 30-day median premium, volume, sweep count, unusual-activity count per ticker
@@ -397,17 +430,15 @@ Specialists use Haiku for classification (cheap), Sonnet only for flag writing.
 
 ---
 
-## Open Questions for James
+## James's Answers (2026-04-23)
 
-1. **Slack channel** — single #co-trader channel, or per-specialist channels? Single is simpler; per-specialist gives granular mute.
-
-2. **Initial Slack gating** — v1 gates on conviction=5. Should we also gate on flag type? (e.g., skip pattern_match until library is mature.)
-
-3. **Futures macro sidebar** — ES is killed from ticker list, but do you want a daily 1-liner on ES/DXY/crude macro somewhere? Or truly no futures context?
-
-4. **Specialist weight on Claude's priors** — when we migrated /edge priors into the old watcher, Claude cited them in reasoning. Specialists will do the same but per-specialist. OK?
-
-5. **Hide-in-place vs rip-out** — for the kill list, prefer surgical rip-out (delete code) or hide-in-place (comment out, leave components for bring-back)? Rip-out is cleaner; hide is safer.
+1. **Slack channel** — single channel (same as current)
+2. **Initial Slack gating** — "done right" — using score ≥ 80 + T+1 confirmation for multi-day, same-day proxy for intraday
+3. **Macro + news sidebar** — nice-to-have, not required. V2.1 candidate.
+4. **Specialist priors** — yes, inject per-specialist track record
+5. **Hide vs rip-out** — **surgically delete**. Dead code goes.
+6. **Ask-side threshold** — 60% (not 70%) — tunable via `ct_config`
+7. **Framing** — "build it great like a hedge fund would for a side project" — serious infra, transparent methodology, tunable params, not precious
 
 ---
 

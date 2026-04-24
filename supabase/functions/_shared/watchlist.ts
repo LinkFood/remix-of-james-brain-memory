@@ -30,8 +30,7 @@ import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0
 
 export const DEFAULT_WATCHLIST = [
   'SPY', 'QQQ', 'IWM',
-  'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA',
-  'GLD', 'USO',
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
 ] as const;
 
 export const MAX_WATCHLIST = 16;

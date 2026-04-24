@@ -502,19 +502,18 @@ export function getTechnicalIndicator(
 // ============================================================================
 
 /**
- * The 12-instrument per-ticker watchlist.
+ * The 10-instrument per-ticker watchlist (v2).
  *
+ * Options-flow-rich names only. GLD/USO/ES removed in Co-Trader v2 scrub —
+ * day trader wants names with liquid options flow for specialist model.
  * ES futures not included — UW doesn't cover futures. Macro S&P read is
- * handled separately via SPX for the market banner. GLD/USO serve as gold/oil
- * proxies.
+ * handled separately via SPX for the market banner.
  */
 export const WATCHLIST = [
   // Indexes
   'SPY', 'QQQ', 'IWM',
   // Mag 7
   'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
-  // Macro proxies
-  'GLD', 'USO',
 ] as const;
 
 /** SPX used for the macro GEX banner. NOT in per-ticker loop. */

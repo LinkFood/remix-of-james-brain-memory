@@ -41,8 +41,7 @@ export interface NetPremCumResponse {
 
 const DEFAULT_TICKERS = [
   'SPY', 'QQQ', 'IWM',
-  'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA',
-  'GLD', 'USO',
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
 ];
 
 /**

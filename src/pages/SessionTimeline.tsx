@@ -29,7 +29,7 @@ import { useTodayBook, useBookHistory } from '@/hooks/useCoTraderData';
 import { Zap } from 'lucide-react';
 import { DataExportButton } from '@/components/DataExportButton';
 
-const TICKER_CHOICES = ['all', 'SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'TSLA', 'GLD', 'USO', 'SPX'];
+const TICKER_CHOICES = ['all', 'SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'SPX'];
 
 const KIND_LABEL: Record<TimelineKind, string> = {
   HEARTBEAT: 'HEARTBEAT',

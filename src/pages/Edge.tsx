@@ -40,7 +40,7 @@ interface EdgeRow {
   computed_at: string;
 }
 
-const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','NVDA','META','GOOGL','AMZN','TSLA','GLD','USO'];
+const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
 type SortKey =
   | 'sharpe' | 'mean_alpha_pct' | 'n' | 't_stat'

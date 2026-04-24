@@ -36,8 +36,7 @@ import { supabase } from '@/integrations/supabase/client';
 
 export const LEADERBOARD_TICKERS = [
   'SPY', 'QQQ', 'IWM',
-  'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA',
-  'GLD', 'USO',
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
 ] as const;
 
 export type LeaderboardTicker = typeof LEADERBOARD_TICKERS[number];

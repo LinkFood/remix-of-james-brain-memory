@@ -83,7 +83,7 @@ export async function fetchPerTickerEdgePriors(
   supabase: SupabaseClient,
   opts?: { minN?: number; minAbsT?: number; lookbackDays?: number; maxPerTicker?: number }
 ): Promise<EdgePrior[]> {
-  const tickers = ['SPY','QQQ','IWM','AAPL','MSFT','NVDA','META','GOOGL','AMZN','TSLA','GLD','USO'];
+  const tickers = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
   const all: EdgePrior[] = [];
   for (const t of tickers) {
     try {

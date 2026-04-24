@@ -27,16 +27,14 @@ import { useLatestHeartbeat, useSessionHeartbeats, type Heartbeat } from './useC
 
 export const BREADTH_TICKERS = [
   'SPY', 'QQQ', 'IWM',
-  'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA',
-  'GLD', 'USO',
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
 ] as const;
 
 export type BreadthTicker = typeof BREADTH_TICKERS[number];
 
 export const SECTORS = {
   Indexes: ['SPY', 'QQQ', 'IWM'] as const,
-  Mag7: ['NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA'] as const,
-  Commodities: ['GLD', 'USO'] as const,
+  Mag7: ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'] as const,
 } as const;
 
 export type SectorName = keyof typeof SECTORS;

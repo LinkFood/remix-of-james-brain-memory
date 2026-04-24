@@ -75,10 +75,10 @@ const DEFAULT_MODULES = ['watcher_writes', 'cooldown', 'alert_book_commit'] as c
 // the UI with near-complete data. 3 = one UPDATE per ~12s of Claude wallclock.
 const CHECKPOINT_EVERY_N_TICKS = 3;
 
-// Mirror ct-alert-book-commit.WATCHLIST (12 instruments)
+// Mirror ct-alert-book-commit.WATCHLIST (10 instruments — v2 scrub removed GLD/USO)
 const ALERT_WHITELIST = new Set([
-  'SPY', 'QQQ', 'IWM', 'NVDA', 'AAPL', 'MSFT',
-  'META', 'GOOGL', 'AMZN', 'TSLA', 'GLD', 'USO',
+  'SPY', 'QQQ', 'IWM',
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
 ]);
 
 // Cooldown thresholds (mirror ct-watcher + ct-alert-book-commit)

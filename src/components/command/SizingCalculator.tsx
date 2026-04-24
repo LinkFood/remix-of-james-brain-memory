@@ -56,7 +56,6 @@ import {
 const DEFAULT_WATCHLIST = [
   'SPY', 'QQQ', 'IWM',
   'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
-  'GLD', 'USO',
 ];
 
 function fmtUsd(n: number | null | undefined, signed = false): string {

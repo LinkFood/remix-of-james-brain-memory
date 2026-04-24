@@ -116,7 +116,6 @@ function volume(alert: FlowAlert): number | null {
 const WATCHLIST_TICKERS = new Set([
   'SPY', 'QQQ', 'IWM',
   'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
-  'GLD', 'USO',
   'SPX', 'SPXW',                        // index + weekly variant land here too
 ]);
 

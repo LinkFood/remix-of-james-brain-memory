@@ -117,12 +117,6 @@ verify_jwt = false
 [functions.ct-news-sentiment-backfill]
 verify_jwt = false
 
-[functions.ct-eod-recap]
-verify_jwt = false
-
-[functions.ct-midday-recap]
-verify_jwt = false
-
 [functions.ct-lessons-curator]
 verify_jwt = false
 
@@ -144,9 +138,6 @@ verify_jwt = false
 [functions.ct-disagreement-materializer]
 verify_jwt = false
 
-[functions.ct-morning-brief]
-verify_jwt = false
-
 [functions.ct-news-causality]
 verify_jwt = false
 
@@ -159,46 +150,16 @@ verify_jwt = false
 [functions.ct-recall]
 verify_jwt = false
 
-[functions.ct-event-watcher]
-verify_jwt = false
-
 [functions.ct-mcp-verify]
 verify_jwt = false
 
 [functions.ct-uw-probe]
 verify_jwt = false
 
-[functions.ct-pre-bell-gauntlet]
-verify_jwt = false
-
-[functions.ct-pre-bell-grader]
-verify_jwt = false
-
-[functions.ct-pre-bell-alert]
-verify_jwt = false
-
-[functions.ct-bias-booth]
-verify_jwt = false
-
-[functions.ct-claude-trade-open]
-verify_jwt = false
-
-[functions.ct-book-manager]
-verify_jwt = false
-
 [functions.ct-trade-advisories]
 verify_jwt = false
 
-[functions.ct-book-eod-close]
-verify_jwt = false
-
-[functions.ct-claude-trade-reopen]
-verify_jwt = false
-
 [functions.ct-slack-digest]
-verify_jwt = false
-
-[functions.ct-alert-book-commit]
 verify_jwt = false
 
 [functions.ct-classify-themes]
@@ -246,9 +207,6 @@ verify_jwt = false
 [functions.ct-premarket-scan]
 verify_jwt = false
 
-[functions.ct-weekly-reflection]
-verify_jwt = false
-
 [functions.ct-pre-trade-check]
 verify_jwt = false
 
@@ -288,9 +246,6 @@ verify_jwt = false
 [functions.ct-correlation-compute]
 verify_jwt = false
 
-[functions.ct-dream]
-verify_jwt = false
-
 [functions.ct-hypothesis-health-check]
 verify_jwt = false
 
@@ -309,21 +264,6 @@ verify_jwt = false
 [functions.ct-reflect-to-jac]
 verify_jwt = false
 
-[functions.ct-claude-book-writer]
-verify_jwt = false
-
-[functions.ct-claude-book-exit-watcher]
-verify_jwt = false
-
-[functions.ct-claude-open-trade-journal]
-verify_jwt = false
-
-[functions.ct-claude-circuit-breaker]
-verify_jwt = false
-
-[functions.ct-claude-health-monitor]
-verify_jwt = false
-
 [functions.ct-ticker-snapshot-builder]
 verify_jwt = false
 
@@ -331,15 +271,6 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ct-daily-brief]
-verify_jwt = false
-
-[functions.ct-claude-cio-review]
-verify_jwt = false
-
-[functions.ct-claude-generation-manager]
-verify_jwt = false
-
-[functions.ct-claude-cash-decay]
 verify_jwt = false
 
 [functions.ct-insider-ingester]
@@ -394,9 +325,6 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ct-price-backfill]
-verify_jwt = false
-
-[functions.ct-flag-book-commit]
 verify_jwt = false
 
 [functions.ct-interval-flow-ingester]

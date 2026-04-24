@@ -32,24 +32,18 @@ import CommandStation from "./pages/CommandStation";
 import Scorecard from "./pages/Scorecard";
 import PromptAbTest from "./pages/PromptAbTest";
 import Replay from "./pages/Replay";
-import Playbooks from "./pages/Playbooks";
 import Workspace from "./pages/Workspace";
 import Principles from "./pages/Principles";
-import Book from "./pages/Book";
 import Health from "./pages/Health";
 import Edge from "./pages/Edge";
 import Pulse from "./pages/Pulse";
 import CostDashboard from "./pages/CostDashboard";
-import Preflight from "./pages/Preflight";
 import SessionTimeline from "./pages/SessionTimeline";
 import ActivityLive from "./pages/ActivityLive";
-import Stress from "./pages/Stress";
 import TickerTerminal from "./pages/TickerTerminal";
 import TickerChart from "./pages/TickerChart";
 import CustomRules from "./pages/CustomRules";
-import TradeCommit from "./pages/TradeCommit";
 import Analogs from "./pages/Analogs";
-import Debates from "./pages/Debates";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { useEffect, useState } from "react";
@@ -83,24 +77,18 @@ const TrackedRoutes = () => {
       <Route path="/" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/"><CommandStation /></RouteBoundary></AuthLayout>} />
       <Route path="/scorecard" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/scorecard"><Scorecard /></RouteBoundary></AuthLayout>} />
       <Route path="/workspace" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/workspace"><Workspace /></RouteBoundary></AuthLayout>} />
-      <Route path="/playbooks" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/playbooks"><Playbooks /></RouteBoundary></AuthLayout>} />
       <Route path="/principles" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/principles"><Principles /></RouteBoundary></AuthLayout>} />
       <Route path="/prompts" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/prompts"><PromptAbTest /></RouteBoundary></AuthLayout>} />
-      <Route path="/book" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/book"><Book /></RouteBoundary></AuthLayout>} />
       <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/health"><Health /></RouteBoundary></AuthLayout>} />
       <Route path="/edge" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/edge"><Edge /></RouteBoundary></AuthLayout>} />
       <Route path="/pulse" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/pulse"><Pulse /></RouteBoundary></AuthLayout>} />
       <Route path="/cost" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/cost"><CostDashboard /></RouteBoundary></AuthLayout>} />
-      <Route path="/preflight" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/preflight"><Preflight /></RouteBoundary></AuthLayout>} />
       <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/session"><SessionTimeline /></RouteBoundary></AuthLayout>} />
       <Route path="/activity-live" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/activity-live"><ActivityLive /></RouteBoundary></AuthLayout>} />
-      <Route path="/stress" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/stress"><Stress /></RouteBoundary></AuthLayout>} />
       <Route path="/ticker/:symbol" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/ticker/:symbol"><TickerTerminal /></RouteBoundary></AuthLayout>} />
       <Route path="/chart/:symbol/:date" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/chart/:symbol/:date"><TickerChart /></RouteBoundary></AuthLayout>} />
       <Route path="/rules" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/rules"><CustomRules /></RouteBoundary></AuthLayout>} />
-      <Route path="/commit" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/commit"><TradeCommit /></RouteBoundary></AuthLayout>} />
       <Route path="/analogs" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/analogs"><Analogs /></RouteBoundary></AuthLayout>} />
-      <Route path="/debates" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/debates"><Debates /></RouteBoundary></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><RouteBoundary route="/dashboard"><Dashboard /></RouteBoundary></AuthLayout>} />

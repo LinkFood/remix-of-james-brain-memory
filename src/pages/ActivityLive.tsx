@@ -29,7 +29,7 @@ import {
 } from '@/hooks/useActivityLive';
 import { DataExportButton } from '@/components/DataExportButton';
 
-const TICKER_CHOICES = ['all', 'SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'TSLA', 'GLD', 'USO', 'SPX'];
+const TICKER_CHOICES = ['all', 'SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'SPX'];
 
 function formatEtTime(iso: string): string {
   try {

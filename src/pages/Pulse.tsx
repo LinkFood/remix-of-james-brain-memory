@@ -24,7 +24,7 @@ import { Activity, TrendingUp, RefreshCw } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, ReferenceLine, Tooltip } from 'recharts';
 import { ChartSafe } from '@/components/ChartSafe';
 
-const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','NVDA','META','GOOGL','AMZN','TSLA','GLD','USO'];
+const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
 const SIGNAL_TYPES = [
   { key: 'sweep',        label: 'Sweeps',     color: '#60a5fa' },

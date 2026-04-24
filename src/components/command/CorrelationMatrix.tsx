@@ -55,8 +55,7 @@ const MIN_SAMPLE = 7;
 // as a render-time fallback when the cache is empty (first-deploy state).
 const DEFAULT_WATCHLIST_FALLBACK = [
   'SPY', 'QQQ', 'IWM',
-  'NVDA', 'AAPL', 'MSFT', 'META', 'GOOGL', 'AMZN', 'TSLA',
-  'GLD', 'USO',
+  'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
 ];
 
 interface CorrelationRow {
