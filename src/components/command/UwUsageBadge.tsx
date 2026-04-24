@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 
 type UsageRow = {
@@ -50,7 +51,7 @@ export function UwUsageBadge() {
   ].filter(Boolean).join(' · ');
 
   return (
-    <div className={`inline-flex items-center gap-2 rounded-md px-2 py-1 text-[10px] font-medium ${t.bg} ${t.fg}`} title={title}>
+    <Link to="/budget" className={`inline-flex items-center gap-2 rounded-md px-2 py-1 text-[10px] font-medium ${t.bg} ${t.fg} hover:brightness-125 transition-all`} title={title}>
       <span className="uppercase tracking-wider opacity-70">UW</span>
       <span className="tabular-nums font-semibold">{data.pct}%</span>
       <div className="h-1 w-16 overflow-hidden rounded-full bg-black/40">
@@ -63,6 +64,6 @@ export function UwUsageBadge() {
         </span>
       )}
       <span className="uppercase tracking-wider font-bold">{t.label}</span>
-    </div>
+    </Link>
   );
 }

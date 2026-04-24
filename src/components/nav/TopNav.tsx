@@ -81,6 +81,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'System',
     items: [
       { path: '/health', label: 'Health' },
+      { path: '/budget', label: 'UW Budget' },
       { path: '/cost', label: 'Cost' },
       { path: '/crons', label: 'Crons' },
       { path: '/agents', label: 'Agents' },
