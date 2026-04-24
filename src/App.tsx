@@ -37,6 +37,8 @@ import Principles from "./pages/Principles";
 import Health from "./pages/Health";
 import Edge from "./pages/Edge";
 import Pulse from "./pages/Pulse";
+import Flags from "./pages/Flags";
+import Specialists from "./pages/Specialists";
 import CostDashboard from "./pages/CostDashboard";
 import SessionTimeline from "./pages/SessionTimeline";
 import ActivityLive from "./pages/ActivityLive";
@@ -44,6 +46,7 @@ import TickerTerminal from "./pages/TickerTerminal";
 import TickerChart from "./pages/TickerChart";
 import CustomRules from "./pages/CustomRules";
 import Analogs from "./pages/Analogs";
+import Patterns from "./pages/Patterns";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { useEffect, useState } from "react";
@@ -82,6 +85,8 @@ const TrackedRoutes = () => {
       <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/health"><Health /></RouteBoundary></AuthLayout>} />
       <Route path="/edge" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/edge"><Edge /></RouteBoundary></AuthLayout>} />
       <Route path="/pulse" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/pulse"><Pulse /></RouteBoundary></AuthLayout>} />
+      <Route path="/flags" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/flags"><Flags /></RouteBoundary></AuthLayout>} />
+      <Route path="/specialists" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/specialists"><Specialists /></RouteBoundary></AuthLayout>} />
       <Route path="/cost" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/cost"><CostDashboard /></RouteBoundary></AuthLayout>} />
       <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/session"><SessionTimeline /></RouteBoundary></AuthLayout>} />
       <Route path="/activity-live" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/activity-live"><ActivityLive /></RouteBoundary></AuthLayout>} />
@@ -89,6 +94,7 @@ const TrackedRoutes = () => {
       <Route path="/chart/:symbol/:date" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/chart/:symbol/:date"><TickerChart /></RouteBoundary></AuthLayout>} />
       <Route path="/rules" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/rules"><CustomRules /></RouteBoundary></AuthLayout>} />
       <Route path="/analogs" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/analogs"><Analogs /></RouteBoundary></AuthLayout>} />
+      <Route path="/patterns" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/patterns"><Patterns /></RouteBoundary></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><RouteBoundary route="/dashboard"><Dashboard /></RouteBoundary></AuthLayout>} />

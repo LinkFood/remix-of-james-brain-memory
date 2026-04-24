@@ -67,6 +67,8 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { path: '/', label: 'Station' },
       { path: '/pulse', label: 'Pulse' },
+      { path: '/flags', label: 'Flags' },
+      { path: '/specialists', label: 'Specialists' },
       { path: '/session', label: 'Timeline' },
     ],
   },
@@ -74,6 +76,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Review',
     items: [
       { path: '/edge', label: 'Edge' },
+      { path: '/patterns', label: 'Patterns' },
       { path: '/scorecard', label: 'Scorecard' },
       { path: '/workspace', label: 'Workspace' },
       { path: '/principles', label: 'Principles' },

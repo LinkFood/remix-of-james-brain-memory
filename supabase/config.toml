@@ -162,6 +162,9 @@ verify_jwt = false
 [functions.ct-slack-digest]
 verify_jwt = false
 
+[functions.ct-slack-push-flag]
+verify_jwt = false
+
 [functions.ct-classify-themes]
 verify_jwt = false
 

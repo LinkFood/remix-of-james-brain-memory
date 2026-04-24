@@ -15,12 +15,13 @@
 
 import { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { Activity, TrendingUp, RefreshCw } from 'lucide-react';
+import { Activity, TrendingUp, RefreshCw, Target } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, ReferenceLine, Tooltip } from 'recharts';
 import { ChartSafe } from '@/components/ChartSafe';
 
@@ -46,6 +47,16 @@ interface TimelineRow {
   signals_by_type: Record<string, { n: number; bull: number; bear: number }> | null;
 }
 
+interface FlagSummary {
+  id: string;
+  specialist_ticker: string;
+  direction: 'bullish' | 'bearish' | 'neutral' | string | null;
+  status: string | null;
+  score: number | null;
+  created_at: string;
+  horizon_ts: string | null;
+}
+
 function fmtUsd(n: number): string {
   if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
   if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
@@ -65,11 +76,14 @@ function TickerTile({
   ticker,
   rows,
   enabledTypes,
+  flags,
 }: {
   ticker: string;
   rows: TimelineRow[];
   enabledTypes: Set<string>;
+  flags: FlagSummary[];
 }) {
+  const navigate = useNavigate();
   const latest = rows[rows.length - 1];
   const fifteenAgo = rows[Math.max(0, rows.length - 4)];
   const slope = latest && fifteenAgo ? latest.score - fifteenAgo.score : 0;
@@ -81,6 +95,45 @@ function TickerTile({
     () => rows.map((r) => ({ t: r.bucket_ts.slice(11, 16), s: r.score })),
     [rows]
   );
+
+  // Snap each flag's created_at to the nearest existing sparkline bucket key,
+  // so ReferenceLine x= matches an actual xKey on the AreaChart.
+  const flagMarkers = useMemo(() => {
+    if (!flags.length || !series.length) return [] as Array<{ id: string; x: string; stroke: string }>;
+    const bucketTimes = series.map((s) => s.t);
+    const keyToMs = new Map<string, number>();
+    for (const t of bucketTimes) {
+      const [hh, mm] = t.split(':').map(Number);
+      keyToMs.set(t, hh * 60 + mm);
+    }
+    return flags.map((f) => {
+      const hhmm = f.created_at.slice(11, 16);
+      const [fh, fm] = hhmm.split(':').map(Number);
+      const fMin = fh * 60 + fm;
+      // find nearest bucket key
+      let bestKey = bucketTimes[0];
+      let bestDelta = Infinity;
+      for (const [k, v] of keyToMs.entries()) {
+        const d = Math.abs(v - fMin);
+        if (d < bestDelta) { bestDelta = d; bestKey = k; }
+      }
+      const stroke =
+        f.direction === 'bullish' ? '#10b981' :
+        f.direction === 'bearish' ? '#ef4444' :
+        '#64748b';
+      return { id: f.id, x: bestKey, stroke };
+    });
+  }, [flags, series]);
+
+  const flagCounts = useMemo(() => {
+    let bull = 0, bear = 0, conviction = 0;
+    for (const f of flags) {
+      if (f.direction === 'bullish') bull++;
+      else if (f.direction === 'bearish') bear++;
+      if (f.status === 'conviction') conviction++;
+    }
+    return { bull, bear, conviction, total: flags.length };
+  }, [flags]);
 
   // Aggregate bull/bear votes + weighted USD respecting toggles.
   const agg = useMemo(() => {
@@ -135,6 +188,16 @@ function TickerTile({
                 </linearGradient>
               </defs>
               <ReferenceLine y={0} stroke="hsl(var(--border))" strokeDasharray="2 2" />
+              {flagMarkers.map((m) => (
+                <ReferenceLine
+                  key={m.id}
+                  x={m.x}
+                  stroke={m.stroke}
+                  strokeWidth={1}
+                  strokeDasharray="3 3"
+                  ifOverflow="hidden"
+                />
+              ))}
               <Area
                 type="monotone"
                 dataKey="s"
@@ -165,6 +228,25 @@ function TickerTile({
             <span>{fmtUsd(agg.bearUsd)}</span>
           </div>
         </div>
+      )}
+
+      {/* Active specialist flags */}
+      {flagCounts.total > 0 && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); navigate(`/flags?specialist=${ticker}`); }}
+          className="flex items-center gap-1.5 text-[10px] px-1.5 py-0.5 rounded bg-muted/40 hover:bg-muted/70 transition-colors text-muted-foreground hover:text-foreground font-mono self-start"
+          title={`${flagCounts.total} active flag${flagCounts.total > 1 ? 's' : ''} on ${ticker} — click to view`}
+        >
+          <Target className="w-3 h-3" />
+          <span className="text-foreground tabular-nums">{flagCounts.total}</span>
+          <span>flag{flagCounts.total > 1 ? 's' : ''}</span>
+          {flagCounts.bull > 0 && <span className="text-emerald-400 tabular-nums">+{flagCounts.bull}</span>}
+          {flagCounts.bear > 0 && <span className="text-red-400 tabular-nums">-{flagCounts.bear}</span>}
+          {flagCounts.conviction > 0 && (
+            <span className="text-amber-400 tabular-nums">★{flagCounts.conviction}</span>
+          )}
+        </button>
       )}
 
       {/* Vote counts by type */}
@@ -220,6 +302,36 @@ export default function Pulse() {
     }
     return m;
   }, [rows]);
+
+  // Active specialist flags created today, still within horizon. Grouped by
+  // ticker to overlay on each sparkline + count badge.
+  const { data: activeFlags } = useQuery<FlagSummary[]>({
+    queryKey: ['ct_flags_active_on_pulse'],
+    queryFn: async () => {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error } = await supabase
+        .from('ct_flags' as never)
+        .select('id, specialist_ticker, direction, status, score, created_at, horizon_ts')
+        .in('status', ['active', 'conviction'])
+        .gte('created_at', today)
+        .order('created_at', { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as unknown as FlagSummary[];
+    },
+    refetchInterval: 30_000,
+  });
+
+  const flagsByTicker = useMemo(() => {
+    const m = new Map<string, FlagSummary[]>();
+    for (const f of activeFlags ?? []) {
+      // filter out any with expired horizon on the client
+      if (f.horizon_ts && new Date(f.horizon_ts).getTime() < Date.now()) continue;
+      const arr = m.get(f.specialist_ticker) ?? [];
+      arr.push(f);
+      m.set(f.specialist_ticker, arr);
+    }
+    return m;
+  }, [activeFlags]);
 
   const toggle = (key: string) => {
     setEnabled((prev) => {
@@ -325,6 +437,7 @@ export default function Pulse() {
                 ticker={t}
                 rows={byTicker.get(t) ?? []}
                 enabledTypes={enabled}
+                flags={flagsByTicker.get(t) ?? []}
               />
             ))}
           </div>
