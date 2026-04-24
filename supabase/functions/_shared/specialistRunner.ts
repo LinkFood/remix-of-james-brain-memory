@@ -67,9 +67,16 @@ interface FlagDecision {
   source_flow_ids?: string[];
 }
 
+interface CurrentRead {
+  direction_lean: 'bullish' | 'bearish' | 'neutral' | 'mixed';
+  conviction: number;
+  read_text: string;
+}
+
 interface ClaudeVerdict {
   flags: FlagDecision[];
   pass_reason?: string | null;
+  current_read: CurrentRead | null;
 }
 
 const GENERIC_PROMPT_FALLBACK = `You are a per-ticker options-flow specialist in Co-Trader v2.
@@ -90,7 +97,15 @@ You now see three cross-facet signals:
 - YOUR TICKER'S LEAN SCORE: your ticker's composite direction. Flag direction should align OR you must justify contrarian.
 - PEER SPECIALIST FLAGS: what your siblings just did. If peers are heavily bearish and you're bullish, say why.
 
-Your job is still ticker-specific, but you must reason against these anchors before firing.`;
+Your job is still ticker-specific, but you must reason against these anchors before firing.
+
+In addition to \`flags\` and \`pass_reason\`, you MUST return a \`current_read\` object on every wakeup:
+  {
+    "direction_lean": "bullish" | "bearish" | "neutral" | "mixed",
+    "conviction": 0-100 ("how close were you to writing a flag — 0=quiet day, 100=you DID flag"),
+    "read_text": "2-3 sentences describing what the ticker is doing right now, what you'd need to see to flag, and your current confidence."
+  }
+This read surfaces on the ticker card even when you pass. It's your running commentary — make it specific and actionable.`;
 
 const DEFAULT_COOLDOWN_MIN = 15;
 const DEFAULT_WAKEUP_THRESHOLD = 60;
@@ -161,10 +176,59 @@ function parseClaudeVerdict(raw: string): ClaudeVerdict | { error: string } {
     });
   }
 
+  // Parse current_read. Missing or malformed → null (caller logs + skips write).
+  let currentRead: CurrentRead | null = null;
+  const crRaw = p.current_read as Record<string, unknown> | undefined;
+  if (crRaw && typeof crRaw === 'object') {
+    const lean = String(crRaw.direction_lean ?? '').toLowerCase();
+    const conv = Number(crRaw.conviction);
+    const text = typeof crRaw.read_text === 'string' ? crRaw.read_text.trim() : '';
+    if (
+      ['bullish', 'bearish', 'neutral', 'mixed'].includes(lean) &&
+      Number.isFinite(conv) &&
+      text.length > 0
+    ) {
+      currentRead = {
+        direction_lean: lean as CurrentRead['direction_lean'],
+        conviction: Math.max(0, Math.min(100, Math.round(conv))),
+        read_text: text.slice(0, 2000),
+      };
+    }
+  }
+
   return {
     flags,
     pass_reason: typeof p.pass_reason === 'string' ? p.pass_reason.slice(0, 500) : null,
+    current_read: currentRead,
   };
+}
+
+async function writeSpecialistRead(
+  supabase: SupabaseClient,
+  args: {
+    ticker: string;
+    read: CurrentRead;
+    flagged: boolean;
+    flagId: string | null;
+    sourceFlowIds: number[];
+  },
+): Promise<void> {
+  try {
+    const { error } = await supabase.from('ct_specialist_reads').insert({
+      ticker: args.ticker,
+      direction_lean: args.read.direction_lean,
+      conviction: args.read.conviction,
+      read_text: args.read.read_text,
+      flagged: args.flagged,
+      flag_id: args.flagId,
+      source_flow_ids: args.sourceFlowIds.length > 0 ? args.sourceFlowIds : null,
+    });
+    if (error) {
+      console.warn(`[specialistRunner] ${args.ticker} current_read write failed:`, error.message);
+    }
+  } catch (e) {
+    console.warn(`[specialistRunner] ${args.ticker} current_read write threw:`, String(e));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -784,8 +848,14 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
       "thesis": "...", "invalidation": "...", "horizon_hours": 48,
       "target_price": 185.5, "score": 72 }
   ],
-  "pass_reason": null | "why you passed"
-}`;
+  "pass_reason": null | "why you passed",
+  "current_read": {
+    "direction_lean": "bullish|bearish|neutral|mixed",
+    "conviction": 0-100,
+    "read_text": "2-3 sentences — what ${ticker} is doing now, what you'd need to flag, current confidence."
+  }
+}
+\`current_read\` is REQUIRED on every wakeup, flag or pass.`;
 
   // 14. Claude call (Haiku).
   const model = CLAUDE_MODELS.haiku;
@@ -853,7 +923,7 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
   const writtenIds: string[] = [];
 
   if (parsed.flags.length === 0) {
-    // Clean pass — journal it and return.
+    // Clean pass — journal it, write current_read, return.
     await recordDecision(supabase, {
       decision_type: 'no_trade',
       model_tier: 'haiku',
@@ -869,6 +939,17 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
       tokens_out: tokensOut,
       cost_usd: costUsd,
     });
+    if (parsed.current_read) {
+      await writeSpecialistRead(supabase, {
+        ticker,
+        read: parsed.current_read,
+        flagged: false,
+        flagId: null,
+        sourceFlowIds,
+      });
+    } else {
+      console.warn(`[specialistRunner] ${ticker} passed without current_read — prompt may be stale or response malformed`);
+    }
     return {
       ...baseResult,
       ok: true,
@@ -963,6 +1044,19 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
       tokens_out: tokensOut,
       cost_usd: costUsd,
     });
+  }
+
+  // Write running commentary AFTER flag inserts so flag_id can link.
+  if (parsed.current_read) {
+    await writeSpecialistRead(supabase, {
+      ticker,
+      read: parsed.current_read,
+      flagged: writtenIds.length > 0,
+      flagId: writtenIds[0] ?? null,
+      sourceFlowIds,
+    });
+  } else {
+    console.warn(`[specialistRunner] ${ticker} flagged without current_read — prompt may be stale or response malformed`);
   }
 
   return {
