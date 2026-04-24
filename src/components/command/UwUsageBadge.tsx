@@ -7,6 +7,9 @@ type UsageRow = {
   daily_count: number;
   daily_limit: number;
   pct: number;
+  minute_counter: number | null;
+  minute_remaining: number | null;
+  minute_reset_at: string | null;
 };
 
 function tier(pct: number): { label: string; bg: string; fg: string } {
@@ -30,21 +33,35 @@ export function UwUsageBadge() {
       if (error) return null;
       return data as UsageRow | null;
     },
-    refetchInterval: 60_000,
+    refetchInterval: 30_000,
   });
 
   if (!data || !data.daily_limit) return null;
   const t = tier(data.pct);
   const barPct = Math.min(100, Math.max(0, data.pct));
 
+  const minuteRemaining = data.minute_remaining;
+  const minuteHot = minuteRemaining !== null && minuteRemaining <= 15;
+
+  const title = [
+    `UW API: ${data.daily_count.toLocaleString()} / ${data.daily_limit.toLocaleString()} today`,
+    minuteRemaining !== null ? `Minute: ${minuteRemaining} remaining` : '',
+    `(updated ${new Date(data.observed_at).toLocaleTimeString()})`,
+  ].filter(Boolean).join(' · ');
+
   return (
-    <div className={`inline-flex items-center gap-2 rounded-md px-2 py-1 text-[10px] font-medium ${t.bg} ${t.fg}`} title={`UW API: ${data.daily_count.toLocaleString()} / ${data.daily_limit.toLocaleString()} today (updated ${new Date(data.observed_at).toLocaleTimeString()})`}>
+    <div className={`inline-flex items-center gap-2 rounded-md px-2 py-1 text-[10px] font-medium ${t.bg} ${t.fg}`} title={title}>
       <span className="uppercase tracking-wider opacity-70">UW</span>
       <span className="tabular-nums font-semibold">{data.pct}%</span>
       <div className="h-1 w-16 overflow-hidden rounded-full bg-black/40">
         <div className={`h-full ${t.fg.replace('text-', 'bg-')}`} style={{ width: `${barPct}%` }} />
       </div>
       <span className="opacity-70 tabular-nums">{data.daily_count.toLocaleString()}/{data.daily_limit.toLocaleString()}</span>
+      {minuteRemaining !== null && (
+        <span className={`tabular-nums ${minuteHot ? 'text-orange-300' : 'opacity-60'}`} title={`${minuteRemaining} req remaining this minute`}>
+          {minuteRemaining}/m
+        </span>
+      )}
       <span className="uppercase tracking-wider font-bold">{t.label}</span>
     </div>
   );

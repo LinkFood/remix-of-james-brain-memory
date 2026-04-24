@@ -55,25 +55,73 @@ export class UwError extends Error {
 /**
  * Record a single UW response's rate-limit headers to ct_uw_usage.
  * Fire-and-forget — never blocks the UW call or throws.
+ *
+ * Captures all 5 UW rate-limit headers:
+ *   x-uw-daily-req-count          → daily_count
+ *   x-uw-token-req-limit          → daily_limit
+ *   x-uw-minute-req-counter       → minute_counter
+ *   x-uw-req-per-minute-remaining → minute_remaining
+ *   x-uw-req-per-minute-reset     → minute_reset_at (unix seconds or iso)
  */
-let _uwUsageBuffer: Array<{ endpoint: string; daily_count: number | null; daily_limit: number | null; status: number; ms: number }> = [];
+type UwUsageRow = {
+  endpoint: string;
+  daily_count: number | null;
+  daily_limit: number | null;
+  minute_counter: number | null;
+  minute_remaining: number | null;
+  minute_reset_at: string | null;
+  status: number;
+  ms: number;
+  caller: string | null;
+};
+let _uwUsageBuffer: UwUsageRow[] = [];
 let _uwUsageFlushPending = false;
+
+function parseMinuteReset(v: string | null): string | null {
+  if (!v) return null;
+  const n = Number(v);
+  if (Number.isFinite(n)) {
+    // UW sends unix seconds; if it's large enough to be ms, treat as ms.
+    const ms = n > 1e12 ? n : n * 1000;
+    return new Date(ms).toISOString();
+  }
+  // Maybe already ISO.
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
 
 function recordUwUsage(path: string, res: Response, ms: number): void {
   const dc = Number(res.headers.get('x-uw-daily-req-count') ?? '');
   const dl = Number(res.headers.get('x-uw-token-req-limit') ?? '');
+  const mc = Number(res.headers.get('x-uw-minute-req-counter') ?? '');
+  const mr = Number(res.headers.get('x-uw-req-per-minute-remaining') ?? '');
+  const mReset = parseMinuteReset(res.headers.get('x-uw-req-per-minute-reset'));
   _uwUsageBuffer.push({
     endpoint: path,
     daily_count: Number.isFinite(dc) ? dc : null,
     daily_limit: Number.isFinite(dl) ? dl : null,
+    minute_counter: Number.isFinite(mc) ? mc : null,
+    minute_remaining: Number.isFinite(mr) ? mr : null,
+    minute_reset_at: mReset,
     status: res.status,
     ms,
+    caller: _callerTag,
   });
   if (!_uwUsageFlushPending) {
     _uwUsageFlushPending = true;
     // Flush 500ms after first call — batches a burst into one insert.
     setTimeout(flushUwUsage, 500);
   }
+}
+
+/**
+ * Opt-in caller tag. Edge functions call `setUwCaller("ct-flow-ingester")`
+ * at startup and every recorded usage row gets attributed to them. Safe to
+ * leave unset — caller defaults to null.
+ */
+let _callerTag: string | null = null;
+export function setUwCaller(tag: string): void {
+  _callerTag = tag.slice(0, 64);
 }
 
 async function flushUwUsage(): Promise<void> {
@@ -96,6 +144,39 @@ async function flushUwUsage(): Promise<void> {
       body: JSON.stringify(rows),
     });
   } catch { /* swallow */ }
+}
+
+/**
+ * Non-critical callers can check UW's budget before firing a cycle.
+ * Returns true unless we're ≥95% of daily limit OR minute_remaining <10.
+ * Reads ct_uw_budget_ok() RPC — empty cache returns true (fail-open).
+ *
+ * Specialists + grader should NOT call this. Backfills, screener sweeps,
+ * endpoint health probes, and other expendable traffic SHOULD.
+ */
+export async function uwBudgetOk(opts: { dailyThreshold?: number; minuteFloor?: number } = {}): Promise<boolean> {
+  try {
+    const url = Deno.env.get('SUPABASE_URL');
+    const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!url || !key) return true;
+    const res = await fetch(`${url}/rest/v1/rpc/ct_uw_budget_ok`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        daily_threshold: opts.dailyThreshold ?? 0.95,
+        minute_floor: opts.minuteFloor ?? 10,
+      }),
+    });
+    if (!res.ok) return true;
+    const raw = await res.json();
+    return raw === true || raw === 'true';
+  } catch {
+    return true;
+  }
 }
 
 /**

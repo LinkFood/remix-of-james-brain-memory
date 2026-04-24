@@ -62,6 +62,87 @@ const MCP_PROTOCOL_VERSION = '2025-06-18';
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 500;
 
+// ---------------------------------------------------------------------------
+// UW rate-limit header capture — MCP responses go through the same API layer
+// as REST so they carry the same 5 headers. We flush them into ct_uw_usage
+// so the /specialists budget bar reflects MCP traffic as well as REST.
+// ---------------------------------------------------------------------------
+type UwMcpUsageRow = {
+  endpoint: string;
+  daily_count: number | null;
+  daily_limit: number | null;
+  minute_counter: number | null;
+  minute_remaining: number | null;
+  minute_reset_at: string | null;
+  status: number;
+  ms: number;
+  caller: string | null;
+};
+let _mcpUsageBuffer: UwMcpUsageRow[] = [];
+let _mcpUsageFlushPending = false;
+let _mcpCallerTag: string | null = null;
+export function setMcpCaller(tag: string): void { _mcpCallerTag = tag.slice(0, 64); }
+
+function parseMinuteReset(v: string | null): string | null {
+  if (!v) return null;
+  const n = Number(v);
+  if (Number.isFinite(n)) {
+    const ms = n > 1e12 ? n : n * 1000;
+    return new Date(ms).toISOString();
+  }
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function recordMcpUsage(endpoint: string, res: Response, ms: number): void {
+  const dc = Number(res.headers.get('x-uw-daily-req-count') ?? '');
+  const dl = Number(res.headers.get('x-uw-token-req-limit') ?? '');
+  const mc = Number(res.headers.get('x-uw-minute-req-counter') ?? '');
+  const mr = Number(res.headers.get('x-uw-req-per-minute-remaining') ?? '');
+  const mReset = parseMinuteReset(res.headers.get('x-uw-req-per-minute-reset'));
+  // Only push rows where UW told us SOMETHING — skip noise from MCP session
+  // handshake frames that the server returns without rate headers.
+  const anyHeader = Number.isFinite(dc) || Number.isFinite(mc) || Number.isFinite(mr);
+  if (!anyHeader) return;
+  _mcpUsageBuffer.push({
+    endpoint,
+    daily_count: Number.isFinite(dc) ? dc : null,
+    daily_limit: Number.isFinite(dl) ? dl : null,
+    minute_counter: Number.isFinite(mc) ? mc : null,
+    minute_remaining: Number.isFinite(mr) ? mr : null,
+    minute_reset_at: mReset,
+    status: res.status,
+    ms,
+    caller: _mcpCallerTag,
+  });
+  if (!_mcpUsageFlushPending) {
+    _mcpUsageFlushPending = true;
+    setTimeout(flushMcpUsage, 500);
+  }
+}
+
+async function flushMcpUsage(): Promise<void> {
+  const rows = _mcpUsageBuffer;
+  _mcpUsageBuffer = [];
+  _mcpUsageFlushPending = false;
+  if (rows.length === 0) return;
+  try {
+    const url = Deno.env.get('SUPABASE_URL');
+    const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!url || !key) return;
+    await fetch(`${url}/rest/v1/ct_uw_usage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': key,
+        'Authorization': `Bearer ${key}`,
+        'Prefer': 'return=minimal',
+      },
+      body: JSON.stringify(rows),
+    });
+  } catch { /* swallow */ }
+}
+
 function getApiKey(): string {
   // Match uwClient.ts precedence so this client and that one never disagree
   // on which key to use.
@@ -180,6 +261,7 @@ async function rpc(state: McpClientState, method: string, params?: unknown, isNo
     if (state.sessionId) headers['Mcp-Session-Id'] = state.sessionId;
 
     let res: Response;
+    const startMs = Date.now();
     try {
       res = await fetch(MCP_URL, { method: 'POST', headers, body: JSON.stringify(body) });
     } catch (netErr) {
@@ -195,6 +277,15 @@ async function rpc(state: McpClientState, method: string, params?: unknown, isNo
     // Capture session id if server minted one on initialize.
     const sid = res.headers.get('mcp-session-id');
     if (sid && !state.sessionId) state.sessionId = sid;
+
+    // UW rate-limit headers — fire-and-forget usage snapshot. Tag method + any
+    // tool name so /specialists budget bar can attribute spend per caller.
+    try {
+      const toolName = (!isNotification && method === 'tools/call' && typeof (params as { name?: unknown })?.name === 'string')
+        ? `mcp:${(params as { name: string }).name}`
+        : `mcp:${method}`;
+      recordMcpUsage(toolName, res, Date.now() - startMs);
+    } catch { /* ignore */ }
 
     // Notifications: server may send 202 Accepted with no body.
     if (isNotification) {
