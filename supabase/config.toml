@@ -344,3 +344,33 @@ verify_jwt = false
 
 [functions.ct-specialist-nvda]
 verify_jwt = false
+
+[functions.ct-specialist-spy]
+verify_jwt = false
+
+[functions.ct-specialist-qqq]
+verify_jwt = false
+
+[functions.ct-specialist-iwm]
+verify_jwt = false
+
+[functions.ct-specialist-aapl]
+verify_jwt = false
+
+[functions.ct-specialist-msft]
+verify_jwt = false
+
+[functions.ct-specialist-googl]
+verify_jwt = false
+
+[functions.ct-specialist-amzn]
+verify_jwt = false
+
+[functions.ct-specialist-meta]
+verify_jwt = false
+
+[functions.ct-specialist-tsla]
+verify_jwt = false
+
+[functions.ct-specialist-dispatcher]
+verify_jwt = false
