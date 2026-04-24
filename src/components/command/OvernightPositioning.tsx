@@ -14,8 +14,8 @@
 
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { TrendingUp, TrendingDown, Activity } from 'lucide-react';
-import { useMemo } from 'react';
+import { TrendingUp, TrendingDown, Activity, ChevronDown, ChevronUp } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   useOvernightPositioning,
   normalizeSide,
@@ -128,19 +128,42 @@ export function OvernightPositioning({ onContractClick, onTickerClick }: Props) 
     return n;
   }, [byTicker]);
 
+  // Collapsed state persisted to localStorage. Default collapsed so the
+  // strip doesn't dominate the page during live market — James can expand
+  // when he wants to dig into overnight positioning context.
+  // TODO(layout): full rethink of this section's density when market closes —
+  //   per-ticker rows still scroll horizontally and the visual language
+  //   could be much tighter. See 2026-04-24 session notes.
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const stored = window.localStorage.getItem('ct_overnight_positioning_collapsed');
+    return stored === null ? true : stored === '1';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('ct_overnight_positioning_collapsed', collapsed ? '1' : '0');
+    }
+  }, [collapsed]);
+
   return (
     <div>
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="w-full flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2 hover:text-foreground transition-colors"
+        title={collapsed ? 'Expand overnight positioning' : 'Collapse overnight positioning'}
+      >
+        {collapsed ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronUp className="w-3.5 h-3.5" />}
         <Activity className="w-3.5 h-3.5" />
         Overnight Positioning{headerSuffix}
         {!isLoading && !isError && totalShown > 0 && (
           <span className="text-[10px] normal-case text-muted-foreground/70 ml-auto">
-            top {totalShown} OI shifts · refreshes every 5m
+            {collapsed ? `${totalShown} OI shifts · click to expand` : `top ${totalShown} OI shifts · refreshes every 5m`}
           </span>
         )}
-      </div>
+      </button>
 
-      {isError ? (
+      {collapsed ? null : isError ? (
         <div className="text-[11px] text-red-300 px-1 py-2">
           Couldn't load overnight positioning: {error instanceof Error ? error.message : 'unknown error'}
         </div>
