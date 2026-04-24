@@ -90,26 +90,33 @@ function parseMinuteReset(v: string | null): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+function headerNum(res: Response, key: string): number | null {
+  const raw = res.headers.get(key);
+  if (raw === null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 function recordUwUsage(path: string, res: Response, ms: number): void {
-  const dc = Number(res.headers.get('x-uw-daily-req-count') ?? '');
-  const dl = Number(res.headers.get('x-uw-token-req-limit') ?? '');
-  const mc = Number(res.headers.get('x-uw-minute-req-counter') ?? '');
-  const mr = Number(res.headers.get('x-uw-req-per-minute-remaining') ?? '');
-  const mReset = parseMinuteReset(res.headers.get('x-uw-req-per-minute-reset'));
+  const daily_count = headerNum(res, 'x-uw-daily-req-count');
+  const daily_limit = headerNum(res, 'x-uw-token-req-limit');
+  // UW currently only sends the 2 daily headers on REST responses; minute-level
+  // headers may appear later. Skip recording rows that carry no rate signal
+  // at all — those pollute ct_uw_usage_latest and poison budget decisions.
+  if (daily_count === null && daily_limit === null) return;
   _uwUsageBuffer.push({
     endpoint: path,
-    daily_count: Number.isFinite(dc) ? dc : null,
-    daily_limit: Number.isFinite(dl) ? dl : null,
-    minute_counter: Number.isFinite(mc) ? mc : null,
-    minute_remaining: Number.isFinite(mr) ? mr : null,
-    minute_reset_at: mReset,
+    daily_count,
+    daily_limit,
+    minute_counter: headerNum(res, 'x-uw-minute-req-counter'),
+    minute_remaining: headerNum(res, 'x-uw-req-per-minute-remaining'),
+    minute_reset_at: parseMinuteReset(res.headers.get('x-uw-req-per-minute-reset')),
     status: res.status,
     ms,
     caller: _callerTag,
   });
   if (!_uwUsageFlushPending) {
     _uwUsageFlushPending = true;
-    // Flush 500ms after first call — batches a burst into one insert.
     setTimeout(flushUwUsage, 500);
   }
 }

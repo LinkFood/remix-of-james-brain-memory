@@ -94,23 +94,28 @@ function parseMinuteReset(v: string | null): string | null {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+function headerNum(res: Response, key: string): number | null {
+  const raw = res.headers.get(key);
+  if (raw === null || raw === '') return null;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : null;
+}
+
 function recordMcpUsage(endpoint: string, res: Response, ms: number): void {
-  const dc = Number(res.headers.get('x-uw-daily-req-count') ?? '');
-  const dl = Number(res.headers.get('x-uw-token-req-limit') ?? '');
-  const mc = Number(res.headers.get('x-uw-minute-req-counter') ?? '');
-  const mr = Number(res.headers.get('x-uw-req-per-minute-remaining') ?? '');
-  const mReset = parseMinuteReset(res.headers.get('x-uw-req-per-minute-reset'));
-  // Only push rows where UW told us SOMETHING — skip noise from MCP session
-  // handshake frames that the server returns without rate headers.
-  const anyHeader = Number.isFinite(dc) || Number.isFinite(mc) || Number.isFinite(mr);
-  if (!anyHeader) return;
+  const daily_count = headerNum(res, 'x-uw-daily-req-count');
+  const daily_limit = headerNum(res, 'x-uw-token-req-limit');
+  const minute_counter = headerNum(res, 'x-uw-minute-req-counter');
+  const minute_remaining = headerNum(res, 'x-uw-req-per-minute-remaining');
+  // Skip handshake / heartbeat frames that carry no rate headers — they'd
+  // poison ct_uw_usage_latest with zero rows.
+  if (daily_count === null && daily_limit === null && minute_counter === null && minute_remaining === null) return;
   _mcpUsageBuffer.push({
     endpoint,
-    daily_count: Number.isFinite(dc) ? dc : null,
-    daily_limit: Number.isFinite(dl) ? dl : null,
-    minute_counter: Number.isFinite(mc) ? mc : null,
-    minute_remaining: Number.isFinite(mr) ? mr : null,
-    minute_reset_at: mReset,
+    daily_count,
+    daily_limit,
+    minute_counter,
+    minute_remaining,
+    minute_reset_at: parseMinuteReset(res.headers.get('x-uw-req-per-minute-reset')),
     status: res.status,
     ms,
     caller: _mcpCallerTag,

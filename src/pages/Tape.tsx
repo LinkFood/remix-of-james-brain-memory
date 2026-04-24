@@ -19,11 +19,16 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { Waves, RefreshCw, ArrowUp, ArrowDown, Minus } from 'lucide-react';
+import { Waves, RefreshCw, ArrowUp, ArrowDown, Minus, Star, Radio } from 'lucide-react';
+import { toast } from 'sonner';
 import { ContractSheet } from '@/components/command/ContractSheet';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
@@ -123,10 +128,31 @@ interface Filters {
   direction: 'all' | Direction;
   sortBy: SortKey;
   showUnscored: boolean;
+  mineOnly: boolean;
+  liveMode: boolean;
 }
 
-const PREMIUM_PRESETS = [10_000, 100_000, 500_000, 1_000_000, 5_000_000];
+const PREMIUM_PRESETS = [25_000, 100_000, 500_000, 1_000_000, 5_000_000];
 const VOL_OI_PRESETS = [0, 1, 2, 5];
+
+/**
+ * Parse call/put from an OCC option symbol. UW's flow-alerts endpoint
+ * often returns side=null (known gap — see CLAUDE.md gotcha), so we
+ * derive from the symbol itself. OCC format: ROOT + YYMMDD + (C|P) + 8-digit strike.
+ * The C/P char sits right after the 6-digit date. Example:
+ *   NVDA260522C00205000 → call
+ *   SPY260606P00500000  → put
+ */
+function parseOccSide(sym: string | null | undefined): 'call' | 'put' | null {
+  if (!sym || sym.length < 8) return null;
+  // Walk from the right: 8-digit strike → preceded by C or P.
+  const strikeStart = sym.length - 8;
+  if (strikeStart < 1) return null;
+  const ch = sym.charAt(strikeStart - 1);
+  if (ch === 'C' || ch === 'c') return 'call';
+  if (ch === 'P' || ch === 'p') return 'put';
+  return null;
+}
 
 function formatTimeET(iso: string): string {
   try {
@@ -217,20 +243,47 @@ function inDteBand(dte: number | null, band: DteBand): boolean {
   return true;
 }
 
+interface JamesFlagRow {
+  id: number;
+  option_symbol: string;
+  ticker: string;
+  source_flow_id: number | null;
+  source_alert_id: string | null;
+  direction_view: Direction | null;
+  note: string | null;
+  created_at: string;
+}
+
+interface MarkDialogState {
+  open: boolean;
+  row: TapeRow | null;
+  note: string;
+  direction_view: Direction | null;
+  saving: boolean;
+}
+
 export default function Tape() {
   const qc = useQueryClient();
   const [filters, setFilters] = useState<Filters>({
     tickers: new Set(),
-    minPremium: 10_000,
+    minPremium: 25_000,
     minVolOi: 0,
     dteBand: 'any',
     sweepOnly: false,
-    minScore: 60,
+    minScore: 0,
     direction: 'all',
     sortBy: 'event_ts',
     showUnscored: false,
+    mineOnly: false,
+    liveMode: false,
   });
   const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
+  const [markDialog, setMarkDialog] = useState<MarkDialogState>({
+    open: false, row: null, note: '', direction_view: null, saving: false,
+  });
+
+  // Refetch interval scales with LIVE mode — 5s when on, 20s baseline.
+  const tapeInterval = filters.liveMode ? 5_000 : 20_000;
 
   // Scored flow — primary source
   const { data: scored, isLoading: loadingScored } = useQuery<ScoredRow[]>({
@@ -239,7 +292,7 @@ export default function Tape() {
       minScore: filters.minScore,
       direction: filters.direction,
     }],
-    refetchInterval: 20_000,
+    refetchInterval: tapeInterval,
     queryFn: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let q: any = supabase
@@ -261,7 +314,7 @@ export default function Tape() {
     queryKey: ['ct_tape_unscored', {
       tickers: Array.from(filters.tickers).sort(),
     }],
-    refetchInterval: 20_000,
+    refetchInterval: tapeInterval,
     enabled: filters.showUnscored,
     queryFn: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -276,6 +329,28 @@ export default function Tape() {
       return (data ?? []) as unknown as AlertRow[];
     },
   });
+
+  // James's flagged prints — for star indicator + "Mine only" filter.
+  const { data: jamesFlags } = useQuery<JamesFlagRow[]>({
+    queryKey: ['ct_james_flags_all'],
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('ct_james_flags' as never) as any)
+        .select('id,option_symbol,ticker,source_flow_id,source_alert_id,direction_view,note,created_at')
+        .order('created_at', { ascending: false })
+        .limit(500);
+      if (error) return [];
+      return (data ?? []) as JamesFlagRow[];
+    },
+  });
+
+  // Fast lookup: has James flagged this option_symbol at all?
+  const flaggedSymbols = useMemo(() => {
+    const s = new Set<string>();
+    jamesFlags?.forEach((f) => s.add(f.option_symbol));
+    return s;
+  }, [jamesFlags]);
 
   // Pull alert_type + raw + side for the scored rows so the Tape column is accurate.
   // One batched call keyed on the set of alert_ids that scored rows point at.
@@ -349,7 +424,7 @@ export default function Tape() {
       const meta = alertMeta?.get(r.source_id);
       const alertType = meta?.alert_type ?? null;
       const raw = meta?.raw ?? null;
-      const side = meta?.side ?? r.side ?? null;
+      const side = meta?.side ?? r.side ?? parseOccSide(r.option_symbol);
       const { kind, isSweep } = deriveTapeKind(alertType, raw);
       const vol = r.volume;
       const oi = r.open_interest;
@@ -418,12 +493,18 @@ export default function Tape() {
       }
     }
 
+    // Alert rows may also have side=null from UW — derive from OCC symbol.
+    for (const r of out) {
+      if (!r.side) r.side = parseOccSide(r.option_symbol);
+    }
+
     // Client-side filters that depend on derived/joined fields.
     const filtered = out.filter((r) => {
       if (filters.minPremium > 0 && (r.premium == null || r.premium < filters.minPremium)) return false;
       if (filters.minVolOi > 0 && (r.vol_oi == null || r.vol_oi < filters.minVolOi)) return false;
       if (!inDteBand(r.dte, filters.dteBand)) return false;
       if (filters.sweepOnly && !r.is_sweep) return false;
+      if (filters.mineOnly && !flaggedSymbols.has(r.option_symbol)) return false;
       return true;
     });
 
@@ -437,7 +518,7 @@ export default function Tape() {
     });
 
     return filtered;
-  }, [scored, unscored, alertMeta, oiMap, filters]);
+  }, [scored, unscored, alertMeta, oiMap, filters, flaggedSymbols]);
 
   const totalBeforeFilter = (scored?.length ?? 0) + (filters.showUnscored ? (unscored?.length ?? 0) : 0);
 
@@ -489,6 +570,17 @@ export default function Tape() {
           {/* Ticker chips */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-muted-foreground mr-1">Ticker:</span>
+            <button
+              onClick={() => setFilters((p) => ({ ...p, tickers: new Set() }))}
+              className={cn(
+                'text-[11px] font-mono px-2 py-1 rounded border transition-colors',
+                filters.tickers.size === 0
+                  ? 'border-primary/40 bg-primary/10 text-primary'
+                  : 'border-muted bg-muted/20 text-muted-foreground hover:text-foreground',
+              )}
+            >
+              ALL
+            </button>
             {TICKERS.map((t) => {
               const on = filters.tickers.has(t);
               return (
@@ -506,14 +598,6 @@ export default function Tape() {
                 </button>
               );
             })}
-            {filters.tickers.size > 0 && (
-              <button
-                onClick={() => setFilters((p) => ({ ...p, tickers: new Set() }))}
-                className="text-[10px] text-muted-foreground underline ml-1"
-              >
-                clear
-              </button>
-            )}
           </div>
 
           <div className="flex items-center gap-4 flex-wrap">
@@ -611,6 +695,35 @@ export default function Tape() {
               />
             </div>
 
+            {/* Mine only */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+                <Star className="w-3 h-3" /> Mine only
+                {jamesFlags && jamesFlags.length > 0 && (
+                  <span className="text-[10px] tabular-nums text-muted-foreground/70">({jamesFlags.length})</span>
+                )}
+              </span>
+              <Switch
+                checked={filters.mineOnly}
+                onCheckedChange={(v) => setFilters((p) => ({ ...p, mineOnly: v }))}
+              />
+            </div>
+
+            {/* LIVE mode — 5s refresh */}
+            <div className="flex items-center gap-2">
+              <span className={cn(
+                'text-xs inline-flex items-center gap-1',
+                filters.liveMode ? 'text-emerald-300' : 'text-muted-foreground',
+              )}>
+                <Radio className={cn('w-3 h-3', filters.liveMode && 'animate-pulse')} />
+                LIVE
+              </span>
+              <Switch
+                checked={filters.liveMode}
+                onCheckedChange={(v) => setFilters((p) => ({ ...p, liveMode: v }))}
+              />
+            </div>
+
             {/* Sort */}
             <div className="flex items-center gap-1 ml-auto">
               <span className="text-xs text-muted-foreground mr-1">Sort:</span>
@@ -691,18 +804,21 @@ export default function Tape() {
                   <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">Ask%</TableHead>
                   <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-right">Score</TableHead>
                   <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider">Tags</TableHead>
+                  <TableHead className="h-8 px-2 text-[10px] uppercase tracking-wider text-center w-10">
+                    <Star className="w-3 h-3 inline" />
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loadingScored && !scored ? (
                   <TableRow>
-                    <TableCell colSpan={16} className="text-center text-xs text-muted-foreground py-8">
+                    <TableCell colSpan={17} className="text-center text-xs text-muted-foreground py-8">
                       Loading tape…
                     </TableCell>
                   </TableRow>
                 ) : rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={16} className="text-center text-xs text-muted-foreground py-8">
+                    <TableCell colSpan={17} className="text-center text-xs text-muted-foreground py-8">
                       No flow matches current filters. Loosen min premium, drop min score, or enable "Show unscored".
                     </TableCell>
                   </TableRow>
@@ -796,6 +912,28 @@ export default function Tape() {
                           )}
                         </div>
                       </TableCell>
+                      <TableCell
+                        className="py-1.5 px-2 text-center"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setMarkDialog({
+                            open: true,
+                            row: r,
+                            note: '',
+                            direction_view: r.direction ?? null,
+                            saving: false,
+                          });
+                        }}
+                      >
+                        <Star
+                          className={cn(
+                            'w-3.5 h-3.5 inline cursor-pointer transition-colors',
+                            flaggedSymbols.has(r.option_symbol)
+                              ? 'fill-amber-400 text-amber-400'
+                              : 'text-muted-foreground/40 hover:text-amber-400',
+                          )}
+                        />
+                      </TableCell>
                     </TableRow>
                   ))
                 )}
@@ -816,6 +954,129 @@ export default function Tape() {
         open={activeSymbol !== null}
         onOpenChange={(o) => { if (!o) setActiveSymbol(null); }}
       />
+
+      {/* Mark-as-interesting dialog */}
+      <Dialog
+        open={markDialog.open}
+        onOpenChange={(o) => {
+          if (!o) setMarkDialog({ open: false, row: null, note: '', direction_view: null, saving: false });
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Star className="w-4 h-4 text-amber-400" />
+              Flag this print
+            </DialogTitle>
+            <DialogDescription className="text-[11px]">
+              Your flags are a training signal for the specialists.
+            </DialogDescription>
+          </DialogHeader>
+
+          {markDialog.row && (
+            <div className="space-y-3">
+              {/* Context row */}
+              <div className="text-[11px] font-mono bg-muted/30 rounded p-2 space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-semibold">{markDialog.row.ticker}</span>
+                  {markDialog.row.side && (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        'text-[9px] px-1 py-0',
+                        markDialog.row.side === 'call'
+                          ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+                          : 'bg-red-500/15 text-red-300 border-red-500/40',
+                      )}
+                    >
+                      {markDialog.row.side === 'call' ? 'CALL' : 'PUT'}
+                    </Badge>
+                  )}
+                  <span>{markDialog.row.strike != null ? `$${markDialog.row.strike}` : ''}</span>
+                  {markDialog.row.expiry && <span className="text-muted-foreground">{formatExpiry(markDialog.row.expiry)}</span>}
+                  <span className="ml-auto text-muted-foreground">{formatPremium(markDialog.row.premium)}</span>
+                </div>
+                <div className="text-[10px] text-muted-foreground truncate">{markDialog.row.option_symbol}</div>
+              </div>
+
+              {/* Direction toggle */}
+              <div className="flex items-center gap-1">
+                <span className="text-xs text-muted-foreground mr-2">Your read:</span>
+                {(['bullish', 'bearish', 'neutral'] as const).map((d) => (
+                  <button
+                    key={d}
+                    onClick={() => setMarkDialog((s) => ({ ...s, direction_view: s.direction_view === d ? null : d }))}
+                    className={cn(
+                      'text-[10px] font-mono px-2 py-1 rounded border transition-colors capitalize',
+                      markDialog.direction_view === d
+                        ? d === 'bullish'
+                          ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                          : d === 'bearish'
+                            ? 'border-red-500/40 bg-red-500/10 text-red-300'
+                            : 'border-slate-500/40 bg-slate-500/10 text-slate-300'
+                        : 'border-muted bg-muted/20 text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+
+              {/* Note */}
+              <div className="space-y-1">
+                <label className="text-xs text-muted-foreground">Note (optional)</label>
+                <Textarea
+                  value={markDialog.note}
+                  onChange={(e) => setMarkDialog((s) => ({ ...s, note: e.target.value }))}
+                  placeholder="Why does this print stand out?"
+                  rows={3}
+                  className="text-xs resize-none"
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setMarkDialog({ open: false, row: null, note: '', direction_view: null, saving: false })}
+              disabled={markDialog.saving}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={markDialog.saving || !markDialog.row}
+              onClick={async () => {
+                if (!markDialog.row) return;
+                setMarkDialog((s) => ({ ...s, saving: true }));
+                const r = markDialog.row;
+                const payload = {
+                  option_symbol: r.option_symbol,
+                  ticker: r.ticker,
+                  source_flow_id: r.source === 'scored' ? r.id : null,
+                  source_alert_id: r.source === 'alert' ? String(r.id) : null,
+                  direction_view: markDialog.direction_view,
+                  note: markDialog.note.trim() || null,
+                };
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const { error } = await (supabase.from('ct_james_flags' as never) as any).insert(payload);
+                if (error) {
+                  toast.error(`Flag failed: ${error.message}`);
+                  setMarkDialog((s) => ({ ...s, saving: false }));
+                  return;
+                }
+                toast.success(`Flagged ${r.ticker} ${r.option_symbol}`);
+                setMarkDialog({ open: false, row: null, note: '', direction_view: null, saving: false });
+                qc.invalidateQueries({ queryKey: ['ct_james_flags_all'] });
+              }}
+            >
+              {markDialog.saving ? 'Saving…' : 'Flag it'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
