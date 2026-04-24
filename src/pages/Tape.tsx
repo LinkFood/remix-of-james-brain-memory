@@ -34,6 +34,7 @@ import { TickerSheet } from '@/components/command/TickerSheet';
 import { MacroBanner } from '@/components/command/MacroBanner';
 import { TapeReaderBanner } from '@/components/command/TapeReaderBanner';
 import { OvernightPositioning } from '@/components/command/OvernightPositioning';
+import { FlowPulse } from '@/components/command/FlowPulse';
 import { RegimeChip } from '@/hooks/useTickerIntradayContext';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
@@ -747,6 +748,7 @@ export default function Tape() {
       <div className="max-w-[1800px] mx-auto p-4 space-y-4">
         <TapeReaderBanner />
         <MacroBanner onTickerClick={(t) => setActiveTicker(t)} />
+        <FlowPulse onTickerClick={(t) => setActiveTicker(t)} />
         <OvernightPositioning
           onContractClick={(sym) => setActiveSymbol(sym)}
           onTickerClick={(t) => setActiveTicker(t)}
