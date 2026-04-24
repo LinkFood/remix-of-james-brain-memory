@@ -31,6 +31,7 @@ import {
   formatMoneyness,
 } from '@/hooks/useOvernightPositioning';
 import { useTickerIntradayContext, RegimeChip } from '@/hooks/useTickerIntradayContext';
+import { useSpecialistReads, type SpecialistRead } from '@/hooks/useSpecialistReads';
 
 interface HotContractRow {
   option_symbol: string;
@@ -144,6 +145,27 @@ function directionColor(d: string | null): string {
   if (d === 'bullish') return 'text-emerald-400';
   if (d === 'bearish') return 'text-red-400';
   return 'text-muted-foreground';
+}
+
+function leanChipClass(d: string | null | undefined): string {
+  if (d === 'bullish') return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40';
+  if (d === 'bearish') return 'bg-rose-500/15 text-rose-300 border-rose-500/40';
+  if (d === 'mixed') return 'bg-amber-500/15 text-amber-300 border-amber-500/40';
+  return 'bg-slate-500/15 text-slate-300 border-slate-500/40';
+}
+
+function leanTextColor(d: string | null | undefined): string {
+  if (d === 'bullish') return 'text-emerald-300';
+  if (d === 'bearish') return 'text-rose-300';
+  if (d === 'mixed') return 'text-amber-300';
+  return 'text-slate-300';
+}
+
+function leanBarClass(d: string | null | undefined): string {
+  if (d === 'bullish') return 'bg-emerald-400/70';
+  if (d === 'bearish') return 'bg-rose-400/70';
+  if (d === 'mixed') return 'bg-amber-400/70';
+  return 'bg-slate-400/70';
 }
 
 interface Props {
@@ -340,6 +362,14 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
   const activeFlagCount = flags?.filter((f) => f.status === 'active' || f.status === 'conviction').length ?? 0;
   const latestFlag = flags?.[0] ?? null;
 
+  const {
+    reads: specialistReads,
+    latest: latestRead,
+    isLoading: readsLoading,
+    isError: readsError,
+  } = useSpecialistReads(ticker ?? undefined, 3);
+  const [readsExpanded, setReadsExpanded] = useState(false);
+
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
@@ -437,34 +467,102 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
           </SheetHeader>
 
           <div className="mt-4 space-y-4">
-            {/* Specialist's latest take */}
+            {/* Specialist's running commentary — live per-wakeup read */}
             <Card className="p-3 bg-muted/20 border-primary/20">
               <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
                 <Brain className="w-3.5 h-3.5" />
-                {ticker} specialist — latest take
-              </div>
-              {latestFlag ? (
-                <>
-                  <div className="flex items-baseline gap-2 mb-1">
-                    <Badge variant="outline" className={cn('text-[10px] font-mono px-1.5 py-0', directionColor(latestFlag.direction))}>
-                      {latestFlag.direction}
-                    </Badge>
-                    <span className="font-mono tabular-nums text-sm font-bold">{Math.round(latestFlag.score)}</span>
-                    <span className="text-[10px] text-muted-foreground">
-                      {timeAgo(latestFlag.created_at)}
+                <span>{ticker} specialist — latest take</span>
+                {latestRead && (
+                  <>
+                    <span className="text-muted-foreground/40">·</span>
+                    <span className="normal-case tracking-normal text-[10px] text-muted-foreground/80">
+                      {timeAgo(latestRead.updated_at)}
                     </span>
+                    <span className="text-muted-foreground/40">·</span>
+                    <span className={cn(
+                      'normal-case tracking-normal text-[10px] font-medium',
+                      leanTextColor(latestRead.direction_lean),
+                    )}>
+                      {latestRead.direction_lean} lean
+                    </span>
+                    <span className="text-muted-foreground/40">·</span>
+                    <span className="normal-case tracking-normal text-[10px] text-muted-foreground/80 tabular-nums">
+                      conviction {latestRead.conviction}
+                    </span>
+                  </>
+                )}
+              </div>
+
+              {readsLoading && !latestRead ? (
+                <div className="space-y-1.5">
+                  <div className="h-3 rounded bg-muted/40 animate-pulse w-11/12" />
+                  <div className="h-3 rounded bg-muted/40 animate-pulse w-10/12" />
+                  <div className="h-3 rounded bg-muted/40 animate-pulse w-9/12" />
+                </div>
+              ) : readsError ? (
+                <div className="text-[11px] text-muted-foreground italic">
+                  Specialist read unavailable — retrying.
+                </div>
+              ) : latestRead ? (
+                <>
+                  <div className="flex items-center gap-2 mb-2">
+                    <Badge variant="outline" className={cn('text-[10px] font-mono px-1.5 py-0', leanChipClass(latestRead.direction_lean))}>
+                      {latestRead.direction_lean}
+                    </Badge>
+                    <div className="flex-1 h-1.5 rounded bg-muted/40 overflow-hidden">
+                      <div
+                        className={cn('h-full transition-all', leanBarClass(latestRead.direction_lean))}
+                        style={{ width: `${Math.max(0, Math.min(100, latestRead.conviction))}%` }}
+                      />
+                    </div>
+                    <span className="font-mono tabular-nums text-[11px] text-muted-foreground">
+                      {latestRead.conviction}
+                    </span>
+                    {latestRead.flagged && (
+                      <Badge variant="outline" className="text-[10px] px-1.5 py-0 bg-amber-500/15 text-amber-300 border-amber-500/40">
+                        🚩 flagged
+                      </Badge>
+                    )}
                   </div>
-                  <div className="text-sm leading-snug text-foreground/90 mb-2">{latestFlag.thesis}</div>
-                  {latestFlag.invalidation && (
-                    <div className="text-[11px] text-muted-foreground leading-snug">
-                      <span className="uppercase tracking-wider mr-1">invalidates:</span>
-                      {latestFlag.invalidation}
+
+                  <div className="text-sm leading-snug text-foreground/90">{latestRead.read_text}</div>
+
+                  {specialistReads.length > 1 && (
+                    <div className="mt-2 pt-2 border-t border-border/40">
+                      <button
+                        type="button"
+                        onClick={() => setReadsExpanded((v) => !v)}
+                        className="text-[10px] uppercase tracking-wider text-muted-foreground hover:text-foreground transition-colors"
+                      >
+                        {readsExpanded
+                          ? 'hide earlier reads'
+                          : `show ${specialistReads.length - 1} earlier read${specialistReads.length - 1 === 1 ? '' : 's'}`}
+                      </button>
+                      {readsExpanded && (
+                        <div className="mt-2 space-y-2">
+                          {specialistReads.slice(1).map((r: SpecialistRead) => (
+                            <div key={r.id} className="pl-2 border-l-2 border-border/40">
+                              <div className="flex items-center gap-1.5 mb-0.5 text-[10px] text-muted-foreground">
+                                <span className={cn('font-medium', leanTextColor(r.direction_lean))}>
+                                  {r.direction_lean}
+                                </span>
+                                <span className="text-muted-foreground/40">·</span>
+                                <span className="tabular-nums">conv {r.conviction}</span>
+                                <span className="text-muted-foreground/40">·</span>
+                                <span>{timeAgo(r.updated_at)}</span>
+                                {r.flagged && <span className="text-amber-400">🚩</span>}
+                              </div>
+                              <div className="text-[12px] leading-snug text-foreground/75">{r.read_text}</div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </>
               ) : (
                 <div className="text-xs text-muted-foreground italic">
-                  No flags from {ticker} specialist yet today. Specialist wakes on score ≥70 flow events + scheduled RTH cadence.
+                  Specialist hasn't woken yet today — next wakeup on score ≥70 flow event or scheduled RTH cadence.
                 </div>
               )}
             </Card>
