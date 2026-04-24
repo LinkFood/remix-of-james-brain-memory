@@ -6,8 +6,8 @@
  *   - Red    ⚠️ Nw  when current_wrong_streak >= 2
  *   - Muted (nothing displayed) when both streaks are < 2
  *
- * Click → /scorecard#streaks. Reuses useStreaks — the hook cache means this
- * doesn't double-fetch with StreakPanel on /scorecard.
+ * Click → /patterns#streaks. Reuses useStreaks — the hook cache means this
+ * doesn't double-fetch if a streak panel is mounted elsewhere.
  */
 import { Link } from 'react-router-dom';
 import { Flame, AlertTriangle } from 'lucide-react';
@@ -31,7 +31,7 @@ export function StreakPill() {
       : 'text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 border-amber-500/30';
     return (
       <Link
-        to="/scorecard#streaks"
+        to="/patterns#streaks"
         className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs border transition-colors ${tone}`}
         title={
           tilt_risk
@@ -48,7 +48,7 @@ export function StreakPill() {
   // Right streak — non-alarming green.
   return (
     <Link
-      to="/scorecard#streaks"
+      to="/patterns#streaks"
       className="flex items-center gap-1 px-2 py-1 rounded-md text-xs text-emerald-400 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 transition-colors"
       title={`Current right streak: ${r}`}
     >

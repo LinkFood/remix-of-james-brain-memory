@@ -59,17 +59,14 @@ interface NavGroup {
   items: NavLinkItem[];
 }
 
-// Groups match the four dropdowns specified in the plan. Only routes actually
-// registered in App.tsx are listed here.
+// v2-focused nav. Only routes actually registered in App.tsx are listed.
 const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Trade',
     items: [
-      { path: '/', label: 'Station' },
+      { path: '/', label: 'Flags' },
       { path: '/pulse', label: 'Pulse' },
-      { path: '/flags', label: 'Flags' },
       { path: '/specialists', label: 'Specialists' },
-      { path: '/session', label: 'Timeline' },
     ],
   },
   {
@@ -77,13 +74,6 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { path: '/edge', label: 'Edge' },
       { path: '/patterns', label: 'Patterns' },
-      { path: '/scorecard', label: 'Scorecard' },
-      { path: '/workspace', label: 'Workspace' },
-      { path: '/principles', label: 'Principles' },
-      { path: '/prompts', label: 'Prompt A/B' },
-      { path: '/replay', label: 'Replay' },
-      { path: '/analogs', label: 'Analogs' },
-      { path: '/rules', label: 'Custom Rules' },
     ],
   },
   {
@@ -93,7 +83,6 @@ const NAV_GROUPS: NavGroup[] = [
       { path: '/cost', label: 'Cost' },
       { path: '/crons', label: 'Crons' },
       { path: '/agents', label: 'Agents' },
-      { path: '/activity-live', label: 'Activity Live' },
     ],
   },
   {
@@ -101,12 +90,12 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { path: '/dashboard', label: 'Dashboard' },
       { path: '/jac', label: 'JAC' },
-      { path: '/calendar', label: 'Calendar' },
       { path: '/brain', label: 'Brain' },
-      { path: '/activity', label: 'Activity' },
       { path: '/reports', label: 'Reports' },
+      { path: '/calendar', label: 'Calendar' },
       { path: '/search', label: 'Search' },
       { path: '/code', label: 'Code' },
+      { path: '/settings', label: 'Settings' },
       { path: '/ct-settings', label: 'CT Config' },
     ],
   },
@@ -392,7 +381,7 @@ export function TopNav({ userId }: TopNavProps) {
         <PreflightChip />
 
         {/* Streak / tilt indicator — silent when N < 2, green N r when
-            2+ right, amber/red N w when 2+ wrong. Click → /scorecard#streaks. */}
+            2+ right, amber/red N w when 2+ wrong. Click → /patterns#streaks. */}
         <StreakPill />
 
         {/* Claude's book — sparkline of today's closed-trade P&L */}

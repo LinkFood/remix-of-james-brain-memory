@@ -26,7 +26,6 @@ import {
   Bell,
   Zap,
   OctagonX,
-  Repeat,
   ClipboardCheck,
   TrendingUp,
   Radio,
@@ -53,22 +52,17 @@ interface RouteEntry {
 
 const ROUTES: RouteEntry[] = [
   // Trade
-  { path: '/',             label: 'Station',        group: 'Trade' },
-  { path: '/flags',        label: 'Flags',          group: 'Trade' },
-  { path: '/session',      label: 'Timeline',       group: 'Trade' },
+  { path: '/',             label: 'Flags',          group: 'Trade' },
+  { path: '/pulse',        label: 'Pulse',          group: 'Trade' },
+  { path: '/specialists',  label: 'Specialists',    group: 'Trade' },
   // Review
-  { path: '/scorecard',    label: 'Scorecard',      group: 'Review' },
+  { path: '/edge',         label: 'Edge',           group: 'Review' },
   { path: '/patterns',     label: 'Patterns',       group: 'Review' },
-  { path: '/specialists',  label: 'Specialists',    group: 'Review' },
-  { path: '/principles',   label: 'Principles',     group: 'Review' },
-  { path: '/prompts',      label: 'Prompt A/B',     group: 'Review' },
-  { path: '/replay',       label: 'Replay',         group: 'Review' },
-  { path: '/rules',        label: 'Custom Rules',   group: 'Review' },
   // System
   { path: '/health',       label: 'Health',         group: 'System' },
+  { path: '/cost',         label: 'Cost',           group: 'System' },
   { path: '/crons',        label: 'Crons',          group: 'System' },
   { path: '/agents',       label: 'Agents',         group: 'System' },
-  { path: '/activity-live',label: 'Activity Live',  group: 'System' },
   // More
   { path: '/dashboard',    label: 'Dashboard',      group: 'More' },
   { path: '/jac',          label: 'JAC',            group: 'More' },
@@ -315,16 +309,16 @@ export function CommandPalette() {
       });
     }
 
-    // Tickers
+    // Tickers — open deep-dive Sheet (same as alert rows)
     for (const t of watchlist) {
       out.push({
         kind: 'ticker',
         id: `ticker:${t}`,
         label: t,
-        hint: 'ticker terminal',
+        hint: 'deep-dive',
         section: 'Tickers',
         icon: LineChart,
-        execute: () => goRoute(`/ticker/${encodeURIComponent(t)}`),
+        execute: () => openAlertDeep(t),
       });
     }
 
@@ -414,13 +408,6 @@ export function CommandPalette() {
           const r = await triggerCoTrader('eod_recap');
           if (r.ok) toast.success('EOD recap fired'); else toast.error(`recap failed: ${r.error}`);
         },
-      },
-      {
-        id: 'action:replay-today',
-        label: 'Replay today',
-        hint: '→ /replay',
-        icon: Repeat,
-        execute: () => { goRoute('/replay'); },
       },
       {
         id: 'action:view-health',

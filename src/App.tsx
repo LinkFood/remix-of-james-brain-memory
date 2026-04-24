@@ -28,24 +28,12 @@ import Agents from "./pages/Agents";
 import CronJobs from "./pages/CronJobs";
 import Reports from "./pages/Reports";
 import Landing from "./pages/Landing";
-import CommandStation from "./pages/CommandStation";
-import Scorecard from "./pages/Scorecard";
-import PromptAbTest from "./pages/PromptAbTest";
-import Replay from "./pages/Replay";
-import Workspace from "./pages/Workspace";
-import Principles from "./pages/Principles";
 import Health from "./pages/Health";
 import Edge from "./pages/Edge";
 import Pulse from "./pages/Pulse";
 import Flags from "./pages/Flags";
 import Specialists from "./pages/Specialists";
 import CostDashboard from "./pages/CostDashboard";
-import SessionTimeline from "./pages/SessionTimeline";
-import ActivityLive from "./pages/ActivityLive";
-import TickerTerminal from "./pages/TickerTerminal";
-import TickerChart from "./pages/TickerChart";
-import CustomRules from "./pages/CustomRules";
-import Analogs from "./pages/Analogs";
 import Patterns from "./pages/Patterns";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { CommandPalette } from "./components/CommandPalette";
@@ -76,24 +64,14 @@ const TrackedRoutes = () => {
       <Route path="/terms" element={<RouteBoundary route="/terms"><Terms /></RouteBoundary>} />
       <Route path="/privacy" element={<RouteBoundary route="/privacy"><Privacy /></RouteBoundary>} />
 
-      {/* Primary authenticated route — co-trader with docked ChatPanel in sidebar slot */}
-      <Route path="/" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/"><CommandStation /></RouteBoundary></AuthLayout>} />
-      <Route path="/scorecard" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/scorecard"><Scorecard /></RouteBoundary></AuthLayout>} />
-      <Route path="/workspace" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/workspace"><Workspace /></RouteBoundary></AuthLayout>} />
-      <Route path="/principles" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/principles"><Principles /></RouteBoundary></AuthLayout>} />
-      <Route path="/prompts" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/prompts"><PromptAbTest /></RouteBoundary></AuthLayout>} />
+      {/* Primary authenticated route — Flags is home for Co-Trader v2 */}
+      <Route path="/" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/"><Flags /></RouteBoundary></AuthLayout>} />
       <Route path="/health" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/health"><Health /></RouteBoundary></AuthLayout>} />
       <Route path="/edge" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/edge"><Edge /></RouteBoundary></AuthLayout>} />
       <Route path="/pulse" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/pulse"><Pulse /></RouteBoundary></AuthLayout>} />
       <Route path="/flags" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/flags"><Flags /></RouteBoundary></AuthLayout>} />
       <Route path="/specialists" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/specialists"><Specialists /></RouteBoundary></AuthLayout>} />
       <Route path="/cost" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/cost"><CostDashboard /></RouteBoundary></AuthLayout>} />
-      <Route path="/session" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/session"><SessionTimeline /></RouteBoundary></AuthLayout>} />
-      <Route path="/activity-live" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/activity-live"><ActivityLive /></RouteBoundary></AuthLayout>} />
-      <Route path="/ticker/:symbol" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/ticker/:symbol"><TickerTerminal /></RouteBoundary></AuthLayout>} />
-      <Route path="/chart/:symbol/:date" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/chart/:symbol/:date"><TickerChart /></RouteBoundary></AuthLayout>} />
-      <Route path="/rules" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/rules"><CustomRules /></RouteBoundary></AuthLayout>} />
-      <Route path="/analogs" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/analogs"><Analogs /></RouteBoundary></AuthLayout>} />
       <Route path="/patterns" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/patterns"><Patterns /></RouteBoundary></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
@@ -109,7 +87,6 @@ const TrackedRoutes = () => {
       <Route path="/brain" element={<AuthLayout><RouteBoundary route="/brain"><BrainInspector /></RouteBoundary></AuthLayout>} />
       <Route path="/crons" element={<AuthLayout><RouteBoundary route="/crons"><CronJobs /></RouteBoundary></AuthLayout>} />
       <Route path="/reports" element={<AuthLayout><RouteBoundary route="/reports"><Reports /></RouteBoundary></AuthLayout>} />
-      <Route path="/replay" element={<AuthLayout><RouteBoundary route="/replay"><Replay /></RouteBoundary></AuthLayout>} />
 
       <Route path="*" element={<RouteBoundary route="*"><NotFound /></RouteBoundary>} />
     </Routes>
