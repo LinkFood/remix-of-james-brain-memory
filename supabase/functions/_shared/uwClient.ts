@@ -241,7 +241,10 @@ async function uwGet<T = unknown>(
 // Flow & Market-wide
 // ============================================================================
 
-/** Unusual options flow alerts (market-wide, filter by ticker via param) */
+/** Unusual options flow alerts (market-wide, filter by ticker via param).
+ *  REST supports `older_than` cursor pagination (ISO timestamp) — the MCP
+ *  equivalent does not. `newer_than` is silently clamped to UW's ~24-day
+ *  rolling retention; enforce the real lower bound client-side. */
 export function getFlowAlerts(params: {
   ticker_symbol?: string;
   limit?: number;
@@ -250,6 +253,8 @@ export function getFlowAlerts(params: {
   is_otm?: boolean;
   min_premium?: number;
   size_greater_oi?: boolean;
+  older_than?: string;
+  newer_than?: string;
 } = {}): Promise<unknown> {
   return uwGet('/api/option-trades/flow-alerts', params);
 }
