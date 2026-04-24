@@ -655,6 +655,7 @@ export default function Tape() {
         <MacroBanner onTickerClick={(t) => setActiveTicker(t)} />
         <OvernightPositioning
           onContractClick={(sym) => setActiveSymbol(sym)}
+          onTickerClick={(t) => setActiveTicker(t)}
         />
         <header className="flex items-center justify-between">
           <div>
