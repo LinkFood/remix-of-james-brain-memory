@@ -256,13 +256,20 @@ async function pullTopOIContracts(ticker: string): Promise<{
 }
 
 /**
- * Pull per-contract OI for every option_symbol in ct_scored_flow (last 24h)
- * for this ticker that ISN'T already in the top-40 batch. Prevents the blank
- * OI Δ1D column on /tape for flow contracts that are outside the top-40.
+ * Pull per-contract OI for the TOP-20-BY-PREMIUM option_symbols in
+ * ct_scored_flow (last 24h) for this ticker that aren't already in the
+ * top-40 batch. Prevents the blank OI Δ1D column on /tape for the flow
+ * contracts that actually matter for positioning signal.
  *
- * Uses get_historic_chains (one MCP call per contract, returns up to 10 daily
- * rows — we take today's row). Budget: ~30-50 extra calls per ticker per slot.
+ * Capped at 20 per ticker per slot → ~20 × 10 tickers × 3 slots = ~600
+ * calls/day instead of the uncapped ~1500/day that burned ~10% of UW
+ * budget in 2 hours on 2026-04-24 morning. Long-tail contracts get
+ * filtered out — they contribute no analytical value.
+ *
+ * Uses get_historic_chains (one MCP call per contract, newest-first).
  */
+const FLOW_CONTRACT_CAP_PER_TICKER = 20;
+
 async function pullFlowContractOIs(
   supabase: SupabaseClient,
   ticker: string,
@@ -275,19 +282,29 @@ async function pullFlowContractOIs(
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase
     .from('ct_scored_flow')
-    .select('option_symbol')
+    .select('option_symbol, premium')
     .eq('ticker', ticker)
     .gte('event_ts', since)
     .not('option_symbol', 'is', null)
-    .limit(2000);
+    .order('premium', { ascending: false, nullsFirst: false })
+    .limit(400);
 
   if (error) {
     errors.push(`flow_query: ${error.message.slice(0, 120)}`);
     return { rows, errors, mcpCalls };
   }
 
-  const flowSymbols = Array.from(new Set((data ?? []).map(r => r.option_symbol as string)))
-    .filter(s => s && !existingSymbols.has(s));
+  // Dedupe by option_symbol (keep first = highest-premium occurrence),
+  // drop anything already in top-40 batch, cap at CAP_PER_TICKER.
+  const seen = new Set<string>();
+  const flowSymbols: string[] = [];
+  for (const r of (data ?? [])) {
+    const sym = r.option_symbol as string;
+    if (!sym || seen.has(sym) || existingSymbols.has(sym)) continue;
+    seen.add(sym);
+    flowSymbols.push(sym);
+    if (flowSymbols.length >= FLOW_CONTRACT_CAP_PER_TICKER) break;
+  }
 
   for (const sym of flowSymbols) {
     try {
