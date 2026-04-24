@@ -42,6 +42,48 @@ type Direction = 'bullish' | 'bearish' | 'neutral';
 type Classification = 'opening_buy' | 'opening_sell' | 'closing' | 'hedge' | 'ambiguous';
 type DteBand = 'any' | '0-7' | '7-30' | '30-90' | '90+';
 type SortKey = 'event_ts' | 'score' | 'premium' | 'vol_oi';
+type DayFilter = 'today' | 'yesterday' | 'last3d' | 'all';
+
+/**
+ * RTH open cutoff for a given UTC calendar date, pinned at 13:30 UTC (09:30 ET during EDT).
+ * Simple approach per spec: take the date string and build an ISO Z timestamp.
+ * Caveat: during EST (Nov-Mar) this is actually 08:30 ET — off by an hour.
+ * For day-filter cutoffs that's fine: pre-open prints still fall on the prior day,
+ * and during market hours the filter is robust. If we ever need exact 09:30 ET
+ * year-round, swap to a tz-aware library — not worth a new dep for this.
+ */
+function rthOpenCutoffUtc(daysAgo = 0): Date {
+  const now = new Date();
+  const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysAgo));
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return new Date(`${yyyy}-${mm}-${dd}T13:30:00Z`);
+}
+
+/** ET calendar date string (YYYY-MM-DD) for a given ISO timestamp. Used for separator grouping. */
+function etDateKey(iso: string): string {
+  try {
+    // en-CA yields YYYY-MM-DD which sorts and compares cleanly.
+    return new Date(iso).toLocaleDateString('en-CA', { timeZone: 'America/New_York' });
+  } catch {
+    return iso.slice(0, 10);
+  }
+}
+
+/** Friendly label for a separator row. "Today · Apr 24", "Yesterday · Apr 23", "Fri · Apr 22". */
+function formatSeparatorLabel(etDate: string): string {
+  const todayEt = etDateKey(new Date().toISOString());
+  const yesterdayEt = etDateKey(new Date(Date.now() - 86_400_000).toISOString());
+  // Parse YYYY-MM-DD as a local date for month/day formatting (timezone-agnostic for the label).
+  const [y, m, d] = etDate.split('-').map(Number);
+  const dateObj = new Date(y, m - 1, d);
+  const monthDay = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  if (etDate === todayEt) return `Today · ${monthDay}`;
+  if (etDate === yesterdayEt) return `Yesterday · ${monthDay}`;
+  const weekday = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+  return `${weekday} · ${monthDay}`;
+}
 
 interface ScoredRow {
   id: number;
@@ -337,6 +379,20 @@ export default function Tape() {
     mineOnly: false,
     liveMode: false,
   });
+  const [dayFilter, setDayFilter] = useState<DayFilter>('today');
+
+  // Compute the event_ts cutoff (lower bound) and optional upper bound for the active day filter.
+  // Null cutoff = no filter ('all'). Upper bound only used for 'yesterday'.
+  const dayBounds = useMemo<{ from: string | null; to: string | null }>(() => {
+    if (dayFilter === 'all') return { from: null, to: null };
+    if (dayFilter === 'today') return { from: rthOpenCutoffUtc(0).toISOString(), to: null };
+    if (dayFilter === 'yesterday') return {
+      from: rthOpenCutoffUtc(1).toISOString(),
+      to: rthOpenCutoffUtc(0).toISOString(),
+    };
+    // last3d — 3 calendar days back from today's RTH open.
+    return { from: rthOpenCutoffUtc(3).toISOString(), to: null };
+  }, [dayFilter]);
   const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
   const [activeTicker, setActiveTicker] = useState<string | null>(null);
   const [markDialog, setMarkDialog] = useState<MarkDialogState>({
@@ -352,6 +408,7 @@ export default function Tape() {
       tickers: Array.from(filters.tickers).sort(),
       minScore: filters.minScore,
       direction: filters.direction,
+      dayFilter,
     }],
     refetchInterval: tapeInterval,
     queryFn: async () => {
@@ -364,6 +421,8 @@ export default function Tape() {
       if (filters.tickers.size > 0) q = q.in('ticker', Array.from(filters.tickers));
       if (filters.direction !== 'all') q = q.eq('direction', filters.direction);
       if (filters.minScore > 0) q = q.gte('score', filters.minScore);
+      if (dayBounds.from) q = q.gte('event_ts', dayBounds.from);
+      if (dayBounds.to) q = q.lt('event_ts', dayBounds.to);
       const { data, error } = await q;
       if (error) throw error;
       return (data ?? []) as unknown as ScoredRow[];
@@ -374,6 +433,7 @@ export default function Tape() {
   const { data: unscored } = useQuery<AlertRow[]>({
     queryKey: ['ct_tape_unscored', {
       tickers: Array.from(filters.tickers).sort(),
+      dayFilter,
     }],
     refetchInterval: tapeInterval,
     enabled: filters.showUnscored,
@@ -385,6 +445,9 @@ export default function Tape() {
         .order('executed_at', { ascending: false })
         .limit(1500);
       if (filters.tickers.size > 0) q = q.in('ticker', Array.from(filters.tickers));
+      // Alerts use executed_at as the event_ts equivalent.
+      if (dayBounds.from) q = q.gte('executed_at', dayBounds.from);
+      if (dayBounds.to) q = q.lt('executed_at', dayBounds.to);
       const { data, error } = await q;
       if (error) throw error;
       return (data ?? []) as unknown as AlertRow[];
@@ -640,6 +703,37 @@ export default function Tape() {
 
   const totalBeforeFilter = (scored?.length ?? 0) + (filters.showUnscored ? (unscored?.length ?? 0) : 0);
 
+  // Interleave day-separator markers into the sorted rows. Walks in render order
+  // (which is newest → oldest when sortBy = event_ts) and drops a separator
+  // whenever the ET calendar date changes. Always emits a leading separator
+  // for the first row so the user sees which day they're starting on.
+  type TapeItem =
+    | { type: 'sep'; key: string; label: string }
+    | { type: 'row'; row: TapeRow };
+  const items = useMemo<TapeItem[]>(() => {
+    const out: TapeItem[] = [];
+    let lastDate: string | null = null;
+    for (const r of rows) {
+      const d = etDateKey(r.event_ts);
+      if (d !== lastDate) {
+        out.push({ type: 'sep', key: `sep-${d}`, label: formatSeparatorLabel(d) });
+        lastDate = d;
+      }
+      out.push({ type: 'row', row: r });
+    }
+    return out;
+  }, [rows]);
+
+  // Header count line — honest about what the filter is showing.
+  const headerCountText = useMemo(() => {
+    const n = rows.length;
+    const m = totalBeforeFilter;
+    if (dayFilter === 'today') return { n, m, suffix: 'today', showM: true };
+    if (dayFilter === 'yesterday') return { n, m, suffix: 'yesterday', showM: false };
+    if (dayFilter === 'last3d') return { n, m, suffix: 'last 3 trading days', showM: false };
+    return { n, m, suffix: 'all time (capped)', showM: true };
+  }, [rows.length, totalBeforeFilter, dayFilter]);
+
   const toggleTicker = (t: string) => {
     setFilters((prev) => {
       const next = new Set(prev.tickers);
@@ -669,8 +763,13 @@ export default function Tape() {
           </div>
           <div className="flex items-center gap-3">
             <div className="text-[11px] text-muted-foreground tabular-nums">
-              Showing <span className="text-foreground font-semibold">{rows.length}</span> of{' '}
-              <span className="text-foreground font-semibold">{totalBeforeFilter}</span> today
+              Showing <span className="text-foreground font-semibold">{headerCountText.n}</span>
+              {headerCountText.showM && (
+                <>
+                  {' '}of <span className="text-foreground font-semibold">{headerCountText.m}</span>
+                </>
+              )}
+              {' '}· {headerCountText.suffix}
             </div>
             <Button
               size="sm"
@@ -691,6 +790,32 @@ export default function Tape() {
 
         {/* Sticky filter strip */}
         <Card className="p-3 space-y-3 sticky top-0 z-30 bg-card/95 backdrop-blur">
+          {/* Day-filter chips */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-muted-foreground mr-1">Day:</span>
+            {(
+              [
+                ['today', 'Today'],
+                ['yesterday', 'Yesterday'],
+                ['last3d', 'Last 3d'],
+                ['all', 'All'],
+              ] as const
+            ).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setDayFilter(k)}
+                className={cn(
+                  'text-[11px] font-mono px-2 py-1 rounded border transition-colors',
+                  dayFilter === k
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-muted bg-muted/20 text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {/* Ticker chips */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-muted-foreground mr-1">Ticker:</span>
@@ -970,7 +1095,28 @@ export default function Tape() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  rows.map((r) => (
+                  items.map((it) => {
+                    if (it.type === 'sep') {
+                      return (
+                        <TableRow
+                          key={it.key}
+                          className="hover:bg-transparent border-b border-border/50"
+                        >
+                          <TableCell
+                            colSpan={17}
+                            className="py-1.5 px-2 bg-muted/40 text-[10px] uppercase tracking-widest text-muted-foreground"
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className="flex-1 h-px bg-border/60" />
+                              <span className="font-mono">{it.label}</span>
+                              <div className="flex-1 h-px bg-border/60" />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    }
+                    const r = it.row;
+                    return (
                     <TableRow
                       key={r.key}
                       onClick={() => setActiveSymbol(r.option_symbol)}
@@ -1141,7 +1287,8 @@ export default function Tape() {
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))
+                    );
+                  })
                 )}
               </TableBody>
             </Table>
