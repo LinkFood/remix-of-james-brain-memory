@@ -126,6 +126,7 @@ interface Filters {
   sweepOnly: boolean;
   minScore: number;
   direction: 'all' | Direction;
+  side: 'all' | 'call' | 'put';
   sortBy: SortKey;
   showUnscored: boolean;
   mineOnly: boolean;
@@ -272,6 +273,7 @@ export default function Tape() {
     sweepOnly: false,
     minScore: 0,
     direction: 'all',
+    side: 'all',
     sortBy: 'event_ts',
     showUnscored: false,
     mineOnly: false,
@@ -505,6 +507,7 @@ export default function Tape() {
       if (!inDteBand(r.dte, filters.dteBand)) return false;
       if (filters.sweepOnly && !r.is_sweep) return false;
       if (filters.mineOnly && !flaggedSymbols.has(r.option_symbol)) return false;
+      if (filters.side !== 'all' && r.side !== filters.side) return false;
       return true;
     });
 
@@ -658,7 +661,30 @@ export default function Tape() {
               ))}
             </div>
 
-            {/* Direction */}
+            {/* Side (call/put) — separate from directional sentiment */}
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-muted-foreground mr-1">Side:</span>
+              {(['all', 'call', 'put'] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setFilters((p) => ({ ...p, side: s }))}
+                  className={cn(
+                    'text-[10px] font-mono px-2 py-0.5 rounded uppercase transition-colors',
+                    filters.side === s
+                      ? s === 'call'
+                        ? 'bg-emerald-500/15 text-emerald-300'
+                        : s === 'put'
+                          ? 'bg-red-500/15 text-red-300'
+                          : 'bg-primary/10 text-primary'
+                      : 'bg-muted/20 text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+
+            {/* Direction — sentiment, not side */}
             <div className="flex items-center gap-1">
               <span className="text-xs text-muted-foreground mr-1">Dir:</span>
               {(['all', 'bullish', 'bearish', 'neutral'] as const).map((d) => (
