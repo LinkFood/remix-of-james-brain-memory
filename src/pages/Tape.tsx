@@ -351,7 +351,7 @@ export default function Tape() {
         .from('ct_scored_flow' as never)
         .select('id,source_table,source_id,ticker,option_symbol,event_ts,classification,direction,score,strike,expiry,dte,delta_est,premium,volume,open_interest,ask_side_perc')
         .order('event_ts', { ascending: false })
-        .limit(500);
+        .limit(1500);
       if (filters.tickers.size > 0) q = q.in('ticker', Array.from(filters.tickers));
       if (filters.direction !== 'all') q = q.eq('direction', filters.direction);
       if (filters.minScore > 0) q = q.gte('score', filters.minScore);
@@ -374,7 +374,7 @@ export default function Tape() {
         .from('ct_flow_alerts' as never)
         .select('id,alert_id,ticker,option_symbol,strike,expiry,side,is_ask,is_bid,is_otm,size,volume,open_interest,size_gt_oi,premium,price,underlying_price,executed_at,alert_type,raw')
         .order('executed_at', { ascending: false })
-        .limit(500);
+        .limit(1500);
       if (filters.tickers.size > 0) q = q.in('ticker', Array.from(filters.tickers));
       const { data, error } = await q;
       if (error) throw error;
@@ -391,7 +391,7 @@ export default function Tape() {
       const { data, error } = await (supabase.from('ct_james_flags' as never) as any)
         .select('id,option_symbol,ticker,source_flow_id,source_alert_id,direction_view,note,created_at')
         .order('created_at', { ascending: false })
-        .limit(500);
+        .limit(1500);
       if (error) return [];
       return (data ?? []) as JamesFlagRow[];
     },
