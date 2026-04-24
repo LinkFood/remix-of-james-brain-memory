@@ -21,6 +21,7 @@ import { cn } from '@/lib/utils';
 import {
   Activity, RefreshCw, ArrowUp, ArrowDown, Minus, Send, ChevronDown, ChevronUp,
 } from 'lucide-react';
+import { FlagDetailSheet } from '@/components/command/FlagDetailSheet';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -45,6 +46,8 @@ interface Flag {
   direction: Direction;
   score: number;
   score_breakdown: unknown;
+  penalty_breakdown: Record<string, number> | null;
+  source_flow_ids: number[] | null;
   tags: string[];
   thesis: string;
   invalidation: string;
@@ -113,13 +116,16 @@ function outcomeColor(outcome: string): string {
   return 'bg-slate-500/15 text-slate-300 border-slate-500/40';
 }
 
-function FlagTile({ flag }: { flag: Flag }) {
+function FlagTile({ flag, onOpen }: { flag: Flag; onOpen: (flag: Flag) => void }) {
   const [expanded, setExpanded] = useState(false);
   const grade = flag.ct_flag_grades?.[0] ?? null;
   const isGraded = flag.status === 'graded' || flag.status === 'invalidated';
 
   return (
-    <Card className="p-3 flex flex-col gap-2 hover:shadow-md transition-shadow">
+    <Card
+      onClick={() => onOpen(flag)}
+      className="p-3 flex flex-col gap-2 hover:shadow-md transition-shadow cursor-pointer"
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <Badge
@@ -198,9 +204,10 @@ function FlagTile({ flag }: { flag: Flag }) {
         </div>
       )}
 
-      {/* Thesis — 2 lines truncated, expand on click */}
+      {/* Thesis — 2 lines truncated, expand on click. stopPropagation so the
+          tile-level click (which opens the detail sheet) doesn't fire here. */}
       <button
-        onClick={() => setExpanded((x) => !x)}
+        onClick={(e) => { e.stopPropagation(); setExpanded((x) => !x); }}
         className="text-left text-[12px] leading-snug text-foreground/90 hover:text-foreground transition-colors"
       >
         <span className={cn(!expanded && 'line-clamp-2')}>{flag.thesis}</span>
@@ -249,6 +256,7 @@ export default function Flags() {
     minScore: 70,
     onlySlacked: false,
   });
+  const [selectedFlag, setSelectedFlag] = useState<Flag | null>(null);
 
   const { data: flags, isLoading } = useQuery<Flag[]>({
     queryKey: ['ct_flags_live', {
@@ -457,7 +465,7 @@ export default function Flags() {
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {flags.map((f) => (
-              <FlagTile key={f.id} flag={f} />
+              <FlagTile key={f.id} flag={f} onOpen={setSelectedFlag} />
             ))}
           </div>
         )}
@@ -475,6 +483,13 @@ export default function Flags() {
           </div>
         </div>
       </div>
+
+      {/* Flag drill-down sheet */}
+      <FlagDetailSheet
+        flag={selectedFlag}
+        open={selectedFlag !== null}
+        onOpenChange={(o) => { if (!o) setSelectedFlag(null); }}
+      />
     </div>
   );
 }
