@@ -229,6 +229,75 @@ async function loadRecentOiBuilds(supabase: SupabaseClient, ticker: string) {
 }
 
 /**
+ * Load aggregate directional imbalance for this ticker via the ct_flow_pulse
+ * RPC. 6h window (RTH session) with 30d baseline deviation — shows the
+ * specialist the REGIME, not just individual prints. Unusual skew (2x or
+ * 0.5x baseline) is one of the strongest floor-level signals.
+ */
+async function loadFlowPulse(supabase: SupabaseClient, ticker: string) {
+  const { data, error } = await supabase.rpc('ct_flow_pulse', {
+    p_window_min: 360,
+    p_ticker: ticker,
+  });
+  if (error) {
+    console.warn(`[specialistRunner] ${ticker} flow pulse load failed:`, error.message);
+    return null;
+  }
+  const row = Array.isArray(data) ? data[0] : data;
+  return (row ?? null) as Record<string, unknown> | null;
+}
+
+function formatFlowPulseBlock(ticker: string, row: Record<string, unknown> | null): string {
+  if (!row) {
+    return `[FLOW PULSE — no directional flow detected in 6h window]`;
+  }
+  const calls = Number(row.calls_count ?? 0);
+  const puts = Number(row.puts_count ?? 0);
+  if (calls === 0 && puts === 0) {
+    return `[FLOW PULSE — no directional flow detected in 6h window]`;
+  }
+  const callsOtm = Number(row.calls_otm_count ?? 0);
+  const callsItm = Number(row.calls_itm_count ?? 0);
+  const putsOtm = Number(row.puts_otm_count ?? 0);
+  const putsItm = Number(row.puts_itm_count ?? 0);
+  const callsPrem = Number(row.calls_premium ?? 0);
+  const putsPrem = Number(row.puts_premium ?? 0);
+  const ratio = Number(row.call_put_ratio ?? 0);
+  const baseline = row.cp_ratio_baseline_30d === null || row.cp_ratio_baseline_30d === undefined
+    ? null
+    : Number(row.cp_ratio_baseline_30d);
+  const deviation = row.cp_ratio_deviation === null || row.cp_ratio_deviation === undefined
+    ? null
+    : Number(row.cp_ratio_deviation);
+  const premNet = Number(row.premium_net ?? 0);
+  const isUnusual = row.is_unusual === true;
+
+  const callsPremM = (callsPrem / 1e6).toFixed(1);
+  const putsPremM = (putsPrem / 1e6).toFixed(1);
+  const premNetM = (premNet / 1e6);
+  const premNetStr = `${premNetM >= 0 ? '+' : ''}${premNetM.toFixed(1)}M`;
+  const leanStr = premNetM >= 0 ? 'bullish' : 'bearish';
+  const baselineStr = baseline !== null && Number.isFinite(baseline)
+    ? `30d baseline ${baseline.toFixed(2)}x`
+    : `30d baseline n/a`;
+  const deviationStr = deviation !== null && Number.isFinite(deviation)
+    ? `${deviation.toFixed(1)}x today`
+    : `deviation n/a`;
+  const unusualStr = isUnusual
+    ? '⚠ UNUSUAL direction skew vs 30d baseline'
+    : 'within normal range';
+
+  return [
+    `[FLOW PULSE — current ${ticker} directional imbalance, 6h window]`,
+    `  Calls: ${calls} prints ($${callsPremM}M) — ${callsOtm} OTM / ${callsItm} ITM`,
+    `  Puts:  ${puts} prints ($${putsPremM}M) — ${putsOtm} OTM / ${putsItm} ITM`,
+    `  Call:Put ratio = ${ratio.toFixed(2)}x  (${baselineStr} — ${deviationStr})`,
+    `  Net premium bias = ${premNetStr} (${leanStr} lean)`,
+    `  ${unusualStr}`,
+  ].join('\n');
+}
+
+/**
  * Load the top overnight OI shifts for this ticker via the ct_top_oi_shifts
  * RPC. Returns the biggest |oi_delta_1d| contracts between yesterday's
  * close and this morning's open, with dollars-at-risk and distance-from-spot.
@@ -487,7 +556,7 @@ export async function runSpecialistWakeup(
   }
 
   // 8-12. Context for Claude.
-  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight] = await Promise.all([
+  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse] = await Promise.all([
     loadTickerSnapshot(supabase, ticker),
     loadNextEarnings(supabase, ticker),
     loadRecentOiBuilds(supabase, ticker),
@@ -495,9 +564,11 @@ export async function runSpecialistWakeup(
     loadHitRateByTag(supabase, ticker),
     loadRecentNews(supabase, ticker),
     loadOvernightPositioning(supabase, ticker),
+    loadFlowPulse(supabase, ticker),
   ]);
 
   const overnightBlock = formatOvernightPositioningBlock(ticker, overnight);
+  const flowPulseBlock = formatFlowPulseBlock(ticker, flowPulse);
 
   const tickerContext = {
     ticker,
@@ -519,6 +590,8 @@ ${JSON.stringify(tickerContext, null, 2)}
 ${JSON.stringify(news, null, 2)}
 
 ${overnightBlock}
+
+${flowPulseBlock}
 
 [CANDIDATE FLOW EVENTS — last ${CANDIDATE_WINDOW_MIN}min, score >= ${wakeupThreshold}]
 ${JSON.stringify(events, null, 2)}
