@@ -70,10 +70,11 @@ async function nearestClose(
   supabase: SupabaseClient,
   ticker: string,
   ts: string,
+  slopMs: number = 30 * 60 * 1000,
 ): Promise<number | null> {
   const target = new Date(ts);
-  const lo = new Date(target.getTime() - 30 * 60 * 1000).toISOString();
-  const hi = new Date(target.getTime() + 30 * 60 * 1000).toISOString();
+  const lo = new Date(target.getTime() - slopMs).toISOString();
+  const hi = new Date(target.getTime() + slopMs).toISOString();
 
   // Try 1m first (preferred resolution), then 5m, then 15m, then 1h as fallback.
   const timeframes = ['1m', '5m', '15m', '1h'] as const;

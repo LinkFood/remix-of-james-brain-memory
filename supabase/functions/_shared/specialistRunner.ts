@@ -61,6 +61,7 @@ interface FlagDecision {
   tags: string[];
   thesis: string;
   invalidation: string;
+  invalidation_price?: number | null;
   horizon_hours: number;
   target_price?: number | null;
   score?: number | null;
@@ -164,12 +165,18 @@ function parseClaudeVerdict(raw: string): ClaudeVerdict | { error: string } {
     const tagsRaw = Array.isArray(r.tags) ? r.tags : [];
     const tags = tagsRaw.map(t => String(t)).slice(0, 12);
 
+    const invalidationPriceRaw = Number(r.invalidation_price);
+    const invalidationPrice = Number.isFinite(invalidationPriceRaw) && invalidationPriceRaw > 0
+      ? invalidationPriceRaw
+      : null;
+
     flags.push({
       option_symbol: typeof r.option_symbol === 'string' ? r.option_symbol : null,
       direction: direction as 'bullish' | 'bearish' | 'neutral',
       tags,
       thesis: thesis.slice(0, 2000),
       invalidation: invalidation.slice(0, 1000),
+      invalidation_price: invalidationPrice,
       horizon_hours: Math.min(720, Math.max(1, Math.round(horizonHours))),
       target_price: Number.isFinite(Number(r.target_price)) ? Number(r.target_price) : null,
       score: Number.isFinite(Number(r.score)) ? Number(r.score) : null,
@@ -1001,6 +1008,7 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
       tags: decision.tags,
       thesis: decision.thesis,
       invalidation: decision.invalidation,
+      invalidation_price: decision.invalidation_price ?? null,
       horizon_hours: decision.horizon_hours,
       entry_price: entryPrice,
       target_price: decision.target_price,
