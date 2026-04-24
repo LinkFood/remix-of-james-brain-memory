@@ -92,6 +92,96 @@ export function formatStackPremium(n: number): string {
   return `${sign}$${Math.round(abs)}`;
 }
 
+/**
+ * interpretStack — translate raw (buy/sell/ask_pct/side) counts into a
+ * directional read at a glance. Raw data can mislead: QQQ $609P with 0 buys,
+ * 29 sells, 13% ask looks like "bearish puts" but is actually BULLISH put
+ * writing (someone collecting premium betting QQQ stays above 609). This
+ * function does the mental math so the UI can color the row by what the
+ * flow MEANS, not what contract type it is.
+ */
+export type StackSignalColor = 'bullish' | 'bearish' | 'mixed';
+
+export interface StackSignal {
+  color: StackSignalColor;
+  label: string;        // short, for chip
+  mechanism: string;    // longer, for tooltip
+  thin: boolean;        // true when total prints < 5 — signal is weak
+}
+
+export function interpretStack(r: {
+  side: string;
+  opening_buy_count: number;
+  opening_sell_count: number;
+  ask_dominant_pct: number | null;
+  prints_count: number;
+}): StackSignal {
+  const side = (r.side || '').toUpperCase().startsWith('C') ? 'C' : 'P';
+  const total = Math.max(1, r.opening_buy_count + r.opening_sell_count);
+  const buyShare = r.opening_buy_count / total;
+  const sellShare = r.opening_sell_count / total;
+  const ask = r.ask_dominant_pct;
+  const thin = r.prints_count < 5;
+
+  const buyDominant = buyShare >= 0.8;
+  const sellDominant = sellShare >= 0.8;
+
+  // Accumulation: buy-dominant regardless of ask% (ask% just dials conviction)
+  if (buyDominant) {
+    if (side === 'C') {
+      return {
+        color: 'bullish',
+        label: 'call accumulation',
+        mechanism: `${r.opening_buy_count}/${total} opening_buy · ask ${ask == null ? 'n/a' : ask + '%'} — someone is accumulating calls = bullish`,
+        thin,
+      };
+    }
+    return {
+      color: 'bearish',
+      label: 'put accumulation',
+      mechanism: `${r.opening_buy_count}/${total} opening_buy · ask ${ask == null ? 'n/a' : ask + '%'} — someone is accumulating puts = bearish (hedge or directional bet)`,
+      thin,
+    };
+  }
+
+  // Sell-dominant: split by ask% to separate "writing" (low ask, collecting
+  // premium) from "distribution / unwinding" (high ask, aggressive unload).
+  if (sellDominant) {
+    const askLow = ask != null && ask < 30;
+    if (askLow) {
+      if (side === 'P') {
+        return {
+          color: 'bullish',
+          label: 'put writing',
+          mechanism: `${r.opening_sell_count}/${total} opening_sell · ask ${ask}% — selling puts at the bid = collecting premium, betting underlying holds above strike (bullish)`,
+          thin,
+        };
+      }
+      return {
+        color: 'bearish',
+        label: 'call writing',
+        mechanism: `${r.opening_sell_count}/${total} opening_sell · ask ${ask}% — selling calls at the bid = collecting premium, betting underlying stays below strike (bearish / resistance)`,
+        thin,
+      };
+    }
+    // Sell-dominant but not at the bid — distribution / aggressive unload.
+    return {
+      color: 'mixed',
+      label: side === 'C' ? 'call distribution' : 'put distribution',
+      mechanism: `${r.opening_sell_count}/${total} opening_sell · ask ${ask == null ? 'n/a' : ask + '%'} — aggressive selling without bid-side dominance: could be unwind, inventory flush, or hedged spread. Read with context.`,
+      thin,
+    };
+  }
+
+  // Neither dominant — two-sided flow. Could be a spread / hedge / split view.
+  return {
+    color: 'mixed',
+    label: '2-sided',
+    mechanism: `${r.opening_buy_count} buy vs ${r.opening_sell_count} sell · ask ${ask == null ? 'n/a' : ask + '%'} — mixed flow, no clear direction`,
+    thin,
+  };
+}
+
 /** "3m ago" / "42m ago" / "2h ago" — short relative time for leaderboard. */
 export function formatTimeAgo(iso: string): string {
   try {

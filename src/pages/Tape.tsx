@@ -41,6 +41,7 @@ import {
   useContractStacking,
   formatStackCount,
   formatStackPremium,
+  interpretStack,
 } from '@/hooks/useContractStacking';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
@@ -1305,16 +1306,25 @@ export default function Tape() {
                         {(() => {
                           const stack = stackBySymbol.get(r.option_symbol);
                           if (!stack || stack.prints_count < 3) return null;
-                          const askStr = stack.ask_dominant_pct != null
-                            ? `${Math.round(stack.ask_dominant_pct)}% ask-side`
-                            : 'ask-side pct unknown';
+                          const sig = interpretStack(stack);
+                          const dot = sig.color === 'bullish' ? '🟢' : sig.color === 'bearish' ? '🔴' : '🟡';
+                          const tone =
+                            sig.color === 'bullish'
+                              ? 'bg-emerald-500/15 text-emerald-200 border-emerald-500/40'
+                              : sig.color === 'bearish'
+                                ? 'bg-rose-500/15 text-rose-200 border-rose-500/40'
+                                : 'bg-slate-500/20 text-slate-200 border-slate-500/30';
                           return (
                             <span
-                              className="inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-500/20 text-slate-200 border border-slate-500/30 tabular-nums"
-                              title={`This contract has ${stack.prints_count} prints today totaling ${formatStackPremium(stack.premium_total)} cum (${askStr})`}
+                              className={cn(
+                                'inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border tabular-nums',
+                                tone,
+                              )}
+                              title={`${stack.prints_count} prints · ${formatStackPremium(stack.premium_total)} cum — ${sig.mechanism}`}
                             >
+                              <span>{dot}</span>
                               <span className="font-semibold">{formatStackCount(stack.prints_count)}</span>
-                              <span className="text-slate-300/70">·</span>
+                              <span className="opacity-60">·</span>
                               <span>{formatStackPremium(stack.premium_total)}</span>
                             </span>
                           );

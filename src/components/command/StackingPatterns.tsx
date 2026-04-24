@@ -22,6 +22,7 @@ import {
   formatStackCount,
   formatStackPremium,
   formatTimeAgo,
+  interpretStack,
   type StackRow,
 } from '@/hooks/useContractStacking';
 
@@ -125,6 +126,32 @@ function StackRowItem({
           <span className="text-muted-foreground/40 text-[10px]">—</span>
         )}
       </td>
+      {/* Signal — interpreted direction from buy/sell + ask% */}
+      <td className="py-1.5 px-2 text-right whitespace-nowrap">
+        {(() => {
+          const sig = interpretStack(r);
+          const tone =
+            sig.color === 'bullish'
+              ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+              : sig.color === 'bearish'
+                ? 'bg-rose-500/15 text-rose-300 border-rose-500/40'
+                : 'bg-slate-500/15 text-slate-300 border-slate-500/40';
+          const dot = sig.color === 'bullish' ? '🟢' : sig.color === 'bearish' ? '🔴' : '🟡';
+          return (
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border',
+                tone,
+                sig.thin && 'opacity-60',
+              )}
+              title={sig.mechanism + (sig.thin ? ' · thin data (<5 prints)' : '')}
+            >
+              <span>{dot}</span>
+              <span className="uppercase tracking-wider">{sig.label}</span>
+            </span>
+          );
+        })()}
+      </td>
     </tr>
   );
 }
@@ -209,6 +236,7 @@ export function StackingPatterns({ onContractClick, windowMin = 360 }: Props) {
                   <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Buy/Sell</th>
                   <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Last</th>
                   <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Accel</th>
+                  <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Signal</th>
                 </tr>
               </thead>
               <tbody>
