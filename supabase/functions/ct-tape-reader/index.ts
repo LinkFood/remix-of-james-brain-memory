@@ -86,6 +86,11 @@ interface RegimeSpotRow {
   spot_pct_from_prev_close: number | null;
 }
 
+interface PriorCommentaryRow {
+  created_at: string;
+  commentary: string;
+}
+
 /**
  * interpretStack — parity with src/hooks/useContractStacking.ts::interpretStack.
  * Not shared across edge/frontend boundary — kept in lockstep manually. Returns
@@ -256,9 +261,12 @@ serve(async (req) => {
   // Any failure here degrades gracefully — we skip the relevant block,
   // never crash the run.
   const regimeWindow = new Date(now.getTime() - 60 * 60_000);
+  // session_date in ct_tape_commentary is NY-tz date; filter today's prior runs
+  const nyToday = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const sessionDate = `${nyToday.getFullYear()}-${String(nyToday.getMonth() + 1).padStart(2, '0')}-${String(nyToday.getDate()).padStart(2, '0')}`;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: any = supabase;
-  const [flowPulseRes, stackingRes, regimeRes] = await Promise.all([
+  const [flowPulseRes, stackingRes, regimeRes, priorRes] = await Promise.all([
     sb.rpc('ct_flow_pulse', { p_window_min: 360, p_ticker: null }),
     sb.rpc('ct_contract_stacking', {
       p_window_min: 360,
@@ -273,11 +281,17 @@ serve(async (req) => {
       .in('ticker', WATCHLIST)
       .not('spot_pct_from_prev_close', 'is', null)
       .limit(2000),
+    sb.from('ct_tape_commentary')
+      .select('created_at, commentary')
+      .eq('session_date', sessionDate)
+      .order('created_at', { ascending: false })
+      .limit(3),
   ]);
 
   const pulseRows = (flowPulseRes?.error ? [] : (flowPulseRes?.data ?? [])) as FlowPulseRow[];
   const stackRows = (stackingRes?.error ? [] : (stackingRes?.data ?? [])) as StackRow[];
   const regimeRows = (regimeRes?.error ? [] : (regimeRes?.data ?? [])) as RegimeSpotRow[];
+  const priorRows = (priorRes?.error ? [] : (priorRes?.data ?? [])) as PriorCommentaryRow[];
 
   // Market-wide aggregate from flow pulse rows
   let mktCalls = 0, mktPuts = 0, mktCallsPrem = 0, mktPutsPrem = 0, mktNetPrem = 0;
@@ -425,6 +439,19 @@ serve(async (req) => {
     }
   }
 
+  if (priorRows.length > 0) {
+    lines.push('');
+    lines.push('[YOUR PRIOR OBSERVATIONS TODAY — chronological, oldest first]');
+    const chronological = [...priorRows].reverse();
+    for (const p of chronological) {
+      const t = new Date(p.created_at);
+      const hhmm = t.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false });
+      const oneLine = (p.commentary || '').replace(/\s+/g, ' ').trim();
+      lines.push(`  ${hhmm} ET: "${oneLine}"`);
+    }
+    lines.push('(When your current read builds on, confirms, or contradicts these, reference them explicitly.)');
+  }
+
   const system = `You are a senior options flow reader looking over a day trader's shoulder. You read the tape for the Mag-7 + major indexes. Write 2-3 sentences describing what's happening right now. No hedging, no disclaimers, no "this is not financial advice." If the tape is quiet, say "Quiet tape." and note what would change that. If something is unusual, name it specifically — ticker, contract, pattern. Every sentence must say something.
 
 You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTERNS], and [MARKET REGIME] — at the top of each prompt. These are the macro anchor: use them directly, don't re-derive them from the candidate rows below. Reference them explicitly ("flow pulse shows NVDA 6.75x unusual, matches what I'm seeing on the tape..."). The stacking labels (call accumulation / put writing / distribution) are already interpreted — read them as directional signal, not raw buy/sell counts. The regime line tells you where the tape is sitting before you read individual prints.`;
@@ -444,7 +471,7 @@ You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTE
       model: CLAUDE_MODELS.haiku,
       system,
       messages: [{ role: 'user', content: userMsg }],
-      max_tokens: 400,
+      max_tokens: 600,
       temperature: 0.3,
     });
     const textBlock = resp.content.find((b) => b.type === 'text' && b.text);
