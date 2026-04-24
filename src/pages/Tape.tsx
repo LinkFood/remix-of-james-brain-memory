@@ -385,7 +385,14 @@ export default function Tape() {
   // One batched call keyed on the set of alert_ids that scored rows point at.
   const scoredSourceIds = useMemo(() => {
     if (!scored) return [] as string[];
-    return Array.from(new Set(scored.filter((r) => r.source_table === 'flow_alerts').map((r) => r.source_id)));
+    // ct_scored_flow.source_table was 'flow_alerts' in early migrations and
+    // became 'ct_flow_alerts' in 20260424000003. Match both so the spot
+    // price / tape kind / is_otm join works for rows from either era.
+    return Array.from(new Set(
+      scored
+        .filter((r) => r.source_table === 'flow_alerts' || r.source_table === 'ct_flow_alerts')
+        .map((r) => r.source_id),
+    ));
   }, [scored]);
 
   interface AlertMetaRow {
@@ -495,7 +502,7 @@ export default function Tape() {
         is_sweep: isSweep,
         is_otm: meta?.is_otm ?? null,
       });
-      if (r.source_table === 'flow_alerts') seenScoredSourceIds.add(r.source_id);
+      if (r.source_table === 'flow_alerts' || r.source_table === 'ct_flow_alerts') seenScoredSourceIds.add(r.source_id);
     }
 
     if (filters.showUnscored) {
@@ -1063,8 +1070,13 @@ export default function Tape() {
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <Star className="w-4 h-4 text-amber-400" />
-              Flag this print
+              <Star className={cn(
+                'w-4 h-4',
+                markDialog.row && flaggedSymbols.has(markDialog.row.option_symbol) ? 'fill-amber-400 text-amber-400' : 'text-amber-400',
+              )} />
+              {markDialog.row && flaggedSymbols.has(markDialog.row.option_symbol)
+                ? 'Already flagged — add another or unflag'
+                : 'Flag this print'}
             </DialogTitle>
             <DialogDescription className="text-[11px]">
               Your flags are a training signal for the specialists.
@@ -1135,6 +1147,32 @@ export default function Tape() {
           )}
 
           <DialogFooter className="gap-2">
+            {markDialog.row && flaggedSymbols.has(markDialog.row.option_symbol) && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="mr-auto text-red-300 border-red-500/40 hover:bg-red-500/10"
+                disabled={markDialog.saving}
+                onClick={async () => {
+                  if (!markDialog.row) return;
+                  setMarkDialog((s) => ({ ...s, saving: true }));
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  const { error } = await (supabase.from('ct_james_flags' as never) as any)
+                    .delete()
+                    .eq('option_symbol', markDialog.row.option_symbol);
+                  if (error) {
+                    toast.error(`Unflag failed: ${error.message}`);
+                    setMarkDialog((s) => ({ ...s, saving: false }));
+                    return;
+                  }
+                  toast.success(`Unflagged ${markDialog.row.ticker} ${markDialog.row.option_symbol}`);
+                  setMarkDialog({ open: false, row: null, note: '', direction_view: null, saving: false });
+                  qc.invalidateQueries({ queryKey: ['ct_james_flags_all'] });
+                }}
+              >
+                Unflag
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"

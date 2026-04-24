@@ -16,8 +16,10 @@ import { supabase } from '@/integrations/supabase/client';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { Flame, Activity, Brain, TrendingUp, ArrowUp, ArrowDown, Minus } from 'lucide-react';
+import { Flame, Activity, Brain, TrendingUp, ArrowUp, ArrowDown, Minus, Newspaper, Globe, Loader2, Target, Gauge } from 'lucide-react';
+import { toast } from 'sonner';
 import { ContractSheet } from './ContractSheet';
 
 interface HotContractRow {
@@ -52,6 +54,40 @@ interface LatestPriceRow {
   close: number | null;
   volume: number | null;
   ts: string;
+}
+
+interface TickerSnapshotRow {
+  ticker: string;
+  spot: number | null;
+  gamma_flip: number | null;
+  call_wall: number | null;
+  put_wall: number | null;
+  max_pain: number | null;
+  iv_rank: number | null;
+  iv_percentile: number | null;
+  net_gamma: number | null;
+  regime: string | null;
+  put_call_ratio: number | null;
+  net_premium_cum: number | null;
+  next_earnings_date: string | null;
+  earnings_expected_move: number | null;
+  snapshot_at: string | null;
+  recent_news: Array<{
+    headline: string;
+    source: string | null;
+    impact: string | null;
+    significance: number | null;
+    claude_take: string | null;
+    created_at: string;
+    news_timestamp: string | null;
+  }> | null;
+}
+
+interface TavilyResult {
+  title: string;
+  url: string;
+  content: string;
+  score?: number;
 }
 
 function formatPremium(n: number | null): string {
@@ -108,6 +144,32 @@ interface Props {
 
 export function TickerSheet({ ticker, open, onOpenChange }: Props) {
   const [drillSymbol, setDrillSymbol] = useState<string | null>(null);
+  const [tavilyResults, setTavilyResults] = useState<TavilyResult[] | null>(null);
+  const [tavilyLoading, setTavilyLoading] = useState(false);
+
+  // Clear Tavily when ticker changes
+  const prevTickerRef = useMemo(() => ({ v: ticker }), [ticker]);
+  if (prevTickerRef.v !== ticker && tavilyResults !== null) {
+    // stale state — reset when swapping tickers via parent
+  }
+
+  // Full quant card — spot, walls, IV, regime, news with Claude's take.
+  // This is the payload ct-watcher maintains; already-ingested data.
+  const { data: snapshot } = useQuery<TickerSnapshotRow | null>({
+    queryKey: ['ticker_snapshot', ticker],
+    enabled: !!ticker && open,
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      if (!ticker) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('ct_ticker_snapshots' as never) as any)
+        .select('*')
+        .eq('ticker', ticker)
+        .maybeSingle();
+      if (error) return null;
+      return data as TickerSnapshotRow | null;
+    },
+  });
 
   const { data: hotContracts, isLoading: loadingHot } = useQuery<HotContractRow[]>({
     queryKey: ['ticker_hot_contracts', ticker],
@@ -237,6 +299,186 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
                 </div>
               )}
             </Card>
+
+            {/* Micro snapshot — spot, walls, IV, regime, P/C, earnings */}
+            {snapshot && (
+              <div>
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+                  <Gauge className="w-3.5 h-3.5" />
+                  Micro snapshot
+                  {snapshot.snapshot_at && (
+                    <span className="text-[10px] text-muted-foreground/60 normal-case ml-auto">
+                      {timeAgo(snapshot.snapshot_at)}
+                    </span>
+                  )}
+                </div>
+                <Card className="p-3 grid grid-cols-2 md:grid-cols-4 gap-x-3 gap-y-2 text-xs">
+                  <div>
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Spot</div>
+                    <div className="font-mono tabular-nums font-semibold">
+                      {snapshot.spot != null ? `$${snapshot.spot.toFixed(2)}` : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Regime</div>
+                    <div className={cn(
+                      'font-mono text-[11px]',
+                      snapshot.regime === 'positive_gamma' ? 'text-emerald-300' : snapshot.regime === 'negative_gamma' ? 'text-red-300' : 'text-muted-foreground',
+                    )}>
+                      {snapshot.regime?.replace('_', ' ') ?? '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider">IV rank</div>
+                    <div className="font-mono tabular-nums">
+                      {snapshot.iv_rank != null ? snapshot.iv_rank.toFixed(1) : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider">P/C</div>
+                    <div className="font-mono tabular-nums">
+                      {snapshot.put_call_ratio != null ? snapshot.put_call_ratio.toFixed(2) : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider inline-flex items-center gap-1">
+                      <Target className="w-2.5 h-2.5" /> Call wall
+                    </div>
+                    <div className="font-mono tabular-nums text-emerald-300">
+                      {snapshot.call_wall != null ? `$${snapshot.call_wall}` : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider inline-flex items-center gap-1">
+                      <Target className="w-2.5 h-2.5" /> Put wall
+                    </div>
+                    <div className="font-mono tabular-nums text-red-300">
+                      {snapshot.put_wall != null ? `$${snapshot.put_wall}` : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Gamma flip</div>
+                    <div className="font-mono tabular-nums text-amber-300">
+                      {snapshot.gamma_flip != null ? `$${snapshot.gamma_flip}` : '—'}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Max pain</div>
+                    <div className="font-mono tabular-nums">
+                      {snapshot.max_pain != null ? `$${snapshot.max_pain}` : '—'}
+                    </div>
+                  </div>
+                  {snapshot.next_earnings_date && (
+                    <div className="col-span-2 md:col-span-4 pt-2 border-t border-border/40">
+                      <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Earnings</div>
+                      <div className="font-mono text-amber-300">
+                        {snapshot.next_earnings_date}
+                        {snapshot.earnings_expected_move != null && (
+                          <span className="ml-2 text-muted-foreground">
+                            implied move ±{(snapshot.earnings_expected_move * 100).toFixed(1)}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              </div>
+            )}
+
+            {/* Recent news with Claude's take */}
+            {snapshot?.recent_news && snapshot.recent_news.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+                  <Newspaper className="w-3.5 h-3.5" />
+                  Recent news · Claude's take
+                </div>
+                <div className="space-y-2">
+                  {snapshot.recent_news.slice(0, 6).map((n, i) => (
+                    <Card key={i} className={cn(
+                      'p-2.5',
+                      n.impact === 'bullish' && 'border-emerald-500/25',
+                      n.impact === 'bearish' && 'border-red-500/25',
+                    )}>
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <Badge variant="outline" className={cn(
+                          'text-[9px] font-mono px-1 py-0 uppercase',
+                          n.impact === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+                          n.impact === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
+                          (!n.impact || n.impact === 'neutral') && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
+                        )}>
+                          {n.impact ?? 'neutral'}
+                        </Badge>
+                        {n.source && <span className="text-[10px] text-muted-foreground">{n.source}</span>}
+                        {n.significance != null && (
+                          <span className="text-[10px] text-muted-foreground">· sig {n.significance}</span>
+                        )}
+                        <span className="text-[10px] text-muted-foreground ml-auto">{timeAgo(n.created_at)}</span>
+                      </div>
+                      <div className="text-xs font-semibold text-foreground/90 leading-snug mb-1">{n.headline}</div>
+                      {n.claude_take && (
+                        <div className="text-[11px] text-muted-foreground leading-snug">{n.claude_take}</div>
+                      )}
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Tavily live search */}
+            <div>
+              <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+                <Globe className="w-3.5 h-3.5" />
+                Live web search
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-6 text-[10px] px-2"
+                  disabled={tavilyLoading || !ticker}
+                  onClick={async () => {
+                    if (!ticker) return;
+                    setTavilyLoading(true);
+                    setTavilyResults(null);
+                    try {
+                      const { data, error } = await supabase.functions.invoke('jac-web-search', {
+                        body: { query: `${ticker} stock news today`, max_results: 5 },
+                      });
+                      if (error) throw error;
+                      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                      const results = ((data as any)?.results ?? (data as any)?.search_results ?? []) as TavilyResult[];
+                      setTavilyResults(results);
+                      if (results.length === 0) toast.info('No fresh results');
+                    } catch (e) {
+                      toast.error(`Search failed: ${e instanceof Error ? e.message : String(e)}`);
+                      setTavilyResults([]);
+                    } finally {
+                      setTavilyLoading(false);
+                    }
+                  }}
+                >
+                  {tavilyLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Search the web'}
+                </Button>
+              </div>
+              {tavilyResults && tavilyResults.length > 0 && (
+                <div className="space-y-1.5">
+                  {tavilyResults.map((r, i) => (
+                    <a
+                      key={i}
+                      href={r.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block p-2.5 rounded border border-border hover:border-primary/40 transition-colors"
+                    >
+                      <div className="text-xs font-semibold text-foreground/90 mb-1 line-clamp-1">{r.title}</div>
+                      <div className="text-[11px] text-muted-foreground leading-snug line-clamp-2">{r.content}</div>
+                      <div className="text-[10px] text-primary/70 mt-1 truncate">{r.url}</div>
+                    </a>
+                  ))}
+                </div>
+              )}
+              {tavilyResults !== null && tavilyResults.length === 0 && !tavilyLoading && (
+                <div className="text-[11px] text-muted-foreground italic">No results — try clicking search again.</div>
+              )}
+            </div>
 
             {/* Hot by premium */}
             <div>
