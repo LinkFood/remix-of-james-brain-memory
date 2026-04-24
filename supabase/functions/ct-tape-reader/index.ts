@@ -122,11 +122,11 @@ serve(async (req) => {
     .limit(10);
   const flags = (flagsRaw ?? []) as FlagRow[];
 
-  // Latest spot price per watchlist ticker
+  // Latest spot price per watchlist ticker — ct_price_bars
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: barsRaw } = await (supabase.from('ct_price_bars' as never) as any)
     .select('ticker,close,ts')
-    .in('ticker', [...WATCHLIST, 'VIX'])
+    .in('ticker', WATCHLIST)
     .order('ts', { ascending: false })
     .limit(80);
   const bars = (barsRaw ?? []) as PriceBarRow[];
@@ -134,7 +134,16 @@ serve(async (req) => {
   for (const b of bars) {
     if (b.close != null && !spotMap.has(b.ticker)) spotMap.set(b.ticker, b.close);
   }
-  const vixLevel = spotMap.get('VIX') ?? null;
+
+  // VIX lives in its own table (ct_vix_history) — 3x/day capture.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: vixRaw } = await (supabase.from('ct_vix_history' as never) as any)
+    .select('level,change_pct,created_at')
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const vixRow = ((vixRaw ?? [])[0] ?? null) as { level: number | null; change_pct: number | null } | null;
+  const vixLevel = vixRow?.level ?? null;
+  const vixChange = vixRow?.change_pct ?? null;
 
   // Market tide: sum of today's net_call_premium - net_put_premium across watchlist
   const todayStart = new Date();
@@ -154,7 +163,7 @@ serve(async (req) => {
 
   const lines: string[] = [];
   lines.push(`Window: ${windowMin} min ending ${now.toISOString()}`);
-  lines.push(`VIX: ${vixLevel != null ? vixLevel.toFixed(2) : 'n/a'} | Tide: ${marketTide} (net ${fmtPremium(netPrem)})`);
+  lines.push(`VIX: ${vixLevel != null ? vixLevel.toFixed(2) : 'n/a'}${vixChange != null ? ` (${vixChange >= 0 ? '+' : ''}${vixChange.toFixed(2)}%)` : ''} | Tide: ${marketTide} (net ${fmtPremium(netPrem)})`);
   lines.push('');
   lines.push(`SPOT (latest close): ${WATCHLIST.map((t) => `${t} ${spotMap.get(t)?.toFixed(2) ?? '?'}`).join('  ')}`);
   lines.push('');

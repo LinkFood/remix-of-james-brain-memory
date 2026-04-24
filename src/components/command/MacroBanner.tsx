@@ -148,6 +148,25 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
     },
   });
 
+  // VIX — lives in ct_vix_history, not ct_price_bars (different ingester).
+  // Captured 3x/day by ct-vix-capture; fields: date, level, prev_close,
+  // change_pct, source, created_at.
+  const { data: vixRow } = useQuery<{ level: number | null; change_pct: number | null } | null>({
+    queryKey: ['ct_macro_vix'],
+    refetchInterval: 60_000,
+    retry: false,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('ct_vix_history' as never) as any)
+        .select('level,change_pct,created_at')
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (error) return null;
+      const row = (data ?? [])[0] as { level: number | null; change_pct: number | null } | undefined;
+      return row ?? null;
+    },
+  });
+
   // Market tide — check for table existence, tolerate 404.
   const { data: tide } = useQuery<MarketTideRow | null>({
     queryKey: ['ct_macro_market_tide'],
@@ -198,16 +217,25 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
       {/* Section 1 — skinny macro strip */}
       <Card className="px-3 py-1.5 flex items-center gap-4 flex-wrap text-[11px] font-mono tabular-nums">
         {MACRO_TICKERS.map((t) => {
+          // VIX draws from ct_vix_history, not ct_price_bars.
+          if (t === 'VIX') {
+            if (!vixRow || vixRow.level == null) return null;
+            return (
+              <div key={t} className="flex items-center gap-1.5">
+                <span className="text-muted-foreground font-semibold">VIX</span>
+                <span className="text-foreground">{vixRow.level.toFixed(2)}</span>
+                {vixRow.change_pct != null && (
+                  <span className={pctColor(vixRow.change_pct)}>{fmtPct(vixRow.change_pct)}</span>
+                )}
+              </div>
+            );
+          }
           const s = priceSummary.get(t);
-          // VIX hides if no data at all.
-          if (t === 'VIX' && (!s || (s.spot == null && s.pct == null))) return null;
           return (
             <div key={t} className="flex items-center gap-1.5">
               <span className="text-muted-foreground font-semibold">{t}</span>
               <span className="text-foreground">{fmtSpot(s?.spot ?? null)}</span>
-              {t !== 'VIX' && (
-                <span className={pctColor(s?.pct ?? null)}>{fmtPct(s?.pct ?? null)}</span>
-              )}
+              <span className={pctColor(s?.pct ?? null)}>{fmtPct(s?.pct ?? null)}</span>
             </div>
           );
         })}
