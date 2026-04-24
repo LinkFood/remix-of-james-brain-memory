@@ -145,6 +145,21 @@ serve(async (req) => {
   const vixLevel = vixRow?.level ?? null;
   const vixChange = vixRow?.change_pct ?? null;
 
+  // Breaking news in the last 30 min affecting any watchlist ticker. News
+  // moves stocks and options front-run news — reader should call it out.
+  const newsWindow = new Date(now.getTime() - 30 * 60_000);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: newsRaw } = await (supabase.from('ct_breaking_news' as never) as any)
+    .select('headline,source,severity,sentiment,category,macro_wide,summary,tickers_affected,ingested_at')
+    .gte('ingested_at', newsWindow.toISOString())
+    .gte('severity', 2)
+    .order('ingested_at', { ascending: false })
+    .limit(20);
+  const news = ((newsRaw ?? []) as Array<Record<string, unknown>>).filter((r) => {
+    const tickers = (r.tickers_affected as string[] | null) ?? [];
+    return r.macro_wide === true || tickers.some((t) => WATCHLIST.includes(t));
+  }).slice(0, 8);
+
   // Market tide: sum of today's net_call_premium - net_put_premium across watchlist
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -186,6 +201,16 @@ serve(async (req) => {
     lines.push('ACTIVE SPECIALIST FLAGS (last 30 min):');
     for (const f of flags) {
       lines.push(`  ${f.specialist_ticker} ${f.direction} score ${Math.round(f.score)} [${f.status}]: ${f.thesis.slice(0, 160)}`);
+    }
+  }
+
+  if (news.length > 0) {
+    lines.push('');
+    lines.push('BREAKING NEWS (last 30min, severity >=2):');
+    for (const n of news) {
+      const tickers = ((n.tickers_affected as string[] | null) ?? []).join(',');
+      lines.push(`  [sev ${n.severity} ${n.sentiment}] ${tickers ? `(${tickers}) ` : ''}${(n.headline as string)?.slice(0, 140) ?? ''}`);
+      if (n.summary) lines.push(`    ${(n.summary as string).slice(0, 200)}`);
     }
   }
 

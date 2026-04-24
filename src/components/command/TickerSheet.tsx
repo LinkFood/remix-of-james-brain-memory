@@ -153,6 +153,39 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
     // stale state — reset when swapping tickers via parent
   }
 
+  // Breaking news affecting this ticker (Tavily sweep + macro watcher).
+  // Separate from the UW news in ct_ticker_snapshots.recent_news — this is
+  // fresher (every 10min) and covers geopolitical / policy / sector events
+  // that never hit UW's per-ticker feed.
+  interface BreakingNewsRow {
+    headline: string;
+    source: string | null;
+    severity: number | null;
+    sentiment: string | null;
+    summary: string | null;
+    macro_wide: boolean | null;
+    tickers_affected: string[] | null;
+    ingested_at: string;
+  }
+  const { data: breakingNews } = useQuery<BreakingNewsRow[]>({
+    queryKey: ['ct_breaking_news_ticker', ticker],
+    enabled: !!ticker && open,
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      if (!ticker) return [];
+      const since = new Date(Date.now() - 6 * 3600_000).toISOString();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('ct_breaking_news' as never) as any)
+        .select('headline,source,severity,sentiment,summary,macro_wide,tickers_affected,ingested_at')
+        .gte('ingested_at', since)
+        .order('ingested_at', { ascending: false })
+        .limit(30);
+      if (error) return [];
+      const rows = (data ?? []) as BreakingNewsRow[];
+      return rows.filter((r) => (r.tickers_affected ?? []).includes(ticker) || r.macro_wide === true).slice(0, 6);
+    },
+  });
+
   // Full quant card — spot, walls, IV, regime, news with Claude's take.
   // This is the payload ct-watcher maintains; already-ingested data.
   const { data: snapshot } = useQuery<TickerSnapshotRow | null>({
@@ -393,6 +426,49 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
                     </div>
                   )}
                 </Card>
+              </div>
+            )}
+
+            {/* Breaking news (Tavily sweep + macro watcher) — last 6h */}
+            {breakingNews && breakingNews.length > 0 && (
+              <div>
+                <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+                  <Globe className="w-3.5 h-3.5" />
+                  Breaking news · last 6h
+                </div>
+                <div className="space-y-1.5">
+                  {breakingNews.map((n, i) => (
+                    <Card key={`bn-${i}`} className={cn(
+                      'p-2.5',
+                      n.sentiment === 'bullish' && 'border-emerald-500/25',
+                      n.sentiment === 'bearish' && 'border-red-500/25',
+                      (n.severity ?? 0) >= 4 && 'ring-1 ring-amber-500/40',
+                    )}>
+                      <div className="flex items-baseline gap-2 mb-1">
+                        <Badge variant="outline" className={cn(
+                          'text-[9px] font-mono px-1 py-0 uppercase',
+                          n.sentiment === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+                          n.sentiment === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
+                          (!n.sentiment || n.sentiment === 'neutral' || n.sentiment === 'ambiguous') && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
+                        )}>
+                          {n.sentiment ?? 'neutral'}
+                        </Badge>
+                        {n.severity != null && (
+                          <span className={cn('text-[10px] font-mono tabular-nums', n.severity >= 4 ? 'text-amber-300 font-bold' : 'text-muted-foreground')}>
+                            sev {n.severity}
+                          </span>
+                        )}
+                        {n.source && <span className="text-[10px] text-muted-foreground">{n.source}</span>}
+                        {n.macro_wide && <span className="text-[10px] font-mono text-muted-foreground">macro</span>}
+                        <span className="text-[10px] text-muted-foreground ml-auto">{timeAgo(n.ingested_at)}</span>
+                      </div>
+                      <div className="text-xs font-semibold text-foreground/90 leading-snug mb-1">{n.headline}</div>
+                      {n.summary && (
+                        <div className="text-[11px] text-muted-foreground leading-snug">{n.summary}</div>
+                      )}
+                    </Card>
+                  ))}
+                </div>
               </div>
             )}
 

@@ -197,6 +197,35 @@ export function ContractSheet({ optionSymbol, open, onOpenChange }: ContractShee
   // Underlying ticker inferred from OCC symbol.
   const ticker = useMemo(() => parseOccTicker(optionSymbol), [optionSymbol]);
 
+  // Breaking news (Tavily sweep + macro watcher) — last 6h for this ticker.
+  interface BreakingNewsRow {
+    headline: string;
+    source: string | null;
+    severity: number | null;
+    sentiment: string | null;
+    summary: string | null;
+    macro_wide: boolean | null;
+    tickers_affected: string[] | null;
+    ingested_at: string;
+  }
+  const { data: breakingNews } = useQuery<BreakingNewsRow[]>({
+    queryKey: ['contract_breaking_news', ticker],
+    enabled: open && !!ticker,
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      if (!ticker) return [];
+      const since = new Date(Date.now() - 6 * 3600_000).toISOString();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase.from('ct_breaking_news' as never) as any)
+        .select('headline,source,severity,sentiment,summary,macro_wide,tickers_affected,ingested_at')
+        .gte('ingested_at', since)
+        .order('ingested_at', { ascending: false })
+        .limit(30);
+      const rows = (data ?? []) as BreakingNewsRow[];
+      return rows.filter((r) => (r.tickers_affected ?? []).includes(ticker) || r.macro_wide === true).slice(0, 4);
+    },
+  });
+
   // Ticker-level micro snapshot + recent news. Same table TickerSheet uses;
   // ct-watcher maintains one row per ticker with the quant card payload.
   const { data: snapshot } = useQuery<TickerSnapshot | null>({
@@ -399,6 +428,45 @@ export function ContractSheet({ optionSymbol, open, onOpenChange }: ContractShee
                   </div>
                 )}
               </Card>
+            </section>
+          )}
+
+          {/* Breaking news (Tavily sweep) — last 6h for this ticker */}
+          {breakingNews && breakingNews.length > 0 && (
+            <section>
+              <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+                <Newspaper className="w-3 h-3" />
+                Breaking news · last 6h · {ticker}
+              </div>
+              <div className="space-y-1.5">
+                {breakingNews.map((n, i) => (
+                  <Card key={`bn-${i}`} className={cn(
+                    'p-2.5',
+                    n.sentiment === 'bullish' && 'border-emerald-500/25',
+                    n.sentiment === 'bearish' && 'border-red-500/25',
+                    (n.severity ?? 0) >= 4 && 'ring-1 ring-amber-500/40',
+                  )}>
+                    <div className="flex items-baseline gap-2 mb-1">
+                      <Badge variant="outline" className={cn(
+                        'text-[9px] font-mono px-1 py-0 uppercase',
+                        n.sentiment === 'bullish' && 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40',
+                        n.sentiment === 'bearish' && 'bg-red-500/15 text-red-300 border-red-500/40',
+                        (!n.sentiment || n.sentiment === 'neutral' || n.sentiment === 'ambiguous') && 'bg-slate-500/15 text-slate-300 border-slate-500/40',
+                      )}>
+                        {n.sentiment ?? 'neutral'}
+                      </Badge>
+                      {n.severity != null && (
+                        <span className={cn('text-[10px] font-mono tabular-nums', n.severity >= 4 ? 'text-amber-300 font-bold' : 'text-muted-foreground')}>sev {n.severity}</span>
+                      )}
+                      {n.source && <span className="text-[10px] text-muted-foreground">{n.source}</span>}
+                      {n.macro_wide && <span className="text-[10px] font-mono text-muted-foreground">macro</span>}
+                      <span className="text-[10px] text-muted-foreground ml-auto">{relativeTime(n.ingested_at)}</span>
+                    </div>
+                    <div className="text-xs font-semibold text-foreground/90 leading-snug mb-1">{n.headline}</div>
+                    {n.summary && <div className="text-[11px] text-muted-foreground leading-snug">{n.summary}</div>}
+                  </Card>
+                ))}
+              </div>
             </section>
           )}
 

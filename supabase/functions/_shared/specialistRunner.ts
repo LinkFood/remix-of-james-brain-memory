@@ -228,6 +228,40 @@ async function loadRecentOiBuilds(supabase: SupabaseClient, ticker: string) {
   return data ?? [];
 }
 
+/**
+ * Load recent news affecting this ticker from ct_breaking_news (Tavily
+ * sweep + macro watcher). Last 6 hours, severity >= 2 OR tagged for this
+ * ticker. News moves stocks; options front-run news — specialists need
+ * to see the catalyst backdrop when proposing flags.
+ */
+async function loadRecentNews(supabase: SupabaseClient, ticker: string) {
+  const sixHoursAgo = new Date(Date.now() - 6 * 3600_000).toISOString();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data } = await (supabase.from('ct_breaking_news' as never) as any)
+    .select('headline,source,severity,sentiment,category,macro_wide,summary,tickers_affected,ingested_at,published_at')
+    .gte('ingested_at', sixHoursAgo)
+    .order('ingested_at', { ascending: false })
+    .limit(50);
+  const rows = (data ?? []) as Array<Record<string, unknown>>;
+  // Keep rows that mention this ticker OR are macro-wide (affect all watchlist).
+  return rows
+    .filter((r) => {
+      const tickers = (r.tickers_affected as string[] | null) ?? [];
+      return tickers.includes(ticker) || r.macro_wide === true;
+    })
+    .slice(0, 8)
+    .map((r) => ({
+      headline: r.headline,
+      source: r.source,
+      severity: r.severity,
+      sentiment: r.sentiment,
+      category: r.category,
+      macro_wide: r.macro_wide,
+      summary: r.summary,
+      ingested_at: r.ingested_at,
+    }));
+}
+
 async function loadSpecialistMemory(supabase: SupabaseClient, ticker: string) {
   // Last 10 graded flags for this specialist joined with grades. We fetch the
   // grades and pull each flag inline rather than relying on a Postgres join —
@@ -405,12 +439,13 @@ export async function runSpecialistWakeup(
   }
 
   // 8-12. Context for Claude.
-  const [snapshot, nextEarnings, oiBuilds, memory, hitRate] = await Promise.all([
+  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news] = await Promise.all([
     loadTickerSnapshot(supabase, ticker),
     loadNextEarnings(supabase, ticker),
     loadRecentOiBuilds(supabase, ticker),
     loadSpecialistMemory(supabase, ticker),
     loadHitRateByTag(supabase, ticker),
+    loadRecentNews(supabase, ticker),
   ]);
 
   const tickerContext = {
@@ -428,6 +463,9 @@ export async function runSpecialistWakeup(
 
   const userPayload = `[TICKER CONTEXT]
 ${JSON.stringify(tickerContext, null, 2)}
+
+[RECENT NEWS — last 6h affecting ${ticker} or macro-wide, Tavily + UW]
+${JSON.stringify(news, null, 2)}
 
 [CANDIDATE FLOW EVENTS — last ${CANDIDATE_WINDOW_MIN}min, score >= ${wakeupThreshold}]
 ${JSON.stringify(events, null, 2)}
