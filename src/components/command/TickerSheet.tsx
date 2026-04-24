@@ -18,8 +18,10 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
-import { Flame, Activity, Brain, TrendingUp, ArrowUp, ArrowDown, Minus, Newspaper, Globe, Loader2, Target, Gauge } from 'lucide-react';
+import { Flame, Activity, Brain, TrendingUp, ArrowUp, ArrowDown, Minus, Newspaper, Globe, Loader2, Target, Gauge, LineChart } from 'lucide-react';
 import { toast } from 'sonner';
+import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { ChartSafe } from '@/components/ChartSafe';
 import { ContractSheet } from './ContractSheet';
 
 interface HotContractRow {
@@ -204,23 +206,41 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
     },
   });
 
-  const { data: hotContracts, isLoading: loadingHot } = useQuery<HotContractRow[]>({
+  // Hot contracts — prefer today's flow, fall back to last 24h if empty
+  // (pre-market / weekend). James's ask: "we're not seeing any hot contracts,
+  // anything that could relate to the news" — solved by widening the window
+  // when today hasn't produced flow yet.
+  const { data: hotContracts, isLoading: loadingHot } = useQuery<{
+    rows: HotContractRow[];
+    windowLabel: 'today' | 'last 24h';
+  }>({
     queryKey: ['ticker_hot_contracts', ticker],
     enabled: !!ticker && open,
     refetchInterval: 20_000,
     queryFn: async () => {
-      if (!ticker) return [];
+      if (!ticker) return { rows: [], windowLabel: 'today' as const };
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.from('ct_scored_flow' as never) as any)
+      const { data: todayData } = await (supabase.from('ct_scored_flow' as never) as any)
         .select('option_symbol,strike,expiry,dte,classification,direction,score,premium,volume,open_interest,event_ts')
         .eq('ticker', ticker)
         .gte('event_ts', todayStart.toISOString())
         .order('premium', { ascending: false })
         .limit(80);
-      if (error) throw error;
-      return (data ?? []) as HotContractRow[];
+      const todayRows = (todayData ?? []) as HotContractRow[];
+      if (todayRows.length >= 4) return { rows: todayRows, windowLabel: 'today' as const };
+
+      // Pre-market / quiet — widen to last 24h so we always show something relevant.
+      const dayAgo = new Date(Date.now() - 24 * 3600_000);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: recentData } = await (supabase.from('ct_scored_flow' as never) as any)
+        .select('option_symbol,strike,expiry,dte,classification,direction,score,premium,volume,open_interest,event_ts')
+        .eq('ticker', ticker)
+        .gte('event_ts', dayAgo.toISOString())
+        .order('premium', { ascending: false })
+        .limit(80);
+      return { rows: (recentData ?? []) as HotContractRow[], windowLabel: 'last 24h' as const };
     },
   });
 
@@ -260,15 +280,16 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
   });
 
   // Split hot contracts into two lists: by premium, by Vol/OI
-  const { byPremium, byVolOi } = useMemo(() => {
-    if (!hotContracts) return { byPremium: [] as HotContractRow[], byVolOi: [] as HotContractRow[] };
-    const byPremium = [...hotContracts].slice(0, 8);
-    const byVolOi = [...hotContracts]
+  const { byPremium, byVolOi, hotWindow } = useMemo(() => {
+    const rows = hotContracts?.rows ?? [];
+    if (rows.length === 0) return { byPremium: [] as HotContractRow[], byVolOi: [] as HotContractRow[], hotWindow: 'today' as const };
+    const byPremium = [...rows].slice(0, 8);
+    const byVolOi = [...rows]
       .map((c) => ({ ...c, vol_oi: c.volume && c.open_interest ? c.volume / c.open_interest : 0 }))
       .filter((c) => c.vol_oi > 0)
       .sort((a, b) => b.vol_oi - a.vol_oi)
       .slice(0, 8);
-    return { byPremium, byVolOi };
+    return { byPremium, byVolOi, hotWindow: hotContracts?.windowLabel ?? 'today' };
   }, [hotContracts]);
 
   const flagCount = flags?.length ?? 0;
@@ -332,6 +353,9 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
                 </div>
               )}
             </Card>
+
+            {/* Price chart — intraday / 5D / 30D context for news + flow */}
+            {ticker && <PriceChart ticker={ticker} open={open} />}
 
             {/* Micro snapshot — spot, walls, IV, regime, P/C, earnings */}
             {snapshot && (
@@ -567,16 +591,16 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
               )}
             </div>
 
-            {/* Hot by premium */}
+            {/* Hot by premium — window widens to last 24h if today is quiet */}
             <div>
               <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
                 <Flame className="w-3.5 h-3.5" />
-                Hot by premium today
+                Hot by premium · {hotWindow}
               </div>
               {loadingHot ? (
                 <div className="text-xs text-muted-foreground py-2">Loading…</div>
               ) : byPremium.length === 0 ? (
-                <div className="text-xs text-muted-foreground py-2">No scored flow today. Check /tape for raw alerts.</div>
+                <div className="text-xs text-muted-foreground py-2">No scored flow for {ticker} in the last 24h. Try /tape with "Show unscored".</div>
               ) : (
                 <div className="space-y-1">
                   {byPremium.map((c) => {
@@ -631,7 +655,7 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
               <div>
                 <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
                   <TrendingUp className="w-3.5 h-3.5" />
-                  Hot by Vol/OI today
+                  Hot by Vol/OI · {hotWindow}
                 </div>
                 <div className="space-y-1">
                   {byVolOi.map((c) => {
@@ -700,5 +724,221 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
         onOpenChange={(o) => { if (!o) setDrillSymbol(null); }}
       />
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PriceChart — intraday / 5D / 30D price context next to news + flow.
+//
+// ct_price_bars as of 2026-04-23 only contains 1m bars (~9 days back). The
+// 30D window falls back to downsampled 1m data until a daily backfill lands.
+// ---------------------------------------------------------------------------
+
+type PriceWindow = '1D' | '5D' | '30D';
+
+interface PriceBar {
+  ts: string;
+  close: number | string | null;
+}
+
+interface ChartPoint {
+  t: number;   // epoch ms, for sorting / x-axis
+  label: string;
+  close: number;
+}
+
+/** Today 00:00 ET as ISO. Matches how the hot-contracts query frames "today". */
+function todayEtStartIso(): string {
+  const now = new Date();
+  // Local midnight — matches the rest of the sheet's "today" semantics.
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return start.toISOString();
+}
+
+function daysAgoIso(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
+
+function formatLabel(iso: string, window: PriceWindow): string {
+  const d = new Date(iso);
+  if (window === '1D') {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  }
+  // 5D / 30D — MMM dd
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+/** Downsample by skipping every Nth row so we never ship >500 points to Recharts. */
+function downsample<T>(rows: T[], max: number): T[] {
+  if (rows.length <= max) return rows;
+  const step = Math.ceil(rows.length / max);
+  const out: T[] = [];
+  for (let i = 0; i < rows.length; i += step) out.push(rows[i]);
+  // Always keep the last point so the line ends on the latest value.
+  if (out[out.length - 1] !== rows[rows.length - 1]) out.push(rows[rows.length - 1]);
+  return out;
+}
+
+interface PriceChartProps {
+  ticker: string;
+  open: boolean;
+}
+
+function PriceChart({ ticker, open }: PriceChartProps) {
+  const [window, setWindow] = useState<PriceWindow>('1D');
+
+  const { data: bars, isLoading } = useQuery<PriceBar[]>({
+    queryKey: ['ticker_price_chart', ticker, window],
+    enabled: !!ticker && open,
+    refetchInterval: 30_000,
+    queryFn: async () => {
+      const sinceIso = window === '1D'
+        ? todayEtStartIso()
+        : window === '5D'
+          ? daysAgoIso(5)
+          : daysAgoIso(30);
+
+      // 30D prefers daily bars if they exist. Falls back to any timeframe.
+      if (window === '30D') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: daily } = await (supabase.from('ct_price_bars' as never) as any)
+          .select('ts,close')
+          .eq('ticker', ticker)
+          .eq('timeframe', '1d')
+          .gte('ts', sinceIso)
+          .order('ts', { ascending: true })
+          .limit(2000);
+        const dailyRows = (daily ?? []) as PriceBar[];
+        if (dailyRows.length > 0) return dailyRows;
+      }
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from('ct_price_bars' as never) as any)
+        .select('ts,close')
+        .eq('ticker', ticker)
+        .gte('ts', sinceIso)
+        .order('ts', { ascending: true })
+        .limit(2000);
+      if (error) return [];
+      return (data ?? []) as PriceBar[];
+    },
+  });
+
+  const points: ChartPoint[] = useMemo(() => {
+    const raw = (bars ?? [])
+      .map((b) => {
+        const c = typeof b.close === 'string' ? parseFloat(b.close) : b.close;
+        if (c == null || !Number.isFinite(c)) return null;
+        return { t: Date.parse(b.ts), label: formatLabel(b.ts, window), close: c } as ChartPoint;
+      })
+      .filter((p): p is ChartPoint => p !== null);
+    return window === '1D' ? raw : downsample(raw, 500);
+  }, [bars, window]);
+
+  const first = points[0]?.close ?? null;
+  const last = points[points.length - 1]?.close ?? null;
+  const pct = first != null && last != null && first !== 0 ? ((last - first) / first) * 100 : null;
+  const trend: 'up' | 'down' | 'flat' = pct == null ? 'flat' : pct > 0.01 ? 'up' : pct < -0.01 ? 'down' : 'flat';
+  const color = trend === 'up' ? '#10b981' : trend === 'down' ? '#ef4444' : '#64748b';
+  const pctClass = trend === 'up' ? 'text-emerald-400' : trend === 'down' ? 'text-red-400' : 'text-muted-foreground';
+  const gradId = `tkr-price-grad-${ticker}-${window}`;
+
+  return (
+    <div>
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+        <LineChart className="w-3.5 h-3.5" />
+        Price context
+        <div className="ml-auto flex items-center gap-1">
+          {(['1D', '5D', '30D'] as const).map((w) => (
+            <button
+              key={w}
+              type="button"
+              onClick={() => setWindow(w)}
+              className={cn(
+                'px-1.5 py-0.5 rounded border text-[10px] font-mono tracking-wider transition-colors',
+                window === w
+                  ? 'bg-primary/20 text-foreground border-primary/50'
+                  : 'bg-muted/20 text-muted-foreground border-border hover:border-primary/30',
+              )}
+            >
+              {w}
+            </button>
+          ))}
+        </div>
+      </div>
+      <Card className="p-3">
+        <div className="flex items-baseline gap-2 mb-2 text-xs">
+          <span className="font-mono tabular-nums font-bold text-sm text-foreground">{ticker}</span>
+          <span className="font-mono tabular-nums text-foreground/90">
+            {last != null ? `$${last.toFixed(2)}` : '—'}
+          </span>
+          {pct != null && (
+            <span className={cn('font-mono tabular-nums text-[11px]', pctClass)}>
+              {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+            </span>
+          )}
+          <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground">
+            {window === '1D' ? 'intraday' : window === '5D' ? 'last 5 days' : 'last 30 days'}
+          </span>
+        </div>
+        <div className="h-[180px]">
+          {isLoading ? (
+            <div className="h-full flex items-center justify-center text-[11px] text-muted-foreground">Loading…</div>
+          ) : points.length === 0 ? (
+            <div className="h-full flex items-center justify-center text-[11px] text-muted-foreground italic">
+              No price data for {window}
+            </div>
+          ) : (
+            <ChartSafe label={`price-${ticker}-${window}`}>
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={points} margin={{ top: 6, right: 6, left: 0, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+                      <stop offset="100%" stopColor={color} stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={{ stroke: 'hsl(var(--border))' }}
+                    interval="preserveStartEnd"
+                    minTickGap={40}
+                  />
+                  <YAxis
+                    domain={['auto', 'auto']}
+                    tick={{ fill: 'hsl(var(--muted-foreground))', fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={{ stroke: 'hsl(var(--border))' }}
+                    width={48}
+                    tickFormatter={(v: number) => `$${v.toFixed(v >= 100 ? 0 : 2)}`}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background: 'hsl(var(--popover))',
+                      border: '1px solid hsl(var(--border))',
+                      borderRadius: 6,
+                      fontSize: 11,
+                      fontFamily: 'ui-monospace, SFMono-Regular, monospace',
+                    }}
+                    labelStyle={{ color: 'hsl(var(--muted-foreground))' }}
+                    formatter={(val: number) => [`$${val.toFixed(2)}`, 'price']}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="close"
+                    stroke={color}
+                    strokeWidth={1.5}
+                    fill={`url(#${gradId})`}
+                    isAnimationActive={false}
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </ChartSafe>
+          )}
+        </div>
+      </Card>
+    </div>
   );
 }
