@@ -90,21 +90,22 @@ interface Filters {
 interface JamesFlagGrade {
   outcome: string;
   price_change_pct: number | null;
-  move_to_strike_pct: number | null;
-  crossed_strike: boolean | null;
   graded_at: string | null;
 }
 
+// James stars are now ct_flags rows with source='james_star'. Same row shape
+// as Flag, plus a slimmer view here for the star tile. Keep separate type so
+// the tile renderer doesn't try to access score / thesis / target the way the
+// FlagTile does — stars carry NULL on most of those.
 interface JamesFlag {
-  id: number;
-  option_symbol: string;
-  ticker: string | null;
-  source_flow_id: number | null;
-  source_alert_id: string | null;
-  direction_view: Direction | null;
-  note: string | null;
+  id: string;
+  option_symbol: string | null;
+  instrument: string;
+  direction: Direction;
+  thesis: string | null;
+  source_flow_ids: number[] | null;
   created_at: string;
-  ct_james_flag_grades: JamesFlagGrade[] | null;
+  ct_flag_grades: JamesFlagGrade[] | JamesFlagGrade | null;
 }
 
 type MergedItem =
@@ -424,8 +425,9 @@ function FlagTile({
 function JamesFlagTile({ flag, onOpen, showOriginBadge }: {
   flag: JamesFlag; onOpen: (s: string) => void; showOriginBadge?: boolean;
 }) {
-  const grade = flag.ct_james_flag_grades?.[0] ?? null;
-  const direction: Direction = flag.direction_view ?? 'neutral';
+  const rawGrade = flag.ct_flag_grades;
+  const grade: JamesFlagGrade | null = Array.isArray(rawGrade) ? (rawGrade[0] ?? null) : (rawGrade ?? null);
+  const direction: Direction = flag.direction;
   const graded = !!(grade && grade.outcome && grade.outcome !== 'pending');
   const outcomeClass = graded
     ? outcomeColor(grade!.outcome)
@@ -433,14 +435,14 @@ function JamesFlagTile({ flag, onOpen, showOriginBadge }: {
 
   return (
     <Card
-      onClick={() => onOpen(flag.option_symbol)}
+      onClick={() => flag.option_symbol && onOpen(flag.option_symbol)}
       className="p-3 flex flex-col gap-2 hover:shadow-md transition-shadow cursor-pointer"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 flex-wrap">
           <Badge variant="outline" className={cn('font-mono text-[11px] px-1.5 py-0', directionColor(direction))}>
             <DirectionIcon d={direction} />
-            <span className="ml-1">{flag.ticker ?? '—'}</span>
+            <span className="ml-1">{flag.instrument ?? '—'}</span>
           </Badge>
           {showOriginBadge && (
             <Badge variant="outline" className="text-[10px] px-1.5 py-0 font-mono border-amber-500/40 text-amber-300">
@@ -448,20 +450,14 @@ function JamesFlagTile({ flag, onOpen, showOriginBadge }: {
             </Badge>
           )}
           <Badge variant="outline" className={cn('text-[10px] px-1.5 py-0 font-mono uppercase', outcomeClass)}>
-            {graded ? grade!.outcome : 'pending'}
+            {graded ? outcomeLabel(grade!.outcome) : 'pending'}
           </Badge>
-          {graded && grade!.move_to_strike_pct != null && (
-            <span className="text-[10px] font-mono text-muted-foreground tabular-nums">
-              {grade!.move_to_strike_pct >= 0 ? '+' : ''}{grade!.move_to_strike_pct.toFixed(1)}% to strike
-              {grade!.crossed_strike && <span className="ml-1 text-emerald-300">✓</span>}
-            </span>
-          )}
         </div>
         <Star className="w-4 h-4 text-amber-400 shrink-0 fill-amber-400/40" />
       </div>
 
       <div className="flex items-center justify-between text-[11px] text-muted-foreground gap-2">
-        <div className="font-mono truncate">{flag.option_symbol}</div>
+        <div className="font-mono truncate">{flag.option_symbol ?? '—'}</div>
         {graded && grade!.price_change_pct != null && (
           <div className="shrink-0 text-[10px] tabular-nums">
             spot {grade!.price_change_pct >= 0 ? '+' : ''}{grade!.price_change_pct.toFixed(2)}%
@@ -470,7 +466,7 @@ function JamesFlagTile({ flag, onOpen, showOriginBadge }: {
       </div>
 
       <div className="text-[12px] leading-snug text-foreground/90">
-        {flag.note?.trim() ? flag.note : <span className="text-muted-foreground italic">No note</span>}
+        {flag.thesis?.trim() ? flag.thesis : <span className="text-muted-foreground italic">No note</span>}
       </div>
 
       <div className="text-[9px] text-muted-foreground/60 tabular-nums">
@@ -510,6 +506,7 @@ export default function Flags() {
       let q: any = supabase
         .from('ct_flags' as never)
         .select('*, ct_flag_grades(outcome, alpha_pct, price_change_pct, graded_at)')
+        .eq('source', 'specialist')
         .order('created_at', { ascending: false })
         .limit(200);
       if (filters.specialists.size > 0) {
@@ -558,14 +555,17 @@ export default function Flags() {
     queryFn: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let q: any = supabase
-        .from('ct_james_flags' as never)
-        .select('id, option_symbol, ticker, source_flow_id, source_alert_id, direction_view, note, created_at, ct_james_flag_grades(outcome, price_change_pct, move_to_strike_pct, crossed_strike, graded_at)')
+        .from('ct_flags' as never)
+        .select('id, option_symbol, instrument, direction, thesis, source_flow_ids, created_at, ct_flag_grades(outcome, price_change_pct, graded_at)')
+        .eq('source', 'james_star')
         .order('created_at', { ascending: false })
         .limit(200);
       if (filters.specialists.size > 0) {
-        q = q.in('ticker', Array.from(filters.specialists));
+        // Stars carry the underlying as `instrument`; reuse the specialist
+        // chip group as a ticker filter rather than introduce a parallel set.
+        q = q.in('instrument', Array.from(filters.specialists));
       }
-      if (filters.direction !== 'all') q = q.eq('direction_view', filters.direction);
+      if (filters.direction !== 'all') q = q.eq('direction', filters.direction);
       const { data, error } = await q;
       if (error) throw error;
       return (data ?? []) as unknown as JamesFlag[];

@@ -505,18 +505,29 @@ export default function Tape() {
     },
   });
 
-  // James's flagged prints — for star indicator + "Mine only" filter.
+  // James's flagged prints — read from unified ct_flags WHERE source='james_star'.
   const { data: jamesFlags } = useQuery<JamesFlagRow[]>({
     queryKey: ['ct_james_flags_all'],
     refetchInterval: 30_000,
     queryFn: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.from('ct_james_flags' as never) as any)
-        .select('id,option_symbol,ticker,source_flow_id,source_alert_id,direction_view,note,created_at')
+      const { data, error } = await (supabase.from('ct_flags' as never) as any)
+        .select('id,option_symbol,instrument,direction,thesis,source_flow_ids,created_at')
+        .eq('source', 'james_star')
         .order('created_at', { ascending: false })
         .limit(1500);
       if (error) return [];
-      return (data ?? []) as JamesFlagRow[];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      return ((data ?? []) as any[]).map((r) => ({
+        id: r.id,
+        option_symbol: r.option_symbol,
+        ticker: r.instrument,
+        source_flow_id: Array.isArray(r.source_flow_ids) && r.source_flow_ids.length > 0 ? Number(r.source_flow_ids[0]) : null,
+        source_alert_id: null,
+        direction_view: r.direction === 'neutral' ? null : (r.direction as Direction),
+        note: r.thesis,
+        created_at: r.created_at,
+      })) as JamesFlagRow[];
     },
   });
 
@@ -527,31 +538,42 @@ export default function Tape() {
     return s;
   }, [jamesFlags]);
 
-  // Latest grade per starred option_symbol — shown as chip next to star.
+  // Latest grade per starred option_symbol — read from unified ct_flag_grades
+  // joined to ct_flags WHERE source='james_star'. Outcome shown as chip next
+  // to the star icon on each row.
   interface JamesGradeRow {
     option_symbol: string;
-    horizon_hours: number;
     outcome: string;
-    move_to_strike_pct: number | null;
-    crossed_strike: boolean;
+    price_change_pct: number | null;
   }
   const { data: jamesGrades } = useQuery<JamesGradeRow[]>({
     queryKey: ['ct_james_flag_grades_all'],
     refetchInterval: 60_000,
     queryFn: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.from('ct_james_flag_grades' as never) as any)
-        .select('option_symbol,horizon_hours,outcome,move_to_strike_pct,crossed_strike')
-        .order('graded_at', { ascending: false })
+      const { data, error } = await (supabase.from('ct_flags' as never) as any)
+        .select('option_symbol, ct_flag_grades(outcome, price_change_pct, graded_at)')
+        .eq('source', 'james_star')
+        .not('option_symbol', 'is', null)
+        .order('created_at', { ascending: false })
         .limit(2000);
       if (error) return [];
-      return (data ?? []) as JamesGradeRow[];
+      const out: JamesGradeRow[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      for (const r of (data ?? []) as any[]) {
+        const g = Array.isArray(r.ct_flag_grades) ? r.ct_flag_grades[0] : r.ct_flag_grades;
+        if (!g || !g.outcome) continue;
+        out.push({
+          option_symbol: r.option_symbol,
+          outcome: g.outcome,
+          price_change_pct: g.price_change_pct == null ? null : Number(g.price_change_pct),
+        });
+      }
+      return out;
     },
   });
   const latestGradeByOption = useMemo(() => {
     const m = new Map<string, JamesGradeRow>();
-    // jamesGrades is sorted graded_at desc so first row per option_symbol
-    // is the most recently graded horizon.
     for (const g of jamesGrades ?? []) {
       if (!m.has(g.option_symbol)) m.set(g.option_symbol, g);
     }
@@ -1344,18 +1366,18 @@ export default function Tape() {
                           />
                           {flaggedSymbols.has(r.option_symbol) && latestGradeByOption.has(r.option_symbol) && (() => {
                             const g = latestGradeByOption.get(r.option_symbol)!;
-                            const mts = g.move_to_strike_pct;
+                            const pct = g.price_change_pct;
                             const color = g.outcome === 'win' ? 'text-emerald-400 font-bold'
                               : g.outcome === 'partial' ? 'text-emerald-300'
                               : g.outcome === 'loss' ? 'text-red-400'
                               : 'text-muted-foreground';
-                            const label = g.crossed_strike ? 'ITM'
-                              : mts != null ? `${mts >= 0 ? '+' : ''}${mts.toFixed(1)}%`
+                            const label = pct != null
+                              ? `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`
                               : g.outcome;
                             return (
                               <span
                                 className={cn('text-[9px] font-mono tabular-nums', color)}
-                                title={`${g.outcome} at ${g.horizon_hours}h horizon`}
+                                title={`${g.outcome} (underlying ${pct != null ? pct.toFixed(2) + '%' : 'n/a'})`}
                               >
                                 {label}
                               </span>
@@ -1543,8 +1565,9 @@ export default function Tape() {
                   if (!markDialog.row) return;
                   setMarkDialog((s) => ({ ...s, saving: true }));
                   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                  const { error } = await (supabase.from('ct_james_flags' as never) as any)
+                  const { error } = await (supabase.from('ct_flags' as never) as any)
                     .delete()
+                    .eq('source', 'james_star')
                     .eq('option_symbol', markDialog.row.option_symbol);
                   if (error) {
                     toast.error(`Unflag failed: ${error.message}`);
@@ -1554,6 +1577,7 @@ export default function Tape() {
                   toast.success(`Unflagged ${markDialog.row.ticker} ${markDialog.row.option_symbol}`);
                   setMarkDialog({ open: false, row: null, note: '', direction_view: null, saving: false });
                   qc.invalidateQueries({ queryKey: ['ct_james_flags_all'] });
+                  qc.invalidateQueries({ queryKey: ['ct_james_flag_grades_all'] });
                 }}
               >
                 Unflag
@@ -1574,16 +1598,27 @@ export default function Tape() {
                 if (!markDialog.row) return;
                 setMarkDialog((s) => ({ ...s, saving: true }));
                 const r = markDialog.row;
+                const now = new Date();
+                const horizon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+                // Vibes-tagged star: source='james_star', NOT NULL columns
+                // satisfied with safe defaults (instrument=ticker, score=0,
+                // 24h horizon). thesis carries James's note (or NULL).
                 const payload = {
+                  source: 'james_star',
+                  specialist_ticker: null,
+                  instrument: r.ticker,
                   option_symbol: r.option_symbol,
-                  ticker: r.ticker,
-                  source_flow_id: r.source === 'scored' ? r.id : null,
-                  source_alert_id: r.source === 'alert' ? String(r.id) : null,
-                  direction_view: markDialog.direction_view,
-                  note: markDialog.note.trim() || null,
+                  direction: markDialog.direction_view ?? 'neutral',
+                  score: 0,
+                  thesis: markDialog.note.trim() || null,
+                  tags: ['james_star'],
+                  horizon_hours: 24,
+                  horizon_ts: horizon.toISOString(),
+                  source_flow_ids: r.source === 'scored' ? [r.id] : null,
+                  status: 'active',
                 };
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const { error } = await (supabase.from('ct_james_flags' as never) as any).insert(payload);
+                const { error } = await (supabase.from('ct_flags' as never) as any).insert(payload);
                 if (error) {
                   toast.error(`Flag failed: ${error.message}`);
                   setMarkDialog((s) => ({ ...s, saving: false }));
