@@ -695,6 +695,69 @@ function formatPeerFlagsBlock(rows: Array<Record<string, unknown>>): string {
 }
 
 /**
+ * Load recent signature alarms fired by ct-signature-watcher for this ticker.
+ * 30-min window matches signature_alarm_dedupe_min default — captures freshest
+ * patterns without stale clutter. Closes the cross-feedback loop: system
+ * pattern detection feeds specialist judgment on the next wakeup.
+ */
+async function loadRecentSignatureAlarms(supabase: SupabaseClient, ticker: string) {
+  try {
+    const cutoff = new Date(Date.now() - 30 * 60_000).toISOString();
+    // ct_flags column is `instrument`, not `ticker` — signature_alarm rows are
+    // written with specialist_ticker=null and instrument=ticker.
+    const { data, error } = await supabase
+      .from('ct_flags')
+      .select('created_at, option_symbol, direction, thesis, tags')
+      .eq('source', 'signature_alarm')
+      .eq('instrument', ticker)
+      .gte('created_at', cutoff)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    if (error) {
+      console.warn(`[specialistRunner] ${ticker} signature alarms load failed:`, error.message);
+      return [];
+    }
+    return (data ?? []) as Array<Record<string, unknown>>;
+  } catch (e) {
+    console.warn(`[specialistRunner] ${ticker} signature alarms load threw:`, String(e));
+    return [];
+  }
+}
+
+function formatSignatureAlarmsBlock(ticker: string, rows: Array<Record<string, unknown>>): string {
+  if (!rows || rows.length === 0) {
+    return `RECENT SIGNATURE ALARMS FOR ${ticker} (last 30 min): None.`;
+  }
+  const lines: string[] = [`RECENT SIGNATURE ALARMS FOR ${ticker} (last 30 min):`];
+  for (const r of rows) {
+    const tags = Array.isArray(r.tags) ? (r.tags as string[]) : [];
+    let tier = '⚠️';
+    if (tags.includes('gold')) tier = '🥇';
+    else if (tags.includes('silver')) tier = '🥈';
+    else if (tags.includes('bronze')) tier = '🥉';
+
+    // HH:MM ET — UW + alarms produce UTC; convert with America/New_York TZ.
+    const iso = String(r.created_at ?? '');
+    let hhmm = '??:??';
+    try {
+      const d = new Date(iso);
+      hhmm = d.toLocaleTimeString('en-US', {
+        timeZone: 'America/New_York',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+    } catch { /* keep fallback */ }
+
+    const sym = r.option_symbol ?? 'unknown_symbol';
+    const dir = String(r.direction ?? '?');
+    const thesis = String(r.thesis ?? '').slice(0, 120);
+    lines.push(`- ${hhmm} ET ${tier} ${sym} ${dir} — ${thesis}`);
+  }
+  return lines.join('\n');
+}
+
+/**
  * Load the current Lean score for this ticker — the pre-computed composite
  * over flow + walls + news + OI momentum + IV. Specialist's flag direction
  * should be consistent with this Lean OR have a thesis justifying contrarian.
@@ -957,7 +1020,7 @@ export async function runSpecialistWakeup(
   // signatures, snapshot stats, working tracks, today's attribution. Fully
   // defensive (returns a stub when none of the downstream tables are
   // populated yet — see _shared/signatureMemory.ts).
-  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse, tapeReads, peerFlags, leanScore, last5FlagsBlock, signatureEdgeBlock] = await Promise.all([
+  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse, tapeReads, peerFlags, leanScore, last5FlagsBlock, signatureEdgeBlock, signatureAlarms] = await Promise.all([
     loadTickerSnapshot(supabase, ticker),
     loadNextEarnings(supabase, ticker),
     loadRecentOiBuilds(supabase, ticker),
@@ -971,6 +1034,7 @@ export async function runSpecialistWakeup(
     loadTickerLean(supabase, ticker),
     loadLast5FlagsContext(supabase, ticker),
     fetchSignatureEdgeForTicker(supabase, ticker),
+    loadRecentSignatureAlarms(supabase, ticker),
   ]);
 
   const overnightBlock = formatOvernightPositioningBlock(ticker, overnight);
@@ -978,6 +1042,7 @@ export async function runSpecialistWakeup(
   const tapeReaderBlock = formatTapeReaderBlock(tapeReads);
   const peerFlagsBlock = formatPeerFlagsBlock(peerFlags);
   const leanScoreBlock = formatLeanScoreBlock(ticker, leanScore);
+  const signatureAlarmsBlock = formatSignatureAlarmsBlock(ticker, signatureAlarms);
 
   const tickerContext = {
     ticker,
@@ -992,7 +1057,9 @@ export async function runSpecialistWakeup(
     earnings_title: nextEarnings?.title ?? null,
   };
 
-  const userPayload = `${signatureEdgeBlock}
+  const userPayload = `${signatureAlarmsBlock}
+
+${signatureEdgeBlock}
 
 [TICKER CONTEXT]
 ${JSON.stringify(tickerContext, null, 2)}
