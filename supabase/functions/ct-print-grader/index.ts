@@ -418,6 +418,31 @@ async function loadContractLossThreshold(supabase: SupabaseClient): Promise<numb
   return n;
 }
 
+// ---------------------------------------------------------------------------
+// Watchlist loader — single source of truth in ct_config.watcher.watchlist.
+// Defaults to the canonical 10-ticker list if config lookup fails so the
+// grader never silently runs unfiltered (UW budget discipline — Phase B
+// poller polls every track this function creates).
+// ---------------------------------------------------------------------------
+const DEFAULT_WATCHLIST = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
+
+async function loadWatchlist(supabase: SupabaseClient): Promise<Set<string>> {
+  const defaults = new Set(DEFAULT_WATCHLIST);
+  const { data, error } = await supabase
+    .from('ct_config')
+    .select('value')
+    .eq('key', 'watcher.watchlist')
+    .maybeSingle();
+  if (error || !data?.value) return defaults;
+  const arr = data.value as unknown;
+  if (!Array.isArray(arr)) return defaults;
+  const set = new Set<string>();
+  for (const t of arr) {
+    if (typeof t === 'string' && t.length > 0) set.add(t.toUpperCase());
+  }
+  return set.size > 0 ? set : defaults;
+}
+
 function dteBucket(dte: number | null): DteBucket {
   if (dte === null || !Number.isFinite(dte)) return 'long';
   if (dte <= 0) return '0dte';
@@ -819,6 +844,7 @@ interface Pass2Stats {
   skipped_no_price: number;
   // Contract-axis tracking (mirror of ct_print_tracks but on contract price).
   contract_tracks_created: number;
+  contract_tracks_skipped_off_watchlist: number;
   skipped_no_symbol: number;              // option_symbol missing AND synthesis failed
   skipped_no_strike_or_expiry: number;    // synthesis input incomplete
   errors: string[];
@@ -962,11 +988,16 @@ async function createMissingTracks(
 async function createMissingContractTracks(
   supabase: SupabaseClient,
   trackingCfg: TrackingConfig,
+  watchlist: Set<string>,
   stats: Pass2Stats,
 ): Promise<void> {
+  // Server-side watchlist filter — every contract track this function creates
+  // becomes a UW-poll target in Phase B. Off-watchlist alerts never enter the
+  // pipeline (UW budget discipline, ~4k calls/day saved).
   const { data: alerts, error } = await supabase
     .from('ct_flow_alerts')
     .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, executed_at, ingested_at, option_symbol, price, raw')
+    .in('ticker', Array.from(watchlist))
     .order('ingested_at', { ascending: true })
     .limit(PASS2_NEW_SCAN_LIMIT);
 
@@ -1265,18 +1296,32 @@ async function runTrackPass(
     skipped_no_print_time: 0,
     skipped_no_price: 0,
     contract_tracks_created: 0,
+    contract_tracks_skipped_off_watchlist: 0,
     skipped_no_symbol: 0,
     skipped_no_strike_or_expiry: 0,
     errors: [],
   };
 
+  const watchlist = await loadWatchlist(supabase);
+
+  // Visibility: how many alerts in the recent scan window are off-watchlist
+  // and would have been turned into contract tracks (and thus UW polls)
+  // before the filter. Cheap HEAD count, no row payload.
+  const { count: offWatchlistAlertCount } = await supabase
+    .from('ct_flow_alerts')
+    .select('alert_id', { count: 'estimated', head: true })
+    .not('ticker', 'in', `(${Array.from(watchlist).map((t) => `"${t}"`).join(',')})`);
+  stats.contract_tracks_skipped_off_watchlist = offWatchlistAlertCount ?? 0;
+
   // Order: create first (so brand-new prints get a sweep this run), then
   // update working set, then expire matured tracks. Expiring last lets a
   // track that just hit tracking_until still record one final peak.
   // Contract-track creation runs alongside underlying-track creation —
-  // both are insert-only and operate on disjoint tables.
+  // both are insert-only and operate on disjoint tables. Underlying-axis
+  // creation is intentionally NOT watchlist-filtered (no UW cost — uses
+  // ct_price_bars which is fed by a watchlist-filtered ingester).
   await createMissingTracks(supabase, trackingCfg, stats);
-  await createMissingContractTracks(supabase, trackingCfg, stats);
+  await createMissingContractTracks(supabase, trackingCfg, watchlist, stats);
   await updateWorkingTracks(supabase, dteThresholds, stats);
   await expireDueTracks(supabase, stats);
 

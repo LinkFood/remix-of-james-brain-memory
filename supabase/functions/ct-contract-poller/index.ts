@@ -115,9 +115,34 @@ interface Stats {
   expired_flips: number;
   stale_flips: number;
   spread_filtered: number;
+  tracks_filtered_off_watchlist: number;
   budget_exhausted: boolean;
   uw_calls: number;
   errors: string[];
+}
+
+// ---------------------------------------------------------------------------
+// Watchlist loader — single source of truth in ct_config.watcher.watchlist.
+// Defaults to the canonical 10-ticker list if config lookup fails so the
+// poller never silently runs unfiltered (UW budget discipline, see CLAUDE.md).
+// ---------------------------------------------------------------------------
+const DEFAULT_WATCHLIST = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
+
+async function loadWatchlist(supabase: SupabaseClient): Promise<Set<string>> {
+  const defaults = new Set(DEFAULT_WATCHLIST);
+  const { data, error } = await supabase
+    .from('ct_config')
+    .select('value')
+    .eq('key', 'watcher.watchlist')
+    .maybeSingle();
+  if (error || !data?.value) return defaults;
+  const arr = data.value as unknown;
+  if (!Array.isArray(arr)) return defaults;
+  const set = new Set<string>();
+  for (const t of arr) {
+    if (typeof t === 'string' && t.length > 0) set.add(t.toUpperCase());
+  }
+  return set.size > 0 ? set : defaults;
 }
 
 // ---------------------------------------------------------------------------
@@ -229,8 +254,13 @@ function pLimit<T>(concurrency: number, jobs: Array<() => Promise<T>>): Promise<
 
 // ---------------------------------------------------------------------------
 // Eligible-track fetch — LRU on last_quoted_at NULLS FIRST.
+// Watchlist filter applied server-side via .in() — off-watchlist tracks
+// never enter the pipeline (UW budget discipline).
 // ---------------------------------------------------------------------------
-async function fetchEligibleTracks(supabase: SupabaseClient): Promise<ContractTrack[]> {
+async function fetchEligibleTracks(
+  supabase: SupabaseClient,
+  watchlist: Set<string>,
+): Promise<ContractTrack[]> {
   const nowIso = new Date().toISOString();
   const { data, error } = await supabase
     .from('ct_contract_tracks')
@@ -242,6 +272,7 @@ async function fetchEligibleTracks(supabase: SupabaseClient): Promise<ContractTr
       'first_tracked_at, last_quoted_at, sweep_count, tracking_until, print_time, track_status',
     )
     .in('track_status', ['WORKING', 'STALE'])
+    .in('ticker', Array.from(watchlist))
     .gt('tracking_until', nowIso)
     .order('last_quoted_at', { ascending: true, nullsFirst: true })
     .limit(MAX_TRACKS_PER_RUN_FETCH);
@@ -483,6 +514,7 @@ serve(async (req) => {
     expired_flips: 0,
     stale_flips: 0,
     spread_filtered: 0,
+    tracks_filtered_off_watchlist: 0,
     budget_exhausted: false,
     uw_calls: 0,
     errors: [],
@@ -502,7 +534,20 @@ serve(async (req) => {
     );
 
     const cfg = await loadPollerConfig(supabase);
-    const allTracks = await fetchEligibleTracks(supabase);
+    const watchlist = await loadWatchlist(supabase);
+
+    // Visibility: how many otherwise-eligible WORKING/STALE tracks we skip
+    // because they're off-watchlist. Cheap HEAD count, no row payload.
+    const nowIsoForCount = new Date().toISOString();
+    const { count: offWatchlistCount } = await supabase
+      .from('ct_contract_tracks')
+      .select('id', { count: 'estimated', head: true })
+      .in('track_status', ['WORKING', 'STALE'])
+      .not('ticker', 'in', `(${Array.from(watchlist).map((t) => `"${t}"`).join(',')})`)
+      .gt('tracking_until', nowIsoForCount);
+    stats.tracks_filtered_off_watchlist = offWatchlistCount ?? 0;
+
+    const allTracks = await fetchEligibleTracks(supabase, watchlist);
     const dueTracks = filterByCadence(allTracks, cfg, mode);
     stats.tracks_eligible = dueTracks.length;
 
