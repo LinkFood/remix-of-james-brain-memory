@@ -1148,7 +1148,7 @@ export default function Tape() {
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">V/OI</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">OI Δ1d</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Ask%</TableHead>
-                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Score</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right" title="Volatility-magnitude detector (0-100). High = setup likely to MOVE big; direction is the specialist's job, not this score's. Per 4,300-event analysis, scorer is a volatility predictor not a direction predictor.">Score</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Tags</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-center w-10">
                     <Star className="w-3.5 h-3.5 inline" />
