@@ -23,6 +23,7 @@ import { logClaudeUsage } from './claudeUsageLog.ts';
 import { isKillSwitchActive } from './killSwitch.ts';
 import { recordDecision } from './decisionJournal.ts';
 import { addTradingHours } from './marketClock.ts';
+import { fetchSignatureEdgeForTicker } from './signatureMemory.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -905,7 +906,11 @@ export async function runSpecialistWakeup(
   }
 
   // 8-12. Context for Claude.
-  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse, tapeReads, peerFlags, leanScore, last5FlagsBlock] = await Promise.all([
+  // signatureEdgeBlock is the accumulated-edge anchor — pulls promoted
+  // signatures, snapshot stats, working tracks, today's attribution. Fully
+  // defensive (returns a stub when none of the downstream tables are
+  // populated yet — see _shared/signatureMemory.ts).
+  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse, tapeReads, peerFlags, leanScore, last5FlagsBlock, signatureEdgeBlock] = await Promise.all([
     loadTickerSnapshot(supabase, ticker),
     loadNextEarnings(supabase, ticker),
     loadRecentOiBuilds(supabase, ticker),
@@ -918,6 +923,7 @@ export async function runSpecialistWakeup(
     loadPeerFlags(supabase, ticker),
     loadTickerLean(supabase, ticker),
     loadLast5FlagsContext(supabase, ticker),
+    fetchSignatureEdgeForTicker(supabase, ticker),
   ]);
 
   const overnightBlock = formatOvernightPositioningBlock(ticker, overnight);
@@ -939,7 +945,9 @@ export async function runSpecialistWakeup(
     earnings_title: nextEarnings?.title ?? null,
   };
 
-  const userPayload = `[TICKER CONTEXT]
+  const userPayload = `${signatureEdgeBlock}
+
+[TICKER CONTEXT]
 ${JSON.stringify(tickerContext, null, 2)}
 
 ${tapeReaderBlock}

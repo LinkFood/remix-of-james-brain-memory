@@ -100,6 +100,80 @@ interface TapeCommentaryRow {
   commentary: string;
 }
 
+// ---------------------------------------------------------------------------
+// Hedge-fund-grade attribution types — all rows defensively read. Downstream
+// tables (ct_edge_daily, ct_print_grades, ct_print_tracks, ct_signatures) are
+// populated by parallel agents. Anything missing → empty fallback.
+// ---------------------------------------------------------------------------
+
+interface EdgeDailyRow {
+  session_date: string;
+  top_winning_signatures: unknown;
+  top_losing_signatures: unknown;
+  by_ticker: unknown;
+  by_time_bucket: unknown;
+  by_dte_bucket?: unknown;
+  slow_burn_pays_today?: unknown;
+  regime_tag: string | null;
+  total_graded: number | null;
+  total_wins: number | null;
+  total_losses: number | null;
+  overall_hit_rate: number | null;
+  tracks_realized_today?: number | null;
+}
+
+interface PrintGradeRow {
+  id: string;
+  alert_id: string;
+  ticker: string;
+  horizon: string;
+  print_time: string;
+  predicted_direction: string;
+  predicted_source: string;
+  actual_move_pct: number | string | null;
+  magnitude_pct: number | string | null;
+  grade: string;
+  graded_at: string;
+}
+
+interface FlowAlertJoin {
+  alert_id?: string | null;
+  id?: string | null;
+  ticker?: string | null;
+  side?: string | null;
+  strike?: number | string | null;
+  expiry?: string | null;
+  signature_key?: string | null;
+  option_symbol?: string | null;
+  premium?: number | string | null;
+}
+
+interface PrintTrackRow {
+  print_id: string;
+  alert_id?: string | null;
+  ticker: string;
+  signature_key?: string | null;
+  print_time: string;
+  peak_favorable_pct?: number | string | null;
+  peak_favorable_at?: string | null;
+  peak_adverse_pct?: number | string | null;
+  threshold_pct?: number | string | null;
+  track_status: string;
+  realized_at?: string | null;
+  dte_bucket?: string | null;
+}
+
+interface SignatureRow {
+  id: string;
+  signature_key: string;
+  ticker: string;
+  hit_rate: number | string | null;
+  edge_score: number | string | null;
+  sample_count: number | null;
+  promoted: boolean;
+  last_updated_at: string;
+}
+
 function fmtUsd(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(Number(n))) return '—';
   const v = Number(n);
@@ -237,6 +311,119 @@ serve(async (req) => {
   const pulseSeries = (flowPulseSeriesRes.data ?? []) as FlowPulseTickRow[];
   const tape = (tapeRes.data ?? []) as TapeCommentaryRow[];
   const bars = (barsRes.data ?? []) as PriceBarRow[];
+
+  // -------------------------------------------------------------------------
+  // Hedge-fund attribution pulls — all defensive. Empty fallback on any error
+  // so the summary still ships when the downstream tables haven't been
+  // populated by their respective agent yet.
+  // -------------------------------------------------------------------------
+
+  // Session-date NY → UTC midnight bounds for filtering "today" on tracks
+  // realized + grades graded.
+  const sessionDayStartUtc = `${sessionDate}T00:00:00Z`;
+  const sessionDayEndUtc = `${sessionDate}T23:59:59Z`;
+
+  let edgeDaily: EdgeDailyRow | null = null;
+  try {
+    const { data, error } = await sb
+      .from('ct_edge_daily')
+      .select('session_date, top_winning_signatures, top_losing_signatures, by_ticker, by_time_bucket, by_dte_bucket, slow_burn_pays_today, regime_tag, total_graded, total_wins, total_losses, overall_hit_rate, tracks_realized_today')
+      .eq('session_date', sessionDate)
+      .maybeSingle();
+    if (error) {
+      console.warn('[ct-eod-summary] ct_edge_daily load failed:', error.message);
+    } else if (data) {
+      edgeDaily = data as EdgeDailyRow;
+    }
+  } catch (e) {
+    console.warn('[ct-eod-summary] ct_edge_daily threw:', String(e));
+  }
+
+  let printGradesToday: PrintGradeRow[] = [];
+  try {
+    const { data, error } = await sb
+      .from('ct_print_grades')
+      .select('id, alert_id, ticker, horizon, print_time, predicted_direction, predicted_source, actual_move_pct, magnitude_pct, grade, graded_at')
+      .gte('graded_at', sessionDayStartUtc)
+      .lte('graded_at', sessionDayEndUtc)
+      .eq('grade', 'WIN')
+      .order('magnitude_pct', { ascending: false, nullsFirst: false })
+      .limit(40);
+    if (error) {
+      console.warn('[ct-eod-summary] ct_print_grades load failed:', error.message);
+    } else {
+      printGradesToday = (data ?? []) as PrintGradeRow[];
+    }
+  } catch (e) {
+    console.warn('[ct-eod-summary] ct_print_grades threw:', String(e));
+  }
+
+  // Pull signature_key + flow context for those alerts (best-effort join)
+  const flowContextByAlertId = new Map<string, FlowAlertJoin>();
+  if (printGradesToday.length > 0) {
+    try {
+      const alertIds = Array.from(new Set(printGradesToday.map(g => g.alert_id).filter(Boolean)));
+      if (alertIds.length > 0) {
+        const { data, error } = await sb
+          .from('ct_flow_alerts')
+          .select('alert_id, ticker, side, strike, expiry, signature_key, option_symbol, premium')
+          .in('alert_id', alertIds);
+        if (error) {
+          console.warn('[ct-eod-summary] ct_flow_alerts join failed:', error.message);
+        } else {
+          for (const r of (data ?? []) as FlowAlertJoin[]) {
+            const key = r.alert_id ?? r.id;
+            if (key) flowContextByAlertId.set(String(key), r);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[ct-eod-summary] ct_flow_alerts threw:', String(e));
+    }
+  }
+
+  let realizedTracksToday: PrintTrackRow[] = [];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (sb.from('ct_print_tracks' as never) as any)
+      .select('print_id, alert_id, ticker, signature_key, print_time, peak_favorable_pct, peak_favorable_at, peak_adverse_pct, threshold_pct, track_status, realized_at, dte_bucket')
+      .eq('track_status', 'REALIZED')
+      .gte('realized_at', sessionDayStartUtc)
+      .lte('realized_at', sessionDayEndUtc)
+      .order('peak_favorable_pct', { ascending: false, nullsFirst: false })
+      .limit(20);
+    if (error) {
+      console.warn('[ct-eod-summary] ct_print_tracks REALIZED load failed:', error.message);
+    } else {
+      realizedTracksToday = (data ?? []) as PrintTrackRow[];
+    }
+  } catch (e) {
+    console.warn('[ct-eod-summary] ct_print_tracks threw:', String(e));
+  }
+
+  // ct_signatures library health
+  let signaturesAll: SignatureRow[] = [];
+  let signaturesPromoted: SignatureRow[] = [];
+  let signaturesPromotedToday: SignatureRow[] = [];
+  try {
+    const { data, error } = await sb
+      .from('ct_signatures')
+      .select('id, signature_key, ticker, hit_rate, edge_score, sample_count, promoted, last_updated_at')
+      .order('edge_score', { ascending: false, nullsFirst: false })
+      .limit(500);
+    if (error) {
+      console.warn('[ct-eod-summary] ct_signatures load failed:', error.message);
+    } else {
+      signaturesAll = (data ?? []) as SignatureRow[];
+      signaturesPromoted = signaturesAll.filter(s => s.promoted === true);
+      signaturesPromotedToday = signaturesPromoted.filter(s => {
+        const ts = String(s.last_updated_at ?? '');
+        return ts.startsWith(sessionDate);
+      });
+    }
+  } catch (e) {
+    console.warn('[ct-eod-summary] ct_signatures threw:', String(e));
+  }
 
   // ----- Aggregate: gradesByFlagId -------------------------------------------
   const gradeByFlag = new Map<string, GradeRow>();
@@ -431,6 +618,177 @@ serve(async (req) => {
     },
   };
 
+  // -------------------------------------------------------------------------
+  // Build per-specialist scorecard: flags today × WINs × REALIZED tracks for
+  // the ticker. Uses the data already pulled above — no extra reads.
+  // -------------------------------------------------------------------------
+  const printGradesByTicker = new Map<string, PrintGradeRow[]>();
+  for (const g of printGradesToday) {
+    const arr = printGradesByTicker.get(g.ticker) ?? [];
+    arr.push(g);
+    printGradesByTicker.set(g.ticker, arr);
+  }
+  const realizedByTicker = new Map<string, PrintTrackRow[]>();
+  for (const t of realizedTracksToday) {
+    const arr = realizedByTicker.get(t.ticker) ?? [];
+    arr.push(t);
+    realizedByTicker.set(t.ticker, arr);
+  }
+
+  const specialistScorecard: Record<string, {
+    flags_today: number;
+    wins_today: number;     // graded WIN prints from ct_print_grades
+    losses_today: number;   // ct_flag_grades.outcome=loss
+    realized_tracks_today: number;
+    best_call: { signature_key: string | null; magnitude_pct: number | null; horizon: string } | null;
+    worst_call: { thesis_slice: string | null; alpha_pct: number | null } | null;
+  }> = {};
+
+  for (const t of WATCHLIST) {
+    const flagsT = flags.filter(f => f.specialist_ticker === t);
+    const flagsWithGrades = flagsT.map(f => ({ flag: f, grade: gradeByFlag.get(f.id) ?? null }));
+    const lossGraded = flagsWithGrades.filter(fg => fg.grade?.outcome === 'loss' || fg.grade?.outcome === 'invalidated_early');
+    let worstCall: { thesis_slice: string | null; alpha_pct: number | null } | null = null;
+    if (lossGraded.length > 0) {
+      // Pick the loss with the worst (most negative) alpha_pct.
+      const sorted = [...lossGraded].sort((a, b) => {
+        const av = Number(a.grade?.alpha_pct ?? 0);
+        const bv = Number(b.grade?.alpha_pct ?? 0);
+        return av - bv;
+      });
+      const w = sorted[0];
+      worstCall = {
+        thesis_slice: w.flag.thesis ? w.flag.thesis.slice(0, 140) : null,
+        alpha_pct: w.grade?.alpha_pct != null ? Number(w.grade.alpha_pct) : null,
+      };
+    }
+
+    const printWinsT = printGradesByTicker.get(t) ?? [];
+    let bestCall: { signature_key: string | null; magnitude_pct: number | null; horizon: string } | null = null;
+    if (printWinsT.length > 0) {
+      const sorted = [...printWinsT].sort((a, b) => {
+        const av = Number(a.magnitude_pct ?? 0);
+        const bv = Number(b.magnitude_pct ?? 0);
+        return bv - av;
+      });
+      const top = sorted[0];
+      const ctx = flowContextByAlertId.get(top.alert_id);
+      bestCall = {
+        signature_key: ctx?.signature_key ?? null,
+        magnitude_pct: top.magnitude_pct != null ? Number(top.magnitude_pct) : null,
+        horizon: top.horizon,
+      };
+    }
+
+    specialistScorecard[t] = {
+      flags_today: flagsT.length,
+      wins_today: printWinsT.length,
+      losses_today: lossGraded.length,
+      realized_tracks_today: (realizedByTicker.get(t) ?? []).length,
+      best_call: bestCall,
+      worst_call: worstCall,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Slow-burn extraction — prints from 3+ days ago whose tracks REALIZED
+  // today. ct_edge_daily.slow_burn_pays_today is canonical; fall back to
+  // computing from realizedTracksToday if the edge-miner column isn't
+  // populated yet.
+  // -------------------------------------------------------------------------
+  const slowBurnFromEdge = (() => {
+    const raw = edgeDaily?.slow_burn_pays_today;
+    if (Array.isArray(raw)) return raw as Array<Record<string, unknown>>;
+    if (raw && typeof raw === 'object') {
+      const arr = (raw as Record<string, unknown>).items;
+      if (Array.isArray(arr)) return arr as Array<Record<string, unknown>>;
+    }
+    return null;
+  })();
+
+  const SLOW_BURN_DAYS = 3;
+  const todayDate = new Date(`${sessionDate}T00:00:00Z`).getTime();
+  const slowBurnFallback = realizedTracksToday
+    .filter(t => {
+      const printedTs = new Date(String(t.print_time ?? '')).getTime();
+      if (!Number.isFinite(printedTs)) return false;
+      const daysOld = (todayDate - printedTs) / (24 * 3600_000);
+      return daysOld >= SLOW_BURN_DAYS;
+    })
+    .map(t => ({
+      ticker: t.ticker,
+      signature_key: t.signature_key,
+      print_time: t.print_time,
+      realized_at: t.realized_at ?? null,
+      peak_favorable_pct: t.peak_favorable_pct,
+      days_to_realization:
+        Number.isFinite(new Date(String(t.realized_at ?? '')).getTime())
+          ? Math.round(
+              (new Date(String(t.realized_at)).getTime() - new Date(String(t.print_time)).getTime()) /
+              (24 * 3600_000) * 10
+            ) / 10
+          : null,
+    }));
+
+  const slowBurnList: Array<Record<string, unknown>> = slowBurnFromEdge ?? slowBurnFallback;
+
+  // -------------------------------------------------------------------------
+  // Top 10 print grades + Top 10 realized tracks (already sorted from query)
+  // -------------------------------------------------------------------------
+  const topPrintGrades = printGradesToday.slice(0, 10).map(g => {
+    const ctx = flowContextByAlertId.get(g.alert_id);
+    return {
+      ticker: g.ticker,
+      horizon: g.horizon,
+      print_time: g.print_time,
+      predicted_direction: g.predicted_direction,
+      predicted_source: g.predicted_source,
+      actual_move_pct: g.actual_move_pct != null ? Number(g.actual_move_pct) : null,
+      magnitude_pct: g.magnitude_pct != null ? Number(g.magnitude_pct) : null,
+      signature_key: ctx?.signature_key ?? null,
+      option_symbol: ctx?.option_symbol ?? null,
+    };
+  });
+
+  const topRealizedTracks = realizedTracksToday.slice(0, 10).map(t => {
+    const printedTs = new Date(String(t.print_time ?? '')).getTime();
+    const realizedTs = new Date(String(t.realized_at ?? '')).getTime();
+    const daysToRealization = Number.isFinite(printedTs) && Number.isFinite(realizedTs)
+      ? Math.round((realizedTs - printedTs) / (24 * 3600_000) * 10) / 10
+      : null;
+    return {
+      ticker: t.ticker,
+      signature_key: t.signature_key ?? null,
+      print_time: t.print_time,
+      peak_favorable_pct: t.peak_favorable_pct != null ? Number(t.peak_favorable_pct) : null,
+      peak_favorable_at: t.peak_favorable_at ?? null,
+      realized_at: t.realized_at ?? null,
+      days_to_realization: daysToRealization,
+    };
+  });
+
+  // -------------------------------------------------------------------------
+  // Edge attribution rollup — copy what exists, omit what doesn't.
+  // -------------------------------------------------------------------------
+  const edgeAttribution: Record<string, unknown> = edgeDaily
+    ? {
+        regime_tag: edgeDaily.regime_tag,
+        overall_hit_rate: edgeDaily.overall_hit_rate,
+        total_graded: edgeDaily.total_graded,
+        total_wins: edgeDaily.total_wins,
+        total_losses: edgeDaily.total_losses,
+        top_winning_signatures: edgeDaily.top_winning_signatures ?? [],
+        top_losing_signatures: edgeDaily.top_losing_signatures ?? [],
+        by_ticker: edgeDaily.by_ticker ?? {},
+        by_time_bucket: edgeDaily.by_time_bucket ?? {},
+        by_dte_bucket: edgeDaily.by_dte_bucket ?? {},
+      }
+    : {};
+
+  const tracksRealizedTodayCount = edgeDaily?.tracks_realized_today ?? realizedTracksToday.length;
+  const snapshotHitRate = edgeDaily?.overall_hit_rate ?? null;
+  const regimeTag = edgeDaily?.regime_tag ?? null;
+
   // ----- Build Sonnet prompt --------------------------------------------------
   const promptLines: string[] = [];
   promptLines.push(`Session date: ${sessionDate}`);
@@ -503,12 +861,140 @@ serve(async (req) => {
   }
   promptLines.push('');
 
+  // === EDGE ATTRIBUTION (ct_edge_daily) =====================================
+  promptLines.push('=== EDGE ATTRIBUTION (ct_edge_daily) ===');
+  if (!edgeDaily) {
+    promptLines.push('[ct_edge_daily not populated for this session yet — edge miner runs at 21:00 UTC, after this report]');
+  } else {
+    const hr = edgeDaily.overall_hit_rate != null ? `${(Number(edgeDaily.overall_hit_rate) * 100).toFixed(1)}%` : '—';
+    promptLines.push(`Regime: ${edgeDaily.regime_tag ?? 'untagged'}`);
+    promptLines.push(`Snapshot hit rate: ${hr} (${edgeDaily.total_wins ?? 0}W / ${edgeDaily.total_losses ?? 0}L of ${edgeDaily.total_graded ?? 0} graded prints)`);
+    const winners = Array.isArray(edgeDaily.top_winning_signatures) ? edgeDaily.top_winning_signatures as Array<Record<string, unknown>> : [];
+    if (winners.length > 0) {
+      promptLines.push(`Top winning signatures today:`);
+      for (const w of winners.slice(0, 8)) {
+        const k = w.signature_key ?? '?';
+        const wins = w.wins ?? w.win_count ?? '?';
+        const losses = w.losses ?? w.loss_count ?? '?';
+        const edge = w.edge_score != null ? Number(w.edge_score).toFixed(2) : '—';
+        promptLines.push(`  - ${k} | ${wins}W/${losses}L | edge ${edge}`);
+      }
+    } else {
+      promptLines.push('Top winning signatures today: [none reported]');
+    }
+    const losers = Array.isArray(edgeDaily.top_losing_signatures) ? edgeDaily.top_losing_signatures as Array<Record<string, unknown>> : [];
+    if (losers.length > 0) {
+      promptLines.push(`Top losing signatures today:`);
+      for (const l of losers.slice(0, 5)) {
+        const k = l.signature_key ?? '?';
+        const wins = l.wins ?? l.win_count ?? '?';
+        const losses = l.losses ?? l.loss_count ?? '?';
+        const edge = l.edge_score != null ? Number(l.edge_score).toFixed(2) : '—';
+        promptLines.push(`  - ${k} | ${wins}W/${losses}L | edge ${edge}`);
+      }
+    }
+    if (edgeDaily.by_dte_bucket && typeof edgeDaily.by_dte_bucket === 'object') {
+      promptLines.push(`DTE bucket performance: ${JSON.stringify(edgeDaily.by_dte_bucket).slice(0, 600)}`);
+    }
+    if (edgeDaily.by_time_bucket && typeof edgeDaily.by_time_bucket === 'object') {
+      promptLines.push(`Time bucket performance: ${JSON.stringify(edgeDaily.by_time_bucket).slice(0, 600)}`);
+    }
+  }
+  promptLines.push('');
+
+  // === SLOW-BURN RETROACTIVE WINS ===========================================
+  promptLines.push('=== SLOW-BURN RETROACTIVE WINS (prints 3+ days old that REALIZED today) ===');
+  if (slowBurnList.length === 0) {
+    promptLines.push('[no retroactive realizations today]');
+  } else {
+    for (const s of slowBurnList.slice(0, 12)) {
+      const tk = s.ticker ?? '?';
+      const sig = s.signature_key ?? '?';
+      const printT = String(s.print_time ?? '').slice(0, 16).replace('T', ' ');
+      const realT = String(s.realized_at ?? '').slice(0, 16).replace('T', ' ');
+      const days = s.days_to_realization ?? '?';
+      const peak = s.peak_favorable_pct;
+      const peakStr = peak != null && Number.isFinite(Number(peak))
+        ? `peak ${(Number(peak) * (Math.abs(Number(peak)) <= 1 ? 100 : 1)).toFixed(2)}%`
+        : 'peak —';
+      promptLines.push(`  - ${tk} \`${sig}\` | printed ${printT} → realized ${realT} (${days}d) | ${peakStr}`);
+    }
+  }
+  promptLines.push('');
+
+  // === TOP 10 GRADED PRINTS TODAY (WINs) ====================================
+  promptLines.push('=== TOP 10 PRINT GRADES TODAY (WIN by magnitude) ===');
+  if (topPrintGrades.length === 0) {
+    promptLines.push('[no graded prints today — check ct-print-grader cron]');
+  } else {
+    for (const g of topPrintGrades) {
+      const printT = String(g.print_time ?? '').slice(0, 16).replace('T', ' ');
+      const sig = g.signature_key ?? '?';
+      const sym = g.option_symbol ?? '?';
+      const move = g.actual_move_pct != null
+        ? `${(g.actual_move_pct * (Math.abs(g.actual_move_pct) <= 1 ? 100 : 1)).toFixed(2)}%`
+        : '—';
+      promptLines.push(`  - ${g.ticker} ${sym} | ${printT} | ${g.horizon} | ${g.predicted_direction} (${g.predicted_source}) | underlying ${move} | sig ${sig}`);
+    }
+  }
+  promptLines.push('');
+
+  // === TOP 10 REALIZED TRACKS TODAY ========================================
+  promptLines.push('=== TOP 10 REALIZED TRACKS TODAY (lifetime peak — any print date) ===');
+  if (topRealizedTracks.length === 0) {
+    promptLines.push('[no realized tracks today — track-status hasn\'t flipped]');
+  } else {
+    for (const t of topRealizedTracks) {
+      const printT = String(t.print_time ?? '').slice(0, 16).replace('T', ' ');
+      const peakAtT = t.peak_favorable_at ? String(t.peak_favorable_at).slice(0, 16).replace('T', ' ') : '—';
+      const peak = t.peak_favorable_pct;
+      const peakStr = peak != null && Number.isFinite(Number(peak))
+        ? `${(Number(peak) * (Math.abs(Number(peak)) <= 1 ? 100 : 1)).toFixed(2)}%`
+        : '—';
+      const days = t.days_to_realization ?? '?';
+      const sig = t.signature_key ?? '?';
+      promptLines.push(`  - ${t.ticker} | printed ${printT} → peak ${peakAtT} | peak ${peakStr} | ${days}d to realization | sig ${sig}`);
+    }
+  }
+  promptLines.push('');
+
+  // === PER-SPECIALIST SCORECARD ============================================
+  promptLines.push('=== PER-SPECIALIST SCORECARD ===');
+  for (const t of WATCHLIST) {
+    const sc = specialistScorecard[t];
+    const bestStr = sc.best_call
+      ? ` | best print: ${sc.best_call.signature_key ?? '?'} ${sc.best_call.magnitude_pct != null ? (sc.best_call.magnitude_pct * (Math.abs(sc.best_call.magnitude_pct) <= 1 ? 100 : 1)).toFixed(2) + '%' : '—'} (${sc.best_call.horizon})`
+      : '';
+    const worstStr = sc.worst_call
+      ? ` | worst flag: alpha ${sc.worst_call.alpha_pct != null ? sc.worst_call.alpha_pct.toFixed(2) + '%' : '—'} — ${(sc.worst_call.thesis_slice ?? '').slice(0, 80)}`
+      : '';
+    promptLines.push(`${t}: ${sc.flags_today} flags | ${sc.wins_today} WIN prints | ${sc.losses_today} loss-graded flags | ${sc.realized_tracks_today} realized tracks${bestStr}${worstStr}`);
+  }
+  promptLines.push('');
+
+  // === SIGNATURE LIBRARY HEALTH ============================================
+  promptLines.push('=== SIGNATURE LIBRARY HEALTH ===');
+  promptLines.push(`Tracked: ${signaturesAll.length} | Promoted: ${signaturesPromoted.length} | Promoted today: ${signaturesPromotedToday.length}`);
+  if (signaturesPromotedToday.length > 0) {
+    promptLines.push(`Newly promoted today (top 5):`);
+    for (const s of signaturesPromotedToday.slice(0, 5)) {
+      const hr = s.hit_rate != null ? `${(Number(s.hit_rate) * 100).toFixed(1)}%` : '—';
+      const edge = s.edge_score != null ? Number(s.edge_score).toFixed(2) : '—';
+      promptLines.push(`  - \`${s.signature_key}\` | hit ${hr} (n=${s.sample_count ?? '?'}) | edge ${edge}`);
+    }
+  }
+  promptLines.push('');
+
   // Data quality flags
   const dataQualityNotes: string[] = [];
   if (reads.length < 30) dataQualityNotes.push(`Only ${reads.length} specialist reads — system is brand-new (specialist_reads launched 2026-04-24).`);
   if (flags.length < 10) dataQualityNotes.push(`Only ${flags.length} flags written — sample is small.`);
   if (grades.length === 0 && flags.length > 0) dataQualityNotes.push('No grades landed yet — Tier 2 grader just shipped today, most flags still in active/horizon window.');
   if (pulseSeries.length === 0) dataQualityNotes.push('FlowPulse series is empty — Phase 1 capture cron may not have populated today.');
+  if (!edgeDaily) dataQualityNotes.push('ct_edge_daily not populated — edge miner cron runs after this report; attribution sections will be empty.');
+  if (printGradesToday.length === 0) dataQualityNotes.push('ct_print_grades empty — print grader hasn\'t run yet for this session OR no WIN-graded prints today.');
+  if (realizedTracksToday.length === 0) dataQualityNotes.push('ct_print_tracks empty — track tracker hasn\'t run yet, retroactive attribution unavailable.');
+  if (signaturesAll.length === 0) dataQualityNotes.push('ct_signatures empty — signature miner hasn\'t accumulated samples yet.');
   if (dataQualityNotes.length > 0) {
     promptLines.push('=== DATA QUALITY FLAGS ===');
     for (const note of dataQualityNotes) promptLines.push(`  - ${note}`);
@@ -517,15 +1003,29 @@ serve(async (req) => {
 
   const userMsg = promptLines.join('\n');
 
-  const system = `You are the Co-Trader EOD analyst. Write a 400-500 word narrative covering today's session for a day trader who runs an autonomous options-flow system. Cover, in order:
+  const system = `You are the head of risk attribution at a quantitative options-flow hedge fund. Co-Trader is the autonomous trader; you write the daily P&L attribution report that the partners read at 5pm. Target 900-1200 words.
 
-1. **The day's market arc** — open vs close net premium, regime shifts, where the tape was sitting first vs last commentary. Concrete numbers.
-2. **Where specialists landed** — per-ticker direction split and grades where data exists. Call out specialists with sharp accuracy AND specialists where direction skewed all one way (bias check).
-3. **Standout flow events** — top 1-2 by premium with what makes them notable (score, direction, ticker context).
-4. **Notable stacking patterns** — top 1-2 stacks today and the directional read (call writing / put accumulation / etc.). Reference the labels — they're already interpreted.
-5. **Data-quality realism** — when sample is tiny, say so explicitly. The system is days old; don't over-claim. If specialist_reads is brand new today, lead with that.
+Style: institutional. Concrete numbers, no hedging language ("seems", "appears", "may"), no disclaimers. Reference signature_keys verbatim (\`QQQ:call:0-7:ATM:ask:open:2h\` style). Reference tickers by symbol. Cite specific prints with timestamps when possible. If a section's data is empty, say so in one sentence and move on — don't pad.
 
-Style: terse, factual, no hedging language ("seems", "appears"). Reference numbers. Reference tickers by symbol. No disclaimers, no "this is not financial advice." If the data is sparse, name what's missing rather than padding the narrative. End with one sentence on what tomorrow's open looks like to set up given today's read.`;
+Structure exactly:
+
+**HEADLINE** — single block of 5-6 short sentences. Lead with regime tag, today's snapshot hit rate, total tracks realized, count of slow-burn attributions, count of newly-promoted signatures. Make it readable in 15 seconds.
+
+**Section 1: Today's Edge** — which signatures paid in real-time today (snapshot WINs from ct_print_grades + REALIZED tracks whose print_time is today or yesterday). Cite at least 2-3 specific prints — ticker, contract, print time, signature_key, the underlying move. Be specific: "QQQ 655C 0DTE aggressive-ask at 10:47am peaked +3.2% by 12:15pm."
+
+**Section 2: Retroactive Alpha (Slow-Burn)** — tracks from prints 3+ days old that REALIZED today. This is the second half of the attribution. Quote signature_keys. State the realization gap in days. Example structure: "On 2026-04-17 we captured 14 ask-side calls on NVDA 30-day expiry; 9 of them peaked today, 7 days into life. Signature \`NVDA:call:8-30:OTM-near:ask:midday:plus1d\` is now 18W/4L lifetime, edge 0.42." If list is empty, say "No slow-burn realizations today" in one line.
+
+**Section 3: Failures to Repeat** — promoted signatures that fired today but DIDN'T pay. Pull from top_losing_signatures + per-specialist worst_call. Ask: what's different about today's regime that neutered them? Tie to regime_tag if relevant.
+
+**Section 4: Per-Specialist Scorecard** — march through the 10 specialists in WATCHLIST order. One line each: name, flags written, WIN prints, loss-graded flags, realized tracks, best call, worst call. Tone is performance review — direct, factual, no padding.
+
+**Section 5: Signature Library Health** — total tracked / promoted / newly promoted today. If any newly-promoted, name them and show hit rate + sample. This is the daily proof that the library is GROWING regardless of P&L (Tenet 5).
+
+**Section 6: Tape Narrative** — keep it tight. Open vs close net premium, regime shifts, first-vs-last tape commentary. Concrete numbers from MARKET-WIDE block. 4-6 sentences.
+
+**Section 7: Tomorrow's Watchlist** — call out (a) signatures with high edge_score that FAILED today (potential mean-revert setup tomorrow) and (b) signatures on a hot streak from today's winners. List 3-5 candidates with one-line "why".
+
+End with a single closing sentence on the day's regime → tomorrow's setup.`;
 
   // ----- Call Sonnet ----------------------------------------------------------
   let summaryText = '';
@@ -539,8 +1039,8 @@ Style: terse, factual, no hedging language ("seems", "appears"). Reference numbe
       model: CLAUDE_MODELS.sonnet_46,
       system,
       messages: [{ role: 'user', content: userMsg }],
-      max_tokens: 1400,
-      temperature: 0.4,
+      max_tokens: 3200,
+      temperature: 0.3,
     });
     const textBlock = resp.content.find(b => b.type === 'text' && b.text);
     summaryText = (textBlock?.text ?? '').trim();
@@ -556,12 +1056,25 @@ Style: terse, factual, no hedging language ("seems", "appears"). Reference numbe
   const costUsd = (inputTokens * rates.input + outputTokens * rates.output) / 1_000_000;
 
   // ----- Upsert into ct_eod_summaries ----------------------------------------
+  // Includes new attribution columns from migration 20260425000012. Older
+  // databases without the migration run will silently drop the new keys (PG
+  // upsert on missing column = error — but the migration is checked into the
+  // same release so prod is in sync). If a column is missing (defensive),
+  // the upsert error is captured below and surfaced on the response.
   const upsertRow = {
     session_date: sessionDate,
     summary_text: summaryText,
     specialist_stats: specialistStats,
     ticker_stats: tickerStats,
     market_stats: marketStats,
+    edge_attribution: edgeAttribution,
+    slow_burn_pays_today: slowBurnList,
+    top_print_grades: topPrintGrades,
+    top_realized_tracks: topRealizedTracks,
+    specialist_scorecard: specialistScorecard,
+    regime_tag: regimeTag,
+    snapshot_hit_rate: snapshotHitRate,
+    tracks_realized_today: tracksRealizedTodayCount,
     generated_at: new Date().toISOString(),
     model: modelUsed,
     cost_usd: Math.round(costUsd * 1_000_000) / 1_000_000,
@@ -584,10 +1097,24 @@ Style: terse, factual, no hedging language ("seems", "appears"). Reference numbe
       const userId = users?.[0]?.id as string | undefined;
 
       if (userId) {
-        const preview = summaryText.slice(0, 200) + (summaryText.length > 200 ? '…' : '');
+        // Pull headline (everything until the first **Section** marker) for
+        // the Slack preview block. Falls back to first 320 chars.
+        const sectionSplit = summaryText.search(/\*\*Section 1/i);
+        const headline = sectionSplit > 50
+          ? summaryText.slice(0, sectionSplit).trim()
+          : summaryText.slice(0, 320).trim();
+        const preview = headline.slice(0, 600) + (headline.length > 600 ? '…' : '');
+
         const winLossLine = grades.length > 0
           ? `${marketStats.grade_breakdown.win}W / ${marketStats.grade_breakdown.loss}L / ${marketStats.grade_breakdown.partial}P / ${marketStats.grade_breakdown.invalidated_early}IE`
-          : 'no grades landed yet';
+          : 'no flag grades yet';
+        const hitRateStr = snapshotHitRate != null
+          ? `${(Number(snapshotHitRate) * 100).toFixed(1)}%`
+          : 'n/a';
+        const regimeStr = regimeTag ?? 'untagged';
+        const slowBurnCount = slowBurnList.length;
+        const promotedTodayCount = signaturesPromotedToday.length;
+
         const headerText = `Co-Trader EOD · ${sessionDate}`;
 
         const blocks: Array<Record<string, unknown>> = [
@@ -595,15 +1122,27 @@ Style: terse, factual, no hedging language ("seems", "appears"). Reference numbe
           { type: 'divider' },
           {
             type: 'section',
+            fields: [
+              { type: 'mrkdwn', text: `*Regime*\n${regimeStr}` },
+              { type: 'mrkdwn', text: `*Snapshot hit rate*\n${hitRateStr}` },
+              { type: 'mrkdwn', text: `*Tracks realized*\n${tracksRealizedTodayCount ?? 0}` },
+              { type: 'mrkdwn', text: `*Slow-burn pays*\n${slowBurnCount}` },
+              { type: 'mrkdwn', text: `*Newly promoted*\n${promotedTodayCount}` },
+              { type: 'mrkdwn', text: `*Flag grades*\n${winLossLine}` },
+            ],
+          },
+          { type: 'divider' },
+          {
+            type: 'section',
             text: {
               type: 'mrkdwn',
-              text: `*Today's totals*\n${flags.length} flags · ${reads.length} reads · ${stacks.length} stacks · ${unusualPulseCount} unusual pulse ticks\n*Grades:* ${winLossLine}\n*Market net premium:* ${fmtUsd(mktPremOpen)} → ${fmtUsd(mktPremClose)} (Δ ${fmtUsd(mktPremDelta)})`,
+              text: `*Today's totals*\n${flags.length} flags · ${reads.length} reads · ${stacks.length} stacks · ${unusualPulseCount} unusual pulse ticks\n*Market net premium:* ${fmtUsd(mktPremOpen)} → ${fmtUsd(mktPremClose)} (Δ ${fmtUsd(mktPremDelta)})\n*Library:* ${signaturesAll.length} tracked · ${signaturesPromoted.length} promoted`,
             },
           },
           { type: 'divider' },
           {
             type: 'section',
-            text: { type: 'mrkdwn', text: `:bar_chart: *Summary*\n${preview}` },
+            text: { type: 'mrkdwn', text: `:bar_chart: *Headline*\n${preview}` },
           },
           {
             type: 'context',
@@ -613,7 +1152,7 @@ Style: terse, factual, no hedging language ("seems", "appears"). Reference numbe
           },
         ];
 
-        const fallbackText = `Co-Trader EOD ${sessionDate}: ${flags.length} flags · ${winLossLine} · net ${fmtUsd(mktPremDelta)} delta`;
+        const fallbackText = `Co-Trader EOD ${sessionDate}: regime ${regimeStr} · ${hitRateStr} hit rate · ${tracksRealizedTodayCount ?? 0} tracks realized · ${slowBurnCount} slow-burn pays`;
         await ctSlackPushDirect(supabase, userId, fallbackText, 'eod', blocks);
         slackOutcome = 'sent';
       }
@@ -645,7 +1184,17 @@ Style: terse, factual, no hedging language ("seems", "appears"). Reference numbe
       pulse_ticks: pulseSeries.length,
       tape_rows: tape.length,
       bars: bars.length,
+      print_grades_today: printGradesToday.length,
+      realized_tracks_today: realizedTracksToday.length,
+      slow_burn: slowBurnList.length,
+      signatures_total: signaturesAll.length,
+      signatures_promoted: signaturesPromoted.length,
+      signatures_promoted_today: signaturesPromotedToday.length,
+      edge_daily_present: edgeDaily !== null,
     },
+    regime_tag: regimeTag,
+    snapshot_hit_rate: snapshotHitRate,
+    tracks_realized_today: tracksRealizedTodayCount,
     slack: { outcome: slackOutcome, error: slackError },
     api_error: apiError,
     upsert_error: upsertErr?.message ?? null,
