@@ -1469,13 +1469,16 @@ async function runContractGradePass(
     errors: [],
   };
 
-  // Pull WORKING + expired tracks (any state where we want grades). Order by
-  // first_tracked_at ASC so the oldest (most likely to have full quote
-  // coverage at all 4 horizons) get graded first.
+  // Order by print_time DESC so the most recent prints (where we actually
+  // have quote coverage from the live poller + weekend historic backfill)
+  // get graded first. ASC by first_tracked_at would starve on the oldest
+  // 400 tracks from 4/16 that the poller never reached — same starvation
+  // pattern we fixed for createMissingTracks (commit d27cb1d, see
+  // feedback_create_query_sort_desc memory).
   const { data: tracks, error } = await supabase
     .from('ct_contract_tracks')
     .select('alert_id, option_symbol, ticker, print_time, entry_contract_price, dte_at_print, predicted_direction, predicted_source')
-    .order('first_tracked_at', { ascending: true })
+    .order('print_time', { ascending: false })
     .limit(PASS3_SCAN_LIMIT);
 
   if (error) {
