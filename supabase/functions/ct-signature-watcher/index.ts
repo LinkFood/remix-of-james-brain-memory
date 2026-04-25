@@ -1,13 +1,19 @@
 /**
- * ct-signature-watcher — live trade-signal alarm.
+ * ct-signature-watcher — tiered live trade-signal alarm.
  *
- * Walks forward through new ct_flow_alerts since the last invocation.
- * For each alert, computes its signature class (ticker, side,
- * predicted_source, dte_bucket) and looks up historical magnitude stats
- * via ct_signature_magnitude_stats. If the class has median_peak_pct
- * >= signature_alarm_min_peak_pct on n >= signature_alarm_min_n, fires
- * a Slack push (with per-option_symbol dedupe). Watermark advances at
- * the end so the next sweep picks up where this one left off.
+ * Walks forward through new ct_flow_alerts since the last invocation. For
+ * each alert, computes its signature class (ticker, side, predicted_source,
+ * dte_bucket), looks up historical magnitude stats via
+ * ct_signature_magnitude_stats AND the per-alert flow score from
+ * ct_scored_flow, then routes to one of three tiers:
+ *
+ *   gold   → Slack push (priority format) + ct_flags row tagged 'gold'
+ *   silver → Slack push (standard format)  + ct_flags row tagged 'silver'
+ *   bronze → ct_flags row tagged 'bronze'  (NO Slack — UI glow only)
+ *
+ * Tier evaluation runs AFTER the 0DTE eligibility skip and dedupe checks.
+ * Watermark advances at the end so the next sweep picks up where this one
+ * left off.
  *
  * Auth: service_role only.
  */
@@ -31,6 +37,7 @@ const PAGE_SIZE = 1000;
 const SCAN_LIMIT = 4000;
 
 type DteBucket = '0dte' | 'short' | 'mid' | 'long';
+type AlarmTier = 'gold' | 'silver' | 'bronze' | null;
 
 interface FlowAlertRow {
   alert_id: string;
@@ -60,17 +67,35 @@ interface SignatureStat {
   median_peak_pct: number | string;
 }
 
-interface AlarmThresholds {
-  minPeakPct: number;
-  minN: number;
+interface TierThresholds {
+  goldMinScore: number;
+  goldMinPeakPct: number;
+  goldMinN: number;
+  silverMinScore: number;
+  silverMinPeakPct: number;
+  silverMinN: number;
+  silverHighSigPeakPct: number;
+  silverHighSigMinN: number;
+  bronzeMinPeakPct: number;
+  bronzeMinN: number;
+  bronzeMinScore: number;
+  // Sweep-level (not per-tier).
   lookbackDays: number;
   dedupeMin: number;
+  // Bronze must clear at least the signature stats RPC's min_n floor — the
+  // RPC currently fetches with min_n=silverMinN so we need bronze<=silver_n
+  // OR fetch with min_n=bronze. We use the lower of the two below.
+  rpcMinN: number;
 }
 
 interface Stats {
   ok: boolean;
   alerts_scanned: number;
-  alarms_fired: number;
+  alarms_total_evaluated: number;
+  alarms_fired_gold: number;
+  alarms_fired_silver: number;
+  alarms_fired_bronze: number;
+  bronze_silent_writes: number;
   alarms_deduped: number;
   alarms_no_signature_match: number;
   alarms_below_threshold: number;
@@ -80,7 +105,7 @@ interface Stats {
   alarms_skipped_0dte_ineligible: number;
   watermark_before: string | null;
   watermark_after: string | null;
-  thresholds: AlarmThresholds;
+  thresholds: TierThresholds;
   errors: string[];
 }
 
@@ -175,16 +200,65 @@ function resolvePrintTime(a: FlowAlertRow): Date {
 }
 
 // ---------------------------------------------------------------------------
+// Tier evaluator — pure, unit-testable.
+// Order matters: gold → silver → bronze. Each tier's full predicate is
+// checked before falling through.
+// ---------------------------------------------------------------------------
+function evaluateTier(
+  score: number | null,
+  sigMedian: number | null,
+  sigN: number | null,
+  t: TierThresholds,
+): AlarmTier {
+  const s = score ?? 0;
+  const sp = sigMedian ?? 0;
+  const sn = sigN ?? 0;
+  // Gold: BOTH layers strong.
+  if (s >= t.goldMinScore && sp >= t.goldMinPeakPct && sn >= t.goldMinN) return 'gold';
+  // Silver: combined high-confidence OR signature-alone exceptional.
+  if (s >= t.silverMinScore && sp >= t.silverMinPeakPct && sn >= t.silverMinN) return 'silver';
+  if (sp >= t.silverHighSigPeakPct && sn >= t.silverHighSigMinN) return 'silver';
+  // Bronze: weakest tier — either layer alone clears a lower bar.
+  if (sp >= t.bronzeMinPeakPct && sn >= t.bronzeMinN) return 'bronze';
+  if (s >= t.bronzeMinScore) return 'bronze';
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Config loaders.
 // ---------------------------------------------------------------------------
-async function loadThresholds(supabase: SupabaseClient): Promise<AlarmThresholds> {
-  const defaults: AlarmThresholds = { minPeakPct: 1.0, minN: 5, lookbackDays: 7, dedupeMin: 30 };
+async function loadTierThresholds(supabase: SupabaseClient): Promise<TierThresholds> {
+  const defaults: TierThresholds = {
+    goldMinScore: 80,
+    goldMinPeakPct: 1.0,
+    goldMinN: 10,
+    silverMinScore: 70,
+    silverMinPeakPct: 0.50,
+    silverMinN: 5,
+    silverHighSigPeakPct: 2.0,
+    silverHighSigMinN: 10,
+    bronzeMinPeakPct: 0.50,
+    bronzeMinN: 3,
+    bronzeMinScore: 80,
+    lookbackDays: 7,
+    dedupeMin: 30,
+    rpcMinN: 3,
+  };
   const { data, error } = await supabase
     .from('ct_config')
     .select('key, value')
     .in('key', [
-      'signature_alarm_min_peak_pct',
-      'signature_alarm_min_n',
+      'signature_alarm_gold_min_score',
+      'signature_alarm_gold_min_peak_pct',
+      'signature_alarm_gold_min_n',
+      'signature_alarm_silver_min_score',
+      'signature_alarm_silver_min_peak_pct',
+      'signature_alarm_silver_min_n',
+      'signature_alarm_silver_high_sig_peak_pct',
+      'signature_alarm_silver_high_sig_min_n',
+      'signature_alarm_bronze_min_peak_pct',
+      'signature_alarm_bronze_min_n',
+      'signature_alarm_bronze_min_score',
       'signature_alarm_lookback_days',
       'signature_alarm_dedupe_min',
     ]);
@@ -194,11 +268,25 @@ async function loadThresholds(supabase: SupabaseClient): Promise<AlarmThresholds
     const v = row.value;
     const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
     if (!Number.isFinite(n) || n < 0) continue;
-    if (row.key === 'signature_alarm_min_peak_pct') out.minPeakPct = n;
-    else if (row.key === 'signature_alarm_min_n') out.minN = Math.floor(n);
-    else if (row.key === 'signature_alarm_lookback_days') out.lookbackDays = Math.floor(n);
-    else if (row.key === 'signature_alarm_dedupe_min') out.dedupeMin = Math.floor(n);
+    switch (row.key) {
+      case 'signature_alarm_gold_min_score':           out.goldMinScore = n; break;
+      case 'signature_alarm_gold_min_peak_pct':        out.goldMinPeakPct = n; break;
+      case 'signature_alarm_gold_min_n':               out.goldMinN = Math.floor(n); break;
+      case 'signature_alarm_silver_min_score':         out.silverMinScore = n; break;
+      case 'signature_alarm_silver_min_peak_pct':      out.silverMinPeakPct = n; break;
+      case 'signature_alarm_silver_min_n':             out.silverMinN = Math.floor(n); break;
+      case 'signature_alarm_silver_high_sig_peak_pct': out.silverHighSigPeakPct = n; break;
+      case 'signature_alarm_silver_high_sig_min_n':    out.silverHighSigMinN = Math.floor(n); break;
+      case 'signature_alarm_bronze_min_peak_pct':      out.bronzeMinPeakPct = n; break;
+      case 'signature_alarm_bronze_min_n':             out.bronzeMinN = Math.floor(n); break;
+      case 'signature_alarm_bronze_min_score':         out.bronzeMinScore = n; break;
+      case 'signature_alarm_lookback_days':            out.lookbackDays = Math.floor(n); break;
+      case 'signature_alarm_dedupe_min':               out.dedupeMin = Math.floor(n); break;
+    }
   }
+  // RPC fetch must use the LOWEST n threshold any tier could fire on,
+  // otherwise bronze candidates get filtered out before tier eval sees them.
+  out.rpcMinN = Math.max(1, Math.min(out.bronzeMinN, out.silverMinN, out.goldMinN));
   return out;
 }
 
@@ -240,15 +328,16 @@ async function saveWatermark(supabase: SupabaseClient, ts: string): Promise<void
 // ---------------------------------------------------------------------------
 // Signature stats lookup — one RPC call per invocation, cached as a Map
 // keyed by signature_label (ticker:side:dte_bucket:predicted_source).
+// Uses the lowest-tier min_n so bronze candidates aren't pre-filtered.
 // ---------------------------------------------------------------------------
 async function loadSignatureStats(
   supabase: SupabaseClient,
-  thresholds: AlarmThresholds,
+  thresholds: TierThresholds,
 ): Promise<Map<string, SignatureStat>> {
   const since = new Date(Date.now() - thresholds.lookbackDays * 24 * 3600_000).toISOString();
   const { data, error } = await supabase.rpc('ct_signature_magnitude_stats', {
     p_since: since,
-    p_min_n: thresholds.minN,
+    p_min_n: thresholds.rpcMinN,
   });
   if (error || !data) return new Map();
   const map = new Map<string, SignatureStat>();
@@ -258,18 +347,53 @@ async function loadSignatureStats(
   return map;
 }
 
+// Label casing mirrors ct_signature_magnitude_stats RPC output exactly —
+// ticker stays UPPER, side/bucket/source stay lower. Mismatched case = miss.
 function buildSignatureLabel(ticker: string, side: string, bucket: DteBucket, source: string): string {
-  return `${ticker.toLowerCase()}:${side}:${bucket}:${source}`;
+  return `${ticker.toUpperCase()}:${side}:${bucket}:${source}`;
+}
+
+// ---------------------------------------------------------------------------
+// Slack body builders — gold gets a priority prefix, silver gets standard.
+// Bronze never builds Slack text.
+// ---------------------------------------------------------------------------
+function buildSlackText(
+  tier: 'gold' | 'silver',
+  args: {
+    ticker: string;
+    side: string;
+    strike: number | null;
+    expiry: string | null;
+    bucketStr: string;
+    source: string;
+    peakPctStr: string;
+    nTracks: number;
+    premKstr: string;
+    scoreStr: string;
+    alertId: string;
+  },
+): string {
+  const prefix = tier === 'gold' ? ':first_place_medal: *GOLD ALARM*' : ':second_place_medal: *Silver alarm*';
+  return (
+    `${prefix} — ${args.ticker} ${args.side} $${args.strike} ${args.expiry} (${args.bucketStr})\n` +
+    `Class: \`${args.source}\` → historical median peak +${args.peakPctStr} on n=${args.nTracks}\n` +
+    `Premium: ${args.premKstr} · ${args.scoreStr}\n` +
+    `Alert: \`${args.alertId}\``
+  );
 }
 
 // ---------------------------------------------------------------------------
 // Main sweep.
 // ---------------------------------------------------------------------------
-async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): Promise<Stats> {
+async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds): Promise<Stats> {
   const stats: Stats = {
     ok: true,
     alerts_scanned: 0,
-    alarms_fired: 0,
+    alarms_total_evaluated: 0,
+    alarms_fired_gold: 0,
+    alarms_fired_silver: 0,
+    alarms_fired_bronze: 0,
+    bronze_silent_writes: 0,
     alarms_deduped: 0,
     alarms_no_signature_match: 0,
     alarms_below_threshold: 0,
@@ -362,20 +486,41 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
       }
 
       const stat = sigStats.get(label);
-      if (!stat) {
-        stats.alarms_no_signature_match += 1;
+      // Signature stat is optional now — bronze can fire on score alone.
+      // Track the no-match count as a hint, but don't skip outright.
+      const sigMedian = stat
+        ? (typeof stat.median_peak_pct === 'string'
+            ? parseFloat(stat.median_peak_pct)
+            : Number(stat.median_peak_pct))
+        : null;
+      const sigN = stat?.n_tracks ?? null;
+      const validSigMedian = sigMedian != null && Number.isFinite(sigMedian) ? sigMedian : null;
+
+      // Score lives on ct_scored_flow, not ct_flow_alerts — pull only if a
+      // matching scored row exists for the ct_flow_alerts source_table.
+      let score: number | null = null;
+      const { data: scored } = await supabase
+        .from('ct_scored_flow')
+        .select('score')
+        .eq('source_table', 'ct_flow_alerts')
+        .eq('source_id', a.alert_id)
+        .order('event_ts', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (scored && Number.isFinite(Number(scored.score))) score = Number(scored.score);
+
+      stats.alarms_total_evaluated += 1;
+      const tier = evaluateTier(score, validSigMedian, sigN, thresholds);
+
+      if (tier === null) {
+        // Bookkeep the dominant reason it didn't qualify.
+        if (!stat) stats.alarms_no_signature_match += 1;
+        else stats.alarms_below_threshold += 1;
         continue;
       }
 
-      const medianPeak = typeof stat.median_peak_pct === 'string'
-        ? parseFloat(stat.median_peak_pct)
-        : Number(stat.median_peak_pct);
-      if (!Number.isFinite(medianPeak) || medianPeak < thresholds.minPeakPct || stat.n_tracks < thresholds.minN) {
-        stats.alarms_below_threshold += 1;
-        continue;
-      }
-
-      // Dedupe — same option_symbol within the dedupe window.
+      // Dedupe — same option_symbol within the dedupe window. Applies to
+      // ALL tiers (bronze writes ct_flags too — don't double-write).
       const dedupeCutoff = new Date(Date.now() - dedupeWindowMs).toISOString();
       const { data: recent } = await supabase
         .from('ct_signature_alarm_log')
@@ -388,43 +533,35 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
         continue;
       }
 
-      // Score lives on ct_scored_flow, not ct_flow_alerts — pull only if a
-      // matching scored row exists, otherwise omit from the message.
-      let score: number | null = null;
-      const { data: scored } = await supabase
-        .from('ct_scored_flow')
-        .select('score')
-        .eq('source_id', a.alert_id)
-        .order('event_ts', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (scored && Number.isFinite(Number(scored.score))) score = Number(scored.score);
-
+      // Build display strings (used for Slack + ct_flags thesis).
       const premium = a.premium == null ? null : Number(a.premium);
       const premKstr = premium != null && Number.isFinite(premium)
         ? `$${(premium / 1000).toFixed(1)}k`
         : 'n/a';
       const dteStr = dte == null ? '?' : String(dte);
-      const peakPctStr = `${Math.round(medianPeak * 100)}%`;
+      const peakPctStr = validSigMedian != null
+        ? `${Math.round(validSigMedian * 100)}%`
+        : 'n/a';
+      const nForDisplay = sigN ?? 0;
       const scoreStr = score != null ? `Score: ${score.toFixed(0)}` : 'Score: —';
-      // Eligibility label disambiguates 0DTE bucket in the Slack message —
-      // "NVDA 0DTE (Friday 0DTE only)" reads correctly on a Friday and
-      // simply won't fire any other day (skipped above).
       const eligLabel = eligibility[ticker]?.label;
       const bucketStr = bucket === '0dte' && eligLabel
         ? `0DTE — ${eligLabel}`
         : `${dteStr}DTE`;
 
-      const text =
-        `:dart: *Signature match:* ${ticker} ${side} $${a.strike} ${a.expiry} (${bucketStr})\n` +
-        `Class: \`${source}\` → historical median peak +${peakPctStr} on n=${stat.n_tracks}\n` +
-        `Premium: ${premKstr} · ${scoreStr}\n` +
-        `Alert: \`${a.alert_id}\``;
-
-      if (userId) {
+      // Per-tier Slack routing — bronze NEVER fires Slack.
+      if ((tier === 'gold' || tier === 'silver') && userId) {
+        const text = buildSlackText(tier, {
+          ticker, side, strike: a.strike, expiry: a.expiry, bucketStr,
+          source, peakPctStr, nTracks: nForDisplay, premKstr, scoreStr,
+          alertId: a.alert_id,
+        });
         await ctSlackPushDirect(supabase, userId, text, 'signature_alarm');
       }
 
+      // Audit trail — write log row for ALL tiers (gold/silver/bronze).
+      // median_peak_pct is NOT NULL on the table, so synthesize 0 when the
+      // alarm fired purely on score (no matching signature class).
       const { error: insertErr } = await supabase
         .from('ct_signature_alarm_log')
         .insert({
@@ -432,17 +569,16 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
           option_symbol: optionSymbol,
           ticker,
           signature_class: label,
-          median_peak_pct: medianPeak,
-          n: stat.n_tracks,
+          median_peak_pct: validSigMedian ?? 0,
+          n: nForDisplay,
           premium,
           score,
         });
       if (insertErr) stats.errors.push(`log insert ${a.alert_id}: ${insertErr.message}`);
 
-      // Mirror into the unified ct_flags table so the alarm shows up next
-      // to specialist + star flags on /flags and gets contract-axis graded
-      // by ct-flag-grader. tags carry the signature class so future
-      // aggregation can group on it without re-parsing the label.
+      // Mirror into the unified ct_flags table — visible on /flags + future
+      // /tape tier-glow. tags carry both the signature class and the tier so
+      // the UI can filter/style without re-evaluating thresholds.
       const direction: Direction = source === 'aggressive_ask_call' || source === 'aggressive_bid_put'
         ? 'bullish'
         : source === 'aggressive_bid_call' || source === 'aggressive_ask_put'
@@ -451,11 +587,13 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
       const horizonHours = 4;
       const horizonTs = new Date(Date.now() + horizonHours * 60 * 60_000).toISOString();
       const entryPrice = a.price == null ? null : Number(a.price);
-      const targetPrice = entryPrice != null && Number.isFinite(entryPrice)
-        ? Number((entryPrice * (1 + medianPeak)).toFixed(4))
+      // Target uses signature median when present; falls back to 0 (no projected target).
+      const targetPrice = entryPrice != null && Number.isFinite(entryPrice) && validSigMedian != null
+        ? Number((entryPrice * (1 + validSigMedian)).toFixed(4))
         : null;
-      const thesis =
-        `Signature class match: ${label}. Historical median peak +${peakPctStr} on n=${stat.n_tracks}. Premium ${premKstr}.`;
+      const thesis = validSigMedian != null
+        ? `[${tier.toUpperCase()}] Signature class match: ${label}. Historical median peak +${peakPctStr} on n=${nForDisplay}. Premium ${premKstr}. ${scoreStr}.`
+        : `[${tier.toUpperCase()}] Score-only fire: ${scoreStr}. Class ${label} (no historical match). Premium ${premKstr}.`;
 
       const { error: flagErr } = await supabase
         .from('ct_flags')
@@ -469,7 +607,7 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
           side,
           direction,
           score: score ?? 0,
-          tags: ['signature_alarm', label],
+          tags: ['signature_alarm', label, tier],
           thesis,
           horizon_hours: horizonHours,
           horizon_ts: horizonTs,
@@ -479,7 +617,12 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
         });
       if (flagErr) stats.errors.push(`flag insert ${a.alert_id}: ${flagErr.message}`);
 
-      stats.alarms_fired += 1;
+      if (tier === 'gold') stats.alarms_fired_gold += 1;
+      else if (tier === 'silver') stats.alarms_fired_silver += 1;
+      else {
+        stats.alarms_fired_bronze += 1;
+        stats.bronze_silent_writes += 1;
+      }
     } catch (e) {
       stats.errors.push(`alert ${a.alert_id}: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -517,7 +660,7 @@ serve(async (req) => {
 
   const startedAt = Date.now();
   try {
-    const thresholds = await loadThresholds(supabase);
+    const thresholds = await loadTierThresholds(supabase);
     const stats = await runSweep(supabase, thresholds);
     return new Response(JSON.stringify({
       ...stats,
