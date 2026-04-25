@@ -378,6 +378,15 @@ verify_jwt = false
 [functions.ct-signature-watcher]
 verify_jwt = false
 
+[functions.ct-detector-whale]
+verify_jwt = false
+
+[functions.ct-detector-unusual-oi]
+verify_jwt = false
+
+[functions.ct-detector-pair-qqq-iwm]
+verify_jwt = false
+
 [functions.ct-backtest-harness]
 verify_jwt = false
 
