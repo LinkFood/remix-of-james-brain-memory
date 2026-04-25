@@ -171,6 +171,7 @@ function buildButterfly(points: FlowPulseChartPoint[], dte: DteKey): ButterflyPo
 function buildLiveCp4Series(
   points: NetPremiumExpirySplitPoint[],
   skipPreMarket: boolean,
+  trailingMinutes?: number,
 ): FourSeriesPoint[] {
   if (points.length === 0) return [];
 
@@ -217,6 +218,25 @@ function buildLiveCp4Series(
       cum_next_call: cumNextCall,
       cum_next_put: cumNextPut,
     });
+  }
+
+  // 1h / 30m tabs slice the tail of the cumulative series. We rebase each
+  // line so the visible window starts at zero — otherwise the slice would
+  // show whatever the running totals happened to be at that tick, which is
+  // only meaningful in the full-session context.
+  if (trailingMinutes && trailingMinutes > 0 && out.length > 0) {
+    const lastMs = Date.parse(out[out.length - 1].bucket_time);
+    const cutoffMs = lastMs - trailingMinutes * 60_000;
+    const sliced = out.filter((p) => Date.parse(p.bucket_time) >= cutoffMs);
+    if (sliced.length === 0) return [];
+    const baseline = sliced[0];
+    return sliced.map((p) => ({
+      ...p,
+      cum_all_call: p.cum_all_call - baseline.cum_all_call,
+      cum_all_put: p.cum_all_put - baseline.cum_all_put,
+      cum_next_call: p.cum_next_call - baseline.cum_next_call,
+      cum_next_put: p.cum_next_put - baseline.cum_next_put,
+    }));
   }
   return out;
 }
@@ -335,18 +355,25 @@ interface ButterflyCpProps {
  * stays the visual midpoint and crossovers read cleanly.
  */
 function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
+  // Y-domain tight around actual data range with zero always visible so the
+  // reference line means something. Symmetric-around-zero wasted ~60% of the
+  // canvas on one-way sessions where everything lives in the positive half.
   const domain = useMemo<[number, number]>(() => {
     if (data.length === 0) return [-1, 1];
-    const padded = Math.max(
-      ...data.flatMap((d) => [
-        Math.abs(d.cum_all_call),
-        Math.abs(d.cum_all_put),
-        Math.abs(d.cum_next_call),
-        Math.abs(d.cum_next_put),
-      ]),
-    ) * 1.10;
-    if (!Number.isFinite(padded) || padded === 0) return [-1, 1];
-    return [-padded, padded];
+    let minV = 0;
+    let maxV = 0;
+    for (const d of data) {
+      const vals = [d.cum_all_call, d.cum_all_put, d.cum_next_call, d.cum_next_put];
+      for (const v of vals) {
+        if (!Number.isFinite(v)) continue;
+        if (v < minV) minV = v;
+        if (v > maxV) maxV = v;
+      }
+    }
+    const range = maxV - minV;
+    if (range === 0) return [-1, 1];
+    const pad = range * 0.08;
+    return [minV - pad, maxV + pad];
   }, [data]);
 
   const seriesLabel = (key: string): string => {
@@ -539,15 +566,19 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
   // new RPC + Realtime on ct_flow_alerts. Mode 'bb' (cumulative mirrored) reads
   // ct_flow_alerts via the legacy bucketed RPC. Both hooks always run (rules of
   // hooks); we just feed the right one to its builder based on mode.
-  const cpQuery = useNetPremiumExpirySplit(ticker, rangeToMin(range));
+  // Always fetch the full session for mode 'cp' — 1h/30m are tail slices of
+  // the same data, rebased to zero at the window start (see buildLiveCp4Series).
+  // This way those tabs keep working after-hours instead of querying a wall-
+  // clock window that has no data.
+  const cpQuery = useNetPremiumExpirySplit(ticker, undefined);
   const bbQuery = useFlowPulseChart(ticker, rangeToMin(range));
 
-  // Mode 'cp' produces FourSeriesPoint[]; mode 'bb' produces ButterflyPoint[].
-  // Computing both unconditionally keeps the hook order stable across mode flips.
   const cpData = useMemo(
-    // Only clip pre-market on the full-day view. 1h/30m windows are already
-    // "last N minutes" so whatever they catch is what the user asked for.
-    () => buildLiveCp4Series(cpQuery.points, range === 'today'),
+    () => buildLiveCp4Series(
+      cpQuery.points,
+      /* skipPreMarket */ true,
+      /* trailingMinutes */ rangeToMin(range),
+    ),
     [cpQuery.points, range],
   );
   const bbData = useMemo(() => buildButterfly(bbQuery.points, dte), [bbQuery.points, dte]);
