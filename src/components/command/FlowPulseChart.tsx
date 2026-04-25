@@ -128,24 +128,24 @@ function buildButterfly(points: FlowPulseChartPoint[], dte: DteKey): ButterflyPo
 }
 
 /**
- * Live (non-cumulative) Calls vs Puts builder. Plots SIGNED net premium values
- * directly — no cumsum, no mirroring. When `p_ticker` is null, the RPC may
- * return one row per ticker per timestamp; we group-by tick_timestamp and sum
- * to produce a single MARKET line. When a ticker is selected, rows are 1:1.
+ * Live Calls vs Puts builder. Running sum of SIGNED net_call_premium and
+ * net_put_premium across the session. Integral of signed flow = smooth
+ * directional-bias line that climbs when buyers dominate, falls when sellers
+ * take over, and can cross zero (or cross each other) when the regime flips.
  *
- * Output:
- *   top_cp    = net_call_premium (raw, can be ±)
- *   bottom_cp = net_put_premium  (raw, can be ±)
+ * Why cumsum: raw per-minute signed ticks are too noisy to read (hair-pattern
+ * spikes). The information sits in the drift, not the minute-to-minute whip.
+ * Since the data is SIGNED (unlike the legacy chart_rpc that fed strictly-
+ * positive premium sums), cumsum is NOT monotonic — it rises, flattens, and
+ * reverses with the tape. Exactly the shape James drew: morning calls climb,
+ * 11am stall, afternoon selloff drags the call line down and puts cross above.
  *
- * Lines cross naturally when the tape flips. *_bb fields are zeroed — this
- * builder is mode-'cp' only and Butterfly ignores them when mode==='cp'.
+ * Aggregation: single ticker → one row per ts; MARKET → many rows per ts,
+ * summed to a single MARKET ribbon. Sort by time first, then integrate.
  */
 function buildLiveCp(points: NetPremiumSeriesPoint[]): ButterflyPoint[] {
   if (points.length === 0) return [];
 
-  // Aggregate by timestamp. Single ticker → one row per ts (sum is a no-op).
-  // MARKET → many rows per ts → sum. Map preserves first-seen insertion order;
-  // we sort by time at the end to be safe regardless of RPC return order.
   const byTime = new Map<string, { call: number; put: number }>();
   for (const p of points) {
     const ts = p.tick_timestamp;
@@ -160,22 +160,29 @@ function buildLiveCp(points: NetPremiumSeriesPoint[]): ButterflyPoint[] {
     }
   }
 
+  const sorted = Array.from(byTime.entries()).sort(
+    (a, b) => Date.parse(a[0]) - Date.parse(b[0]),
+  );
+
+  let cumCall = 0;
+  let cumPut = 0;
   const out: ButterflyPoint[] = [];
-  for (const [ts, v] of byTime) {
+  for (const [ts, v] of sorted) {
+    cumCall += v.call;
+    cumPut += v.put;
     out.push({
       time: fmtTime(ts),
       bucket_time: ts,
-      top_cp: v.call,
-      bottom_cp: v.put,
+      top_cp: cumCall,
+      bottom_cp: cumPut,
       top_bb: 0,
       bottom_bb: 0,
-      top_cp_abs: Math.abs(v.call),
-      bottom_cp_abs: Math.abs(v.put),
+      top_cp_abs: Math.abs(cumCall),
+      bottom_cp_abs: Math.abs(cumPut),
       top_bb_abs: 0,
       bottom_bb_abs: 0,
     });
   }
-  out.sort((a, b) => Date.parse(a.bucket_time) - Date.parse(b.bucket_time));
   return out;
 }
 
@@ -510,7 +517,7 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
 
       <div className="mt-1 text-[9.5px] text-muted-foreground/70">
         {mode === 'cp'
-          ? 'Live net call premium (top) and net put premium (bottom), refreshed tick-by-tick. Lines cross when the tape flips — calls negative = call selling; puts positive = put buying.'
+          ? 'Running sum of signed net premium over today — calls (green) climb when bought, fall when sold; puts (red) climb when bought, fall when sold. Lines can cross above or below zero when the tape flips. Live via Supabase Realtime.'
           : 'Aggressive bull bets (bought calls + sold puts) climb up; aggressive bear bets (bought puts + sold calls) climb down. Refreshes every 60s.'}
       </div>
     </Card>
