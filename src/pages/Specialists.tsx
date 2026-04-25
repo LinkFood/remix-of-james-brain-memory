@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import { Target, RefreshCw, ArrowUp, ArrowDown, Minus } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { ChartSafe } from '@/components/ChartSafe';
+import { useSpecialistScoreboard, SpecialistScoreboardRow } from '@/hooks/useSpecialistScoreboard';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -195,9 +196,11 @@ function Sparkline({ data, color }: { data: { day: string; n: number }[]; color:
 
 function SpecialistTile({
   stats,
+  outcome,
   onClick,
 }: {
   stats: SpecialistStats;
+  outcome?: SpecialistScoreboardRow;
   onClick: () => void;
 }) {
   const color = stats.hitRate != null && stats.hitRate >= 0.55
@@ -251,6 +254,44 @@ function SpecialistTile({
           ) : (
             <span className="text-muted-foreground/60">—</span>
           )}
+        </div>
+      </div>
+
+      {/* Outcome-Elo row — derived from ct_contract_tracks (truth), not flag volume */}
+      <div className="grid grid-cols-3 gap-1 text-[10px] border-t border-border/40 pt-1.5">
+        <div className="text-muted-foreground" title="Hit rate over last 7d, from ct_contract_tracks">
+          hit 7d{' '}
+          {outcome && outcome.hit_rate != null ? (
+            <span className={cn(
+              'font-mono tabular-nums',
+              outcome.hit_rate >= 0.55 ? 'text-emerald-300'
+                : outcome.hit_rate < 0.45 ? 'text-red-300'
+                : 'text-foreground',
+            )}>
+              {Math.round(outcome.hit_rate * 100)}%
+            </span>
+          ) : (
+            <span className="text-muted-foreground/60">—</span>
+          )}
+        </div>
+        <div className="text-muted-foreground text-right" title="Median peak contract % across joined tracks">
+          peak{' '}
+          {outcome && outcome.median_peak_pct != null ? (
+            <span className="font-mono tabular-nums text-foreground">
+              {(outcome.median_peak_pct * 100).toFixed(0)}%
+            </span>
+          ) : (
+            <span className="text-muted-foreground/60">—</span>
+          )}
+        </div>
+        <div
+          className="text-muted-foreground text-right truncate"
+          title={outcome?.top_pick ?? 'no joined picks yet'}
+        >
+          top{' '}
+          <span className="font-mono tabular-nums text-foreground">
+            {outcome?.top_pick ? outcome.top_pick.replace(/^[A-Z]+/, '') : '—'}
+          </span>
         </div>
       </div>
 
@@ -391,6 +432,25 @@ export default function Specialists() {
 
   const statsByTicker = useMemo(() => computeStats(flags ?? []), [flags]);
 
+  const { data: scoreboard } = useSpecialistScoreboard();
+  const outcomeByName = useMemo(() => {
+    const m: Record<string, SpecialistScoreboardRow> = {};
+    for (const row of scoreboard ?? []) m[row.specialist_name] = row;
+    return m;
+  }, [scoreboard]);
+
+  // Default tile order: hit_rate DESC (specialists with no outcome row sort last).
+  const orderedTickers = useMemo(() => {
+    return [...TICKERS].sort((a, b) => {
+      const ra = outcomeByName[a]?.hit_rate;
+      const rb = outcomeByName[b]?.hit_rate;
+      if (ra == null && rb == null) return 0;
+      if (ra == null) return 1;
+      if (rb == null) return -1;
+      return rb - ra;
+    });
+  }, [outcomeByName]);
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="max-w-[1600px] mx-auto p-4 space-y-4">
@@ -421,10 +481,11 @@ export default function Specialists() {
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
-            {TICKERS.map((t) => (
+            {orderedTickers.map((t) => (
               <SpecialistTile
                 key={t}
                 stats={statsByTicker[t]}
+                outcome={outcomeByName[t]}
                 onClick={() => setSelected(t)}
               />
             ))}
@@ -447,6 +508,12 @@ export default function Specialists() {
             <span className="text-amber-300">amber</span> = 1-4h,{' '}
             <span className="text-slate-300">slate</span> = longer or none.
             Sparkline tints green when hit rate ≥ 55%, red when &lt; 45%.
+          </div>
+          <div>
+            <span className="text-foreground">Outcome row</span> (hit 7d / peak / top): from{' '}
+            <span className="font-mono">ct_specialist_scoreboard</span> — derived from{' '}
+            <span className="font-mono">ct_contract_tracks.track_status</span>, not flag volume.
+            Tiles sorted by 7d hit rate. Snap fires nightly 23:00 UTC weekdays.
           </div>
           <div>Refreshes every 60s. Click a tile to see its last 10 flags.</div>
         </div>
