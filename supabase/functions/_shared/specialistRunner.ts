@@ -24,6 +24,12 @@ import { isKillSwitchActive } from './killSwitch.ts';
 import { recordDecision } from './decisionJournal.ts';
 import { addTradingHours } from './marketClock.ts';
 import { fetchSignatureEdgeForTicker } from './signatureMemory.ts';
+import {
+  loadDteEligibility,
+  ticker0DteEligibleOn,
+  nextEligible0DteDate,
+  nextFridayOn,
+} from './dteEligibility.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -114,6 +120,47 @@ const DEFAULT_COOLDOWN_MIN = 15;
 const DEFAULT_WAKEUP_THRESHOLD = 60;
 const DEFAULT_MAX_FLAGS_PER_DAY = 10;
 const CANDIDATE_WINDOW_MIN = 30;
+
+const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+
+/**
+ * Build the SYSTEM CONTEXT line prepended to every specialist prompt.
+ * Tells the specialist what calendar day it is and whether 0DTE is even
+ * a possibility for this ticker today. Without it, NVDA on a Tuesday will
+ * happily theorize about 0DTE plays that can't structurally exist.
+ */
+async function buildSystemContextHeader(
+  supabase: SupabaseClient,
+  ticker: string,
+  now: Date,
+): Promise<string> {
+  const eligibility = await loadDteEligibility(supabase);
+  const cfg = eligibility[ticker];
+  const dayName = DAY_NAMES[now.getUTCDay()];
+  const dateStr = now.toISOString().slice(0, 10);
+
+  if (!cfg) {
+    return `SYSTEM CONTEXT: Today is ${dayName} (${dateStr}). No 0DTE eligibility config for ${ticker} — treat any 0DTE flag as suspect.`;
+  }
+
+  const eligible = ticker0DteEligibleOn(ticker, eligibility, now);
+  const label = cfg.label;
+
+  if (eligible) {
+    return `SYSTEM CONTEXT: Today is ${dayName} (${dateStr}). Your ticker ${ticker} 0DTE eligibility today: ${label}. 0DTE eligible — daily expiry available.`;
+  }
+
+  // Not eligible — point Claude at the next tradable date.
+  const nextElig = nextEligible0DteDate(ticker, eligibility, now);
+  if (nextElig) {
+    const nextStr = nextElig.toISOString().slice(0, 10);
+    return `SYSTEM CONTEXT: Today is ${dayName} (${dateStr}). Your ticker ${ticker} 0DTE eligibility today: ${label}. 0DTE flags from you today must be REJECTED — earliest tradable 0DTE for ${ticker} is Friday ${nextStr}.`;
+  }
+
+  // Never eligible — point at next Friday weekly expiry instead.
+  const fri = nextFridayOn(now).toISOString().slice(0, 10);
+  return `SYSTEM CONTEXT: Today is ${dayName} (${dateStr}). Your ticker ${ticker} 0DTE eligibility today: ${label}. 0DTE flags from you must be REJECTED — ${ticker} is weekly minimum, earliest expiry is Friday ${fri}.`;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -997,6 +1044,10 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
 \`current_read\` is REQUIRED on every wakeup, flag or pass.`;
 
   // 14. Claude call (Haiku).
+  // SYSTEM CONTEXT prepended so the specialist always knows what day it is
+  // and whether 0DTE is even structurally possible for this ticker today —
+  // see _shared/dteEligibility.ts.
+  const systemContextHeader = await buildSystemContextHeader(supabase, ticker, new Date());
   const model = CLAUDE_MODELS.haiku;
   const claudeStart = Date.now();
   let claudeRes: Awaited<ReturnType<typeof callClaude>> | null = null;
@@ -1004,7 +1055,7 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
   try {
     claudeRes = await callClaude({
       model,
-      system: `${prompt}${CROSS_FACET_PROMPT_SUFFIX}`,
+      system: `${systemContextHeader}\n\n${prompt}${CROSS_FACET_PROMPT_SUFFIX}`,
       messages: [{ role: 'user', content: userPayload }],
       max_tokens: 2000,
       temperature: 0.2,
