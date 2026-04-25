@@ -75,12 +75,12 @@ export function formatExpiryShort(iso: string | null | undefined): string {
 }
 
 /**
- * OTM/ITM label relative to side.
+ * OTM/ITM label relative to side. The ct_top_oi_shifts RPC returns
+ * distance_from_spot_pct as a percent (e.g. 0.9 = 0.9% OTM). Earlier code
+ * had a `<1 → fraction` heuristic that wrongly multiplied small ATM-ish
+ * distances by 100 (turning a 0.9% OTM call into "+90% OTM"). Fixed.
  *   CALL: strike > spot → OTM (positive distance)
  *   PUT : strike < spot → OTM (positive distance)
- * distance_from_spot_pct comes as raw (strike - spot) / spot fraction or pct
- * depending on how the RPC computed it — we treat it as a pct number (e.g. 2.1
- * for 2.1%). If it comes as a fraction (0.021) we detect that and scale.
  */
 export function formatMoneyness(
   distancePct: number | null | undefined,
@@ -89,9 +89,7 @@ export function formatMoneyness(
   if (distancePct == null || !Number.isFinite(distancePct) || side == null) {
     return { label: '-', moneyness: null };
   }
-  // Detect fractional vs percent representation.
-  const pct = Math.abs(distancePct) < 1 ? distancePct * 100 : distancePct;
-  // (strike - spot) / spot sign tells us which side of spot the strike is on.
+  const pct = distancePct;
   const strikeAboveSpot = pct > 0;
   const moneyness: 'OTM' | 'ITM' =
     (side === 'call' && strikeAboveSpot) || (side === 'put' && !strikeAboveSpot)
