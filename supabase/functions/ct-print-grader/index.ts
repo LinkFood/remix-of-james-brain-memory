@@ -41,6 +41,7 @@ const PASS1_WORK_LIMIT = 80;             // Pass 1 max alerts to actually grade
 const PASS2_NEW_SCAN_LIMIT = 800;        // Pass 2 fetch for create
 const PASS2_NEW_WORK_LIMIT = 150;        // Pass 2 max new tracks
 const MAX_TRACKS_PER_RUN = 150;          // Pass 2 update cap (LRU on last_tracked_at)
+const PASS2_CONTRACT_NEW_WORK_LIMIT = 150; // Pass 2 max new contract tracks per sweep
 const PRICE_LOOKUP_SLOP_MS = 30 * 60_000; // ±30 min slop for nearest-bar
 // All timeframes that exist in ct_price_bars today. Single query asks for
 // any of them; we pick the closest match by ts. Faster than 3 sequential
@@ -65,8 +66,38 @@ interface FlowAlertRow {
   expiry: string | null;
   executed_at: string | null;
   ingested_at: string;
+  // Optional — present in Pass 2 contract-track creation queries only.
+  option_symbol?: string | null;
+  price?: number | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   raw: any;
+}
+
+// ---------------------------------------------------------------------------
+// OCC-symbol synthesis. ct_flow_alerts.option_symbol is null on every row
+// (UW shape change), so we build it from ticker + expiry + side + strike.
+// Format: {TICKER}{YYMMDD}{C|P}{strike*1000 zero-padded to 8 chars}.
+// No "O:" prefix — UW REST endpoints accept the bare OCC string.
+// Returns null if any required field is missing or the strike/expiry
+// are unusable (the caller skips the row in that case).
+// ---------------------------------------------------------------------------
+function buildOccSymbol(
+  ticker: string | null | undefined,
+  expiry: string | null | undefined, // 'YYYY-MM-DD'
+  side: string | null | undefined,   // 'call' | 'put'
+  strike: number | null | undefined,
+): string | null {
+  if (!ticker || !expiry || strike == null || !Number.isFinite(strike) || strike <= 0) return null;
+  const sideStr = (side ?? '').toLowerCase();
+  if (sideStr !== 'call' && sideStr !== 'put') return null;
+  const sideChar = sideStr === 'put' ? 'P' : 'C';
+  const m = expiry.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const yymmdd = `${m[1].slice(2)}${m[2]}${m[3]}`;
+  const strikeInt = Math.round(strike * 1000);
+  if (!Number.isFinite(strikeInt) || strikeInt < 0) return null;
+  const strikeStr = String(strikeInt).padStart(8, '0');
+  return `${ticker.toUpperCase()}${yymmdd}${sideChar}${strikeStr}`;
 }
 
 interface DirectionInference {
@@ -460,6 +491,32 @@ async function fetchExistingTrackIds(
   return out;
 }
 
+// Sibling of fetchExistingTrackIds for ct_contract_tracks. Same chunked
+// pattern (PostgREST `in.()` clause limit safety).
+async function fetchExistingContractTrackIds(
+  supabase: SupabaseClient,
+  alertIds: string[],
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (alertIds.length === 0) return out;
+  const chunkSize = 200;
+  for (let i = 0; i < alertIds.length; i += chunkSize) {
+    const slice = alertIds.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from('ct_contract_tracks')
+      .select('alert_id')
+      .in('alert_id', slice);
+    if (error) {
+      console.warn(`[ct-print-grader] existing contract track lookup: ${error.message}`);
+      continue;
+    }
+    for (const row of (data ?? [])) {
+      if (row.alert_id) out.add(row.alert_id as string);
+    }
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Grade computation.
 // ---------------------------------------------------------------------------
@@ -650,6 +707,10 @@ interface Pass2Stats {
   skipped_no_direction: number;
   skipped_no_print_time: number;
   skipped_no_price: number;
+  // Contract-axis tracking (mirror of ct_print_tracks but on contract price).
+  contract_tracks_created: number;
+  skipped_no_symbol: number;              // option_symbol missing AND synthesis failed
+  skipped_no_strike_or_expiry: number;    // synthesis input incomplete
   errors: string[];
 }
 
@@ -763,6 +824,165 @@ async function createMissingTracks(
       continue;
     }
     stats.tracks_created += count ?? slice.length;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pass 2 contract-axis: create ct_contract_tracks rows for ct_flow_alerts
+// that don't have one yet.
+//
+// Mirrors createMissingTracks but on the contract-price axis. Three key
+// differences:
+//   1. option_symbol is NOT NULL on ct_contract_tracks. ct_flow_alerts.
+//      option_symbol is NULL on every row today (UW shape change), so we
+//      synthesize via buildOccSymbol. If synthesis fails (missing strike
+//      or expiry), the row is skipped — partial-data prints just don't
+//      get a contract track. No harm done.
+//   2. entry_contract_price comes from ct_flow_alerts.price (per-share
+//      premium at print). If null, we leave entry null and tag
+//      entry_source='estimated_mid' so Phase B can backfill on first quote.
+//   3. tracking_until extends 1 DAY past expiry (intentional — captures
+//      the final settlement quote that posts after close on expiry day).
+//      Underlying tracker stops AT expiry because the underlying keeps
+//      trading regardless; the contract does not.
+//
+// NO POLLING happens here — Phase B (ct-contract-poller) handles updates.
+// This function only seeds entries on creation.
+// ---------------------------------------------------------------------------
+async function createMissingContractTracks(
+  supabase: SupabaseClient,
+  trackingCfg: TrackingConfig,
+  stats: Pass2Stats,
+): Promise<void> {
+  const { data: alerts, error } = await supabase
+    .from('ct_flow_alerts')
+    .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, executed_at, ingested_at, option_symbol, price, raw')
+    .order('ingested_at', { ascending: true })
+    .limit(PASS2_NEW_SCAN_LIMIT);
+
+  if (error) {
+    stats.errors.push(`p2 contract create-fetch: ${error.message}`);
+    return;
+  }
+  if (!alerts || alerts.length === 0) return;
+
+  const alertIds = alerts.map((a) => a.alert_id).filter((x): x is string => !!x);
+  const existing = await fetchExistingContractTrackIds(supabase, alertIds);
+
+  // Filter to alerts that don't already have a contract track and cap to
+  // work limit. Same semantics as createMissingTracks but against
+  // ct_contract_tracks.
+  const workable = (alerts as FlowAlertRow[])
+    .filter((a) => !!a.alert_id && !existing.has(a.alert_id))
+    .slice(0, PASS2_CONTRACT_NEW_WORK_LIMIT);
+
+  const toCreate: Record<string, unknown>[] = [];
+  const maxMs = trackingCfg.maxDays * 24 * 3600_000;
+
+  for (const a of workable as FlowAlertRow[]) {
+    try {
+      if (!a.alert_id) continue;
+      const side = (a.side ?? '').toLowerCase();
+      if (side !== 'call' && side !== 'put') continue;
+
+      const printTime = resolvePrintTime(a);
+      if (!printTime) {
+        stats.skipped_no_print_time += 1;
+        continue;
+      }
+
+      const dir = inferDirection(a);
+      if (!dir) {
+        stats.skipped_no_direction += 1;
+        continue;
+      }
+
+      // Resolve OCC symbol — prefer the raw column, fall back to synthesis.
+      // Today every row falls into synthesis; leaving the precedence in
+      // place so this code keeps working if/when UW restores the field.
+      let optionSymbol: string | null = a.option_symbol ?? null;
+      if (!optionSymbol) {
+        // Synthesis input check first so we can split the skip counters.
+        if (a.strike == null || !a.expiry) {
+          stats.skipped_no_strike_or_expiry += 1;
+          continue;
+        }
+        optionSymbol = buildOccSymbol(a.ticker, a.expiry, side, a.strike);
+        if (!optionSymbol) {
+          stats.skipped_no_symbol += 1;
+          continue;
+        }
+      }
+
+      // tracking_until = LEAST(expiry+1d at 21:00 UTC, print_time + maxDays).
+      // The +1d on expiry is intentional — see migration header. Captures
+      // final settlement quote that posts after close on expiry day.
+      let trackingUntilMs = printTime.getTime() + maxMs;
+      if (a.expiry) {
+        const expPlus1 = new Date(a.expiry + 'T21:00:00Z');
+        if (!Number.isNaN(expPlus1.getTime())) {
+          expPlus1.setUTCDate(expPlus1.getUTCDate() + 1);
+          trackingUntilMs = Math.min(trackingUntilMs, expPlus1.getTime());
+        }
+      }
+      // Don't track in the past — guarantee at least 1h forward.
+      if (trackingUntilMs < printTime.getTime() + 3600_000) {
+        trackingUntilMs = printTime.getTime() + 3600_000;
+      }
+      const trackingUntil = new Date(trackingUntilMs);
+
+      const dteAtPrint = a.expiry
+        ? Math.max(0, Math.floor((new Date(a.expiry + 'T21:00:00Z').getTime() - printTime.getTime()) / (24 * 3600_000)))
+        : null;
+
+      // Entry contract price from ct_flow_alerts.price. If null, leave
+      // entry null + source='estimated_mid' so Phase B knows to backfill.
+      const priceRaw = a.price;
+      const entryPrice = priceRaw != null && Number.isFinite(Number(priceRaw)) && Number(priceRaw) > 0
+        ? Number(priceRaw)
+        : null;
+      const entrySource = entryPrice !== null ? 'flow_alert_price' : 'estimated_mid';
+
+      toCreate.push({
+        alert_id: a.alert_id,
+        option_symbol: optionSymbol,
+        ticker: a.ticker,
+        side,
+        strike: a.strike ?? null,
+        expiry: a.expiry ?? null,
+        dte_at_print: dteAtPrint,
+        print_time: printTime.toISOString(),
+        predicted_direction: dir.direction,
+        predicted_source: dir.source,
+        entry_contract_price: entryPrice === null ? null : Number(entryPrice.toFixed(4)),
+        entry_source: entrySource,
+        current_contract_price: entryPrice === null ? null : Number(entryPrice.toFixed(4)),
+        current_contract_pct: entryPrice === null ? null : 0,
+        peak_contract_pct: 0,
+        max_drawdown_pct: 0,
+        track_status: 'WORKING',
+        tracking_until: trackingUntil.toISOString(),
+        sweep_count: 0,
+        grading_method: 'contract_v1',
+      });
+    } catch (e) {
+      stats.errors.push(`p2 contract create ${a.alert_id}: ${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}`);
+    }
+  }
+
+  if (toCreate.length === 0) return;
+
+  const chunkSize = 200;
+  for (let i = 0; i < toCreate.length; i += chunkSize) {
+    const slice = toCreate.slice(i, i + chunkSize);
+    const { error: insErr, count } = await supabase
+      .from('ct_contract_tracks')
+      .upsert(slice, { onConflict: 'alert_id', ignoreDuplicates: true, count: 'exact' });
+    if (insErr) {
+      stats.errors.push(`p2 contract create-insert: ${insErr.message.slice(0, 200)}`);
+      continue;
+    }
+    stats.contract_tracks_created += count ?? slice.length;
   }
 }
 
@@ -934,13 +1154,19 @@ async function runTrackPass(
     skipped_no_direction: 0,
     skipped_no_print_time: 0,
     skipped_no_price: 0,
+    contract_tracks_created: 0,
+    skipped_no_symbol: 0,
+    skipped_no_strike_or_expiry: 0,
     errors: [],
   };
 
   // Order: create first (so brand-new prints get a sweep this run), then
   // update working set, then expire matured tracks. Expiring last lets a
   // track that just hit tracking_until still record one final peak.
+  // Contract-track creation runs alongside underlying-track creation —
+  // both are insert-only and operate on disjoint tables.
   await createMissingTracks(supabase, trackingCfg, stats);
+  await createMissingContractTracks(supabase, trackingCfg, stats);
   await updateWorkingTracks(supabase, dteThresholds, stats);
   await expireDueTracks(supabase, stats);
 
@@ -1003,10 +1229,13 @@ serve(async (req) => {
       tracks_created: pass2.tracks_created,
       tracks_updated: pass2.tracks_updated,
       tracks_expired: pass2.tracks_expired,
+      contract_tracks_created: pass2.contract_tracks_created,
       skipped: {
         no_direction: pass2.skipped_no_direction,
         no_print_time: pass2.skipped_no_print_time,
         no_price: pass2.skipped_no_price,
+        no_symbol: pass2.skipped_no_symbol,
+        no_strike_or_expiry: pass2.skipped_no_strike_or_expiry,
       },
     },
     thresholds: {
