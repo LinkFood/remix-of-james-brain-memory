@@ -312,3 +312,91 @@ export function gradeColor(grade: string | null | undefined): string {
   if (grade === 'LOSS') return 'text-rose-400';
   return 'text-muted-foreground';
 }
+
+// ---------- ct_signature_magnitude_stats RPC ----------
+
+export interface SignatureMagnitudeRow {
+  signature_label: string;
+  ticker: string;
+  side: string;
+  dte_bucket: string;
+  predicted_source: string;
+  n_tracks: number;
+  median_peak_pct: number | null;
+  p75_peak_pct: number | null;
+  p90_peak_pct: number | null;
+  max_peak_pct: number | null;
+  win_count: number;
+  loss_count: number;
+  working_count: number;
+  hit_rate: number | null;
+  expected_value_pct: number | null;
+}
+
+export function useSignatureMagnitudeStats(sinceDays = 7, minN = 3) {
+  return useQuery<SignatureMagnitudeRow[]>({
+    queryKey: ['ct_signature_magnitude_stats', sinceDays, minN],
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    retry: false,
+    queryFn: async () => {
+      const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any).rpc('ct_signature_magnitude_stats', {
+        p_since: since,
+        p_min_n: minN,
+      });
+      if (error) {
+        console.warn('[useSignatureMagnitudeStats]', error.message);
+        return [];
+      }
+      return (data ?? []) as SignatureMagnitudeRow[];
+    },
+  });
+}
+
+// ---------- ct_contract_threshold_distribution RPC ----------
+
+export interface ContractThresholdRow {
+  dte_bucket: string;
+  bucket_order: number;
+  n_tracks: number;
+  current_threshold_pct: number | null;
+  median_peak_pct: number | null;
+  p75_peak_pct: number | null;
+  p90_peak_pct: number | null;
+  max_peak_pct: number | null;
+  n_above_threshold: number;
+  pct_above_threshold: number | null;
+  recommended_p60_pct: number | null;
+  recommended_p75_pct: number | null;
+}
+
+export function useContractThresholdDistribution(sinceDays = 7) {
+  return useQuery<ContractThresholdRow[]>({
+    queryKey: ['ct_contract_threshold_distribution', sinceDays],
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    retry: false,
+    queryFn: async () => {
+      const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any).rpc('ct_contract_threshold_distribution', {
+        p_since: since,
+      });
+      if (error) {
+        console.warn('[useContractThresholdDistribution]', error.message);
+        return [];
+      }
+      return (data ?? []) as ContractThresholdRow[];
+    },
+  });
+}
+
+/** Format a decimal-fraction magnitude (1.0 = 100%) as "+100%". Null-safe. */
+export function fmtFractionAsPct(v: number | null | undefined, digits = 0): string {
+  if (v == null || !Number.isFinite(v)) return '—';
+  const pct = v * 100;
+  const sign = pct >= 0 ? '+' : '';
+  return `${sign}${pct.toFixed(digits)}%`;
+}

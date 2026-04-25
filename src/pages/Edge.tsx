@@ -44,16 +44,21 @@ import {
   useSignatures,
   usePrintGrades,
   usePrintTracks,
+  useSignatureMagnitudeStats,
+  useContractThresholdDistribution,
   fmtPctRate,
   fmtInt,
   fmtNum,
   fmtPct,
+  fmtFractionAsPct,
   gradeColor,
   type PrintGradeRow,
   type SignatureRow,
   type PrintTrackRow,
   type SlowBurnPay,
   type EdgeDailyByBucket,
+  type SignatureMagnitudeRow,
+  type ContractThresholdRow,
 } from '@/hooks/useEdge';
 import {
   useTopContractPeaks,
@@ -841,6 +846,291 @@ function AttributionByDimension() {
 }
 
 // ============================================================================
+// Section H — Threshold Calibration (contract-axis WIN bars vs reality)
+// ============================================================================
+//
+// The contract grader uses per-DTE-bucket WIN thresholds stored in ct_config:
+//   0DTE = +50%, short = +50%, mid = +100%, long = +200%.
+// Are those bars right? This panel surfaces the actual peak distribution per
+// bucket alongside the current threshold so James can see at a glance which
+// bars are too tight (almost no WINs land) or too loose (everything WINs).
+//
+// "% over bar" coloring is the headline:
+//   <10%  rose  — bar too tight, almost no signature crosses it
+//   10-30 amber
+//   30-60 emerald — sweet spot
+//   60-90 amber
+//   >90%  rose  — bar too loose, WIN means nothing
+
+function thresholdHealthClass(pct: number | null | undefined): string {
+  if (pct == null) return 'text-muted-foreground';
+  const p = pct * 100;
+  if (p < 10) return 'text-rose-300';
+  if (p < 30) return 'text-amber-300';
+  if (p <= 60) return 'text-emerald-300';
+  if (p <= 90) return 'text-amber-300';
+  return 'text-rose-300';
+}
+
+function bucketLabel(b: string): string {
+  switch (b) {
+    case '0dte': return '0DTE';
+    case 'short': return 'Short (1-7d)';
+    case 'mid': return 'Mid (8-30d)';
+    case 'long': return 'Long (30d+)';
+    default: return b;
+  }
+}
+
+function ThresholdCalibration() {
+  const { data, isLoading } = useContractThresholdDistribution(7);
+  const rows: ContractThresholdRow[] = data ?? [];
+
+  return (
+    <Card className="p-0 overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border/60 flex items-center gap-2 bg-primary/[0.04]">
+        <Target className="w-4 h-4 text-primary" />
+        <h2 className="text-sm font-semibold tracking-tight">Threshold Calibration</h2>
+        <span className="text-[10px] text-muted-foreground ml-2">
+          actual contract peak distribution vs current WIN thresholds (7d)
+        </span>
+        <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">
+          {fmtInt(rows.reduce((acc, r) => acc + (r.n_tracks ?? 0), 0))} tracks
+        </span>
+      </div>
+      {isLoading ? (
+        <div className="p-6 text-center text-xs text-muted-foreground">Loading distribution…</div>
+      ) : rows.length === 0 ? (
+        <div className="p-6 text-center text-xs text-muted-foreground italic">
+          No contract tracks yet — calibration appears once the poller fills peaks.
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="text-[10px] uppercase tracking-wider">DTE Bucket</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-right">n</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-right">WIN bar</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-right">P50</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-right">P75</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-right">P90</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-right">Max</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-right">% over bar</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-right">Suggest P60</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-right">Suggest P75</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={r.dte_bucket} className="hover:bg-muted/20">
+                <TableCell className="py-1.5 text-[11px] font-mono font-semibold text-foreground">
+                  {bucketLabel(r.dte_bucket)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums text-muted-foreground">
+                  {fmtInt(r.n_tracks)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right font-mono tabular-nums text-foreground">
+                  {fmtFractionAsPct(r.current_threshold_pct, 0)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums text-muted-foreground">
+                  {fmtFractionAsPct(r.median_peak_pct, 0)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums">
+                  {fmtFractionAsPct(r.p75_peak_pct, 0)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums">
+                  {fmtFractionAsPct(r.p90_peak_pct, 0)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums text-muted-foreground">
+                  {fmtFractionAsPct(r.max_peak_pct, 0)}
+                </TableCell>
+                <TableCell className={cn(
+                  'py-1.5 text-[11px] text-right font-mono tabular-nums font-semibold',
+                  thresholdHealthClass(r.pct_above_threshold),
+                )}>
+                  {r.pct_above_threshold == null
+                    ? '—'
+                    : `${(r.pct_above_threshold * 100).toFixed(1)}%`}
+                  <span className="ml-1 text-[9px] text-muted-foreground/70">
+                    ({fmtInt(r.n_above_threshold)})
+                  </span>
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums text-amber-300/90">
+                  {fmtFractionAsPct(r.recommended_p60_pct, 0)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums text-amber-300/90">
+                  {fmtFractionAsPct(r.recommended_p75_pct, 0)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+      <div className="px-4 py-2 text-[10px] text-muted-foreground/80 border-t border-border/40">
+        <span className="font-semibold">% over bar</span> green 30-60% = bar feels right.
+        Rose &lt;10% = bar too tight (almost nothing WINs). Rose &gt;90% = bar too loose.
+        <span className="ml-1 font-semibold">Suggest P60</span> = threshold that catches top 40% of tracks.
+      </div>
+    </Card>
+  );
+}
+
+// ============================================================================
+// Section I — Signature Magnitude (contract-axis EV ranking)
+// ============================================================================
+//
+// Sibling of BestSignatures but ranked by ACTUAL contract returns, not
+// direction hit rate. Built off ct_contract_tracks grouped by
+// (ticker × side × dte_bucket × predicted_source) so it works on every
+// tracked print, even ones that haven't earned a promoted ct_signatures row.
+
+function evColorClass(ev: number | null | undefined): string {
+  if (ev == null || !Number.isFinite(ev)) return 'text-muted-foreground';
+  const p = ev * 100;
+  if (p > 50) return 'text-emerald-300';
+  if (p >= 0) return 'text-amber-300';
+  return 'text-rose-300';
+}
+
+function dteBucketBadgeClass(b: string): string {
+  switch (b) {
+    case '0dte': return 'bg-rose-500/15 text-rose-300 border-rose-500/30';
+    case 'short': return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+    case 'mid': return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
+    case 'long': return 'bg-primary/15 text-primary border-primary/30';
+    default: return 'bg-muted/40 text-muted-foreground border-border/50';
+  }
+}
+
+type MagSortKey = 'expected_value_pct' | 'median_peak_pct' | 'p75_peak_pct' | 'p90_peak_pct' | 'n_tracks' | 'hit_rate';
+
+function SignatureMagnitude() {
+  const { data, isLoading } = useSignatureMagnitudeStats(7, 3);
+  const [sortKey, setSortKey] = useState<MagSortKey>('expected_value_pct');
+
+  const rows: SignatureMagnitudeRow[] = useMemo(() => {
+    const r = (data ?? []).slice();
+    r.sort((a, b) => {
+      const av = a[sortKey];
+      const bv = b[sortKey];
+      const an = av == null || !Number.isFinite(av) ? -Infinity : av;
+      const bn = bv == null || !Number.isFinite(bv) ? -Infinity : bv;
+      return bn - an;
+    });
+    return r;
+  }, [data, sortKey]);
+
+  const sortBtn = (k: MagSortKey, label: string) => (
+    <button
+      type="button"
+      onClick={() => setSortKey(k)}
+      className={cn(
+        'text-[10px] uppercase tracking-wider hover:text-foreground transition-colors',
+        sortKey === k ? 'text-primary font-semibold' : 'text-muted-foreground',
+      )}
+    >
+      {label}{sortKey === k ? ' ↓' : ''}
+    </button>
+  );
+
+  return (
+    <Card className="p-0 overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-border/60 flex items-center gap-2 bg-primary/[0.04]">
+        <TrendingUp className="w-4 h-4 text-primary" />
+        <h2 className="text-sm font-semibold tracking-tight">Signatures by Magnitude</h2>
+        <span className="text-[10px] text-muted-foreground ml-2">
+          contract-axis EV — ranks by actual peak returns, not direction (7d, n≥3)
+        </span>
+        <span className="ml-auto text-[10px] text-muted-foreground tabular-nums">
+          {fmtInt(rows.length)} shapes
+        </span>
+      </div>
+      {isLoading ? (
+        <div className="p-6 text-center text-xs text-muted-foreground">Loading magnitude…</div>
+      ) : rows.length === 0 ? (
+        <div className="p-6 text-center text-xs text-muted-foreground italic">
+          No signature shapes have ≥3 tracked prints yet — bar lowers as the contract poller fills more rows.
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="text-[10px] uppercase tracking-wider">Signature</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider">DTE</TableHead>
+              <TableHead className="text-right">{sortBtn('n_tracks', 'n')}</TableHead>
+              <TableHead className="text-right">{sortBtn('median_peak_pct', 'Median')}</TableHead>
+              <TableHead className="text-right">{sortBtn('p75_peak_pct', 'P75')}</TableHead>
+              <TableHead className="text-right">{sortBtn('p90_peak_pct', 'P90')}</TableHead>
+              <TableHead className="text-[10px] uppercase tracking-wider text-right">W/L/Wk</TableHead>
+              <TableHead className="text-right">{sortBtn('hit_rate', 'Hit%')}</TableHead>
+              <TableHead className="text-right">{sortBtn('expected_value_pct', 'EV')}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={r.signature_label} className="hover:bg-muted/20">
+                <TableCell className="py-1.5 text-[11px] font-mono font-semibold text-foreground truncate max-w-[280px]">
+                  {r.signature_label}
+                </TableCell>
+                <TableCell className="py-1.5">
+                  <Badge
+                    variant="outline"
+                    className={cn(
+                      'text-[10px] font-mono px-1.5 py-0',
+                      dteBucketBadgeClass(r.dte_bucket),
+                    )}
+                  >
+                    {r.dte_bucket}
+                  </Badge>
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums">
+                  {fmtInt(r.n_tracks)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums text-muted-foreground">
+                  {fmtFractionAsPct(r.median_peak_pct, 0)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums">
+                  {fmtFractionAsPct(r.p75_peak_pct, 0)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums">
+                  {fmtFractionAsPct(r.p90_peak_pct, 0)}
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right font-mono tabular-nums">
+                  <span className="text-emerald-300">{fmtInt(r.win_count)}</span>
+                  <span className="text-muted-foreground/40 mx-0.5">/</span>
+                  <span className="text-rose-300">{fmtInt(r.loss_count)}</span>
+                  <span className="text-muted-foreground/40 mx-0.5">/</span>
+                  <span className="text-muted-foreground">{fmtInt(r.working_count)}</span>
+                </TableCell>
+                <TableCell className="py-1.5 text-[11px] text-right tabular-nums">
+                  <span className="inline-flex items-center gap-1.5 justify-end">
+                    <HitBar rate={r.hit_rate} />
+                    <span className="text-foreground w-10 text-right">
+                      {fmtPctRate(r.hit_rate, 0)}
+                    </span>
+                  </span>
+                </TableCell>
+                <TableCell className={cn(
+                  'py-1.5 text-[11px] text-right font-mono tabular-nums font-semibold',
+                  evColorClass(r.expected_value_pct),
+                )}>
+                  {fmtFractionAsPct(r.expected_value_pct, 0)}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+      <div className="px-4 py-2 text-[10px] text-muted-foreground/80 border-t border-border/40">
+        <span className="font-semibold">EV</span> = mean peak % treating LOSSes as -loss_threshold.
+        Rough "expected return per dollar" if you had bought every print of this signature shape.
+        Emerald &gt;50%, amber 0-50%, rose negative.
+      </div>
+    </Card>
+  );
+}
+
+// ============================================================================
 // Page
 // ============================================================================
 
@@ -871,9 +1161,11 @@ export default function Edge() {
         </header>
 
         <HeroRow />
+        <ThresholdCalibration />
         <SlowBurnPays />
         <WinnersLosers />
         <BestSignatures />
+        <SignatureMagnitude />
         <ContractAxisEdge />
         <PerTickerGrid />
         <WorkingTracks />
