@@ -37,6 +37,7 @@ import {
   Area,
   AreaChart,
   CartesianGrid,
+  Line,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -46,10 +47,10 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   useFlowPulseChart,
-  useNetPremiumSeries,
+  useNetPremiumExpirySplit,
   formatPulseDollars,
   type FlowPulseChartPoint,
-  type NetPremiumSeriesPoint,
+  type NetPremiumExpirySplitPoint,
 } from '@/hooks/useFlowPulse';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
@@ -61,18 +62,31 @@ type DteKey = 'all' | 'short' | 'long';
 interface ButterflyPoint {
   time: string;
   bucket_time: string;
-  // For mode 'cp' (LIVE signed): top_cp = raw net_call_premium (can be ±),
-  // bottom_cp = raw net_put_premium (can be ±). NOT mirrored.
-  // For mode 'bb' (cumulative): top_bb >= 0 (cum bull), bottom_bb <= 0 (cum bear, mirrored).
-  top_cp: number;
+  // Mode 'bb' (cumulative): top_bb >= 0 (cum bull), bottom_bb <= 0 (cum bear, mirrored).
   top_bb: number;
-  bottom_cp: number;
   bottom_bb: number;
   // Absolute magnitudes (for tooltip + headline)
-  top_cp_abs: number;
   top_bb_abs: number;
-  bottom_cp_abs: number;
   bottom_bb_abs: number;
+}
+
+/**
+ * 4-series point for mode 'cp'. Cumulative running sums of signed net premium,
+ * split by expiry slice:
+ *   cum_all_call  → all expiries combined, calls leg
+ *   cum_all_put   → all expiries combined, puts leg
+ *   cum_next_call → 0-7 DTE only, calls leg
+ *   cum_next_put  → 0-7 DTE only, puts leg
+ * All four are signed running sums — they can rise above zero, fall below it,
+ * and cross each other when the regime flips.
+ */
+interface FourSeriesPoint {
+  time: string;
+  bucket_time: string;
+  cum_all_call: number;
+  cum_all_put: number;
+  cum_next_call: number;
+  cum_next_put: number;
 }
 
 interface Props {
@@ -123,61 +137,60 @@ function pickField(p: FlowPulseChartPoint, side: 'calls' | 'puts' | 'bullish' | 
 }
 
 function buildButterfly(points: FlowPulseChartPoint[], dte: DteKey): ButterflyPoint[] {
-  let cumCalls = 0;
-  let cumPuts = 0;
   let cumBull = 0;
   let cumBear = 0;
   return points.map((p) => {
-    cumCalls += pickField(p, 'calls', dte);
-    cumPuts += pickField(p, 'puts', dte);
     cumBull += pickField(p, 'bullish', dte);
     cumBear += pickField(p, 'bearish', dte);
     return {
       time: fmtTime(p.bucket_time),
       bucket_time: p.bucket_time,
-      top_cp: cumCalls,
       top_bb: cumBull,
-      bottom_cp: -cumPuts,
       bottom_bb: -cumBear,
-      top_cp_abs: cumCalls,
       top_bb_abs: cumBull,
-      bottom_cp_abs: cumPuts,
       bottom_bb_abs: cumBear,
     };
   });
 }
 
 /**
- * Live Calls vs Puts builder. Running sum of SIGNED net_call_premium and
- * net_put_premium across the session. Integral of signed flow = smooth
- * directional-bias line that climbs when buyers dominate, falls when sellers
- * take over, and can cross zero (or cross each other) when the regime flips.
+ * Live 4-series builder. Running sum of SIGNED net premium for four legs:
+ * (calls all-expiry, puts all-expiry, calls 0-7 DTE, puts 0-7 DTE).
  *
- * Why cumsum: raw per-minute signed ticks are too noisy to read (hair-pattern
- * spikes). The information sits in the drift, not the minute-to-minute whip.
- * Since the data is SIGNED (unlike the legacy chart_rpc that fed strictly-
- * positive premium sums), cumsum is NOT monotonic — it rises, flattens, and
- * reverses with the tape. Exactly the shape James drew: morning calls climb,
- * 11am stall, afternoon selloff drags the call line down and puts cross above.
+ * Why cumsum across all four: raw per-minute signed ticks are noisy and the
+ * actual information sits in the drift. Cumsum on signed values is NOT
+ * monotonic — each line rises when its leg is being bought, falls when sold,
+ * and crosses zero when the regime flips on that leg. With 4 lines you read
+ * regime AND term-structure at once: NextExpiry diverging from All means the
+ * short-dated tape is leading or lagging the broader positioning.
  *
- * Aggregation: single ticker → one row per ts; MARKET → many rows per ts,
- * summed to a single MARKET ribbon. Sort by time first, then integrate.
+ * Aggregation: single ticker → one row per ts; MARKET → defensive group-by-ts.
+ * Sort by timestamp first, then integrate forward.
  */
-function buildLiveCp(points: NetPremiumSeriesPoint[], skipPreMarket: boolean): ButterflyPoint[] {
+function buildLiveCp4Series(
+  points: NetPremiumExpirySplitPoint[],
+  skipPreMarket: boolean,
+): FourSeriesPoint[] {
   if (points.length === 0) return [];
 
-  const byTime = new Map<string, { call: number; put: number }>();
+  const byTime = new Map<string, {
+    allCall: number; allPut: number; nextCall: number; nextPut: number;
+  }>();
   for (const p of points) {
     if (skipPreMarket && isPreMarketET(p.tick_timestamp)) continue;
     const ts = p.tick_timestamp;
-    const call = Number.isFinite(p.net_call_premium) ? p.net_call_premium : 0;
-    const put = Number.isFinite(p.net_put_premium) ? p.net_put_premium : 0;
+    const allCall = Number.isFinite(p.all_net_call) ? p.all_net_call : 0;
+    const allPut = Number.isFinite(p.all_net_put) ? p.all_net_put : 0;
+    const nextCall = Number.isFinite(p.next_net_call) ? p.next_net_call : 0;
+    const nextPut = Number.isFinite(p.next_net_put) ? p.next_net_put : 0;
     const cur = byTime.get(ts);
     if (cur) {
-      cur.call += call;
-      cur.put += put;
+      cur.allCall += allCall;
+      cur.allPut += allPut;
+      cur.nextCall += nextCall;
+      cur.nextPut += nextPut;
     } else {
-      byTime.set(ts, { call, put });
+      byTime.set(ts, { allCall, allPut, nextCall, nextPut });
     }
   }
 
@@ -185,68 +198,54 @@ function buildLiveCp(points: NetPremiumSeriesPoint[], skipPreMarket: boolean): B
     (a, b) => Date.parse(a[0]) - Date.parse(b[0]),
   );
 
-  let cumCall = 0;
-  let cumPut = 0;
-  const out: ButterflyPoint[] = [];
+  let cumAllCall = 0;
+  let cumAllPut = 0;
+  let cumNextCall = 0;
+  let cumNextPut = 0;
+  const out: FourSeriesPoint[] = [];
   for (const [ts, v] of sorted) {
-    cumCall += v.call;
-    cumPut += v.put;
+    cumAllCall += v.allCall;
+    cumAllPut += v.allPut;
+    cumNextCall += v.nextCall;
+    cumNextPut += v.nextPut;
     out.push({
       time: fmtTime(ts),
       bucket_time: ts,
-      top_cp: cumCall,
-      bottom_cp: cumPut,
-      top_bb: 0,
-      bottom_bb: 0,
-      top_cp_abs: Math.abs(cumCall),
-      bottom_cp_abs: Math.abs(cumPut),
-      top_bb_abs: 0,
-      bottom_bb_abs: 0,
+      cum_all_call: cumAllCall,
+      cum_all_put: cumAllPut,
+      cum_next_call: cumNextCall,
+      cum_next_put: cumNextPut,
     });
   }
   return out;
 }
 
-interface ButterflyProps {
+interface ButterflyBbProps {
   data: ButterflyPoint[];
-  mode: ModeKey;
   height?: number;
 }
 
-function Butterfly({ data, mode, height = 280 }: ButterflyProps) {
-  const topKey = mode === 'cp' ? 'top_cp' : 'top_bb';
-  const bottomKey = mode === 'cp' ? 'bottom_cp' : 'bottom_bb';
-  const topLabel = mode === 'cp' ? 'Calls' : 'Bulls';
-  const bottomLabel = mode === 'cp' ? 'Puts' : 'Bears';
-  const fillTopId = `butterfly-top-${mode}`;
-  const fillBottomId = `butterfly-bottom-${mode}`;
+/**
+ * Mode 'bb' renderer — cumulative bull/bear areas mirrored around 0.
+ * Untouched from the original implementation modulo the trimmed point shape.
+ */
+function ButterflyBb({ data, height = 280 }: ButterflyBbProps) {
+  const fillTopId = 'butterfly-top-bb';
+  const fillBottomId = 'butterfly-bottom-bb';
 
-  // Symmetric Y-domain so the zero centerline reads as the true midpoint.
-  // For mode 'cp' (live signed): both lines can be positive OR negative, so
-  // we take the max magnitude across BOTH extremes of BOTH series — this lets
-  // crossovers stay visually centered and the zero line always means "flip."
-  // For mode 'bb' (cumulative mirrored): top is always ≥0, bottom is mirrored
-  // ≤0; their magnitudes via *_abs are sufficient.
   const domain = useMemo<[number, number]>(() => {
     if (data.length === 0) return [-1, 1];
     let max = 0;
     for (const d of data) {
-      if (mode === 'cp') {
-        const t = Math.abs(d.top_cp);
-        const b = Math.abs(d.bottom_cp);
-        if (t > max) max = t;
-        if (b > max) max = b;
-      } else {
-        const t = d.top_bb_abs;
-        const b = d.bottom_bb_abs;
-        if (t > max) max = t;
-        if (b > max) max = b;
-      }
+      const t = d.top_bb_abs;
+      const b = d.bottom_bb_abs;
+      if (t > max) max = t;
+      if (b > max) max = b;
     }
     if (max === 0) return [-1, 1];
     const padded = max * 1.10;
     return [-padded, padded];
-  }, [data, mode]);
+  }, [data]);
 
   return (
     <div style={{ width: '100%', height }}>
@@ -272,14 +271,110 @@ function Butterfly({ data, mode, height = 280 }: ButterflyProps) {
           <YAxis
             stroke="#71717a"
             tick={{ fontSize: 10, fontFamily: 'monospace' }}
+            tickFormatter={(v: number) => formatPulseDollars(Math.abs(v))}
+            domain={domain}
+            width={72}
+          />
+          <ReferenceLine y={0} stroke="#a1a1aa" strokeOpacity={0.6} strokeDasharray="1 3" />
+          <Tooltip
+            contentStyle={{
+              background: '#0a0a0a',
+              border: '1px solid #27272a',
+              borderRadius: 6,
+              fontSize: 11,
+              fontFamily: 'monospace',
+            }}
+            labelStyle={{ color: '#a1a1aa' }}
+            formatter={(value: number, name: string) => {
+              const isTop = name === 'top_bb';
+              const label = isTop ? 'Bulls' : 'Bears';
+              const display = formatPulseDollars(Math.abs(value));
+              return [display, label];
+            }}
+          />
+          <Area
+            type="monotone"
+            dataKey="top_bb"
+            stroke="#34d399"
+            strokeWidth={1.6}
+            fill={`url(#${fillTopId})`}
+            isAnimationActive={false}
+            dot={false}
+            activeDot={{ r: 3 }}
+          />
+          <Area
+            type="monotone"
+            dataKey="bottom_bb"
+            stroke="#fb7185"
+            strokeWidth={1.6}
+            fill={`url(#${fillBottomId})`}
+            isAnimationActive={false}
+            dot={false}
+            activeDot={{ r: 3 }}
+          />
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+interface ButterflyCpProps {
+  data: FourSeriesPoint[];
+  height?: number;
+}
+
+/**
+ * Mode 'cp' renderer — 4 cumulative SIGNED lines, no fills.
+ *   Calls All        → emerald  #34d399  solid
+ *   Calls NextExpiry → green    #22c55e  dashed
+ *   Puts All         → light rose #fda4af solid
+ *   Puts NextExpiry  → vivid rose #f43f5e dashed
+ *
+ * Y-domain is symmetric ± max magnitude across all 4 series so the zero line
+ * stays the visual midpoint and crossovers read cleanly.
+ */
+function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
+  const domain = useMemo<[number, number]>(() => {
+    if (data.length === 0) return [-1, 1];
+    const padded = Math.max(
+      ...data.flatMap((d) => [
+        Math.abs(d.cum_all_call),
+        Math.abs(d.cum_all_put),
+        Math.abs(d.cum_next_call),
+        Math.abs(d.cum_next_put),
+      ]),
+    ) * 1.10;
+    if (!Number.isFinite(padded) || padded === 0) return [-1, 1];
+    return [-padded, padded];
+  }, [data]);
+
+  const seriesLabel = (key: string): string => {
+    switch (key) {
+      case 'cum_all_call': return 'Calls All';
+      case 'cum_next_call': return 'Calls Next';
+      case 'cum_all_put': return 'Puts All';
+      case 'cum_next_put': return 'Puts Next';
+      default: return key;
+    }
+  };
+
+  return (
+    <div style={{ width: '100%', height }}>
+      <ResponsiveContainer>
+        <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+          <CartesianGrid stroke="#ffffff08" strokeDasharray="2 4" />
+          <XAxis
+            dataKey="time"
+            stroke="#71717a"
+            tick={{ fontSize: 10, fontFamily: 'monospace' }}
+            minTickGap={36}
+          />
+          <YAxis
+            stroke="#71717a"
+            tick={{ fontSize: 10, fontFamily: 'monospace' }}
             tickFormatter={(v: number) => {
-              // Mode 'cp' = signed running sum; labels must carry sign.
-              // Mode 'bb' = mirrored magnitudes; absolute reads naturally.
-              if (mode === 'cp') {
-                if (Math.abs(v) < 1) return '$0';
-                return `${v < 0 ? '−' : ''}${formatPulseDollars(Math.abs(v))}`;
-              }
-              return formatPulseDollars(Math.abs(v));
+              if (Math.abs(v) < 1) return '$0';
+              return `${v < 0 ? '−' : ''}${formatPulseDollars(Math.abs(v))}`;
             }}
             domain={domain}
             width={72}
@@ -295,33 +390,48 @@ function Butterfly({ data, mode, height = 280 }: ButterflyProps) {
             }}
             labelStyle={{ color: '#a1a1aa' }}
             formatter={(value: number, name: string) => {
-              const isTop = name === topKey;
-              const label = isTop ? topLabel : bottomLabel;
-              // Mode 'cp' lines are signed — preserve sign so negative reads
-              // as "selling." Mode 'bb' lines are magnitudes (bottom mirrored
-              // negative for layout); show absolute value so it reads naturally.
-              const display = mode === 'cp'
-                ? `${value < 0 ? '−' : '+'}${formatPulseDollars(Math.abs(value))}`
-                : formatPulseDollars(Math.abs(value));
-              return [display, label];
+              const display = `${value < 0 ? '−' : '+'}${formatPulseDollars(Math.abs(value))}`;
+              return [display, seriesLabel(name)];
             }}
           />
-          <Area
+          <Line
             type="monotone"
-            dataKey={topKey}
+            dataKey="cum_all_call"
             stroke="#34d399"
-            strokeWidth={1.6}
-            fill={`url(#${fillTopId})`}
+            strokeWidth={2}
+            fill="none"
             isAnimationActive={false}
             dot={false}
             activeDot={{ r: 3 }}
           />
-          <Area
+          <Line
             type="monotone"
-            dataKey={bottomKey}
-            stroke="#fb7185"
-            strokeWidth={1.6}
-            fill={`url(#${fillBottomId})`}
+            dataKey="cum_next_call"
+            stroke="#22c55e"
+            strokeWidth={1.8}
+            strokeDasharray="4 3"
+            fill="none"
+            isAnimationActive={false}
+            dot={false}
+            activeDot={{ r: 3 }}
+          />
+          <Line
+            type="monotone"
+            dataKey="cum_all_put"
+            stroke="#fda4af"
+            strokeWidth={2}
+            fill="none"
+            isAnimationActive={false}
+            dot={false}
+            activeDot={{ r: 3 }}
+          />
+          <Line
+            type="monotone"
+            dataKey="cum_next_put"
+            stroke="#f43f5e"
+            strokeWidth={1.8}
+            strokeDasharray="4 3"
+            fill="none"
             isAnimationActive={false}
             dot={false}
             activeDot={{ r: 3 }}
@@ -332,33 +442,78 @@ function Butterfly({ data, mode, height = 280 }: ButterflyProps) {
   );
 }
 
-function buildHeadline(
-  data: ButterflyPoint[],
-  mode: ModeKey,
-): { text: string; tone: 'top' | 'bottom' | 'flat' } {
+/**
+ * Compact 4-series legend for cp mode. Solid swatch = All; dashed swatch =
+ * NextExpiry. Greens for calls, roses for puts. Renders inline above the chart.
+ */
+function CpLegend() {
+  const items: { label: string; color: string; dashed: boolean }[] = [
+    { label: 'Calls All', color: '#34d399', dashed: false },
+    { label: 'Calls Next', color: '#22c55e', dashed: true },
+    { label: 'Puts All', color: '#fda4af', dashed: false },
+    { label: 'Puts Next', color: '#f43f5e', dashed: true },
+  ];
+  return (
+    <div className="flex items-center gap-3 text-[10px] font-mono text-muted-foreground">
+      {items.map((it) => (
+        <div key={it.label} className="flex items-center gap-1.5">
+          <svg width={18} height={6} aria-hidden>
+            <line
+              x1={0}
+              y1={3}
+              x2={18}
+              y2={3}
+              stroke={it.color}
+              strokeWidth={2}
+              strokeDasharray={it.dashed ? '4 3' : undefined}
+            />
+          </svg>
+          <span>{it.label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+type HeadlineTone = 'top' | 'bottom' | 'flat';
+
+/**
+ * Headline for mode 'cp' — drives off the LAST cumulative point of the
+ * NextExpiry series. NextExpiry is more signal-rich for intraday read; All is
+ * the fallback when next is mixed/flat.
+ */
+function buildHeadlineCp(data: FourSeriesPoint[]): { text: string; tone: HeadlineTone } {
   if (data.length === 0) return { text: '', tone: 'flat' };
   const last = data[data.length - 1];
+  const nextCall = last.cum_next_call;
+  const nextPut = last.cum_next_put;
 
-  if (mode === 'cp') {
-    // Live signed mode. Read the CURRENT bias off last tick:
-    //   call > 0 && put < 0  → tape bullish (calls being bought, puts being sold)
-    //   call < 0 && put > 0  → tape bearish (calls being sold, puts being bought)
-    //   mixed                 → show net = call − put
-    const call = last.top_cp;
-    const put = last.bottom_cp;
-    if (call > 0 && put < 0) {
-      return { text: `Tape bullish · calls +${formatPulseDollars(Math.abs(call))} · puts ${formatPulseDollars(put)}`, tone: 'top' };
-    }
-    if (call < 0 && put > 0) {
-      return { text: `Tape bearish · calls ${formatPulseDollars(call)} · puts +${formatPulseDollars(Math.abs(put))}`, tone: 'bottom' };
-    }
-    const net = call - put;
-    if (Math.abs(net) < 1) return { text: 'Tape flat', tone: 'flat' };
-    if (net > 0) return { text: `Net bullish ${formatPulseDollars(net)}`, tone: 'top' };
-    return { text: `Net bearish ${formatPulseDollars(Math.abs(net))}`, tone: 'bottom' };
+  if (nextCall > 0 && nextPut < 0) {
+    return {
+      text: `Next-expiry bullish · calls +${formatPulseDollars(Math.abs(nextCall))} · puts ${formatPulseDollars(nextPut)}`,
+      tone: 'top',
+    };
+  }
+  if (nextCall < 0 && nextPut > 0) {
+    return {
+      text: `Next-expiry bearish · calls ${formatPulseDollars(nextCall)} · puts +${formatPulseDollars(Math.abs(nextPut))}`,
+      tone: 'bottom',
+    };
   }
 
-  // Mode 'bb' — cumulative magnitudes (unchanged behavior).
+  // Mixed / flat on next-expiry — fall back to all-expiry net read.
+  const allNet = last.cum_all_call - last.cum_all_put;
+  if (Math.abs(allNet) < 1) return { text: 'Tape flat', tone: 'flat' };
+  if (allNet > 0) return { text: `All-expiry: net +${formatPulseDollars(allNet)}`, tone: 'top' };
+  return { text: `All-expiry: net ${formatPulseDollars(allNet)}`, tone: 'bottom' };
+}
+
+/**
+ * Headline for mode 'bb' — cumulative magnitudes spread (unchanged behavior).
+ */
+function buildHeadlineBb(data: ButterflyPoint[]): { text: string; tone: HeadlineTone } {
+  if (data.length === 0) return { text: '', tone: 'flat' };
+  const last = data[data.length - 1];
   const top = last.top_bb_abs;
   const bottom = last.bottom_bb_abs;
   const spread = Math.abs(top - bottom);
@@ -383,26 +538,30 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
   const [mode, setMode] = useState<ModeKey>('cp');
   const [dte, setDte] = useState<DteKey>('all');
 
-  // Mode 'cp' (live signed) reads ct_net_premium_ticks via the new RPC + Realtime.
-  // Mode 'bb' (cumulative mirrored) reads ct_flow_alerts via the legacy RPC.
-  // Both hooks always run (rules of hooks); we just feed the right one to the
-  // builder based on mode.
-  const cpQuery = useNetPremiumSeries(ticker, rangeToMin(range));
+  // Mode 'cp' (live signed, 4-series) reads ct_net_premium_expiry_split via the
+  // new RPC + Realtime on ct_flow_alerts. Mode 'bb' (cumulative mirrored) reads
+  // ct_flow_alerts via the legacy bucketed RPC. Both hooks always run (rules of
+  // hooks); we just feed the right one to its builder based on mode.
+  const cpQuery = useNetPremiumExpirySplit(ticker, rangeToMin(range));
   const bbQuery = useFlowPulseChart(ticker, rangeToMin(range));
 
-  const data = useMemo(() => {
-    if (mode === 'cp') {
-      // Only clip pre-market on the full-day view. 1h/30m windows are already
-      // "last N minutes" so whatever they catch is what the user asked for.
-      return buildLiveCp(cpQuery.points, range === 'today');
-    }
-    return buildButterfly(bbQuery.points, dte);
-  }, [mode, cpQuery.points, bbQuery.points, dte, range]);
+  // Mode 'cp' produces FourSeriesPoint[]; mode 'bb' produces ButterflyPoint[].
+  // Computing both unconditionally keeps the hook order stable across mode flips.
+  const cpData = useMemo(
+    // Only clip pre-market on the full-day view. 1h/30m windows are already
+    // "last N minutes" so whatever they catch is what the user asked for.
+    () => buildLiveCp4Series(cpQuery.points, range === 'today'),
+    [cpQuery.points, range],
+  );
+  const bbData = useMemo(() => buildButterfly(bbQuery.points, dte), [bbQuery.points, dte]);
 
-  const headline = useMemo(() => buildHeadline(data, mode), [data, mode]);
+  const headline = useMemo(() => {
+    return mode === 'cp' ? buildHeadlineCp(cpData) : buildHeadlineBb(bbData);
+  }, [mode, cpData, bbData]);
 
   const isLoading = mode === 'cp' ? cpQuery.isLoading : bbQuery.isLoading;
   const isError = mode === 'cp' ? cpQuery.isError : bbQuery.isError;
+  const hasDataForMode = mode === 'cp' ? cpData.length > 0 : bbData.length > 0;
 
   // Mode 'bb' only — detect whether the backend filled in directional fields.
   // (Live mode 'cp' doesn't have this concern; net premium ticks are signed by
@@ -421,8 +580,7 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
     return dirFlow > 0;
   }, [mode, bbQuery.points]);
 
-  const hasData = data.length > 0;
-  const showDirectionalEmpty = mode === 'bb' && hasData && !hasDirectional;
+  const showDirectionalEmpty = mode === 'bb' && hasDataForMode && !hasDirectional;
 
   return (
     <Card className="mt-1 p-3 bg-card/70 border-border/60">
@@ -490,24 +648,27 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
       {/* Mode tabs — Bulls vs Bears hidden until it's migrated to the live
           signed path. Showing a broken option produced noise in testing. */}
 
-      {/* Headline */}
-      {hasData && headline.text && !showDirectionalEmpty && (
-        <div className="mb-2">
-          <span
-            className={cn(
-              'text-[12px] font-mono font-semibold',
-              headline.tone === 'top' && 'text-emerald-300',
-              headline.tone === 'bottom' && 'text-rose-300',
-              headline.tone === 'flat' && 'text-muted-foreground',
-            )}
-          >
-            {headline.text}
-          </span>
+      {/* Headline + cp-mode legend on the same row when both apply */}
+      {hasDataForMode && !showDirectionalEmpty && (headline.text || mode === 'cp') && (
+        <div className="mb-2 flex items-center gap-3 flex-wrap">
+          {headline.text && (
+            <span
+              className={cn(
+                'text-[12px] font-mono font-semibold',
+                headline.tone === 'top' && 'text-emerald-300',
+                headline.tone === 'bottom' && 'text-rose-300',
+                headline.tone === 'flat' && 'text-muted-foreground',
+              )}
+            >
+              {headline.text}
+            </span>
+          )}
+          {mode === 'cp' && <div className="ml-auto"><CpLegend /></div>}
         </div>
       )}
 
       {/* Chart / states */}
-      {isLoading && !hasData ? (
+      {isLoading && !hasDataForMode ? (
         <div className="w-full h-[280px] flex items-center justify-center text-[11px] text-muted-foreground">
           Loading chart…
         </div>
@@ -515,7 +676,7 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
         <div className="w-full h-[280px] flex items-center justify-center text-[11px] text-muted-foreground italic">
           Chart unavailable — retrying
         </div>
-      ) : !hasData ? (
+      ) : !hasDataForMode ? (
         <div className="w-full h-[280px] flex flex-col items-center justify-center gap-1 text-center px-4">
           <span className="text-[12px] text-muted-foreground italic">
             No flow in {range === '30m' ? 'last 30 min' : range === '1h' ? 'last hour' : 'today’s session'}
@@ -533,13 +694,15 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
             Flow alerts need a directional <span className="font-mono">side</span> field. Until then, use Calls vs Puts.
           </span>
         </div>
+      ) : mode === 'cp' ? (
+        <ButterflyCp data={cpData} height={280} />
       ) : (
-        <Butterfly data={data} mode={mode} height={280} />
+        <ButterflyBb data={bbData} height={280} />
       )}
 
       <div className="mt-1 text-[9.5px] text-muted-foreground/70">
         {mode === 'cp'
-          ? 'Running sum of signed net premium over today — calls (green) climb when bought, fall when sold; puts (red) climb when bought, fall when sold. Lines can cross above or below zero when the tape flips. Live via Supabase Realtime.'
+          ? 'Running sum of signed net premium — 4 series split by expiry. All = every expiry combined; NextExpiry = contracts 0-7 DTE (shorter expiries). Solid = All; dashed = NextExpiry. Green = calls; rose = puts. Live via Supabase Realtime.'
           : 'Aggressive bull bets (bought calls + sold puts) climb up; aggressive bear bets (bought puts + sold calls) climb down. Refreshes every 60s.'}
       </div>
     </Card>

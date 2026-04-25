@@ -340,6 +340,93 @@ export function useNetPremiumSeries(ticker?: string, sinceMin?: number) {
 }
 
 /**
+ * useNetPremiumExpirySplit — live signed net premium ticks split by expiry.
+ *
+ * Powers the 4-series Flow Butterfly. Reads ct_net_premium_expiry_split which
+ * returns per-minute signed net premium for calls/puts in two slices:
+ *   - all   : every expiry combined (the broad regime read)
+ *   - next  : 0-7 DTE only (the short-dated, more reactive read)
+ *
+ * Values are SIGNED (ask_side_prem - bid_side_prem):
+ *   > 0 → buying aggression on that leg
+ *   < 0 → selling aggression on that leg
+ *
+ * Plot strategy: cumulative sum across the session — same approach as
+ * `buildLiveCp`. Cumsum smooths per-minute noise and produces clean directional
+ * lines that can cross zero (and each other) when regime flips.
+ *
+ * Realtime: subscribes to INSERT on ct_flow_alerts (the underlying source) and
+ * invalidates the React Query cache. Channel name suffix differs from
+ * useNetPremiumSeries so both can coexist on a page without collision.
+ *
+ * Pre-deploy behavior: RPC missing → query errors → isError true. `retry: false`
+ * keeps us off a 404 hammer; the 30s interval picks it up cleanly once deployed.
+ */
+export interface NetPremiumExpirySplitPoint {
+  tick_timestamp: string;
+  ticker: string;
+  all_net_call: number;
+  all_net_put: number;
+  next_net_call: number;
+  next_net_put: number;
+}
+
+export function useNetPremiumExpirySplit(ticker?: string, sinceMin?: number) {
+  const qc = useQueryClient();
+  const queryKey = ['net-premium-expiry-split', ticker ?? 'MARKET', sinceMin ?? 'today'] as const;
+
+  // Realtime invalidation on new flow alerts. Ticker filter is best-effort —
+  // ct_flow_alerts INSERTs fire across every watched symbol; the RPC re-filters
+  // on requery so a stray invalidation is cheap.
+  useEffect(() => {
+    const chan = supabase
+      .channel(`ct_flow_alerts_expiry_split_${ticker ?? 'MARKET'}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'ct_flow_alerts' },
+        (payload) => {
+          if (ticker) {
+            const row = (payload as { new?: { ticker?: string } }).new;
+            if (row?.ticker && row.ticker !== ticker) return;
+          }
+          qc.invalidateQueries({ queryKey });
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(chan);
+    };
+    // queryKey is derived from ticker+sinceMin, so those deps cover it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qc, ticker, sinceMin]);
+
+  const query = useQuery<NetPremiumExpirySplitPoint[]>({
+    queryKey: [...queryKey],
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+    retry: false,
+    queryFn: async () => {
+      const params: Record<string, unknown> = {
+        p_ticker: ticker ?? null,
+      };
+      if (sinceMin && sinceMin > 0) {
+        params.p_since = new Date(Date.now() - sinceMin * 60_000).toISOString();
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.rpc as any)('ct_net_premium_expiry_split', params);
+      if (error) throw error;
+      return (Array.isArray(data) ? data : []) as NetPremiumExpirySplitPoint[];
+    },
+  });
+
+  return {
+    points: query.data ?? [],
+    isLoading: query.isLoading,
+    isError: query.isError,
+  };
+}
+
+/**
  * Compute the default "Today" window in minutes — from today's 13:30 UTC
  * (RTH open ≈ 09:30 ET during EDT) to now. Falls back to 360 when we're
  * pre-market or off-hours so we still show something useful on a pre-open
