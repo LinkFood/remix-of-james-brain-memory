@@ -366,6 +366,9 @@ verify_jwt = false
 [functions.ct-flag-grader]
 verify_jwt = false
 
+[functions.ct-print-grader]
+verify_jwt = false
+
 [functions.ct-specialist-nvda]
 verify_jwt = false
 
@@ -397,4 +400,7 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.ct-specialist-dispatcher]
+verify_jwt = false
+
+[functions.ct-edge-miner]
 verify_jwt = false
