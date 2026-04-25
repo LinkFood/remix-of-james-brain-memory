@@ -199,12 +199,23 @@ export function useFlowPulseSeries() {
 
 export interface FlowPulseChartPoint {
   bucket_time: string;
+  // Mode 1: Calls vs Puts — every contract on the side it was struck
   calls_all: number;
-  calls_short: number;
-  calls_long: number;
+  calls_short: number;   // 0-7 DTE
+  calls_long: number;    // 30+ DTE
   puts_all: number;
   puts_short: number;
   puts_long: number;
+  // Mode 2: Bullish vs Bearish — directional aggression
+  // bullish = bought calls + sold puts; bearish = bought puts + sold calls.
+  // Backend may return null/0 for these if `side` isn't yet on ct_flow_alerts;
+  // the chart renders an empty-state message in that case.
+  bullish_all?: number | null;
+  bullish_short?: number | null;
+  bullish_long?: number | null;
+  bearish_all?: number | null;
+  bearish_short?: number | null;
+  bearish_long?: number | null;
 }
 
 /**
