@@ -90,6 +90,7 @@ interface TierThresholds {
 
 interface Stats {
   ok: boolean;
+  replay_mode: boolean;
   alerts_scanned: number;
   alarms_total_evaluated: number;
   alarms_fired_gold: number;
@@ -385,9 +386,10 @@ function buildSlackText(
 // ---------------------------------------------------------------------------
 // Main sweep.
 // ---------------------------------------------------------------------------
-async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds): Promise<Stats> {
+async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, replayMode: boolean): Promise<Stats> {
   const stats: Stats = {
     ok: true,
+    replay_mode: replayMode,
     alerts_scanned: 0,
     alarms_total_evaluated: 0,
     alarms_fired_gold: 0,
@@ -573,6 +575,7 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds): P
           n: nForDisplay,
           premium,
           score,
+          replay_run: replayMode,
         });
       if (insertErr) stats.errors.push(`log insert ${a.alert_id}: ${insertErr.message}`);
 
@@ -607,7 +610,9 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds): P
           side,
           direction,
           score: score ?? 0,
-          tags: ['signature_alarm', label, tier],
+          tags: replayMode
+            ? ['signature_alarm', label, tier, 'replay']
+            : ['signature_alarm', label, tier],
           thesis,
           horizon_hours: horizonHours,
           horizon_ts: horizonTs,
@@ -659,9 +664,20 @@ serve(async (req) => {
   );
 
   const startedAt = Date.now();
+  // Parse body for replay_mode flag — non-fatal on parse failure (cron
+  // sends '{}' anyway). Replay mode tags rows so they're filterable later.
+  let replayMode = false;
+  try {
+    const text = await req.text();
+    if (text && text.length > 0) {
+      const body = JSON.parse(text);
+      if (body && body.replay_mode === true) replayMode = true;
+    }
+  } catch (_) { /* body optional */ }
+
   try {
     const thresholds = await loadTierThresholds(supabase);
-    const stats = await runSweep(supabase, thresholds);
+    const stats = await runSweep(supabase, thresholds, replayMode);
     return new Response(JSON.stringify({
       ...stats,
       elapsed_ms: Date.now() - startedAt,
