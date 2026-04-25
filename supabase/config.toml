@@ -369,6 +369,9 @@ verify_jwt = false
 [functions.ct-print-grader]
 verify_jwt = false
 
+[functions.ct-contract-poller]
+verify_jwt = false
+
 [functions.ct-specialist-nvda]
 verify_jwt = false
 
