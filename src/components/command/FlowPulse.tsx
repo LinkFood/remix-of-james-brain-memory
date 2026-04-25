@@ -37,6 +37,7 @@ import {
   type FlowPulseRow,
 } from '@/hooks/useFlowPulse';
 import { FlowPulseSparkline } from './FlowPulseSparkline';
+import { FlowPulseChartPanel } from './FlowPulseChart';
 
 // Watchlist order mirrors Tape.tsx TICKERS / OvernightPositioning WATCHLIST.
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
@@ -74,6 +75,9 @@ function windowLabel(k: WindowKey): string {
 export function FlowPulse({ onTickerClick }: Props) {
   // Window selector. "Today" = RTH-open-to-now dynamic minutes. 1h = 60. 30m = 30.
   const [windowKey, setWindowKey] = useState<WindowKey>('today');
+  // Chart panel's selected ticker (separate from the table's onTickerClick
+  // which opens TickerSheet). null = market aggregate.
+  const [chartTicker, setChartTicker] = useState<string | null>(null);
   const windowMin = useMemo(() => {
     if (windowKey === '1h') return 60;
     if (windowKey === '30m') return 30;
@@ -242,6 +246,7 @@ export function FlowPulse({ onTickerClick }: Props) {
 
       {/* Per-ticker table — only when expanded AND we have data */}
       {!collapsed && hasData && (
+        <>
         <Card className="mt-1 p-0 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-[11px] font-mono tabular-nums">
@@ -373,6 +378,11 @@ export function FlowPulse({ onTickerClick }: Props) {
             OTM/ITM counts under each side. "vs 30d" is today's C:P ratio relative to 30-day baseline. Refreshes every 30s.
           </div>
         </Card>
+        <FlowPulseChartPanel
+          ticker={chartTicker ?? undefined}
+          onTickerChange={setChartTicker}
+        />
+        </>
       )}
     </div>
   );

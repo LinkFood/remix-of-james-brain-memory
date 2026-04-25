@@ -197,6 +197,54 @@ export function useFlowPulseSeries() {
   };
 }
 
+export interface FlowPulseChartPoint {
+  bucket_time: string;
+  calls_all: number;
+  calls_short: number;
+  calls_long: number;
+  puts_all: number;
+  puts_short: number;
+  puts_long: number;
+}
+
+/**
+ * Multi-series time-bucketed premium for the FlowPulseChart.
+ *
+ * Calls server-side ct_flow_pulse_chart, which buckets ct_flow_alerts on-
+ * demand into p_bucket_min slots and returns 6 numeric series per bucket.
+ * Pass ticker=undefined for the watchlist aggregate, or a specific symbol.
+ * sinceMin → server interprets as "now() - sinceMin minutes"; if undefined,
+ * server defaults to NY-tz midnight (today).
+ */
+export function useFlowPulseChart(ticker?: string, sinceMin?: number) {
+  const query = useQuery<FlowPulseChartPoint[]>({
+    queryKey: ['flow-pulse-chart', ticker ?? 'MARKET', sinceMin ?? 'today'],
+    staleTime: 60_000,
+    refetchInterval: 60_000,
+    retry: false,
+    queryFn: async () => {
+      const params: Record<string, unknown> = {
+        p_ticker: ticker ?? null,
+        p_bucket_min: 5,
+      };
+      if (sinceMin && sinceMin > 0) {
+        const since = new Date(Date.now() - sinceMin * 60_000).toISOString();
+        params.p_since = since;
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.rpc as any)('ct_flow_pulse_chart', params);
+      if (error) throw error;
+      return (Array.isArray(data) ? data : []) as FlowPulseChartPoint[];
+    },
+  });
+
+  return {
+    points: query.data ?? [],
+    isLoading: query.isLoading,
+    isError: query.isError,
+  };
+}
+
 /**
  * Compute the default "Today" window in minutes — from today's 13:30 UTC
  * (RTH open ≈ 09:30 ET during EDT) to now. Falls back to 360 when we're
