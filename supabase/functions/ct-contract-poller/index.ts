@@ -317,9 +317,16 @@ async function expirePastDueTracks(
 async function fetchEligibleTracks(
   supabase: SupabaseClient,
   watchlist: Set<string>,
+  oldestFirst = false,
+  printTimeGte: string | null = null,
 ): Promise<ContractTrack[]> {
   const nowIso = new Date().toISOString();
-  const { data, error } = await supabase
+  // Primary order: nulls-first on last_quoted_at (unpolled get priority).
+  // Tiebreaker on print_time: DESC by default (newest unpolled first — steady
+  // state wants fresh prints visible fast). With oldestFirst=true (backfill
+  // mode), flip to ASC so the queue drains from market open forward — gives
+  // the operator a deterministic walk to fill in early-day chips on /tape.
+  let q = supabase
     .from('ct_contract_tracks')
     .select(
       'id, alert_id, option_symbol, ticker, side, expiry, dte_at_print, ' +
@@ -330,9 +337,11 @@ async function fetchEligibleTracks(
     )
     .in('track_status', ['WORKING', 'STALE'])
     .in('ticker', Array.from(watchlist))
-    .gt('tracking_until', nowIso)
-    .order('last_quoted_at', { ascending: true, nullsFirst: true })
-    .limit(MAX_TRACKS_PER_RUN_FETCH);
+    .gt('tracking_until', nowIso);
+  if (printTimeGte) q = q.gte('print_time', printTimeGte);
+  q = q.order('last_quoted_at', { ascending: true, nullsFirst: true })
+    .order('print_time', { ascending: oldestFirst });
+  const { data, error } = await q.limit(MAX_TRACKS_PER_RUN_FETCH);
 
   if (error) {
     console.error(`[${FN_NAME}] eligible fetch: ${error.message}`);
@@ -579,9 +588,13 @@ serve(async (req) => {
 
   try {
     let mode: Mode = 'rth';
+    let oldestFirst = false;
+    let printTimeGte: string | null = null;
     try {
       const body = await req.json().catch(() => ({}));
       if (body && body.mode === 'offhours') mode = 'offhours';
+      if (body && body.oldest_first === true) oldestFirst = true;
+      if (body && typeof body.print_time_gte === 'string') printTimeGte = body.print_time_gte;
     } catch { /* ignore */ }
     stats.mode = mode;
 
@@ -609,7 +622,7 @@ serve(async (req) => {
       .gt('tracking_until', nowIsoForCount);
     stats.tracks_filtered_off_watchlist = offWatchlistCount ?? 0;
 
-    const allTracks = await fetchEligibleTracks(supabase, watchlist);
+    const allTracks = await fetchEligibleTracks(supabase, watchlist, oldestFirst, printTimeGte);
     const dueTracks = filterByCadence(allTracks, cfg, mode);
     stats.tracks_eligible = dueTracks.length;
 

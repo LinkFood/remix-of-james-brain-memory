@@ -426,6 +426,23 @@ export default function Tape() {
   // Refetch interval scales with LIVE mode — 5s when on, 20s baseline.
   const tapeInterval = filters.liveMode ? 5_000 : 20_000;
 
+  // PostgREST silently caps every response at 1000 rows. To pull a deeper
+  // window (e.g. all of Friday RTH = 1800+ alerts) we paginate via .range().
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function paginatedFetch<T>(builder: (start: number, end: number) => any, target: number): Promise<T[]> {
+    const pageSize = 1000;
+    const out: T[] = [];
+    for (let start = 0; start < target; start += pageSize) {
+      const end = Math.min(start + pageSize - 1, target - 1);
+      const { data, error } = await builder(start, end);
+      if (error) throw error;
+      const rows = (data ?? []) as T[];
+      out.push(...rows);
+      if (rows.length < pageSize) break;
+    }
+    return out;
+  }
+
   // Contract stacking — lookup map for per-row badges. 6h window, 3+ prints.
   // Leaderboard UI (StackingPatterns) mounts above OvernightPositioning and
   // calls its own hook instance; TanStack dedupes so this is one network call.
@@ -441,20 +458,20 @@ export default function Tape() {
     }],
     refetchInterval: tapeInterval,
     queryFn: async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let q: any = supabase
-        .from('ct_scored_flow' as never)
-        .select('id,source_table,source_id,ticker,option_symbol,event_ts,classification,direction,score,strike,expiry,dte,delta_est,premium,volume,open_interest,ask_side_perc,spot_pct_from_prev_close,spot_pct_from_today_open')
-        .order('event_ts', { ascending: false })
-        .limit(1500);
-      if (filters.tickers.size > 0) q = q.in('ticker', Array.from(filters.tickers));
-      if (filters.direction !== 'all') q = q.eq('direction', filters.direction);
-      if (filters.minScore > 0) q = q.gte('score', filters.minScore);
-      if (dayBounds.from) q = q.gte('event_ts', dayBounds.from);
-      if (dayBounds.to) q = q.lt('event_ts', dayBounds.to);
-      const { data, error } = await q;
-      if (error) throw error;
-      return (data ?? []) as unknown as ScoredRow[];
+      // PostgREST caps at 1000 rows; paginate to surface a full RTH session.
+      return paginatedFetch<ScoredRow>((start, end) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let q: any = supabase
+          .from('ct_scored_flow' as never)
+          .select('id,source_table,source_id,ticker,option_symbol,event_ts,classification,direction,score,strike,expiry,dte,delta_est,premium,volume,open_interest,ask_side_perc,spot_pct_from_prev_close,spot_pct_from_today_open')
+          .order('event_ts', { ascending: false });
+        if (filters.tickers.size > 0) q = q.in('ticker', Array.from(filters.tickers));
+        if (filters.direction !== 'all') q = q.eq('direction', filters.direction);
+        if (filters.minScore > 0) q = q.gte('score', filters.minScore);
+        if (dayBounds.from) q = q.gte('event_ts', dayBounds.from);
+        if (dayBounds.to) q = q.lt('event_ts', dayBounds.to);
+        return q.range(start, end);
+      }, 5000);
     },
   });
 
@@ -467,19 +484,17 @@ export default function Tape() {
     refetchInterval: tapeInterval,
     enabled: filters.showUnscored,
     queryFn: async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let q: any = supabase
-        .from('ct_flow_alerts' as never)
-        .select('id,alert_id,ticker,option_symbol,strike,expiry,side,is_ask,is_bid,is_otm,size,volume,open_interest,size_gt_oi,premium,price,underlying_price,executed_at,alert_type,raw')
-        .order('executed_at', { ascending: false })
-        .limit(1500);
-      if (filters.tickers.size > 0) q = q.in('ticker', Array.from(filters.tickers));
-      // Alerts use executed_at as the event_ts equivalent.
-      if (dayBounds.from) q = q.gte('executed_at', dayBounds.from);
-      if (dayBounds.to) q = q.lt('executed_at', dayBounds.to);
-      const { data, error } = await q;
-      if (error) throw error;
-      return (data ?? []) as unknown as AlertRow[];
+      return paginatedFetch<AlertRow>((start, end) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let q: any = supabase
+          .from('ct_flow_alerts' as never)
+          .select('id,alert_id,ticker,option_symbol,strike,expiry,side,is_ask,is_bid,is_otm,size,volume,open_interest,size_gt_oi,premium,price,underlying_price,executed_at,alert_type,raw')
+          .order('executed_at', { ascending: false });
+        if (filters.tickers.size > 0) q = q.in('ticker', Array.from(filters.tickers));
+        if (dayBounds.from) q = q.gte('executed_at', dayBounds.from);
+        if (dayBounds.to) q = q.lt('executed_at', dayBounds.to);
+        return q.range(start, end);
+      }, 5000);
     },
   });
 
