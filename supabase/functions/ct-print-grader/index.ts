@@ -890,7 +890,7 @@ async function createMissingTracks(
     .from('ct_flow_alerts')
     .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, executed_at, ingested_at, raw')
     .in('ticker', Array.from(watchlist))
-    .order('ingested_at', { ascending: true })
+    .order('ingested_at', { ascending: false })
     .limit(PASS2_NEW_SCAN_LIMIT);
 
   if (error) {
@@ -1027,7 +1027,7 @@ async function createMissingContractTracks(
     .from('ct_flow_alerts')
     .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, executed_at, ingested_at, option_symbol, price, raw')
     .in('ticker', Array.from(watchlist))
-    .order('ingested_at', { ascending: true })
+    .order('ingested_at', { ascending: false })
     .limit(PASS2_NEW_SCAN_LIMIT);
 
   if (error) {
