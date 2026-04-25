@@ -68,6 +68,7 @@ const NAV_GROUPS: NavGroup[] = [
       { path: '/edge', label: 'Edge' },
       { path: '/tape-reader', label: 'Tape Reader' },
       { path: '/', label: 'Flags' },
+      { path: '/alarms', label: 'Alarms' },
       { path: '/pulse', label: 'Pulse' },
       { path: '/specialists', label: 'Specialists' },
     ],
