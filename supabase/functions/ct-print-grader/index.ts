@@ -674,6 +674,7 @@ interface Pass1Stats {
   skipped_no_price: number;
   skipped_horizon_future: number;
   skipped_already_graded: number;
+  skipped_off_watchlist: number;
   errors: string[];
 }
 
@@ -689,15 +690,33 @@ async function runSnapshotPass(
     skipped_no_price: 0,
     skipped_horizon_future: 0,
     skipped_already_graded: 0,
+    skipped_off_watchlist: 0,
     errors: [],
   };
 
   const now = new Date();
   const cutoff = new Date(now.getTime() - 30 * 60_000).toISOString();
 
+  // Watchlist scoping — Pass 1 grades against ct_price_bars (no UW cost),
+  // but off-watchlist tickers pollute the dashboard slices. Filter at fetch
+  // time to keep underlying_v1 grades scoped to the same 10 tickers as the
+  // contract-side pipeline (commit 37b52cf).
+  const watchlist = await loadWatchlist(supabase);
+  const watchlistArr = Array.from(watchlist);
+
+  // Visibility: count off-watchlist alerts in the same time window that we
+  // would have graded pre-filter. Cheap HEAD count — no row payload.
+  const { count: offWlCount } = await supabase
+    .from('ct_flow_alerts')
+    .select('alert_id', { count: 'estimated', head: true })
+    .or(`executed_at.lte.${cutoff},and(executed_at.is.null,ingested_at.lte.${cutoff})`)
+    .not('ticker', 'in', `(${watchlistArr.map((t) => `"${t}"`).join(',')})`);
+  stats.skipped_off_watchlist = offWlCount ?? 0;
+
   const { data: alerts, error } = await supabase
     .from('ct_flow_alerts')
     .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, executed_at, ingested_at, raw')
+    .in('ticker', watchlistArr)
     .or(`executed_at.lte.${cutoff},and(executed_at.is.null,ingested_at.lte.${cutoff})`)
     .order('ingested_at', { ascending: true })
     .limit(PASS1_SCAN_LIMIT);
@@ -842,6 +861,10 @@ interface Pass2Stats {
   skipped_no_direction: number;
   skipped_no_print_time: number;
   skipped_no_price: number;
+  // Underlying-axis off-watchlist visibility (createMissingTracks +
+  // updateWorkingTracks both filter on watchlist now).
+  underlying_tracks_skipped_off_watchlist: number;
+  tracks_skipped_off_watchlist: number;
   // Contract-axis tracking (mirror of ct_print_tracks but on contract price).
   contract_tracks_created: number;
   contract_tracks_skipped_off_watchlist: number;
@@ -853,14 +876,20 @@ interface Pass2Stats {
 async function createMissingTracks(
   supabase: SupabaseClient,
   trackingCfg: TrackingConfig,
+  watchlist: Set<string>,
   stats: Pass2Stats,
 ): Promise<void> {
   // Pull a batch of recent alerts. We DO NOT require the snapshot cutoff
   // here — even brand-new prints get tracked from the start. Scan widely,
   // then work on at most PASS2_NEW_WORK_LIMIT genuinely-new alerts.
+  //
+  // Watchlist scoping: no UW cost on the underlying axis (uses ct_price_bars,
+  // fed by a watchlist-filtered ingester), but off-watchlist tickers polluted
+  // the dashboard slices. Mirror the contract-side filter from commit 37b52cf.
   const { data: alerts, error } = await supabase
     .from('ct_flow_alerts')
     .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, executed_at, ingested_at, raw')
+    .in('ticker', Array.from(watchlist))
     .order('ingested_at', { ascending: true })
     .limit(PASS2_NEW_SCAN_LIMIT);
 
@@ -1148,14 +1177,19 @@ async function expireDueTracks(
 async function updateWorkingTracks(
   supabase: SupabaseClient,
   dteThresholds: DteThresholds,
+  watchlist: Set<string>,
   stats: Pass2Stats,
 ): Promise<void> {
   const nowIso = new Date().toISOString();
+  // Watchlist scoping at fetch time so we don't waste ct_price_bars lookups
+  // on off-watchlist tracks. Existing off-watchlist rows get DELETEd via
+  // dashboard SQL, but this guarantees no new ones get touched.
   const { data: tracks, error } = await supabase
     .from('ct_print_tracks')
     .select('id, alert_id, ticker, dte_at_print, predicted_direction, underlying_at_print, peak_favorable_pct, peak_adverse_pct, peak_favorable_at, peak_adverse_at, first_cross_threshold_at, sweep_count, tracking_until')
     .eq('track_status', 'WORKING')
     .gt('tracking_until', nowIso)
+    .in('ticker', Array.from(watchlist))
     .order('last_tracked_at', { ascending: true })
     .limit(MAX_TRACKS_PER_RUN);
 
@@ -1295,6 +1329,8 @@ async function runTrackPass(
     skipped_no_direction: 0,
     skipped_no_print_time: 0,
     skipped_no_price: 0,
+    underlying_tracks_skipped_off_watchlist: 0,
+    tracks_skipped_off_watchlist: 0,
     contract_tracks_created: 0,
     contract_tracks_skipped_off_watchlist: 0,
     skipped_no_symbol: 0,
@@ -1303,6 +1339,8 @@ async function runTrackPass(
   };
 
   const watchlist = await loadWatchlist(supabase);
+  const watchlistArr = Array.from(watchlist);
+  const notInExpr = `(${watchlistArr.map((t) => `"${t}"`).join(',')})`;
 
   // Visibility: how many alerts in the recent scan window are off-watchlist
   // and would have been turned into contract tracks (and thus UW polls)
@@ -1310,19 +1348,32 @@ async function runTrackPass(
   const { count: offWatchlistAlertCount } = await supabase
     .from('ct_flow_alerts')
     .select('alert_id', { count: 'estimated', head: true })
-    .not('ticker', 'in', `(${Array.from(watchlist).map((t) => `"${t}"`).join(',')})`);
+    .not('ticker', 'in', notInExpr);
   stats.contract_tracks_skipped_off_watchlist = offWatchlistAlertCount ?? 0;
+  // Same count drives the underlying-axis creator visibility — it scans the
+  // same ct_flow_alerts source.
+  stats.underlying_tracks_skipped_off_watchlist = offWatchlistAlertCount ?? 0;
+
+  // How many WORKING ct_print_tracks rows would updateWorkingTracks have
+  // touched if we didn't filter. After the cleanup DELETE this should drop
+  // to ~0 — surfaces drift if off-watchlist rows ever leak back in.
+  const { count: offWatchlistTrackCount } = await supabase
+    .from('ct_print_tracks')
+    .select('id', { count: 'estimated', head: true })
+    .eq('track_status', 'WORKING')
+    .not('ticker', 'in', notInExpr);
+  stats.tracks_skipped_off_watchlist = offWatchlistTrackCount ?? 0;
 
   // Order: create first (so brand-new prints get a sweep this run), then
   // update working set, then expire matured tracks. Expiring last lets a
   // track that just hit tracking_until still record one final peak.
   // Contract-track creation runs alongside underlying-track creation —
-  // both are insert-only and operate on disjoint tables. Underlying-axis
-  // creation is intentionally NOT watchlist-filtered (no UW cost — uses
-  // ct_price_bars which is fed by a watchlist-filtered ingester).
-  await createMissingTracks(supabase, trackingCfg, stats);
+  // both are insert-only and operate on disjoint tables. Both axes are
+  // now watchlist-filtered (commit 37b52cf for contract, this commit for
+  // underlying — no UW cost on underlying side, but cleans dashboard slices).
+  await createMissingTracks(supabase, trackingCfg, watchlist, stats);
   await createMissingContractTracks(supabase, trackingCfg, watchlist, stats);
-  await updateWorkingTracks(supabase, dteThresholds, stats);
+  await updateWorkingTracks(supabase, dteThresholds, watchlist, stats);
   await expireDueTracks(supabase, stats);
 
   return stats;
@@ -1603,6 +1654,7 @@ serve(async (req) => {
         no_price: pass1.skipped_no_price,
         horizon_future: pass1.skipped_horizon_future,
         already_graded: pass1.skipped_already_graded,
+        off_watchlist: pass1.skipped_off_watchlist,
       },
     },
     pass2: {
@@ -1616,6 +1668,9 @@ serve(async (req) => {
         no_price: pass2.skipped_no_price,
         no_symbol: pass2.skipped_no_symbol,
         no_strike_or_expiry: pass2.skipped_no_strike_or_expiry,
+        underlying_tracks_off_watchlist: pass2.underlying_tracks_skipped_off_watchlist,
+        tracks_off_watchlist: pass2.tracks_skipped_off_watchlist,
+        contract_tracks_off_watchlist: pass2.contract_tracks_skipped_off_watchlist,
       },
     },
     pass3: {
