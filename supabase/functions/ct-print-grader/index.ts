@@ -43,6 +43,15 @@ const PASS2_NEW_WORK_LIMIT = 150;        // Pass 2 max new tracks
 const MAX_TRACKS_PER_RUN = 150;          // Pass 2 update cap (LRU on last_tracked_at)
 const PASS2_CONTRACT_NEW_WORK_LIMIT = 150; // Pass 2 max new contract tracks per sweep
 const PRICE_LOOKUP_SLOP_MS = 30 * 60_000; // ±30 min slop for nearest-bar
+// Pass 3 (contract grading) — bounded by quote-join cost. Budget ~10s of
+// the 150s wall: 80 tracks × 4 horizons × ~30ms per quote lookup = ~10s.
+const PASS3_SCAN_LIMIT = 400;
+const PASS3_WORK_LIMIT = 80;
+// Contract quotes only flow every 5 min RTH (and 4h off-hours); EOD/plus1d
+// horizons can land outside any quote window. 6h slop catches the next
+// off-hours sweep without straying so far that the price is stale.
+const CONTRACT_QUOTE_SLOP_MS = 6 * 3600_000;
+const CONTRACT_GRADING_METHOD = 'contract_v1';
 // All timeframes that exist in ct_price_bars today. Single query asks for
 // any of them; we pick the closest match by ts. Faster than 3 sequential
 // queries per lookup.
@@ -392,6 +401,23 @@ async function loadTrackingConfig(supabase: SupabaseClient): Promise<TrackingCon
   return { maxDays: Math.floor(n) };
 }
 
+// Pass 3 — fixed LOSS magnitude (decimal fraction of entry premium). Asymmetric
+// vs WIN: WIN uses DTE-bucketed magnitude, LOSS is a flat -50% by default.
+// Lives in ct_config.contract_loss_threshold_pct (seeded by 20260426000010).
+async function loadContractLossThreshold(supabase: SupabaseClient): Promise<number> {
+  const fallback = 0.50;
+  const { data, error } = await supabase
+    .from('ct_config')
+    .select('value')
+    .eq('key', 'contract_loss_threshold_pct')
+    .maybeSingle();
+  if (error || !data) return fallback;
+  const v = data.value;
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return n;
+}
+
 function dteBucket(dte: number | null): DteBucket {
   if (dte === null || !Number.isFinite(dte)) return 'long';
   if (dte <= 0) return '0dte';
@@ -515,6 +541,90 @@ async function fetchExistingContractTrackIds(
     }
   }
   return out;
+}
+
+// Pass 3 — already-graded lookup specifically for contract_v1 rows. Mirrors
+// fetchExistingGradeKeys but filters grading_method='contract_v1' so we
+// don't double-grade and don't collide with underlying_v1 keys.
+async function fetchExistingContractGradeKeys(
+  supabase: SupabaseClient,
+  alertIds: string[],
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  if (alertIds.length === 0) return out;
+  const chunkSize = 200;
+  for (let i = 0; i < alertIds.length; i += chunkSize) {
+    const slice = alertIds.slice(i, i + chunkSize);
+    const { data, error } = await supabase
+      .from('ct_print_grades')
+      .select('alert_id, horizon')
+      .in('alert_id', slice)
+      .eq('grading_method', CONTRACT_GRADING_METHOD);
+    if (error) {
+      console.warn(`[ct-print-grader] existing contract grade lookup: ${error.message}`);
+      continue;
+    }
+    for (const row of (data ?? [])) {
+      out.add(`${row.alert_id}|${row.horizon}`);
+    }
+  }
+  return out;
+}
+
+// Pass 3 — closest-quote-to-horizon lookup. Try at-or-after first within the
+// 6h slop (typical case during RTH); fall back to at-or-before within the
+// same window so EOD/plus1d horizons that land outside an active poll window
+// still pull the most recent settlement quote. Returns null if nothing in
+// either window — caller skips and waits for the next sweep.
+//
+// Why mid first, last fallback: ct_contract_quotes mid is the average of
+// bid/ask (best per-share execution proxy). Last is trade-print, which is
+// stale on illiquid contracts but better than nothing when mid is null.
+async function nearestContractQuoteAround(
+  supabase: SupabaseClient,
+  optionSymbol: string,
+  horizonTime: Date,
+): Promise<{ ts: string; price: number } | null> {
+  const target = horizonTime.getTime();
+  const horizonIso = new Date(target).toISOString();
+  const hi = new Date(target + CONTRACT_QUOTE_SLOP_MS).toISOString();
+  const lo = new Date(target - CONTRACT_QUOTE_SLOP_MS).toISOString();
+
+  // At-or-after (preferred — quote post-dates horizon).
+  const after = await supabase
+    .from('ct_contract_quotes')
+    .select('ts, mid, last')
+    .eq('option_symbol', optionSymbol)
+    .gte('ts', horizonIso)
+    .lte('ts', hi)
+    .order('ts', { ascending: true })
+    .limit(1);
+  if (!after.error && after.data && after.data.length > 0) {
+    const row = after.data[0];
+    const mid = row.mid != null ? Number(row.mid) : NaN;
+    const last = row.last != null ? Number(row.last) : NaN;
+    const price = Number.isFinite(mid) && mid > 0 ? mid : (Number.isFinite(last) && last > 0 ? last : null);
+    if (price !== null) return { ts: row.ts as string, price };
+  }
+
+  // Fallback: at-or-before (handles EOD/plus1d horizons polled at close).
+  const before = await supabase
+    .from('ct_contract_quotes')
+    .select('ts, mid, last')
+    .eq('option_symbol', optionSymbol)
+    .gte('ts', lo)
+    .lte('ts', horizonIso)
+    .order('ts', { ascending: false })
+    .limit(1);
+  if (!before.error && before.data && before.data.length > 0) {
+    const row = before.data[0];
+    const mid = row.mid != null ? Number(row.mid) : NaN;
+    const last = row.last != null ? Number(row.last) : NaN;
+    const price = Number.isFinite(mid) && mid > 0 ? mid : (Number.isFinite(last) && last > 0 ? last : null);
+    if (price !== null) return { ts: row.ts as string, price };
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1174,6 +1284,228 @@ async function runTrackPass(
 }
 
 // ---------------------------------------------------------------------------
+// Pass 3 — Contract-axis snapshot grading.
+//
+// Mirrors Pass 1's shape but on the contract-price axis. For each
+// ct_contract_tracks row that has a non-null entry_contract_price, grade
+// 30m / 2h / eod / +1d horizons against the per-share mid at horizon_time
+// (joined from ct_contract_quotes via option_symbol).
+//
+// Asymmetric thresholds (different from Pass 1's symmetric WIN/LOSS bar):
+//   WIN  if actual_move_pct >=  dteThreshold  (DTE-bucketed magnitude)
+//   LOSS if actual_move_pct <= -lossThreshold (fixed -50% by default)
+//   FLAT otherwise
+//
+// Skips:
+//   - entry_contract_price null/0 → wait for Phase B's estimated_mid backfill.
+//   - horizon > now → not eligible yet.
+//   - no quote within 6h slop of horizon → wait for next poller sweep.
+//   - all 4 horizons already graded → already done.
+//
+// Idempotent via (alert_id, horizon, grading_method='contract_v1') unique key.
+// ---------------------------------------------------------------------------
+interface ContractTrackRow {
+  alert_id: string;
+  option_symbol: string;
+  ticker: string;
+  print_time: string;
+  entry_contract_price: number | null;
+  dte_at_print: number | null;
+  predicted_direction: Direction;
+  predicted_source: string;
+}
+
+interface Pass3Stats {
+  scanned: number;
+  work_done: number;
+  graded_total: number;
+  graded_per_horizon: Record<HorizonName, number>;
+  skipped_no_entry_price: number;
+  skipped_no_quote: number;
+  skipped_horizon_future: number;
+  skipped_already_graded: number;
+  errors: string[];
+}
+
+async function runContractGradePass(
+  supabase: SupabaseClient,
+  dteThresholds: DteThresholds,
+  lossThreshold: number,
+  snapshotHorizons: HorizonName[],
+): Promise<Pass3Stats> {
+  const stats: Pass3Stats = {
+    scanned: 0,
+    work_done: 0,
+    graded_total: 0,
+    graded_per_horizon: { '30m': 0, '2h': 0, eod: 0, plus1d: 0 },
+    skipped_no_entry_price: 0,
+    skipped_no_quote: 0,
+    skipped_horizon_future: 0,
+    skipped_already_graded: 0,
+    errors: [],
+  };
+
+  // Pull WORKING + expired tracks (any state where we want grades). Order by
+  // first_tracked_at ASC so the oldest (most likely to have full quote
+  // coverage at all 4 horizons) get graded first.
+  const { data: tracks, error } = await supabase
+    .from('ct_contract_tracks')
+    .select('alert_id, option_symbol, ticker, print_time, entry_contract_price, dte_at_print, predicted_direction, predicted_source')
+    .order('first_tracked_at', { ascending: true })
+    .limit(PASS3_SCAN_LIMIT);
+
+  if (error) {
+    stats.errors.push(`p3 fetch: ${error.message}`);
+    return stats;
+  }
+  if (!tracks || tracks.length === 0) return stats;
+  stats.scanned = tracks.length;
+
+  // Filter: must have a usable entry price. Phase B fills in
+  // estimated_mid backfills later — tracks without a real entry have to wait.
+  const withEntry = (tracks as ContractTrackRow[]).filter((t) => {
+    const ep = t.entry_contract_price;
+    if (ep == null) {
+      stats.skipped_no_entry_price += 1;
+      return false;
+    }
+    const epn = Number(ep);
+    if (!Number.isFinite(epn) || epn <= 0) {
+      stats.skipped_no_entry_price += 1;
+      return false;
+    }
+    return true;
+  });
+
+  const alertIds = withEntry.map((t) => t.alert_id).filter((x): x is string => !!x);
+  const existing = await fetchExistingContractGradeKeys(supabase, alertIds);
+
+  // Drop tracks where every horizon is already graded — saves quote lookups.
+  const workable = withEntry.filter((t) => {
+    let ungraded = 0;
+    for (const h of snapshotHorizons) {
+      if (!existing.has(`${t.alert_id}|${h}`)) ungraded += 1;
+    }
+    return ungraded > 0;
+  }).slice(0, PASS3_WORK_LIMIT);
+
+  stats.work_done = workable.length;
+
+  const now = Date.now();
+  const toInsert: Record<string, unknown>[] = [];
+
+  for (const t of workable) {
+    try {
+      const printTime = new Date(t.print_time);
+      if (Number.isNaN(printTime.getTime())) continue;
+
+      const entryPrice = Number(t.entry_contract_price);
+      const dteThreshold = thresholdForDte(t.dte_at_print, dteThresholds);
+
+      for (const horizon of snapshotHorizons) {
+        const key = `${t.alert_id}|${horizon}`;
+        if (existing.has(key)) {
+          stats.skipped_already_graded += 1;
+          continue;
+        }
+
+        const horizonTime = computeHorizonTime(printTime, horizon);
+        if (horizonTime.getTime() > now) {
+          stats.skipped_horizon_future += 1;
+          continue;
+        }
+
+        const quote = await nearestContractQuoteAround(supabase, t.option_symbol, horizonTime);
+        if (!quote) {
+          stats.skipped_no_quote += 1;
+          continue;
+        }
+
+        const exitPrice = quote.price;
+        const actualMovePct = (exitPrice - entryPrice) / entryPrice;
+        const magnitudePct = Math.abs(actualMovePct);
+
+        // Asymmetric classification — WIN bar is DTE-bucketed magnitude,
+        // LOSS bar is fixed -lossThreshold drawdown. Order matters: a print
+        // can theoretically clear both bars on the same horizon (it can't
+        // really — they're disjoint regions of actual_move_pct — but encode
+        // defensively). WIN takes precedence if both somehow trigger.
+        let grade: Grade;
+        if (actualMovePct >= dteThreshold) {
+          grade = 'WIN';
+        } else if (actualMovePct <= -lossThreshold) {
+          grade = 'LOSS';
+        } else {
+          grade = 'FLAT';
+        }
+
+        toInsert.push({
+          alert_id: t.alert_id,
+          ticker: t.ticker,
+          horizon,
+          print_time: printTime.toISOString(),
+          horizon_time: horizonTime.toISOString(),
+          predicted_direction: t.predicted_direction,
+          predicted_source: t.predicted_source,
+          underlying_at_print: null,
+          underlying_at_horizon: null,
+          contract_at_print: Number(entryPrice.toFixed(4)),
+          contract_at_horizon: Number(exitPrice.toFixed(4)),
+          actual_move_pct: Number(actualMovePct.toFixed(6)),
+          grade,
+          magnitude_pct: Number(magnitudePct.toFixed(6)),
+          // threshold_used = WIN-axis bar at grade time. LOSS bar is the
+          // fixed contract_loss_threshold_pct (loaded once per invocation).
+          threshold_used: dteThreshold,
+          grading_method: CONTRACT_GRADING_METHOD,
+        });
+      }
+    } catch (e) {
+      stats.errors.push(`p3 ${t.alert_id}: ${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}`);
+    }
+  }
+
+  // Bulk upsert with the same race-safety pattern as Pass 1. Rows keyed by
+  // (alert_id, horizon, grading_method) — duplicates from a concurrent sweep
+  // are silently ignored.
+  const chunkSize = 100;
+  for (let i = 0; i < toInsert.length; i += chunkSize) {
+    const slice = toInsert.slice(i, i + chunkSize);
+    const { error: insErr, count } = await supabase
+      .from('ct_print_grades')
+      .upsert(slice, {
+        onConflict: 'alert_id,horizon,grading_method',
+        ignoreDuplicates: true,
+        count: 'exact',
+      });
+    if (insErr) {
+      stats.errors.push(`p3 bulk-insert: ${insErr.message.slice(0, 200)}`);
+      continue;
+    }
+    const inserted = count ?? 0;
+    stats.graded_total += inserted;
+    // Per-horizon counter — tally directly from the slice we just inserted.
+    // count is total inserted across the slice; we approximate per-horizon
+    // by walking the slice. For ignoreDuplicates, exact per-horizon counts
+    // require a lookup we skip — the totals here are best-effort
+    // attribution (rows in slice * effectiveness).
+    if (inserted > 0) {
+      const effectiveness = inserted / slice.length;
+      const localTally: Record<HorizonName, number> = { '30m': 0, '2h': 0, eod: 0, plus1d: 0 };
+      for (const row of slice) {
+        const h = row.horizon as HorizonName;
+        if (h in localTally) localTally[h] += 1;
+      }
+      for (const h of snapshotHorizons) {
+        stats.graded_per_horizon[h] += Math.round(localTally[h] * effectiveness);
+      }
+    }
+  }
+
+  return stats;
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 serve(async (req) => {
@@ -1194,15 +1526,17 @@ serve(async (req) => {
   const startedAt = Date.now();
 
   // Load all thresholds up-front (one set of small reads).
-  const [snapshotThresholds, dteThresholds, trackingCfg] = await Promise.all([
+  const [snapshotThresholds, dteThresholds, trackingCfg, contractLossThreshold] = await Promise.all([
     loadSnapshotThresholds(supabase),
     loadDteThresholds(supabase),
     loadTrackingConfig(supabase),
+    loadContractLossThreshold(supabase),
   ]);
 
-  // Run both passes. Errors in one don't kill the other.
+  // Run all three passes. Errors in one don't kill the others.
   const pass1 = await runSnapshotPass(supabase, snapshotThresholds);
   const pass2 = await runTrackPass(supabase, dteThresholds, trackingCfg);
+  const pass3 = await runContractGradePass(supabase, dteThresholds, contractLossThreshold, HORIZONS);
 
   const elapsedMs = Date.now() - startedAt;
 
@@ -1214,6 +1548,7 @@ serve(async (req) => {
     tracks_created: pass2.tracks_created,
     tracks_updated: pass2.tracks_updated,
     tracks_expired: pass2.tracks_expired,
+    contract_grades_written: pass3.graded_total,
     pass1: {
       scanned: pass1.scanned,
       graded: pass1.graded,
@@ -1238,12 +1573,25 @@ serve(async (req) => {
         no_strike_or_expiry: pass2.skipped_no_strike_or_expiry,
       },
     },
+    pass3: {
+      scanned: pass3.scanned,
+      work_done: pass3.work_done,
+      graded_total: pass3.graded_total,
+      graded_per_horizon: pass3.graded_per_horizon,
+      skipped: {
+        no_entry_price: pass3.skipped_no_entry_price,
+        no_quote: pass3.skipped_no_quote,
+        horizon_future: pass3.skipped_horizon_future,
+        already_graded: pass3.skipped_already_graded,
+      },
+    },
     thresholds: {
       snapshot: snapshotThresholds,
       dte: dteThresholds,
       tracking_max_days: trackingCfg.maxDays,
+      contract_loss: contractLossThreshold,
     },
-    errors: [...pass1.errors, ...pass2.errors].slice(0, 20),
+    errors: [...pass1.errors, ...pass2.errors, ...pass3.errors].slice(0, 30),
   }), {
     status: 200,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
