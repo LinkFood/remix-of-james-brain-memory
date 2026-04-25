@@ -35,6 +35,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { recordDecision } from '../_shared/decisionJournal.ts';
+import { isMarketOpen } from '../_shared/marketClock.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -222,8 +223,22 @@ async function gradeExpiredFlags(
   let graded = 0;
   let skipped = 0;
 
+  const nowDate = new Date();
+  const nowOpen = isMarketOpen(nowDate);
+
   for (const row of flags as FlagRow[]) {
     try {
+      // Trading-clock gate: don't bake stale Friday-close (or pre-open) prices
+      // into outcomes. If neither now() nor the flag's horizon falls inside
+      // RTH, leave status='active' and skip — the next post-open run grades it
+      // with live tape. See _shared/marketClock.ts and migration
+      // 20260424000060_market_clock.sql for the primitive.
+      const horizonOpen = isMarketOpen(row.horizon_ts);
+      if (!nowOpen && !horizonOpen) {
+        skipped += 1;
+        continue;
+      }
+
       // Resolve entry price: prefer stored, else nearest bar at created_at.
       let entryPx: number | null = row.entry_price ?? null;
       if (entryPx === null || !Number.isFinite(entryPx)) {
