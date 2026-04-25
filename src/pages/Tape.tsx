@@ -443,10 +443,17 @@ export default function Tape() {
     return out;
   }
 
-  // Contract stacking — lookup map for per-row badges. 6h window, 3+ prints.
-  // Leaderboard UI (StackingPatterns) mounts above OvernightPositioning and
-  // calls its own hook instance; TanStack dedupes so this is one network call.
-  const { bySymbol: stackBySymbol } = useContractStacking(360, 50);
+  // Contract stacking — lookup map for per-row badges. Window adapts to the
+  // active day filter so stacks line up with the prints on screen. Default
+  // 360min (6h) only covers live RTH; for "yesterday" or "last3d" we widen
+  // so weekend / off-hours viewing actually surfaces stacks.
+  const stackWindowMin = useMemo(() => {
+    if (dayFilter === 'today') return 360;       // 6h — live session
+    if (dayFilter === 'yesterday') return 2880;  // 48h — covers prior RTH + buffer
+    if (dayFilter === 'last3d') return 5760;     // 4d — covers 3-day window + buffer
+    return 10080;                                // 'all' = 7d
+  }, [dayFilter]);
+  const { bySymbol: stackBySymbol } = useContractStacking(stackWindowMin, 50);
 
   // Scored flow — primary source
   const { data: scored, isLoading: loadingScored } = useQuery<ScoredRow[]>({
@@ -614,7 +621,15 @@ export default function Tape() {
     refetchInterval: 60_000,
     queryFn: async () => {
       const map = new Map<string, number | null>();
-      const today = new Date().toISOString().slice(0, 10);
+      // Find the latest snap_date that has data (skips weekends, pre-snap mornings).
+      // Cheap one-row probe before the bulk lookup.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: probe } = await (supabase.from('ct_oi_snapshots' as never) as any)
+        .select('snap_date')
+        .order('snap_date', { ascending: false })
+        .limit(1);
+      const latestSnapDate = (probe?.[0] as { snap_date?: string } | undefined)?.snap_date;
+      if (!latestSnapDate) return map;
       const chunks: string[][] = [];
       for (let i = 0; i < symbolsInView.length; i += 200) chunks.push(symbolsInView.slice(i, i + 200));
       for (const chunk of chunks) {
@@ -622,7 +637,7 @@ export default function Tape() {
         const { data, error } = await (supabase.from('ct_oi_snapshots' as never) as any)
           .select('option_symbol,snap_date,snap_slot,oi,oi_delta_1d')
           .in('option_symbol', chunk)
-          .eq('snap_date', today)
+          .eq('snap_date', latestSnapDate)
           .order('captured_at', { ascending: false });
         if (error) throw error;
         for (const row of (data ?? []) as OiSnap[]) {
