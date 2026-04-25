@@ -23,6 +23,9 @@ import {
   type AlarmTierFilter,
   type AlarmTypeFilter,
   type AlarmDayFilter,
+  type AlarmDetectorFilter,
+  type AlarmRegime,
+  type AlarmRegimeFilter,
   type ContractOutcome,
 } from '@/hooks/useAlarms';
 import { useSlackToggleStatus } from '@/hooks/useSlackToggleStatus';
@@ -132,6 +135,59 @@ function ThesisCell({ thesis }: { thesis: string | null }) {
   );
 }
 
+const REGIME_EMOJI: Record<AlarmRegime, string> = {
+  trending_up: '🟢',
+  trending_down: '🔴',
+  chop: '🟡',
+  unknown: '⚪',
+};
+
+const REGIME_LABEL: Record<AlarmRegime, string> = {
+  trending_up: 'up',
+  trending_down: 'down',
+  chop: 'chop',
+  unknown: '—',
+};
+
+const REGIME_COLOR: Record<AlarmRegime, string> = {
+  trending_up: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200',
+  trending_down: 'border-rose-500/40 bg-rose-500/10 text-rose-200',
+  chop: 'border-amber-500/40 bg-amber-500/10 text-amber-200',
+  unknown: 'border-muted bg-muted/20 text-muted-foreground',
+};
+
+// Compact USD-thousands formatter for inline pulse net premium (signed).
+function fmtPremiumK(net: number | null): string {
+  if (net == null || !Number.isFinite(net)) return '—';
+  const k = net / 1000;
+  const sign = k >= 0 ? '+' : '−';
+  const abs = Math.abs(k);
+  if (abs >= 1000) return `${sign}$${(abs / 1000).toFixed(1)}M`;
+  return `${sign}$${abs.toFixed(0)}k`;
+}
+
+function RegimeCell({ alarm }: { alarm: AlarmRow }) {
+  const regime = alarm.pulseRegime;
+  const premiumLabel = fmtPremiumK(alarm.pulseNetPremium);
+  return (
+    <div className="flex flex-col items-start gap-0.5">
+      <Badge
+        variant="outline"
+        className={cn('text-[10px] font-mono px-1.5 py-0', REGIME_COLOR[regime])}
+        title={`Pulse net premium ${premiumLabel} · slope ${
+          alarm.pulseSlope5min != null ? `${(alarm.pulseSlope5min / 1000).toFixed(1)}k/min` : 'n/a'
+        }`}
+      >
+        <span className="mr-0.5">{REGIME_EMOJI[regime]}</span>
+        {REGIME_LABEL[regime]}
+      </Badge>
+      <span className="text-[9px] font-mono tabular-nums text-muted-foreground">
+        {premiumLabel}
+      </span>
+    </div>
+  );
+}
+
 function AlarmRowView({
   alarm,
   outcome,
@@ -154,6 +210,9 @@ function AlarmRowView({
           {alarm.tier}
         </Badge>
       </td>
+      <td className="px-2 py-1.5 whitespace-nowrap">
+        <RegimeCell alarm={alarm} />
+      </td>
       <td className="px-2 py-1.5 text-[12px] font-mono font-semibold whitespace-nowrap">
         {alarm.ticker || '—'}
       </td>
@@ -173,6 +232,9 @@ function AlarmRowView({
       </td>
       <td className="px-2 py-1.5 text-[11px] font-mono tabular-nums text-right whitespace-nowrap">
         {alarm.score ?? '—'}
+      </td>
+      <td className="px-2 py-1.5 text-[10px] font-mono whitespace-nowrap text-muted-foreground">
+        {alarm.detectorId ?? '—'}
       </td>
       <td className="px-2 py-1.5">
         <ThesisCell thesis={alarm.thesis} />
@@ -195,11 +257,25 @@ export default function Alarms() {
   const [tierFilter, setTierFilter] = useState<AlarmTierFilter>('all');
   const [typeFilter, setTypeFilter] = useState<AlarmTypeFilter>('all');
   const [dayFilter, setDayFilter] = useState<AlarmDayFilter>('today');
+  const [detectorFilter, setDetectorFilter] = useState<AlarmDetectorFilter>('all');
+  const [regimeFilter, setRegimeFilter] = useState<AlarmRegimeFilter>('all');
 
+  // Pull the unfiltered set first so the detector chip always shows every
+  // value present in the day window — narrowing the chip otherwise hides
+  // the option that would un-narrow it.
+  const { alarms: alarmsUnfilteredByDetector } = useAlarms({
+    tier: tierFilter,
+    type: typeFilter,
+    dayFilter,
+    detector: 'all',
+    regime: regimeFilter,
+  });
   const { alarms, outcomes, isLoading, refetch } = useAlarms({
     tier: tierFilter,
     type: typeFilter,
     dayFilter,
+    detector: detectorFilter,
+    regime: regimeFilter,
   });
   const slack = useSlackToggleStatus();
 
@@ -213,6 +289,15 @@ export default function Alarms() {
 
   const replayCount = useMemo(() => alarms.filter((a) => a.isReplay).length, [alarms]);
   const liveCount = alarms.length - replayCount;
+
+  // Detector chip values — distinct detector_ids found in the broader set.
+  const detectorOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const a of alarmsUnfilteredByDetector) {
+      if (a.detectorId) set.add(a.detectorId);
+    }
+    return Array.from(set).sort();
+  }, [alarmsUnfilteredByDetector]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -302,6 +387,31 @@ export default function Alarms() {
             ))}
           </div>
 
+          {/* Regime — Pulse-at-fire-time (tenet 9). */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-muted-foreground mr-1">Regime:</span>
+            {([
+              ['all', 'All'],
+              ['trending_up', '🟢 Up'],
+              ['trending_down', '🔴 Down'],
+              ['chop', '🟡 Chop'],
+              ['unknown', '⚪ Unknown'],
+            ] as const).map(([k, label]) => (
+              <button
+                key={k}
+                onClick={() => setRegimeFilter(k)}
+                className={cn(
+                  'text-[11px] font-mono px-2 py-1 rounded border transition-colors',
+                  regimeFilter === k
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-muted bg-muted/20 text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
           {/* Day */}
           <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-muted-foreground mr-1">Day:</span>
@@ -324,6 +434,44 @@ export default function Alarms() {
                 {label}
               </button>
             ))}
+          </div>
+
+          {/* Detector — populated from distinct detector_id values in the
+              current day window. Detector portfolio is first-class — the
+              user filters by which detector fired, not by tier alone. */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-muted-foreground mr-1">Detector:</span>
+            <button
+              onClick={() => setDetectorFilter('all')}
+              className={cn(
+                'text-[11px] font-mono px-2 py-1 rounded border transition-colors',
+                detectorFilter === 'all'
+                  ? 'border-primary/40 bg-primary/10 text-primary'
+                  : 'border-muted bg-muted/20 text-muted-foreground hover:text-foreground',
+              )}
+            >
+              All
+            </button>
+            {detectorOptions.map((id) => (
+              <button
+                key={id}
+                onClick={() => setDetectorFilter(id)}
+                className={cn(
+                  'text-[11px] font-mono px-2 py-1 rounded border transition-colors',
+                  detectorFilter === id
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-muted bg-muted/20 text-muted-foreground hover:text-foreground',
+                )}
+                title={id}
+              >
+                {id}
+              </button>
+            ))}
+            {detectorOptions.length === 0 && (
+              <span className="text-[10px] text-muted-foreground/60 italic">
+                no detector_id stamped yet — wait for next watcher sweep
+              </span>
+            )}
           </div>
 
           <div className="text-[10px] text-muted-foreground tabular-nums flex items-center gap-3 pt-1 border-t border-border/40">
@@ -365,11 +513,13 @@ export default function Alarms() {
                   <tr className="text-[10px] uppercase tracking-wider text-muted-foreground">
                     <th className="px-2 py-2 text-left font-medium">Time ET</th>
                     <th className="px-2 py-2 text-left font-medium">Tier</th>
+                    <th className="px-2 py-2 text-left font-medium">Regime</th>
                     <th className="px-2 py-2 text-left font-medium">Ticker</th>
                     <th className="px-2 py-2 text-left font-medium">Side</th>
                     <th className="px-2 py-2 text-right font-medium">Strike</th>
                     <th className="px-2 py-2 text-left font-medium">Expiry</th>
                     <th className="px-2 py-2 text-right font-medium">Score</th>
+                    <th className="px-2 py-2 text-left font-medium">Detector</th>
                     <th className="px-2 py-2 text-left font-medium">Thesis</th>
                     <th className="px-2 py-2 text-left font-medium">Outcome</th>
                     <th className="px-2 py-2 text-left font-medium">Type</th>

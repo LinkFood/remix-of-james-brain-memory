@@ -34,6 +34,13 @@ import {
   loadScoreForAlert,
   type TierThresholds,
 } from '../_shared/alarmTiering.ts';
+import {
+  detectClusterAt,
+  type ClusterConfig,
+  type ClusterMatch,
+} from '../_shared/clusterDetector.ts';
+import { loadActiveDetectors, type Detector } from '../_shared/detectorRegistry.ts';
+import { readPulseContext } from '../_shared/pulseContext.ts';
 
 // ---------------------------------------------------------------------------
 // Tunables — page size mirrors PostgREST 1000-row cap. SCAN cap bounds total
@@ -117,6 +124,8 @@ interface Stats {
   alarms_fired_gold: number;
   alarms_fired_silver: number;
   alarms_fired_bronze: number;
+  cluster_alarms_fired: number;
+  cluster_detectors_active: number;
   bronze_silent_writes: number;
   slack_pushes_sent: number;
   slack_enabled: boolean;
@@ -341,6 +350,8 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
     alarms_fired_gold: 0,
     alarms_fired_silver: 0,
     alarms_fired_bronze: 0,
+    cluster_alarms_fired: 0,
+    cluster_detectors_active: 0,
     bronze_silent_writes: 0,
     slack_pushes_sent: 0,
     slack_enabled: slackToggle.enabled,
@@ -364,6 +375,14 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
   const watchlist = await loadWatchlist(supabase);
   const sigStats = await loadSignatureStats(supabase, thresholds);
   const eligibility: DteEligibilityMap = await loadDteEligibility(supabase);
+
+  // Detector portfolio — every cluster_* row in ct_detectors that isn't
+  // retired runs as its own detector with its own config. Each match
+  // writes its own ct_flags row stamped with that detector's id.
+  const clusterDetectors = (await loadActiveDetectors(supabase, 'cluster_'))
+    .map(toClusterDetector)
+    .filter((d): d is { detector: Detector; cfg: ClusterConfig } => d != null);
+  stats.cluster_detectors_active = clusterDetectors.length;
 
   // Resolve userId for Slack push (single-user pattern, matches ct-eod-summary).
   const { data: users } = await supabase.from('profiles').select('id').limit(1);
@@ -540,10 +559,14 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
         ? `[${tier.toUpperCase()}] Signature class match: ${label}. Historical median peak +${peakPctStr} on n=${nForDisplay}. Premium ${premKstr}. ${scoreStr}.`
         : `[${tier.toUpperCase()}] Score-only fire: ${scoreStr}. Class ${label} (no historical match). Premium ${premKstr}.`;
 
+      // Pulse-at-fire-time — regime context per tenet 9.
+      const pulse = await readPulseContext(supabase, ticker, printTime);
+
       const { error: flagErr } = await supabase
         .from('ct_flags')
         .insert({
           source: 'signature_alarm',
+          detector_id: 'signature_v1',
           specialist_ticker: null,
           instrument: ticker,
           option_symbol: optionSymbol,
@@ -561,6 +584,9 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
           entry_price: entryPrice,
           target_price: targetPrice,
           status: 'active',
+          pulse_net_premium_at_fire: pulse.netPremium,
+          pulse_slope_5min_at_fire: pulse.slope5min,
+          pulse_regime_at_fire: pulse.regime,
         });
       if (flagErr) stats.errors.push(`flag insert ${a.alert_id}: ${flagErr.message}`);
 
@@ -569,6 +595,63 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
       else {
         stats.alarms_fired_bronze += 1;
         stats.bronze_silent_writes += 1;
+      }
+
+      // Detector portfolio — same alert can match multiple cluster configs
+      // and create multiple alarm rows, one per detector_id. Each row carries
+      // its own provenance so the per-detector scoreboard (deferred) can
+      // attribute outcomes to the right strategy.
+      for (const cd of clusterDetectors) {
+        try {
+          const match = await detectClusterAt(
+            supabase,
+            {
+              alert_id: a.alert_id,
+              ticker,
+              side,
+              strike: a.strike,
+              executed_at: a.executed_at,
+              ingested_at: a.ingested_at,
+            },
+            cd.cfg,
+          );
+          if (!match) continue;
+
+          const clusterThesis = buildClusterThesis(cd.detector, match, premKstr);
+          const { error: clusterFlagErr } = await supabase
+            .from('ct_flags')
+            .insert({
+              source: 'signature_alarm',
+              detector_id: cd.detector.id,
+              specialist_ticker: null,
+              instrument: ticker,
+              option_symbol: optionSymbol,
+              strike: a.strike,
+              expiry: a.expiry,
+              side,
+              direction,
+              score: score ?? 0,
+              tags: replayMode
+                ? ['signature_alarm', 'cluster', cd.detector.id, 'replay']
+                : ['signature_alarm', 'cluster', cd.detector.id],
+              thesis: clusterThesis,
+              horizon_hours: horizonHours,
+              horizon_ts: horizonTs,
+              entry_price: entryPrice,
+              target_price: targetPrice,
+              status: 'active',
+              pulse_net_premium_at_fire: pulse.netPremium,
+              pulse_slope_5min_at_fire: pulse.slope5min,
+              pulse_regime_at_fire: pulse.regime,
+            });
+          if (clusterFlagErr) {
+            stats.errors.push(`cluster ${cd.detector.id} insert ${a.alert_id}: ${clusterFlagErr.message}`);
+          } else {
+            stats.cluster_alarms_fired += 1;
+          }
+        } catch (ce) {
+          stats.errors.push(`cluster ${cd.detector.id} ${a.alert_id}: ${ce instanceof Error ? ce.message : String(ce)}`);
+        }
       }
     } catch (e) {
       stats.errors.push(`alert ${a.alert_id}: ${e instanceof Error ? e.message : String(e)}`);
@@ -585,6 +668,47 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
 // Page-size guard so a short final page also breaks the loop.
 function pageBreakSize(end: number, offset: number): number {
   return end - offset + 1;
+}
+
+// Translate a ct_detectors row (config jsonb) into a runnable ClusterConfig.
+// Returns null on missing/invalid keys so a bad row skips the detector
+// instead of crashing the sweep.
+function toClusterDetector(detector: Detector): { detector: Detector; cfg: ClusterConfig } | null {
+  const c = detector.config ?? {};
+  const windowMin = num(c.window_min);
+  const minPrints = num(c.min_prints);
+  const strikeBandPct = num(c.strike_band_pct);
+  const minUnanimityPct = num(c.min_unanimity_pct);
+  if (windowMin == null || minPrints == null || strikeBandPct == null || minUnanimityPct == null) return null;
+  return {
+    detector,
+    cfg: {
+      enabled: true,
+      windowMin,
+      minPrints: Math.floor(minPrints),
+      strikeBandPct,
+      minUnanimityPct,
+    },
+  };
+}
+
+function num(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v;
+  if (typeof v === 'string') {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function buildClusterThesis(detector: Detector, match: ClusterMatch, premKstr: string): string {
+  const unanimity = `${Math.round(match.unanimityPct * 100)}%`;
+  const winMin = Math.round((match.windowEnd.getTime() - match.windowStart.getTime()) / 60_000);
+  return (
+    `[CLUSTER ${detector.id}] ${detector.name}. ` +
+    `${match.printCount} aligned ${match.side} prints in ${winMin}min window, ` +
+    `${unanimity} directional unanimity. Trigger premium ${premKstr}.`
+  );
 }
 
 // ---------------------------------------------------------------------------

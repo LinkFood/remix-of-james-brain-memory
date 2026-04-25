@@ -577,6 +577,7 @@ async function writeFlag(
 
   const { data, error } = await supabase.from('ct_flags').insert({
     user_id: userId,
+    detector_id: 'specialist_flag',
     instruments,
     direction: claude.direction ?? 'neutral',
     conviction,

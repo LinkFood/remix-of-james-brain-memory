@@ -25,6 +25,8 @@ export type AlarmTier = 'gold' | 'silver' | 'bronze' | 'unknown';
 export type AlarmDayFilter = 'today' | 'yesterday' | 'last3d' | 'all';
 export type AlarmTypeFilter = 'all' | 'live' | 'replay';
 export type AlarmTierFilter = 'all' | 'gold' | 'silver' | 'bronze';
+export type AlarmRegime = 'trending_up' | 'trending_down' | 'chop' | 'unknown';
+export type AlarmRegimeFilter = 'all' | AlarmRegime;
 
 export interface AlarmRow {
   id: string;
@@ -36,6 +38,7 @@ export interface AlarmRow {
   direction: string | null;
   score: number | null;
   tier: AlarmTier;
+  detectorId: string | null;
   thesis: string | null;
   horizonHours: number | null;
   entryPrice: number | null;
@@ -44,6 +47,9 @@ export interface AlarmRow {
   isReplay: boolean;
   alertId: string | null;
   createdAt: string;
+  pulseRegime: AlarmRegime;
+  pulseNetPremium: number | null;
+  pulseSlope5min: number | null;
 }
 
 export type ContractOutcomeStatus = 'WIN' | 'LOSS' | 'WORKING' | 'EXPIRED' | 'UNKNOWN';
@@ -64,6 +70,7 @@ interface CtFlagRow {
   direction: string | null;
   score: number | null;
   tags: string[] | null;
+  detector_id: string | null;
   thesis: string | null;
   horizon_hours: number | null;
   entry_price: number | null;
@@ -71,10 +78,13 @@ interface CtFlagRow {
   status: string | null;
   source_flow_ids: string[] | null;
   created_at: string;
+  pulse_regime_at_fire: string | null;
+  pulse_net_premium_at_fire: number | string | null;
+  pulse_slope_5min_at_fire: number | string | null;
 }
 
 const SELECT_COLS =
-  'id, instrument, option_symbol, side, strike, expiry, direction, score, tags, thesis, horizon_hours, entry_price, target_price, status, source_flow_ids, created_at';
+  'id, instrument, option_symbol, side, strike, expiry, direction, score, tags, detector_id, thesis, horizon_hours, entry_price, target_price, status, source_flow_ids, created_at, pulse_regime_at_fire, pulse_net_premium_at_fire, pulse_slope_5min_at_fire';
 
 function parseTier(tags: string[] | null | undefined): AlarmTier {
   if (!tags) return 'unknown';
@@ -82,6 +92,17 @@ function parseTier(tags: string[] | null | undefined): AlarmTier {
   if (tags.includes('silver')) return 'silver';
   if (tags.includes('bronze')) return 'bronze';
   return 'unknown';
+}
+
+function parseRegime(v: string | null | undefined): AlarmRegime {
+  if (v === 'trending_up' || v === 'trending_down' || v === 'chop') return v;
+  return 'unknown';
+}
+
+function toNumOrNull(v: number | string | null | undefined): number | null {
+  if (v == null) return null;
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 function rowToAlarm(row: CtFlagRow): AlarmRow {
@@ -99,6 +120,7 @@ function rowToAlarm(row: CtFlagRow): AlarmRow {
     direction: row.direction,
     score: row.score,
     tier: parseTier(row.tags),
+    detectorId: row.detector_id ?? null,
     thesis: row.thesis,
     horizonHours: row.horizon_hours,
     entryPrice: row.entry_price,
@@ -107,6 +129,9 @@ function rowToAlarm(row: CtFlagRow): AlarmRow {
     isReplay,
     alertId,
     createdAt: row.created_at,
+    pulseRegime: parseRegime(row.pulse_regime_at_fire),
+    pulseNetPremium: toNumOrNull(row.pulse_net_premium_at_fire),
+    pulseSlope5min: toNumOrNull(row.pulse_slope_5min_at_fire),
   };
 }
 
@@ -129,10 +154,16 @@ function dayFilterFloor(filter: AlarmDayFilter): string | null {
   return null;
 }
 
+// 'all' = no filter; any other string = exact detector_id match. Detector
+// filter is exact-match because the registry id is a stable slug.
+export type AlarmDetectorFilter = 'all' | string;
+
 interface UseAlarmsArgs {
   tier?: AlarmTierFilter;
   type?: AlarmTypeFilter;
   dayFilter?: AlarmDayFilter;
+  detector?: AlarmDetectorFilter;
+  regime?: AlarmRegimeFilter;
 }
 
 interface UseAlarmsResult {
@@ -147,6 +178,8 @@ export function useAlarms({
   tier = 'all',
   type = 'all',
   dayFilter = 'today',
+  detector = 'all',
+  regime = 'all',
 }: UseAlarmsArgs): UseAlarmsResult {
   const floorIso = useMemo(() => dayFilterFloor(dayFilter), [dayFilter]);
   // Realtime pushes land here; bootstrap query seeds it on (re)mount.
@@ -225,10 +258,12 @@ export function useAlarms({
         if (tier !== 'all' && a.tier !== tier) return false;
         if (type === 'live' && a.isReplay) return false;
         if (type === 'replay' && !a.isReplay) return false;
+        if (detector !== 'all' && a.detectorId !== detector) return false;
+        if (regime !== 'all' && a.pulseRegime !== regime) return false;
         return true;
       })
       .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
-  }, [liveAlarms, tier, type, floorIso]);
+  }, [liveAlarms, tier, type, floorIso, detector, regime]);
 
   // Outcome lookup — non-blocking, batched on visible alert IDs.
   const alertIds = useMemo(
