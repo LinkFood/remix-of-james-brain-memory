@@ -98,6 +98,98 @@ async function loadNotableDecisions(
   return merged.slice(0, 80);
 }
 
+interface ContractWinRow {
+  ticker: string;
+  side: string;
+  strike: number;
+  expiry: string;
+  dte_at_print: number | null;
+  predicted_source: string | null;
+  peak_contract_pct: number | null;
+  print_time: string;
+  alert_id: string | null;
+}
+
+async function loadDailyWins(
+  supabase: SupabaseClient,
+  sinceIso: string,
+): Promise<ContractWinRow[]> {
+  const { data } = await supabase
+    .from('ct_contract_tracks')
+    .select('ticker,side,strike,expiry,dte_at_print,predicted_source,peak_contract_pct,print_time,alert_id')
+    .eq('track_status', 'WIN')
+    .gte('print_time', sinceIso)
+    .order('peak_contract_pct', { ascending: false })
+    .limit(200);
+  return (data ?? []) as ContractWinRow[];
+}
+
+// peak_contract_pct is stored as a decimal fraction (1.578 = +157.8%).
+function formatPct(decimal: number | null): string {
+  if (decimal === null || decimal === undefined) return '?';
+  return `${(decimal * 100).toFixed(1)}`;
+}
+
+function formatHHMMUtc(iso: string): string {
+  const d = new Date(iso);
+  const hh = String(d.getUTCHours()).padStart(2, '0');
+  const mm = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+function median(nums: number[]): number {
+  if (nums.length === 0) return 0;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+}
+
+function buildWinSections(wins: ContractWinRow[]): string {
+  if (wins.length === 0) {
+    return '\n\n---\nTrading outcomes (last 24h): no graded WINs in window.';
+  }
+
+  const top = wins[0];
+  const topLine = `${top.ticker} ${top.side} $${top.strike} exp ${top.expiry} (dte=${top.dte_at_print ?? '?'}, ${top.predicted_source ?? 'unknown'}) printed ${formatHHMMUtc(top.print_time)} UTC, peak +${formatPct(top.peak_contract_pct)}% [alert ${top.alert_id ?? 'n/a'}]`;
+
+  const top5 = wins.slice(0, 5).map((w) => {
+    return `- ${formatHHMMUtc(w.print_time)} ${w.ticker} ${w.side} $${w.strike} -> +${formatPct(w.peak_contract_pct)}% peak (${w.predicted_source ?? 'unknown'}, dte=${w.dte_at_print ?? '?'})`;
+  }).join('\n');
+
+  const groups = new Map<string, number[]>();
+  for (const w of wins) {
+    const key = `${w.ticker} ${w.side} ${w.predicted_source ?? 'unknown'}`;
+    const peak = w.peak_contract_pct ?? 0;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(peak);
+  }
+  const signatureLines: string[] = [];
+  for (const [key, peaks] of groups.entries()) {
+    if (peaks.length < 2) continue;
+    const med = median(peaks);
+    signatureLines.push(`- ${key} -> n=${peaks.length}, median_peak=+${(med * 100).toFixed(1)}%`);
+  }
+  signatureLines.sort();
+
+  const sigBlock = signatureLines.length > 0
+    ? signatureLines.join('\n')
+    : '(no signature class had >=2 WINs)';
+
+  return [
+    '',
+    '---',
+    'Trading outcomes (last 24h):',
+    '',
+    `Top WIN of the day: ${topLine}`,
+    '',
+    `Top 5 WINs of the day:\n${top5}`,
+    '',
+    `Today's signature winners (n>=2 per ticker+side+source):\n${sigBlock}`,
+  ].join('\n');
+}
+
 interface DecisionCounts {
   total: number;
   by_type: Record<string, number>;
@@ -226,7 +318,8 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
-  const summaryText = summary.trim();
+  const wins = await loadDailyWins(supabase, sinceIso);
+  const summaryText = `${summary.trim()}${buildWinSections(wins)}`;
 
   // One reflection per JAC user (profiles.id). Single-user today, but stays
   // correct if JAC grows. jac_reflections requires user_id NOT NULL.
@@ -301,6 +394,8 @@ serve(async (req) => {
       window_hours: 24,
       source_decision_count: decisions.length,
       counts,
+      win_count: wins.length,
+      top_win_alert_id: wins[0]?.alert_id ?? null,
       jac_reflection_ids: reflectionIds,
       summary: summaryText,
     },
