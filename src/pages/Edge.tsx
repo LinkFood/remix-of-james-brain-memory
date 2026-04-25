@@ -55,6 +55,10 @@ import {
   type SlowBurnPay,
   type EdgeDailyByBucket,
 } from '@/hooks/useEdge';
+import {
+  useTopContractPeaks,
+  fmtPctMagnitude,
+} from '@/hooks/useContractTracks';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
 
@@ -489,6 +493,108 @@ function BestSignatures() {
 }
 
 // ============================================================================
+// Section D2 — Contract-axis edge (Phase D preview)
+// ============================================================================
+//
+// Top peaks from ct_contract_tracks over the last 7d. The contract-axis
+// grader (Phase C) will eventually fill in the rest of this page with full
+// magnitude attribution; this section is the proof-of-life that Phase A's
+// tracker rows + Phase B's quote poller are flowing data through.
+// Defensive — empty/loading states render their own placeholders.
+
+function ContractAxisEdge() {
+  const sinceISO = useMemo(() => new Date(Date.now() - 7 * 86_400_000).toISOString(), []);
+  const { data, isLoading } = useTopContractPeaks(10, sinceISO);
+
+  const sideCls = (side: string | null) =>
+    side === 'call'
+      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+      : side === 'put'
+        ? 'bg-rose-500/15 text-rose-300 border-rose-500/40'
+        : 'bg-muted/40 text-muted-foreground border-border/50';
+
+  const statusCls = (status: string) => {
+    if (status === 'WIN' || status === 'EXPIRED_WIN') return 'text-emerald-300';
+    if (status === 'LOSS' || status === 'EXPIRED_LOSS') return 'text-rose-300';
+    if (status === 'STALE') return 'text-muted-foreground';
+    return 'text-amber-300';
+  };
+
+  return (
+    <Card className="p-0 overflow-hidden">
+      <div className="px-4 py-3 border-b border-border/40 flex items-center gap-2">
+        <Zap className="w-4 h-4 text-primary" />
+        <h2 className="text-sm font-semibold tracking-tight">Contract-axis edge — Top peaks (7d)</h2>
+        <span className="text-[10px] text-muted-foreground font-mono ml-auto">
+          ct_contract_tracks · Phase D preview
+        </span>
+      </div>
+      {isLoading ? (
+        <div className="p-6 text-xs text-muted-foreground text-center">Loading contract tracks…</div>
+      ) : !data || data.length === 0 ? (
+        <div className="p-6 text-xs text-muted-foreground text-center">
+          No contract tracks yet. Phase B's poller fills these as quotes arrive.
+        </div>
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow className="bg-muted/40">
+              <TableHead className="h-9 px-3 text-[11px] uppercase tracking-wider">Ticker</TableHead>
+              <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Strike</TableHead>
+              <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Side</TableHead>
+              <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">DTE</TableHead>
+              <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Peak</TableHead>
+              <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Time-to-Peak</TableHead>
+              <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Status</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.map((t) => {
+              const ttp = (() => {
+                if (!t.peak_contract_at) return '—';
+                const printMs = Date.parse(t.print_time);
+                const peakMs = Date.parse(t.peak_contract_at);
+                if (!Number.isFinite(printMs) || !Number.isFinite(peakMs)) return '—';
+                const mins = Math.max(0, Math.round((peakMs - printMs) / 60_000));
+                if (mins < 60) return `${mins}m`;
+                const h = Math.floor(mins / 60);
+                const m = mins % 60;
+                return m === 0 ? `${h}h` : `${h}h ${m}m`;
+              })();
+              return (
+                <TableRow key={t.id} className="hover:bg-muted/30 border-b border-border/40">
+                  <TableCell className="py-2 px-3 font-mono font-bold">{t.ticker}</TableCell>
+                  <TableCell className="py-2 px-2 font-mono tabular-nums">
+                    {t.strike != null ? `$${t.strike}` : '—'}
+                  </TableCell>
+                  <TableCell className="py-2 px-2">
+                    <Badge variant="outline" className={cn('text-[10px] font-mono px-1.5 py-0 font-bold', sideCls(t.side))}>
+                      {t.side?.toUpperCase()}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="py-2 px-2 font-mono tabular-nums text-right">
+                    {t.dte_at_print ?? '—'}
+                  </TableCell>
+                  <TableCell className="py-2 px-2 font-mono tabular-nums text-right text-emerald-300 font-semibold">
+                    {fmtPctMagnitude(t.peak_contract_pct)}
+                  </TableCell>
+                  <TableCell className="py-2 px-2 font-mono tabular-nums text-muted-foreground">
+                    {ttp}
+                  </TableCell>
+                  <TableCell className={cn('py-2 px-2 font-mono text-[11px] uppercase tracking-wider', statusCls(t.track_status))}>
+                    {t.track_status.replace('_', ' ')}
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      )}
+    </Card>
+  );
+}
+
+// ============================================================================
 // Section E — Per-Ticker Scorecards
 // ============================================================================
 
@@ -768,6 +874,7 @@ export default function Edge() {
         <SlowBurnPays />
         <WinnersLosers />
         <BestSignatures />
+        <ContractAxisEdge />
         <PerTickerGrid />
         <WorkingTracks />
         <AttributionByDimension />

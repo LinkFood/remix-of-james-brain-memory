@@ -31,6 +31,12 @@ import { Waves, RefreshCw, ArrowUp, ArrowDown, Minus, Star, Radio } from 'lucide
 import { toast } from 'sonner';
 import { ContractSheet } from '@/components/command/ContractSheet';
 import { TickerSheet } from '@/components/command/TickerSheet';
+import { ContractPnLChip } from '@/components/co-trader/ContractPnLChip';
+import { ContractDrillSheet } from '@/components/co-trader/ContractDrillSheet';
+import {
+  useContractTracksByAlerts,
+  useContractTracksRealtime,
+} from '@/hooks/useContractTracks';
 import { MacroBanner } from '@/components/command/MacroBanner';
 import { TapeReaderBanner } from '@/components/command/TapeReaderBanner';
 import { OvernightPositioning } from '@/components/command/OvernightPositioning';
@@ -156,6 +162,7 @@ interface TapeRow {
   key: string;
   source: 'scored' | 'alert';
   id: number;
+  alert_id: string | null;
   ticker: string;
   option_symbol: string;
   event_ts: string;
@@ -403,9 +410,16 @@ export default function Tape() {
   }, [dayFilter]);
   const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
   const [activeTicker, setActiveTicker] = useState<string | null>(null);
+  const [drillAlertId, setDrillAlertId] = useState<string | null>(null);
   const [markDialog, setMarkDialog] = useState<MarkDialogState>({
     open: false, row: null, note: '', direction_view: null, saving: false,
   });
+
+  // Live contract-axis P&L (Phase D). Subscribe once at the page level so the
+  // chip column on every visible row repaints when Phase B's poller bumps a
+  // ct_contract_tracks row. Defensive — silently no-ops if the table or
+  // realtime channel isn't deployed yet.
+  useContractTracksRealtime();
 
   // Refetch interval scales with LIVE mode — 5s when on, 20s baseline.
   const tapeInterval = filters.liveMode ? 5_000 : 20_000;
@@ -620,6 +634,7 @@ export default function Tape() {
         key: `s-${r.id}`,
         source: 'scored',
         id: r.id,
+        alert_id: r.source_table === 'flow_alerts' || r.source_table === 'ct_flow_alerts' ? r.source_id : null,
         ticker: r.ticker,
         option_symbol: r.option_symbol,
         event_ts: r.event_ts,
@@ -660,6 +675,7 @@ export default function Tape() {
           key: `a-${a.id}`,
           source: 'alert',
           id: a.id,
+          alert_id: a.alert_id,
           ticker: a.ticker,
           option_symbol: a.option_symbol,
           event_ts: a.executed_at,
@@ -736,6 +752,16 @@ export default function Tape() {
     }
     return out;
   }, [rows]);
+
+  // Batch-load contract tracks for visible rows. Keyed off the set of
+  // alert_ids the rows point at — TanStack dedupes the network call. The
+  // chip itself reads from the returned Map; rows without a track render
+  // a thin "—" placeholder so the column never stretches the row.
+  const visibleAlertIds = useMemo<string[]>(
+    () => rows.map((r) => r.alert_id).filter((x): x is string => !!x),
+    [rows],
+  );
+  const { data: contractTracks } = useContractTracksByAlerts(visibleAlertIds);
 
   // Header count line — honest about what the filter is showing.
   const headerCountText = useMemo(() => {
@@ -1094,19 +1120,20 @@ export default function Tape() {
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-center w-10">
                     <Star className="w-3.5 h-3.5 inline" />
                   </TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">P&amp;L</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Stack</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loadingScored && !scored ? (
                   <TableRow>
-                    <TableCell colSpan={18} className="text-center text-xs text-muted-foreground py-8">
+                    <TableCell colSpan={19} className="text-center text-xs text-muted-foreground py-8">
                       Loading tape…
                     </TableCell>
                   </TableRow>
                 ) : rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={18} className="text-center text-xs text-muted-foreground py-8">
+                    <TableCell colSpan={19} className="text-center text-xs text-muted-foreground py-8">
                       No flow matches current filters. Loosen min premium, drop min score, or enable "Show unscored".
                     </TableCell>
                   </TableRow>
@@ -1119,7 +1146,7 @@ export default function Tape() {
                           className="hover:bg-transparent border-b border-border/50"
                         >
                           <TableCell
-                            colSpan={18}
+                            colSpan={19}
                             className="py-1.5 px-2 bg-muted/40 text-[10px] uppercase tracking-widest text-muted-foreground"
                           >
                             <div className="flex items-center gap-3">
@@ -1302,6 +1329,19 @@ export default function Tape() {
                           })()}
                         </div>
                       </TableCell>
+                      <TableCell
+                        className="py-2 px-2 text-right whitespace-nowrap"
+                        onClick={(e) => {
+                          if (!r.alert_id) return;
+                          e.stopPropagation();
+                          setDrillAlertId(r.alert_id);
+                        }}
+                      >
+                        <ContractPnLChip
+                          track={r.alert_id ? contractTracks?.get(r.alert_id) ?? null : null}
+                          onClick={r.alert_id ? () => setDrillAlertId(r.alert_id) : undefined}
+                        />
+                      </TableCell>
                       <TableCell className="py-2 px-2 text-right whitespace-nowrap">
                         {(() => {
                           const stack = stackBySymbol.get(r.option_symbol);
@@ -1358,6 +1398,13 @@ export default function Tape() {
         ticker={activeTicker}
         open={activeTicker !== null}
         onOpenChange={(o) => { if (!o) setActiveTicker(null); }}
+      />
+
+      {/* Contract-axis P&L drill sheet (Phase D) */}
+      <ContractDrillSheet
+        alertId={drillAlertId}
+        open={drillAlertId !== null}
+        onOpenChange={(o) => { if (!o) setDrillAlertId(null); }}
       />
 
       {/* Mark-as-interesting dialog */}
