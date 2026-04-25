@@ -372,7 +372,13 @@ verify_jwt = false
 [functions.ct-contract-poller]
 verify_jwt = false
 
+[functions.ct-historical-quote-backfill]
+verify_jwt = false
+
 [functions.ct-signature-watcher]
+verify_jwt = false
+
+[functions.ct-backtest-harness]
 verify_jwt = false
 
 [functions.ct-specialist-nvda]

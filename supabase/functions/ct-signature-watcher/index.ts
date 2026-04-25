@@ -28,6 +28,12 @@ import {
   ticker0DteEligibleOn,
   type DteEligibilityMap,
 } from '../_shared/dteEligibility.ts';
+import {
+  evaluateTier,
+  loadTierThresholds,
+  loadScoreForAlert,
+  type TierThresholds,
+} from '../_shared/alarmTiering.ts';
 
 // ---------------------------------------------------------------------------
 // Tunables — page size mirrors PostgREST 1000-row cap. SCAN cap bounds total
@@ -37,7 +43,6 @@ const PAGE_SIZE = 1000;
 const SCAN_LIMIT = 4000;
 
 type DteBucket = '0dte' | 'short' | 'mid' | 'long';
-type AlarmTier = 'gold' | 'silver' | 'bronze' | null;
 
 interface FlowAlertRow {
   alert_id: string;
@@ -65,27 +70,6 @@ interface SignatureStat {
   predicted_source: string;
   n_tracks: number;
   median_peak_pct: number | string;
-}
-
-interface TierThresholds {
-  goldMinScore: number;
-  goldMinPeakPct: number;
-  goldMinN: number;
-  silverMinScore: number;
-  silverMinPeakPct: number;
-  silverMinN: number;
-  silverHighSigPeakPct: number;
-  silverHighSigMinN: number;
-  bronzeMinPeakPct: number;
-  bronzeMinN: number;
-  bronzeMinScore: number;
-  // Sweep-level (not per-tier).
-  lookbackDays: number;
-  dedupeMin: number;
-  // Bronze must clear at least the signature stats RPC's min_n floor — the
-  // RPC currently fetches with min_n=silverMinN so we need bronze<=silver_n
-  // OR fetch with min_n=bronze. We use the lower of the two below.
-  rpcMinN: number;
 }
 
 interface Stats {
@@ -205,97 +189,6 @@ function resolvePrintTime(a: FlowAlertRow): Date {
     if (!Number.isNaN(d.getTime())) return d;
   }
   return new Date(a.ingested_at);
-}
-
-// ---------------------------------------------------------------------------
-// Tier evaluator — pure, unit-testable.
-// Order matters: gold → silver → bronze. Each tier's full predicate is
-// checked before falling through.
-// ---------------------------------------------------------------------------
-function evaluateTier(
-  score: number | null,
-  sigMedian: number | null,
-  sigN: number | null,
-  t: TierThresholds,
-): AlarmTier {
-  const s = score ?? 0;
-  const sp = sigMedian ?? 0;
-  const sn = sigN ?? 0;
-  // Gold: BOTH layers strong.
-  if (s >= t.goldMinScore && sp >= t.goldMinPeakPct && sn >= t.goldMinN) return 'gold';
-  // Silver: combined high-confidence OR signature-alone exceptional.
-  if (s >= t.silverMinScore && sp >= t.silverMinPeakPct && sn >= t.silverMinN) return 'silver';
-  if (sp >= t.silverHighSigPeakPct && sn >= t.silverHighSigMinN) return 'silver';
-  // Bronze: weakest tier — either layer alone clears a lower bar.
-  if (sp >= t.bronzeMinPeakPct && sn >= t.bronzeMinN) return 'bronze';
-  if (s >= t.bronzeMinScore) return 'bronze';
-  return null;
-}
-
-// ---------------------------------------------------------------------------
-// Config loaders.
-// ---------------------------------------------------------------------------
-async function loadTierThresholds(supabase: SupabaseClient): Promise<TierThresholds> {
-  const defaults: TierThresholds = {
-    goldMinScore: 80,
-    goldMinPeakPct: 1.0,
-    goldMinN: 10,
-    silverMinScore: 70,
-    silverMinPeakPct: 0.50,
-    silverMinN: 5,
-    silverHighSigPeakPct: 2.0,
-    silverHighSigMinN: 10,
-    bronzeMinPeakPct: 0.50,
-    bronzeMinN: 3,
-    bronzeMinScore: 80,
-    lookbackDays: 7,
-    dedupeMin: 30,
-    rpcMinN: 3,
-  };
-  const { data, error } = await supabase
-    .from('ct_config')
-    .select('key, value')
-    .in('key', [
-      'signature_alarm_gold_min_score',
-      'signature_alarm_gold_min_peak_pct',
-      'signature_alarm_gold_min_n',
-      'signature_alarm_silver_min_score',
-      'signature_alarm_silver_min_peak_pct',
-      'signature_alarm_silver_min_n',
-      'signature_alarm_silver_high_sig_peak_pct',
-      'signature_alarm_silver_high_sig_min_n',
-      'signature_alarm_bronze_min_peak_pct',
-      'signature_alarm_bronze_min_n',
-      'signature_alarm_bronze_min_score',
-      'signature_alarm_lookback_days',
-      'signature_alarm_dedupe_min',
-    ]);
-  if (error || !data) return defaults;
-  const out = { ...defaults };
-  for (const row of data) {
-    const v = row.value;
-    const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
-    if (!Number.isFinite(n) || n < 0) continue;
-    switch (row.key) {
-      case 'signature_alarm_gold_min_score':           out.goldMinScore = n; break;
-      case 'signature_alarm_gold_min_peak_pct':        out.goldMinPeakPct = n; break;
-      case 'signature_alarm_gold_min_n':               out.goldMinN = Math.floor(n); break;
-      case 'signature_alarm_silver_min_score':         out.silverMinScore = n; break;
-      case 'signature_alarm_silver_min_peak_pct':      out.silverMinPeakPct = n; break;
-      case 'signature_alarm_silver_min_n':             out.silverMinN = Math.floor(n); break;
-      case 'signature_alarm_silver_high_sig_peak_pct': out.silverHighSigPeakPct = n; break;
-      case 'signature_alarm_silver_high_sig_min_n':    out.silverHighSigMinN = Math.floor(n); break;
-      case 'signature_alarm_bronze_min_peak_pct':      out.bronzeMinPeakPct = n; break;
-      case 'signature_alarm_bronze_min_n':             out.bronzeMinN = Math.floor(n); break;
-      case 'signature_alarm_bronze_min_score':         out.bronzeMinScore = n; break;
-      case 'signature_alarm_lookback_days':            out.lookbackDays = Math.floor(n); break;
-      case 'signature_alarm_dedupe_min':               out.dedupeMin = Math.floor(n); break;
-    }
-  }
-  // RPC fetch must use the LOWEST n threshold any tier could fire on,
-  // otherwise bronze candidates get filtered out before tier eval sees them.
-  out.rpcMinN = Math.max(1, Math.min(out.bronzeMinN, out.silverMinN, out.goldMinN));
-  return out;
 }
 
 const DEFAULT_WATCHLIST = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
@@ -505,18 +398,8 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
       const sigN = stat?.n_tracks ?? null;
       const validSigMedian = sigMedian != null && Number.isFinite(sigMedian) ? sigMedian : null;
 
-      // Score lives on ct_scored_flow, not ct_flow_alerts — pull only if a
-      // matching scored row exists for the ct_flow_alerts source_table.
-      let score: number | null = null;
-      const { data: scored } = await supabase
-        .from('ct_scored_flow')
-        .select('score')
-        .eq('source_table', 'ct_flow_alerts')
-        .eq('source_id', a.alert_id)
-        .order('event_ts', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      if (scored && Number.isFinite(Number(scored.score))) score = Number(scored.score);
+      // Score lives on ct_scored_flow, not ct_flow_alerts — shared helper.
+      const score: number | null = await loadScoreForAlert(supabase, a.alert_id);
 
       stats.alarms_total_evaluated += 1;
       const tier = evaluateTier(score, validSigMedian, sigN, thresholds);
