@@ -124,10 +124,10 @@ function isPreMarketET(iso: string): boolean {
 function fmtTime(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleTimeString('en-US', {
-    hour: '2-digit',
+    hour: 'numeric',
     minute: '2-digit',
     timeZone: 'America/New_York',
-    hour12: false,
+    hour12: true,
   });
 }
 
