@@ -30,6 +30,7 @@ import {
   nextEligible0DteDate,
   nextFridayOn,
 } from './dteEligibility.ts';
+import { readPulseContext } from './pulseContext.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1215,6 +1216,10 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
     };
   }
 
+  // Pulse-at-fire-time — read once per wakeup; all flags from this batch
+  // share the same regime context (tenet 9, 2026-04-25).
+  const pulse = await readPulseContext(supabase, ticker);
+
   for (const decision of parsed.flags) {
     // Flag score: Claude's self-assigned score wins, else top event's score,
     // else average of the event scores. Clamped to [0,100].
@@ -1273,6 +1278,9 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
       target_price: decision.target_price,
       status: 'active',
       source_flow_ids: sourceFlowIds.length > 0 ? sourceFlowIds : null,
+      pulse_net_premium_at_fire: pulse.netPremium,
+      pulse_slope_5min_at_fire: pulse.slope5min,
+      pulse_regime_at_fire: pulse.regime,
     };
 
     const { data: inserted, error: insErr } = await supabase
