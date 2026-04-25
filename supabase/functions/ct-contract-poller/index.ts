@@ -257,6 +257,63 @@ function pLimit<T>(concurrency: number, jobs: Array<() => Promise<T>>): Promise<
 // Watchlist filter applied server-side via .in() — off-watchlist tracks
 // never enter the pipeline (UW budget discipline).
 // ---------------------------------------------------------------------------
+// Sweep WORKING/STALE tracks past their tracking_until and flip them to a
+// terminal EXPIRED_* status. fetchEligibleTracks below filters by
+// `tracking_until > now` for UW efficiency, which means past-due tracks
+// would never be polled and would silently zombie in WORKING forever
+// without this sweep. No UW calls — we already have peak + current pcts
+// stored from earlier polls (or 0/0 if never polled).
+async function expirePastDueTracks(
+  supabase: SupabaseClient,
+  cfg: PollerConfig,
+  watchlist: Set<string>,
+  stats: Stats,
+): Promise<void> {
+  const nowIso = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('ct_contract_tracks')
+    .select('id, dte_at_print, peak_contract_pct, max_drawdown_pct')
+    .in('track_status', ['WORKING', 'STALE', 'WIN', 'LOSS'])
+    .in('ticker', Array.from(watchlist))
+    .lte('tracking_until', nowIso)
+    .limit(2000);
+  if (error) {
+    stats.errors.push(`expire sweep fetch: ${error.message}`);
+    return;
+  }
+  if (!data || data.length === 0) return;
+
+  const updates: Array<{ id: string; status: TrackStatus }> = [];
+  for (const t of data as Array<{ id: string; dte_at_print: number | null; peak_contract_pct: number | null; max_drawdown_pct: number | null }>) {
+    const peak = t.peak_contract_pct ?? 0;
+    const winT = winThresholdForDte(t.dte_at_print, cfg.winThresholds);
+    let status: TrackStatus;
+    if (peak >= winT) status = 'EXPIRED_WIN';
+    else if ((t.max_drawdown_pct ?? 0) >= cfg.lossThreshold) status = 'EXPIRED_LOSS';
+    else status = 'EXPIRED_FLAT';
+    updates.push({ id: t.id, status });
+  }
+
+  // Group by status — three batched UPDATEs, not N individual writes.
+  const byStatus = new Map<TrackStatus, string[]>();
+  for (const u of updates) {
+    const arr = byStatus.get(u.status) ?? [];
+    arr.push(u.id);
+    byStatus.set(u.status, arr);
+  }
+  for (const [status, ids] of byStatus.entries()) {
+    const { error: upErr } = await supabase
+      .from('ct_contract_tracks')
+      .update({ track_status: status, last_tracked_at: nowIso })
+      .in('id', ids);
+    if (upErr) {
+      stats.errors.push(`expire sweep update ${status}: ${upErr.message}`);
+      continue;
+    }
+    stats.expired_flips += ids.length;
+  }
+}
+
 async function fetchEligibleTracks(
   supabase: SupabaseClient,
   watchlist: Set<string>,
@@ -535,6 +592,11 @@ serve(async (req) => {
 
     const cfg = await loadPollerConfig(supabase);
     const watchlist = await loadWatchlist(supabase);
+
+    // Sweep past-due WORKING/STALE tracks to terminal EXPIRED_*. Must run
+    // before fetchEligibleTracks because that query filters tracking_until>now,
+    // so past-due tracks would never be polled or graduated otherwise.
+    await expirePastDueTracks(supabase, cfg, watchlist, stats);
 
     // Visibility: how many otherwise-eligible WORKING/STALE tracks we skip
     // because they're off-watchlist. Cheap HEAD count, no row payload.
