@@ -38,6 +38,7 @@ import {
   AreaChart,
   CartesianGrid,
   Line,
+  LineChart,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -361,7 +362,7 @@ function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
   return (
     <div style={{ width: '100%', height }}>
       <ResponsiveContainer>
-        <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+        <LineChart data={data} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
           <CartesianGrid stroke="#ffffff08" strokeDasharray="2 4" />
           <XAxis
             dataKey="time"
@@ -399,7 +400,6 @@ function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
             dataKey="cum_all_call"
             stroke="#34d399"
             strokeWidth={2}
-            fill="none"
             isAnimationActive={false}
             dot={false}
             activeDot={{ r: 3 }}
@@ -410,7 +410,6 @@ function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
             stroke="#22c55e"
             strokeWidth={1.8}
             strokeDasharray="4 3"
-            fill="none"
             isAnimationActive={false}
             dot={false}
             activeDot={{ r: 3 }}
@@ -420,7 +419,6 @@ function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
             dataKey="cum_all_put"
             stroke="#fda4af"
             strokeWidth={2}
-            fill="none"
             isAnimationActive={false}
             dot={false}
             activeDot={{ r: 3 }}
@@ -431,12 +429,11 @@ function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
             stroke="#f43f5e"
             strokeWidth={1.8}
             strokeDasharray="4 3"
-            fill="none"
             isAnimationActive={false}
             dot={false}
             activeDot={{ r: 3 }}
           />
-        </AreaChart>
+        </LineChart>
       </ResponsiveContainer>
     </div>
   );
