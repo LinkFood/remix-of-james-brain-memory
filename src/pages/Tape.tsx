@@ -32,9 +32,11 @@ import { toast } from 'sonner';
 import { ContractSheet } from '@/components/command/ContractSheet';
 import { TickerSheet } from '@/components/command/TickerSheet';
 import { ContractPnLChip } from '@/components/co-trader/ContractPnLChip';
+import { ContractGradeChips } from '@/components/co-trader/ContractGradeChips';
 import { ContractDrillSheet } from '@/components/co-trader/ContractDrillSheet';
 import {
   useContractTracksByAlerts,
+  useContractGradesByAlerts,
   useContractTracksRealtime,
 } from '@/hooks/useContractTracks';
 import { MacroBanner } from '@/components/command/MacroBanner';
@@ -762,6 +764,7 @@ export default function Tape() {
     [rows],
   );
   const { data: contractTracks } = useContractTracksByAlerts(visibleAlertIds);
+  const { data: contractGradesByAlert } = useContractGradesByAlerts(visibleAlertIds);
 
   // Header count line — honest about what the filter is showing.
   const headerCountText = useMemo(() => {
@@ -1121,19 +1124,20 @@ export default function Tape() {
                     <Star className="w-3.5 h-3.5 inline" />
                   </TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">P&amp;L</TableHead>
+                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-center w-[200px]">Horizons</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Stack</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loadingScored && !scored ? (
                   <TableRow>
-                    <TableCell colSpan={19} className="text-center text-xs text-muted-foreground py-8">
+                    <TableCell colSpan={20} className="text-center text-xs text-muted-foreground py-8">
                       Loading tape…
                     </TableCell>
                   </TableRow>
                 ) : rows.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={19} className="text-center text-xs text-muted-foreground py-8">
+                    <TableCell colSpan={20} className="text-center text-xs text-muted-foreground py-8">
                       No flow matches current filters. Loosen min premium, drop min score, or enable "Show unscored".
                     </TableCell>
                   </TableRow>
@@ -1146,7 +1150,7 @@ export default function Tape() {
                           className="hover:bg-transparent border-b border-border/50"
                         >
                           <TableCell
-                            colSpan={19}
+                            colSpan={20}
                             className="py-1.5 px-2 bg-muted/40 text-[10px] uppercase tracking-widest text-muted-foreground"
                           >
                             <div className="flex items-center gap-3">
@@ -1340,6 +1344,11 @@ export default function Tape() {
                         <ContractPnLChip
                           track={r.alert_id ? contractTracks?.get(r.alert_id) ?? null : null}
                           onClick={r.alert_id ? () => setDrillAlertId(r.alert_id) : undefined}
+                        />
+                      </TableCell>
+                      <TableCell className="py-2 px-2 text-center whitespace-nowrap">
+                        <ContractGradeChips
+                          grades={r.alert_id ? contractGradesByAlert?.get(r.alert_id) : undefined}
                         />
                       </TableCell>
                       <TableCell className="py-2 px-2 text-right whitespace-nowrap">

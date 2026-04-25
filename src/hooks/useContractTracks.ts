@@ -142,6 +142,84 @@ export function useContractTracksByAlerts(
   });
 }
 
+// ---------- contract_v1 horizon grades (chips on /tape) ----------
+
+export type ContractGradeHorizon = '30m' | '2h' | 'eod' | 'plus1d';
+export type ContractGradeOutcome = 'WIN' | 'LOSS' | 'FLAT';
+
+export interface ContractGradeRow {
+  alert_id: string;
+  horizon: ContractGradeHorizon;
+  grade: ContractGradeOutcome;
+  actual_move_pct: number | null;        // signed decimal — +0.50 = +50% on contract
+  contract_at_print: number | null;
+  contract_at_horizon: number | null;
+  threshold_used: number | null;
+  graded_at: string;
+}
+
+export const CONTRACT_GRADE_HORIZONS: ContractGradeHorizon[] = ['30m', '2h', 'eod', 'plus1d'];
+
+const GRADE_HORIZON_ORDER: Record<ContractGradeHorizon, number> = {
+  '30m': 0,
+  '2h': 1,
+  eod: 2,
+  plus1d: 3,
+};
+
+const GRADE_SELECT_COLS =
+  'alert_id, horizon, grade, actual_move_pct, contract_at_print, contract_at_horizon, threshold_used, graded_at';
+
+/**
+ * Batch-fetch contract_v1 horizon grades for a list of alert_ids.
+ * Returns Map<alert_id, ContractGradeRow[]> — list per alert because each
+ * alert can have up to 4 horizons (30m / 2h / eod / +1d).
+ *
+ * Empty Map on error / no-data so callers (the chip component) render the
+ * placeholder cluster without throwing. Sorted ascending by horizon order.
+ */
+export function useContractGradesByAlerts(
+  alertIds: string[],
+): UseQueryResult<Map<string, ContractGradeRow[]>> {
+  const sorted = [...new Set(alertIds.filter(Boolean))].sort();
+  const cacheKey = sorted.join(',');
+
+  return useQuery<Map<string, ContractGradeRow[]>>({
+    queryKey: ['ct_print_grades', 'contract_v1', 'batch', cacheKey],
+    enabled: sorted.length > 0,
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+    retry: false,
+    queryFn: async () => {
+      const out = new Map<string, ContractGradeRow[]>();
+      if (sorted.length === 0) return out;
+      const CHUNK = 500;
+      for (let i = 0; i < sorted.length; i += CHUNK) {
+        const chunk = sorted.slice(i, i + CHUNK);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data, error } = await (supabase.from as any)('ct_print_grades')
+          .select(GRADE_SELECT_COLS)
+          .in('alert_id', chunk)
+          .eq('grading_method', 'contract_v1');
+        if (error) {
+          console.warn('[useContractGradesByAlerts]', error.message);
+          return out;
+        }
+        for (const row of (data ?? []) as ContractGradeRow[]) {
+          const list = out.get(row.alert_id) ?? [];
+          list.push(row);
+          out.set(row.alert_id, list);
+        }
+      }
+      // Sort each list by horizon order so chips render 30m → 2h → eod → +1d.
+      for (const list of out.values()) {
+        list.sort((a, b) => GRADE_HORIZON_ORDER[a.horizon] - GRADE_HORIZON_ORDER[b.horizon]);
+      }
+      return out;
+    },
+  });
+}
+
 // ---------- top-peaks query (Edge preview) ----------
 
 export function useTopContractPeaks(
@@ -182,6 +260,7 @@ export function useTopContractPeaks(
 export function useContractTracksRealtime(): void {
   const qc = useQueryClient();
   const channelRef = useRef<RealtimeChannel | null>(null);
+  const gradesChannelRef = useRef<RealtimeChannel | null>(null);
 
   useEffect(() => {
     const channel = supabase
@@ -200,10 +279,35 @@ export function useContractTracksRealtime(): void {
       .subscribe();
     channelRef.current = channel;
 
+    // Second channel: refresh horizon-grade chips when a new contract_v1 grade
+    // lands. Filter at the postgres_changes layer so we don't wake on the much
+    // higher-volume underlying_v1 INSERTs.
+    const gradesChannel = supabase
+      .channel('ct_print_grades-contract_v1-realtime')
+      .on(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        'postgres_changes' as any,
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'ct_print_grades',
+          filter: 'grading_method=eq.contract_v1',
+        },
+        () => {
+          qc.invalidateQueries({ queryKey: ['ct_print_grades', 'contract_v1'] });
+        },
+      )
+      .subscribe();
+    gradesChannelRef.current = gradesChannel;
+
     return () => {
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
         channelRef.current = null;
+      }
+      if (gradesChannelRef.current) {
+        supabase.removeChannel(gradesChannelRef.current);
+        gradesChannelRef.current = null;
       }
     };
   }, [qc]);
