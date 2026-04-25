@@ -133,13 +133,20 @@ function inferPredictedSource(row: FlowAlertRow): string | null {
   let sourceTag: 'ask' | 'bid' | null = null;
   if (row.is_ask === true) sourceTag = 'ask';
   else if (row.is_bid === true) sourceTag = 'bid';
-  else if (askPremValid && bidPremValid) {
-    if (askPrem > bidPrem) sourceTag = 'ask';
-    else if (bidPrem > askPrem) sourceTag = 'bid';
+  else {
+    // Mirror ct-print-grader fix: RepeatedHits* IS accumulation by definition;
+    // premium-side bear-tagged the 9:33 NVDA 0DTE +475% print on 2026-04-24.
+    const alertRule = typeof raw['alert_rule'] === 'string' ? raw['alert_rule'] : '';
+    if (alertRule.startsWith('RepeatedHits')) {
+      sourceTag = side === 'call' ? 'ask' : 'bid';
+    } else if (askPremValid && bidPremValid) {
+      if (askPrem > bidPrem) sourceTag = 'ask';
+      else if (bidPrem > askPrem) sourceTag = 'bid';
+      else return null;
+    } else if (askPremValid && askPrem > 0 && (!bidPremValid || bidPrem === 0)) sourceTag = 'ask';
+    else if (bidPremValid && bidPrem > 0 && (!askPremValid || askPrem === 0)) sourceTag = 'bid';
     else return null;
-  } else if (askPremValid && askPrem > 0 && (!bidPremValid || bidPrem === 0)) sourceTag = 'ask';
-  else if (bidPremValid && bidPrem > 0 && (!askPremValid || askPrem === 0)) sourceTag = 'bid';
-  else return null;
+  }
 
   return `aggressive_${sourceTag}_${side}`;
 }

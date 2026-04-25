@@ -163,24 +163,36 @@ function inferDirection(row: FlowAlertRow): DirectionInference | null {
   } else if (row.is_bid === true) {
     aggressiveBid = true;
     sourceTag = 'bid';
-  } else if (askPremValid && bidPremValid) {
-    if (askPrem > bidPrem) {
+  } else {
+    // No explicit aggressor flag. UW's RepeatedHits* rules ARE accumulation
+    // by definition — repeated fills into the same contract. Cheap OTM/0DTE
+    // buyers routinely lift at the bid (MM willing to sell), which inverts
+    // total_bid_side_prem and bear-tagged a +475% NVDA 0DTE call on 2026-04-24.
+    // Trust the rule's directional intent: call=ask-aggressive, put=bid-aggressive.
+    const alertRule = typeof raw['alert_rule'] === 'string' ? raw['alert_rule'] : '';
+    const isRepeatedHits = alertRule.startsWith('RepeatedHits');
+    if (isRepeatedHits) {
+      if (side === 'call') { aggressiveAsk = true; sourceTag = 'ask'; }
+      else { aggressiveBid = true; sourceTag = 'bid'; }
+    } else if (askPremValid && bidPremValid) {
+      if (askPrem > bidPrem) {
+        aggressiveAsk = true;
+        sourceTag = 'ask';
+      } else if (bidPrem > askPrem) {
+        aggressiveBid = true;
+        sourceTag = 'bid';
+      } else {
+        return null; // tied, no edge
+      }
+    } else if (askPremValid && askPrem > 0 && (!bidPremValid || bidPrem === 0)) {
       aggressiveAsk = true;
       sourceTag = 'ask';
-    } else if (bidPrem > askPrem) {
+    } else if (bidPremValid && bidPrem > 0 && (!askPremValid || askPrem === 0)) {
       aggressiveBid = true;
       sourceTag = 'bid';
     } else {
-      return null; // tied, no edge
+      return null;
     }
-  } else if (askPremValid && askPrem > 0 && (!bidPremValid || bidPrem === 0)) {
-    aggressiveAsk = true;
-    sourceTag = 'ask';
-  } else if (bidPremValid && bidPrem > 0 && (!askPremValid || askPrem === 0)) {
-    aggressiveBid = true;
-    sourceTag = 'bid';
-  } else {
-    return null;
   }
 
   // Map side + ask/bid → direction.
