@@ -61,6 +61,43 @@ interface FlowAlertRow {
 }
 
 type Direction = 'bullish' | 'bearish' | 'neutral';
+// Non-null tier — shared AlarmTier includes null; we only call shouldSlack
+// after a tier was confirmed.
+type FiredTier = 'gold' | 'silver' | 'bronze';
+
+// Slack toggle — calibration default OFF; flip via ct_config.
+interface SlackToggle {
+  enabled: boolean;
+  minTier: FiredTier;
+}
+
+async function loadSlackToggle(supabase: SupabaseClient): Promise<SlackToggle> {
+  const { data } = await supabase
+    .from('ct_config')
+    .select('key, value')
+    .in('key', ['signature_alarm_slack_enabled', 'signature_alarm_slack_min_tier']);
+  let enabled = false;
+  let minTier: FiredTier = 'gold';
+  if (Array.isArray(data)) {
+    for (const row of data) {
+      if (row.key === 'signature_alarm_slack_enabled' && typeof row.value === 'boolean') {
+        enabled = row.value;
+      } else if (row.key === 'signature_alarm_slack_min_tier' && typeof row.value === 'string') {
+        const v = row.value.toLowerCase();
+        if (v === 'gold' || v === 'silver' || v === 'bronze') minTier = v;
+      }
+    }
+  }
+  return { enabled, minTier };
+}
+
+function shouldSlack(tier: FiredTier, slackEnabled: boolean, minTier: FiredTier): boolean {
+  if (!slackEnabled) return false;
+  if (tier === 'bronze') return minTier === 'bronze';
+  if (tier === 'silver') return minTier === 'bronze' || minTier === 'silver';
+  if (tier === 'gold') return true;
+  return false;
+}
 
 interface SignatureStat {
   signature_label: string;
@@ -81,6 +118,9 @@ interface Stats {
   alarms_fired_silver: number;
   alarms_fired_bronze: number;
   bronze_silent_writes: number;
+  slack_pushes_sent: number;
+  slack_enabled: boolean;
+  slack_min_tier: FiredTier;
   alarms_deduped: number;
   alarms_no_signature_match: number;
   alarms_below_threshold: number;
@@ -287,6 +327,12 @@ function buildSlackText(
 // Main sweep.
 // ---------------------------------------------------------------------------
 async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, replayMode: boolean): Promise<Stats> {
+  // Replay runs must never page — force off regardless of config.
+  const slackToggleRaw = await loadSlackToggle(supabase);
+  const slackToggle: SlackToggle = replayMode
+    ? { enabled: false, minTier: slackToggleRaw.minTier }
+    : slackToggleRaw;
+
   const stats: Stats = {
     ok: true,
     replay_mode: replayMode,
@@ -296,6 +342,9 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
     alarms_fired_silver: 0,
     alarms_fired_bronze: 0,
     bronze_silent_writes: 0,
+    slack_pushes_sent: 0,
+    slack_enabled: slackToggle.enabled,
+    slack_min_tier: slackToggle.minTier,
     alarms_deduped: 0,
     alarms_no_signature_match: 0,
     alarms_below_threshold: 0,
@@ -441,14 +490,17 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
         ? `0DTE — ${eligLabel}`
         : `${dteStr}DTE`;
 
-      // Per-tier Slack routing — bronze NEVER fires Slack.
-      if ((tier === 'gold' || tier === 'silver') && userId) {
+      // Per-tier Slack routing — bronze NEVER fires Slack via builder, AND
+      // global toggle gates the push so calibration runs stay silent.
+      if ((tier === 'gold' || tier === 'silver') && userId
+          && shouldSlack(tier, slackToggle.enabled, slackToggle.minTier)) {
         const text = buildSlackText(tier, {
           ticker, side, strike: a.strike, expiry: a.expiry, bucketStr,
           source, peakPctStr, nTracks: nForDisplay, premKstr, scoreStr,
           alertId: a.alert_id,
         });
         await ctSlackPushDirect(supabase, userId, text, 'signature_alarm');
+        stats.slack_pushes_sent += 1;
       }
 
       // Audit trail — write log row for ALL tiers (gold/silver/bronze).
