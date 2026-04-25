@@ -186,6 +186,92 @@ export async function uwBudgetOk(opts: { dailyThreshold?: number; minuteFloor?: 
   }
 }
 
+// ============================================================================
+// Tiered UW budget guard — graceful restriction instead of full halt.
+// ============================================================================
+
+export type UwBudgetTier = 'unrestricted' | 'tightened' | 'critical' | 'exhausted';
+
+export interface UwBudgetTierResult {
+  tier: UwBudgetTier;
+  daily_count: number | null;
+  daily_limit: number | null;
+  pct_used: number | null;
+  thresholds: { tighten: number; critical: number; exhausted: number };
+}
+
+const DEFAULT_TIER_THRESHOLDS = { tighten: 0.70, critical: 0.90, exhausted: 1.00 };
+
+async function loadTierThresholds(url: string, key: string): Promise<{ tighten: number; critical: number; exhausted: number }> {
+  try {
+    const res = await fetch(
+      `${url}/rest/v1/ct_config?select=key,value&key=in.(uw_budget_tighten_pct,uw_budget_critical_pct,uw_budget_exhausted_pct)`,
+      { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } },
+    );
+    if (!res.ok) return DEFAULT_TIER_THRESHOLDS;
+    const rows = await res.json() as Array<{ key: string; value: unknown }>;
+    const out = { ...DEFAULT_TIER_THRESHOLDS };
+    for (const row of rows) {
+      const v = row.value;
+      const n = typeof v === 'number' ? v : (typeof v === 'string' ? parseFloat(v) : NaN);
+      if (!Number.isFinite(n) || n <= 0 || n > 1) continue;
+      if (row.key === 'uw_budget_tighten_pct') out.tighten = n;
+      else if (row.key === 'uw_budget_critical_pct') out.critical = n;
+      else if (row.key === 'uw_budget_exhausted_pct') out.exhausted = n;
+    }
+    return out;
+  } catch {
+    return DEFAULT_TIER_THRESHOLDS;
+  }
+}
+
+/**
+ * Tiered budget guard. Used by the contract poller (and any other caller
+ * that wants graceful restriction instead of binary halt).
+ *
+ *   < tighten%   → 'unrestricted' (poll everything)
+ *   tighten-critical → 'tightened' (drop low-priority tracks)
+ *   critical-exhausted → 'critical' (only highest-conviction tracks)
+ *   ≥ exhausted% → 'exhausted' (skip everything)
+ *
+ * Fail-open: any error reading usage returns 'unrestricted'.
+ */
+export async function uwBudgetTier(): Promise<UwBudgetTierResult> {
+  const fallback: UwBudgetTierResult = {
+    tier: 'unrestricted',
+    daily_count: null,
+    daily_limit: null,
+    pct_used: null,
+    thresholds: DEFAULT_TIER_THRESHOLDS,
+  };
+  try {
+    const url = Deno.env.get('SUPABASE_URL');
+    const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!url || !key) return fallback;
+
+    const thresholds = await loadTierThresholds(url, key);
+    const res = await fetch(
+      `${url}/rest/v1/ct_uw_usage_latest?select=daily_count,daily_limit&limit=1`,
+      { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } },
+    );
+    if (!res.ok) return { ...fallback, thresholds };
+    const rows = await res.json() as Array<{ daily_count: number | null; daily_limit: number | null }>;
+    if (!Array.isArray(rows) || rows.length === 0) return { ...fallback, thresholds };
+    const { daily_count, daily_limit } = rows[0];
+    if (daily_count === null || daily_limit === null || daily_limit <= 0) {
+      return { ...fallback, thresholds, daily_count, daily_limit };
+    }
+    const pct = daily_count / daily_limit;
+    let tier: UwBudgetTier = 'unrestricted';
+    if (pct >= thresholds.exhausted) tier = 'exhausted';
+    else if (pct >= thresholds.critical) tier = 'critical';
+    else if (pct >= thresholds.tighten) tier = 'tightened';
+    return { tier, daily_count, daily_limit, pct_used: pct, thresholds };
+  } catch {
+    return fallback;
+  }
+}
+
 /**
  * GET with retry on 5xx only.
  */

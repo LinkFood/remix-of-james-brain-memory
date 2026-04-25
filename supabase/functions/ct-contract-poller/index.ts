@@ -45,7 +45,8 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getOptionContractLatestMid, uwBudgetOk, setUwCaller } from '../_shared/uwClient.ts';
+import { getOptionContractLatestMid, uwBudgetOk, uwBudgetTier, setUwCaller, type UwBudgetTier } from '../_shared/uwClient.ts';
+import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 
 // ---------------------------------------------------------------------------
 // Hard rails — caps that keep us under the 150s edge wall regardless of config.
@@ -117,8 +118,26 @@ interface Stats {
   spread_filtered: number;
   tracks_filtered_off_watchlist: number;
   budget_exhausted: boolean;
+  budget_tier: UwBudgetTier;
+  budget_pct_used: number | null;
   uw_calls: number;
   errors: string[];
+}
+
+// Filter applied at the SQL level when budget tier restricts polling.
+// `dteMax` caps dte_at_print; `staleMin` requires last_quoted_at older than
+// N minutes (or NULL). Both null → no restriction (unrestricted tier).
+interface TierFilter {
+  dteMax: number | null;
+  staleMin: number | null;
+}
+
+function tierFilterFor(tier: UwBudgetTier): TierFilter {
+  switch (tier) {
+    case 'critical':  return { dteMax: 7,  staleMin: 60 };
+    case 'tightened': return { dteMax: 30, staleMin: 30 };
+    default:          return { dteMax: null, staleMin: null };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -319,6 +338,7 @@ async function fetchEligibleTracks(
   watchlist: Set<string>,
   oldestFirst = false,
   printTimeGte: string | null = null,
+  tierFilter: TierFilter = { dteMax: null, staleMin: null },
 ): Promise<ContractTrack[]> {
   const nowIso = new Date().toISOString();
   // Primary order: nulls-first on last_quoted_at (unpolled get priority).
@@ -339,6 +359,15 @@ async function fetchEligibleTracks(
     .in('ticker', Array.from(watchlist))
     .gt('tracking_until', nowIso);
   if (printTimeGte) q = q.gte('print_time', printTimeGte);
+  // Tiered budget restriction — applied at SQL level so off-tier tracks
+  // never enter the symbol-dedup pool and never compete for cfg.maxPerRun slots.
+  if (tierFilter.dteMax !== null) {
+    q = q.lte('dte_at_print', tierFilter.dteMax);
+  }
+  if (tierFilter.staleMin !== null) {
+    const staleCutoff = new Date(Date.now() - tierFilter.staleMin * 60_000).toISOString();
+    q = q.or(`last_quoted_at.is.null,last_quoted_at.lt.${staleCutoff}`);
+  }
   q = q.order('last_quoted_at', { ascending: true, nullsFirst: true })
     .order('print_time', { ascending: oldestFirst });
   const { data, error } = await q.limit(MAX_TRACKS_PER_RUN_FETCH);
@@ -552,6 +581,45 @@ function applyMissToTrack(
 }
 
 // ---------------------------------------------------------------------------
+// Budget-tier Slack alarm — one fire per day per tier (critical / exhausted).
+// Tracked in ct_uw_alarm_state (single-row table, id=1).
+// ---------------------------------------------------------------------------
+async function maybeFireBudgetAlarm(
+  supabase: SupabaseClient,
+  tier: 'critical' | 'exhausted',
+  pctUsed: number | null,
+): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10); // UTC YYYY-MM-DD
+  const col = tier === 'critical' ? 'last_critical_alarm_date' : 'last_exhausted_alarm_date';
+
+  const { data: state } = await supabase
+    .from('ct_uw_alarm_state')
+    .select(col)
+    .eq('id', 1)
+    .maybeSingle();
+  const lastFired = (state as Record<string, string | null> | null)?.[col] ?? null;
+  if (lastFired === today) return;
+
+  const pctStr = pctUsed !== null ? `${(pctUsed * 100).toFixed(0)}%` : 'unknown';
+  const text = tier === 'critical'
+    ? `:warning: UW budget at ${pctStr} — ct-contract-poller restricting to short-DTE active contracts only.`
+    : `:octagonal_sign: UW budget exhausted (${pctStr}) — ct-contract-poller halted for today. Resumes at next UTC day rollover.`;
+
+  // Single-user pattern (mirror of ct-cron-health-check).
+  const { data: users } = await supabase.from('profiles').select('id').limit(1);
+  const userId = (users?.[0]?.id as string | undefined) ?? null;
+  if (userId) {
+    await ctSlackPushDirect(supabase, userId, text, `uw_budget_${tier}`);
+  }
+
+  // Stamp the date BEFORE the push would normally complete to avoid race on
+  // back-to-back invocations within the same minute.
+  await supabase
+    .from('ct_uw_alarm_state')
+    .upsert({ id: 1, [col]: today, updated_at: new Date().toISOString() }, { onConflict: 'id' });
+}
+
+// ---------------------------------------------------------------------------
 // Main entry
 // ---------------------------------------------------------------------------
 serve(async (req) => {
@@ -582,6 +650,8 @@ serve(async (req) => {
     spread_filtered: 0,
     tracks_filtered_off_watchlist: 0,
     budget_exhausted: false,
+    budget_tier: 'unrestricted',
+    budget_pct_used: null,
     uw_calls: 0,
     errors: [],
   };
@@ -606,6 +676,31 @@ serve(async (req) => {
     const cfg = await loadPollerConfig(supabase);
     const watchlist = await loadWatchlist(supabase);
 
+    // Cache the budget tier ONCE per run — the per-call uwBudgetOk() inside
+    // each job stays in place as a final safety net for cliff-edge exhaustion.
+    const tierResult = await uwBudgetTier();
+    stats.budget_tier = tierResult.tier;
+    stats.budget_pct_used = tierResult.pct_used;
+    const tierFilter = tierFilterFor(tierResult.tier);
+
+    // Fire one Slack alarm per day per tier when we cross into critical /
+    // exhausted. Alarm-state row is single-row by PK convention so we just
+    // upsert id=1.
+    if (tierResult.tier === 'critical' || tierResult.tier === 'exhausted') {
+      try { await maybeFireBudgetAlarm(supabase, tierResult.tier, tierResult.pct_used); }
+      catch (e) { stats.errors.push(`alarm: ${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}`); }
+    }
+
+    // Exhausted tier — short-circuit before doing any UW-spending work.
+    if (tierResult.tier === 'exhausted') {
+      stats.budget_exhausted = true;
+      stats.elapsed_ms = Date.now() - startedAt;
+      return new Response(JSON.stringify(stats), {
+        status: 200,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
     // Sweep past-due WORKING/STALE tracks to terminal EXPIRED_*. Must run
     // before fetchEligibleTracks because that query filters tracking_until>now,
     // so past-due tracks would never be polled or graduated otherwise.
@@ -622,7 +717,7 @@ serve(async (req) => {
       .gt('tracking_until', nowIsoForCount);
     stats.tracks_filtered_off_watchlist = offWatchlistCount ?? 0;
 
-    const allTracks = await fetchEligibleTracks(supabase, watchlist, oldestFirst, printTimeGte);
+    const allTracks = await fetchEligibleTracks(supabase, watchlist, oldestFirst, printTimeGte, tierFilter);
     const dueTracks = filterByCadence(allTracks, cfg, mode);
     stats.tracks_eligible = dueTracks.length;
 
