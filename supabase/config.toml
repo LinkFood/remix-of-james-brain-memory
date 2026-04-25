@@ -416,3 +416,6 @@ verify_jwt = false
 
 [functions.ct-edge-miner]
 verify_jwt = false
+
+[functions.ct-prediction-backfill]
+verify_jwt = false
