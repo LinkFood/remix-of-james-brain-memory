@@ -29,7 +29,6 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import {
   useFlowPulse,
-  useFlowPulseSeries,
   formatPulseDollars,
   formatPulseDollarsSigned,
   formatPulseInt,
@@ -85,7 +84,6 @@ export function FlowPulse({ onTickerClick }: Props) {
   }, [windowKey]);
 
   const { rows, marketTotal, isLoading, isError } = useFlowPulse(windowMin);
-  const { seriesByTicker } = useFlowPulseSeries();
 
   // Sort rows by total volume (calls + puts) desc so the biggest movers
   // sit at the top of the per-ticker table. Keep every row the RPC returns
@@ -222,7 +220,7 @@ export function FlowPulse({ onTickerClick }: Props) {
             <span className="text-muted-foreground/60">·</span>
 
             <span className="inline-flex items-center gap-1.5" title="Today's market net premium evolution">
-              <FlowPulseSparkline points={seriesByTicker.get('MARKET')} width={88} height={22} />
+              <FlowPulseSparkline ticker="MARKET" width={88} height={22} />
               <span className="text-[10px] text-muted-foreground">today</span>
             </span>
           </div>
@@ -329,7 +327,7 @@ export function FlowPulse({ onTickerClick }: Props) {
                       <td className={cn('py-1.5 px-2 text-right', netColor(r.premium_net))}>
                         <span className="inline-flex items-center gap-1.5 justify-end">
                           <FlowPulseSparkline
-                            points={seriesByTicker.get(r.ticker)}
+                            ticker={r.ticker}
                             width={56}
                             height={18}
                           />
