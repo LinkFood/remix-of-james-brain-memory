@@ -22,6 +22,7 @@ import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from './anth
 import { logClaudeUsage } from './claudeUsageLog.ts';
 import { isKillSwitchActive } from './killSwitch.ts';
 import { recordDecision } from './decisionJournal.ts';
+import { addTradingHours } from './marketClock.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -128,6 +129,129 @@ async function getConfigValue<T>(
     return data as T;
   } catch {
     return fallback;
+  }
+}
+
+/**
+ * Load the active prompt for a specialist via the new versioned
+ * ct_specialist_prompts table. Falls back to legacy ct_config row on miss
+ * so the table migration is non-breaking. See migration
+ * 20260424000064_specialist_prompts_table.sql.
+ */
+async function loadSpecialistPrompt(
+  supabase: SupabaseClient,
+  ticker: string,
+): Promise<string> {
+  // Primary: versioned prompts table.
+  try {
+    const { data, error } = await supabase.rpc('ct_specialist_prompt_active', {
+      p_ticker: ticker,
+    });
+    if (!error && typeof data === 'string' && data.trim().length > 0) {
+      return data;
+    }
+  } catch (e) {
+    console.warn(`[specialistRunner] ${ticker} active-prompt RPC threw:`, String(e));
+  }
+
+  // Fallback: legacy ct_config row (one-cycle backwards compat).
+  try {
+    const legacy = await getConfigValue<string>(
+      supabase,
+      `specialist.${ticker}.prompt`,
+      '',
+    );
+    if (legacy && legacy.trim().length > 0) {
+      console.warn(`[specialistRunner] ${ticker} using legacy ct_config prompt — migrate to ct_specialist_prompts`);
+      return legacy;
+    }
+  } catch (e) {
+    console.warn(`[specialistRunner] ${ticker} legacy prompt fetch threw:`, String(e));
+  }
+
+  console.warn(`[specialistRunner] ${ticker} no prompt found — using generic fallback`);
+  return GENERIC_PROMPT_FALLBACK;
+}
+
+/**
+ * Build the bias-audit context block: the specialist's last 5 flags with
+ * direction + outcome counts. Injected so the prompt's "BIAS AUDIT" section
+ * has something concrete to reason against. Returns a formatted string;
+ * empty means no prior flags.
+ */
+async function loadLast5FlagsContext(
+  supabase: SupabaseClient,
+  ticker: string,
+): Promise<string> {
+  try {
+    const { data: flags, error: flagsErr } = await supabase
+      .from('ct_flags')
+      .select('id, direction, score, thesis, created_at')
+      .eq('specialist_ticker', ticker)
+      .order('created_at', { ascending: false })
+      .limit(5);
+    if (flagsErr) {
+      console.warn(`[specialistRunner] ${ticker} last-5 flags load failed:`, flagsErr.message);
+      return `[YOUR LAST 5 FLAGS — none yet OR load failed]`;
+    }
+    const flagRows = (flags ?? []) as Array<Record<string, unknown>>;
+    if (flagRows.length === 0) {
+      return `[YOUR LAST 5 FLAGS — none yet for ${ticker}; no bias-audit baseline]`;
+    }
+
+    const flagIds = flagRows.map(f => f.id as string).filter(Boolean);
+    const { data: grades } = await supabase
+      .from('ct_flag_grades')
+      .select('flag_id, outcome')
+      .in('flag_id', flagIds);
+    const gradeByFlagId = new Map<string, string>();
+    for (const g of (grades ?? [])) {
+      gradeByFlagId.set(g.flag_id as string, g.outcome as string);
+    }
+
+    let bullCount = 0, bearCount = 0, neutCount = 0;
+    let bullW = 0, bullL = 0, bullPending = 0;
+    let bearW = 0, bearL = 0, bearPending = 0;
+
+    const lines: string[] = [];
+    for (const f of flagRows) {
+      const dir = String(f.direction ?? '');
+      const fid = f.id as string;
+      const outcome = gradeByFlagId.get(fid) ?? 'pending';
+      const dt = String(f.created_at ?? '').slice(0, 16).replace('T', ' ');
+
+      if (dir === 'bullish') {
+        bullCount++;
+        if (outcome === 'win' || outcome === 'partial') bullW++;
+        else if (outcome === 'loss' || outcome === 'invalidated_early') bullL++;
+        else bullPending++;
+      } else if (dir === 'bearish') {
+        bearCount++;
+        if (outcome === 'win' || outcome === 'partial') bearW++;
+        else if (outcome === 'loss' || outcome === 'invalidated_early') bearL++;
+        else bearPending++;
+      } else {
+        neutCount++;
+      }
+
+      lines.push(`  ${dt} UTC · ${dir} · score ${f.score ?? '?'} · ${outcome}`);
+    }
+
+    const summary =
+      `${bullCount} bullish (${bullW}W/${bullL}L/${bullPending}pending) · ` +
+      `${bearCount} bearish (${bearW}W/${bearL}L/${bearPending}pending)` +
+      (neutCount > 0 ? ` · ${neutCount} neutral` : '');
+
+    return [
+      `[YOUR LAST 5 FLAGS — bias-audit baseline]`,
+      `Direction split: ${summary}`,
+      `Most recent first:`,
+      ...lines,
+      `(If your last 5 are all one direction with no wins, ask: am I seeing flow that justifies this OR defaulting? Articulate the difference or pass.)`,
+    ].join('\n');
+  } catch (e) {
+    console.warn(`[specialistRunner] ${ticker} last-5 context build threw:`, String(e));
+    return `[YOUR LAST 5 FLAGS — load error, bias-audit baseline unavailable]`;
   }
 }
 
@@ -727,12 +851,9 @@ export async function runSpecialistWakeup(
     };
   }
 
-  // 2-4. Load per-ticker config.
-  const prompt = await getConfigValue<string>(
-    supabase,
-    `specialist.${ticker}.prompt`,
-    GENERIC_PROMPT_FALLBACK,
-  );
+  // 2-4. Load per-ticker config. Prompt comes from versioned table (with
+  // ct_config legacy fallback inside the loader).
+  const prompt = await loadSpecialistPrompt(supabase, ticker);
   const wakeupThreshold = Number(await getConfigValue<number>(
     supabase,
     `specialist.${ticker}.wakeup_threshold`,
@@ -784,7 +905,7 @@ export async function runSpecialistWakeup(
   }
 
   // 8-12. Context for Claude.
-  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse, tapeReads, peerFlags, leanScore] = await Promise.all([
+  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse, tapeReads, peerFlags, leanScore, last5FlagsBlock] = await Promise.all([
     loadTickerSnapshot(supabase, ticker),
     loadNextEarnings(supabase, ticker),
     loadRecentOiBuilds(supabase, ticker),
@@ -796,6 +917,7 @@ export async function runSpecialistWakeup(
     loadTapeReaderReads(supabase),
     loadPeerFlags(supabase, ticker),
     loadTickerLean(supabase, ticker),
+    loadLast5FlagsContext(supabase, ticker),
   ]);
 
   const overnightBlock = formatOvernightPositioningBlock(ticker, overnight);
@@ -829,6 +951,8 @@ ${flowPulseBlock}
 ${overnightBlock}
 
 ${peerFlagsBlock}
+
+${last5FlagsBlock}
 
 [RECENT NEWS — last 6h affecting ${ticker} or macro-wide, Tavily + UW]
 ${JSON.stringify(news, null, 2)}
@@ -995,6 +1119,14 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
       strike = Number(occMatch[4]) / 1000;
     }
 
+    // horizon_ts is computed via the trading clock (skips weekends + overnight).
+    // The DB trigger _ct_flags_compute_horizon_ts only fills horizon_ts when
+    // NULL, so passing it explicitly here wins. Pre-clock code let calendar
+    // hours count, producing flag horizons that landed Saturday with frozen
+    // Friday-close spot — see migration 20260424000060 for the primitive
+    // and 20260424000062 for the trigger backfill.
+    const horizonTs = addTradingHours(new Date(), decision.horizon_hours).toISOString();
+
     const row = {
       specialist_ticker: ticker,
       instrument: ticker,
@@ -1010,6 +1142,7 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
       invalidation: decision.invalidation,
       invalidation_price: decision.invalidation_price ?? null,
       horizon_hours: decision.horizon_hours,
+      horizon_ts: horizonTs,
       entry_price: entryPrice,
       target_price: decision.target_price,
       status: 'active',
