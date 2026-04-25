@@ -17,6 +17,11 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import {
+  loadDteEligibility,
+  ticker0DteEligibleOn,
+  type DteEligibilityMap,
+} from '../_shared/dteEligibility.ts';
 
 // ---------------------------------------------------------------------------
 // Tunables — page size mirrors PostgREST 1000-row cap. SCAN cap bounds total
@@ -72,6 +77,7 @@ interface Stats {
   alarms_no_direction: number;
   alarms_off_watchlist: number;
   alarms_no_symbol: number;
+  alarms_skipped_0dte_ineligible: number;
   watermark_before: string | null;
   watermark_after: string | null;
   thresholds: AlarmThresholds;
@@ -270,6 +276,7 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
     alarms_no_direction: 0,
     alarms_off_watchlist: 0,
     alarms_no_symbol: 0,
+    alarms_skipped_0dte_ineligible: 0,
     watermark_before: null,
     watermark_after: null,
     thresholds,
@@ -281,6 +288,7 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
 
   const watchlist = await loadWatchlist(supabase);
   const sigStats = await loadSignatureStats(supabase, thresholds);
+  const eligibility: DteEligibilityMap = await loadDteEligibility(supabase);
 
   // Resolve userId for Slack push (single-user pattern, matches ct-eod-summary).
   const { data: users } = await supabase.from('profiles').select('id').limit(1);
@@ -345,6 +353,14 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
       const bucket = dteBucket(dte);
       const label = buildSignatureLabel(ticker, side, bucket, source);
 
+      // 0DTE eligibility filter — kills false "NVDA 0DTE alarm" on a
+      // Tuesday, when NVDA's earliest expiry is the upcoming Friday.
+      // SPY/QQQ/IWM always pass; NVDA only on Friday; the rest never.
+      if (bucket === '0dte' && !ticker0DteEligibleOn(ticker, eligibility, printTime)) {
+        stats.alarms_skipped_0dte_ineligible += 1;
+        continue;
+      }
+
       const stat = sigStats.get(label);
       if (!stat) {
         stats.alarms_no_signature_match += 1;
@@ -391,9 +407,16 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
       const dteStr = dte == null ? '?' : String(dte);
       const peakPctStr = `${Math.round(medianPeak * 100)}%`;
       const scoreStr = score != null ? `Score: ${score.toFixed(0)}` : 'Score: —';
+      // Eligibility label disambiguates 0DTE bucket in the Slack message —
+      // "NVDA 0DTE (Friday 0DTE only)" reads correctly on a Friday and
+      // simply won't fire any other day (skipped above).
+      const eligLabel = eligibility[ticker]?.label;
+      const bucketStr = bucket === '0dte' && eligLabel
+        ? `0DTE — ${eligLabel}`
+        : `${dteStr}DTE`;
 
       const text =
-        `:dart: *Signature match:* ${ticker} ${side} $${a.strike} ${a.expiry} (${dteStr}DTE)\n` +
+        `:dart: *Signature match:* ${ticker} ${side} $${a.strike} ${a.expiry} (${bucketStr})\n` +
         `Class: \`${source}\` → historical median peak +${peakPctStr} on n=${stat.n_tracks}\n` +
         `Premium: ${premKstr} · ${scoreStr}\n` +
         `Alert: \`${a.alert_id}\``;
