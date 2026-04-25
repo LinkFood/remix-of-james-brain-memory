@@ -322,12 +322,16 @@ export function useContractTracksRealtime(): void {
  */
 export function fmtPctFromFraction(
   v: number | null | undefined,
-  digits = 0,
+  digits?: number,
 ): string {
   if (v == null || !Number.isFinite(v)) return '—';
   const pct = v * 100;
   const sign = pct >= 0 ? '+' : '−';
-  return `${sign}${Math.abs(pct).toFixed(digits)}%`;
+  const abs = Math.abs(pct);
+  // Auto-precision: sub-1% needs decimals or it renders "+0%" on every tick;
+  // single-digit % gets 1 decimal; bigger numbers drop decimals for compactness.
+  const d = digits ?? (abs < 1 ? 2 : abs < 10 ? 1 : 0);
+  return `${sign}${abs.toFixed(d)}%`;
 }
 
 /**
