@@ -878,6 +878,7 @@ async function createMissingTracks(
   trackingCfg: TrackingConfig,
   watchlist: Set<string>,
   stats: Pass2Stats,
+  overrides: PassOverrides = {},
 ): Promise<void> {
   // Pull a batch of recent alerts. We DO NOT require the snapshot cutoff
   // here — even brand-new prints get tracked from the start. Scan widely,
@@ -886,18 +887,28 @@ async function createMissingTracks(
   // Watchlist scoping: no UW cost on the underlying axis (uses ct_price_bars,
   // fed by a watchlist-filtered ingester), but off-watchlist tickers polluted
   // the dashboard slices. Mirror the contract-side filter from commit 37b52cf.
-  const { data: alerts, error } = await supabase
-    .from('ct_flow_alerts')
-    .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, executed_at, ingested_at, raw')
-    .in('ticker', Array.from(watchlist))
-    .order('ingested_at', { ascending: false })
-    .limit(PASS2_NEW_SCAN_LIMIT);
-
-  if (error) {
-    stats.errors.push(`p2 create-fetch: ${error.message}`);
-    return;
+  // PostgREST caps at 1000 rows per response — paginate via .range() to scan
+  // past the newest 1000 (see contract-side mirror with same fix).
+  const targetScan = overrides.scanLimit ?? PASS2_NEW_SCAN_LIMIT;
+  const pageSize = 1000;
+  const alerts: FlowAlertRow[] = [];
+  for (let offset = 0; offset < targetScan; offset += pageSize) {
+    const end = Math.min(offset + pageSize - 1, targetScan - 1);
+    const { data: page, error } = await supabase
+      .from('ct_flow_alerts')
+      .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, executed_at, ingested_at, raw')
+      .in('ticker', Array.from(watchlist))
+      .order('ingested_at', { ascending: false })
+      .range(offset, end);
+    if (error) {
+      stats.errors.push(`p2 create-fetch page ${offset}: ${error.message}`);
+      break;
+    }
+    if (!page || page.length === 0) break;
+    alerts.push(...(page as FlowAlertRow[]));
+    if (page.length < pageSize) break;
   }
-  if (!alerts || alerts.length === 0) return;
+  if (alerts.length === 0) return;
 
   const alertIds = alerts.map((a) => a.alert_id).filter((x): x is string => !!x);
   const existing = await fetchExistingTrackIds(supabase, alertIds);
@@ -905,7 +916,7 @@ async function createMissingTracks(
   // Filter to alerts that don't already have a track and cap to work limit.
   const workable = (alerts as FlowAlertRow[])
     .filter((a) => !!a.alert_id && !existing.has(a.alert_id))
-    .slice(0, PASS2_NEW_WORK_LIMIT);
+    .slice(0, overrides.workLimit ?? PASS2_NEW_WORK_LIMIT);
 
   const toCreate: Record<string, unknown>[] = [];
   const maxMs = trackingCfg.maxDays * 24 * 3600_000;
@@ -1019,22 +1030,36 @@ async function createMissingContractTracks(
   trackingCfg: TrackingConfig,
   watchlist: Set<string>,
   stats: Pass2Stats,
+  overrides: PassOverrides = {},
 ): Promise<void> {
   // Server-side watchlist filter — every contract track this function creates
   // becomes a UW-poll target in Phase B. Off-watchlist alerts never enter the
   // pipeline (UW budget discipline, ~4k calls/day saved).
-  const { data: alerts, error } = await supabase
-    .from('ct_flow_alerts')
-    .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, executed_at, ingested_at, option_symbol, price, raw')
-    .in('ticker', Array.from(watchlist))
-    .order('ingested_at', { ascending: false })
-    .limit(PASS2_NEW_SCAN_LIMIT);
-
-  if (error) {
-    stats.errors.push(`p2 contract create-fetch: ${error.message}`);
-    return;
+  // PostgREST hard-caps at 1000 rows per response regardless of .limit().
+  // To scan past the newest 1000 we paginate via .range() until we either
+  // hit the requested scanLimit or run out of rows. Critical for backfill
+  // — without pagination the create-loop only ever sees the newest 1000
+  // alerts, leaving every print older than that permanently untracked.
+  const targetScan = overrides.scanLimit ?? PASS2_NEW_SCAN_LIMIT;
+  const pageSize = 1000;
+  const alerts: FlowAlertRow[] = [];
+  for (let offset = 0; offset < targetScan; offset += pageSize) {
+    const end = Math.min(offset + pageSize - 1, targetScan - 1);
+    const { data: page, error } = await supabase
+      .from('ct_flow_alerts')
+      .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, executed_at, ingested_at, option_symbol, price, raw')
+      .in('ticker', Array.from(watchlist))
+      .order('ingested_at', { ascending: false })
+      .range(offset, end);
+    if (error) {
+      stats.errors.push(`p2 contract create-fetch page ${offset}: ${error.message}`);
+      break;
+    }
+    if (!page || page.length === 0) break;
+    alerts.push(...(page as FlowAlertRow[]));
+    if (page.length < pageSize) break;
   }
-  if (!alerts || alerts.length === 0) return;
+  if (alerts.length === 0) return;
 
   const alertIds = alerts.map((a) => a.alert_id).filter((x): x is string => !!x);
   const existing = await fetchExistingContractTrackIds(supabase, alertIds);
@@ -1044,7 +1069,7 @@ async function createMissingContractTracks(
   // ct_contract_tracks.
   const workable = (alerts as FlowAlertRow[])
     .filter((a) => !!a.alert_id && !existing.has(a.alert_id))
-    .slice(0, PASS2_CONTRACT_NEW_WORK_LIMIT);
+    .slice(0, overrides.workLimit ?? PASS2_CONTRACT_NEW_WORK_LIMIT);
 
   const toCreate: Record<string, unknown>[] = [];
   const maxMs = trackingCfg.maxDays * 24 * 3600_000;
@@ -1317,10 +1342,13 @@ async function updateWorkingTracks(
   }
 }
 
+interface PassOverrides { scanLimit?: number; workLimit?: number }
+
 async function runTrackPass(
   supabase: SupabaseClient,
   dteThresholds: DteThresholds,
   trackingCfg: TrackingConfig,
+  overrides: PassOverrides = {},
 ): Promise<Pass2Stats> {
   const stats: Pass2Stats = {
     tracks_created: 0,
@@ -1371,8 +1399,8 @@ async function runTrackPass(
   // both are insert-only and operate on disjoint tables. Both axes are
   // now watchlist-filtered (commit 37b52cf for contract, this commit for
   // underlying — no UW cost on underlying side, but cleans dashboard slices).
-  await createMissingTracks(supabase, trackingCfg, watchlist, stats);
-  await createMissingContractTracks(supabase, trackingCfg, watchlist, stats);
+  await createMissingTracks(supabase, trackingCfg, watchlist, stats, overrides);
+  await createMissingContractTracks(supabase, trackingCfg, watchlist, stats, overrides);
   await updateWorkingTracks(supabase, dteThresholds, watchlist, stats);
   await expireDueTracks(supabase, stats);
 
@@ -1621,6 +1649,15 @@ serve(async (req) => {
 
   const startedAt = Date.now();
 
+  // Optional body overrides (used for one-shot backfill drains — bumps
+  // the create-loop scan/work caps so a single fire can chew through the
+  // gap between the recent window and the already-tracked tail).
+  const body = await req.json().catch(() => ({}));
+  const overrides: PassOverrides = {
+    scanLimit: typeof body?.scan_limit === 'number' ? body.scan_limit : undefined,
+    workLimit: typeof body?.work_limit === 'number' ? body.work_limit : undefined,
+  };
+
   // Load all thresholds up-front (one set of small reads).
   const [snapshotThresholds, dteThresholds, trackingCfg, contractLossThreshold] = await Promise.all([
     loadSnapshotThresholds(supabase),
@@ -1631,7 +1668,7 @@ serve(async (req) => {
 
   // Run all three passes. Errors in one don't kill the others.
   const pass1 = await runSnapshotPass(supabase, snapshotThresholds);
-  const pass2 = await runTrackPass(supabase, dteThresholds, trackingCfg);
+  const pass2 = await runTrackPass(supabase, dteThresholds, trackingCfg, overrides);
   const pass3 = await runContractGradePass(supabase, dteThresholds, contractLossThreshold, HORIZONS);
 
   const elapsedMs = Date.now() - startedAt;
