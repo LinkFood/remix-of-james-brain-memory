@@ -60,6 +60,7 @@ import {
   type SignatureMagnitudeRow,
   type ContractThresholdRow,
 } from '@/hooks/useEdge';
+import { useDteEligibility, type DteEligibilityMap } from '@/hooks/useDteEligibility';
 import {
   useTopContractPeaks,
   fmtPctMagnitude,
@@ -1004,8 +1005,28 @@ function dteBucketBadgeClass(b: string): string {
 
 type MagSortKey = 'expected_value_pct' | 'median_peak_pct' | 'p75_peak_pct' | 'p90_peak_pct' | 'n_tracks' | 'hit_rate';
 
+// Eligibility scope tag for 0dte signature rows. SPY/QQQ/IWM are daily;
+// NVDA is Friday-only; anything else with daily_0dte=false has no business
+// in 0dte (flagged "n/a" so it stands out as suspect data).
+function dte0DteScope(ticker: string, eligibility: DteEligibilityMap): { label: string; tone: 'daily' | 'fri' | 'na' } {
+  const cfg = eligibility[ticker?.toUpperCase()];
+  if (!cfg) return { label: 'n/a', tone: 'na' };
+  if (cfg.daily_0dte) return { label: 'daily', tone: 'daily' };
+  if (cfg.weekly_friday_0dte) return { label: 'Fri-only', tone: 'fri' };
+  return { label: 'n/a', tone: 'na' };
+}
+
+function dte0DteScopeClass(tone: 'daily' | 'fri' | 'na'): string {
+  switch (tone) {
+    case 'daily': return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
+    case 'fri':   return 'border-amber-500/30 bg-amber-500/10 text-amber-300';
+    case 'na':    return 'border-rose-500/40 bg-rose-500/10 text-rose-300';
+  }
+}
+
 function SignatureMagnitude() {
   const { data, isLoading } = useSignatureMagnitudeStats(7, 3);
+  const { data: eligibility } = useDteEligibility();
   const [sortKey, setSortKey] = useState<MagSortKey>('expected_value_pct');
 
   const rows: SignatureMagnitudeRow[] = useMemo(() => {
@@ -1067,10 +1088,27 @@ function SignatureMagnitude() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((r) => (
+            {rows.map((r) => {
+              const is0dte = r.dte_bucket === '0dte';
+              const scope = is0dte ? dte0DteScope(r.ticker, eligibility ?? {}) : null;
+              return (
               <TableRow key={r.signature_label} className="hover:bg-muted/20">
-                <TableCell className="py-1.5 text-[11px] font-mono font-semibold text-foreground truncate max-w-[280px]">
-                  {r.signature_label}
+                <TableCell className="py-1.5 text-[11px] font-mono font-semibold text-foreground truncate max-w-[320px]">
+                  <span className="inline-flex items-center gap-1.5">
+                    <span>{r.signature_label}</span>
+                    {scope && (
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'text-[9px] font-mono px-1 py-0 leading-none',
+                          dte0DteScopeClass(scope.tone),
+                        )}
+                        title={`0DTE scope for ${r.ticker}: ${scope.label}`}
+                      >
+                        {scope.label}
+                      </Badge>
+                    )}
+                  </span>
                 </TableCell>
                 <TableCell className="py-1.5">
                   <Badge
@@ -1117,7 +1155,7 @@ function SignatureMagnitude() {
                   {fmtFractionAsPct(r.expected_value_pct, 0)}
                 </TableCell>
               </TableRow>
-            ))}
+            );})}
           </TableBody>
         </Table>
       )}

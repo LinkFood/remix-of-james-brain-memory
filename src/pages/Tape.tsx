@@ -51,6 +51,7 @@ import {
   formatStackPremium,
   interpretStack,
 } from '@/hooks/useContractStacking';
+import { useTodaysEligibleTickers } from '@/hooks/useDteEligibility';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -378,6 +379,21 @@ interface MarkDialogState {
   note: string;
   direction_view: Direction | null;
   saving: boolean;
+}
+
+// Subtle inline pill: which tickers actually have 0DTE expiry today.
+// Hides itself if config hasn't loaded so it never flashes empty state.
+function DteEligibilityPill() {
+  const { tickers, map } = useTodaysEligibleTickers();
+  if (!tickers || tickers.length === 0 || Object.keys(map).length === 0) return null;
+  return (
+    <div className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded border border-rose-500/30 bg-rose-500/5 text-[10px] font-mono">
+      <span className="text-rose-300/80 uppercase tracking-wider">0DTE today:</span>
+      {tickers.map((t) => (
+        <span key={t} className="text-rose-200 font-semibold">{t}</span>
+      ))}
+    </div>
+  );
 }
 
 export default function Tape() {
@@ -867,6 +883,7 @@ export default function Tape() {
               )}
               {' '}· {headerCountText.suffix}
             </div>
+            <DteEligibilityPill />
             <Button
               size="sm"
               variant="outline"
