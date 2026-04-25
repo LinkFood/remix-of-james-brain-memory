@@ -1,28 +1,29 @@
 /**
  * FlowPulseChart — Butterfly.
  *
- * Two cumulative areas diverging from a $0 centerline since RTH open. Top
- * (emerald) climbs up; bottom (rose) climbs down. The shape preserves
- * information that any single "calls − puts" net would average away —
- * options markets carry a structural call-bias, so a single ribbon drifts
- * positive regardless of regime. Two halves keeps the slopes honest.
- *
  * Two modes (tabs):
- *   1. Calls vs Puts        — top = cum call premium, bottom = cum put premium
- *   2. Bullish vs Bearish   — top = bought calls + sold puts (aggressive bull)
- *                             bottom = bought puts + sold calls (aggressive bear)
  *
- * DTE filter (preserved): All / 0-7 / 30+ → maps to *_all / *_short / *_long.
+ *   1. Calls vs Puts (LIVE, mode 'cp')
+ *      Plots SIGNED net call premium (top) and SIGNED net put premium (bottom),
+ *      raw — no cumsum, no mirror. Reads ct_net_premium_ticks via the
+ *      ct_net_premium_series RPC + Supabase Realtime INSERT subscription, with
+ *      a 30s fallback poll. Lines cross naturally when the tape flips:
+ *        calls > 0 + puts < 0  → bullish (calls being bought, puts sold)
+ *        calls < 0 + puts > 0  → bearish (calls being sold, puts bought)
+ *      The DTE filter is a no-op in this mode (ticks are all-DTE aggregates).
  *
- * The headline above the chart reports the latest-bucket spread between the
- * two halves, e.g. "Calls leading $185M today" or "Tape balanced, $5M apart".
+ *   2. Bullish vs Bearish (CUMULATIVE, mode 'bb')
+ *      Two cumulative areas diverging from $0 since RTH open. Top (emerald) =
+ *      bought calls + sold puts. Bottom (rose, mirrored negative for layout) =
+ *      bought puts + sold calls. Reads ct_flow_pulse_chart with the legacy
+ *      bucketed RPC. DTE filter (All / 0-7 / 30+) applies.
  *
- * Cumulatives are computed client-side from per-bucket RPC values via useMemo.
+ * Headline above the chart:
+ *   - Mode 'cp' reports CURRENT bias from the last tick.
+ *   - Mode 'bb' reports the cumulative spread.
  *
- * Empty-state: when the requested time-window returns zero rows (e.g. picking
- * "30m" on a Friday evening with the market closed), the chart renders a
- * friendly empty message instead of blanking the screen. Window-selector bug
- * fix lives here, not in the parent.
+ * Empty-state: when the requested window returns zero rows, the chart renders
+ * a friendly empty message instead of blanking the screen.
  */
 
 import { Card } from '@/components/ui/card';
@@ -45,8 +46,10 @@ import {
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   useFlowPulseChart,
+  useNetPremiumSeries,
   formatPulseDollars,
   type FlowPulseChartPoint,
+  type NetPremiumSeriesPoint,
 } from '@/hooks/useFlowPulse';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
@@ -58,10 +61,11 @@ type DteKey = 'all' | 'short' | 'long';
 interface ButterflyPoint {
   time: string;
   bucket_time: string;
-  // Top series — always positive (or 0)
+  // For mode 'cp' (LIVE signed): top_cp = raw net_call_premium (can be ±),
+  // bottom_cp = raw net_put_premium (can be ±). NOT mirrored.
+  // For mode 'bb' (cumulative): top_bb >= 0 (cum bull), bottom_bb <= 0 (cum bear, mirrored).
   top_cp: number;
   top_bb: number;
-  // Bottom series — emitted as negative numbers so the area renders below 0
   bottom_cp: number;
   bottom_bb: number;
   // Absolute magnitudes (for tooltip + headline)
@@ -123,6 +127,58 @@ function buildButterfly(points: FlowPulseChartPoint[], dte: DteKey): ButterflyPo
   });
 }
 
+/**
+ * Live (non-cumulative) Calls vs Puts builder. Plots SIGNED net premium values
+ * directly — no cumsum, no mirroring. When `p_ticker` is null, the RPC may
+ * return one row per ticker per timestamp; we group-by tick_timestamp and sum
+ * to produce a single MARKET line. When a ticker is selected, rows are 1:1.
+ *
+ * Output:
+ *   top_cp    = net_call_premium (raw, can be ±)
+ *   bottom_cp = net_put_premium  (raw, can be ±)
+ *
+ * Lines cross naturally when the tape flips. *_bb fields are zeroed — this
+ * builder is mode-'cp' only and Butterfly ignores them when mode==='cp'.
+ */
+function buildLiveCp(points: NetPremiumSeriesPoint[]): ButterflyPoint[] {
+  if (points.length === 0) return [];
+
+  // Aggregate by timestamp. Single ticker → one row per ts (sum is a no-op).
+  // MARKET → many rows per ts → sum. Map preserves first-seen insertion order;
+  // we sort by time at the end to be safe regardless of RPC return order.
+  const byTime = new Map<string, { call: number; put: number }>();
+  for (const p of points) {
+    const ts = p.tick_timestamp;
+    const call = Number.isFinite(p.net_call_premium) ? p.net_call_premium : 0;
+    const put = Number.isFinite(p.net_put_premium) ? p.net_put_premium : 0;
+    const cur = byTime.get(ts);
+    if (cur) {
+      cur.call += call;
+      cur.put += put;
+    } else {
+      byTime.set(ts, { call, put });
+    }
+  }
+
+  const out: ButterflyPoint[] = [];
+  for (const [ts, v] of byTime) {
+    out.push({
+      time: fmtTime(ts),
+      bucket_time: ts,
+      top_cp: v.call,
+      bottom_cp: v.put,
+      top_bb: 0,
+      bottom_bb: 0,
+      top_cp_abs: Math.abs(v.call),
+      bottom_cp_abs: Math.abs(v.put),
+      top_bb_abs: 0,
+      bottom_bb_abs: 0,
+    });
+  }
+  out.sort((a, b) => Date.parse(a.bucket_time) - Date.parse(b.bucket_time));
+  return out;
+}
+
 interface ButterflyProps {
   data: ButterflyPoint[];
   mode: ModeKey;
@@ -137,21 +193,30 @@ function Butterfly({ data, mode, height = 280 }: ButterflyProps) {
   const fillTopId = `butterfly-top-${mode}`;
   const fillBottomId = `butterfly-bottom-${mode}`;
 
-  // Symmetric Y-domain so the centerline reads as the true midpoint. We pick
-  // the larger of the two halves' magnitudes so both areas have proportional
-  // breathing room — never asymmetric scaling, that hides the asymmetry which
-  // IS the signal.
+  // Symmetric Y-domain so the zero centerline reads as the true midpoint.
+  // For mode 'cp' (live signed): both lines can be positive OR negative, so
+  // we take the max magnitude across BOTH extremes of BOTH series — this lets
+  // crossovers stay visually centered and the zero line always means "flip."
+  // For mode 'bb' (cumulative mirrored): top is always ≥0, bottom is mirrored
+  // ≤0; their magnitudes via *_abs are sufficient.
   const domain = useMemo<[number, number]>(() => {
     if (data.length === 0) return [-1, 1];
     let max = 0;
     for (const d of data) {
-      const t = mode === 'cp' ? d.top_cp_abs : d.top_bb_abs;
-      const b = mode === 'cp' ? d.bottom_cp_abs : d.bottom_bb_abs;
-      if (t > max) max = t;
-      if (b > max) max = b;
+      if (mode === 'cp') {
+        const t = Math.abs(d.top_cp);
+        const b = Math.abs(d.bottom_cp);
+        if (t > max) max = t;
+        if (b > max) max = b;
+      } else {
+        const t = d.top_bb_abs;
+        const b = d.bottom_bb_abs;
+        if (t > max) max = t;
+        if (b > max) max = b;
+      }
     }
     if (max === 0) return [-1, 1];
-    const padded = max * 1.08;
+    const padded = max * 1.10;
     return [-padded, padded];
   }, [data, mode]);
 
@@ -196,7 +261,13 @@ function Butterfly({ data, mode, height = 280 }: ButterflyProps) {
             formatter={(value: number, name: string) => {
               const isTop = name === topKey;
               const label = isTop ? topLabel : bottomLabel;
-              return [formatPulseDollars(Math.abs(value)), label];
+              // Mode 'cp' lines are signed — preserve sign so negative reads
+              // as "selling." Mode 'bb' lines are magnitudes (bottom mirrored
+              // negative for layout); show absolute value so it reads naturally.
+              const display = mode === 'cp'
+                ? `${value < 0 ? '−' : '+'}${formatPulseDollars(Math.abs(value))}`
+                : formatPulseDollars(Math.abs(value));
+              return [display, label];
             }}
           />
           <Area
@@ -231,23 +302,38 @@ function buildHeadline(
 ): { text: string; tone: 'top' | 'bottom' | 'flat' } {
   if (data.length === 0) return { text: '', tone: 'flat' };
   const last = data[data.length - 1];
-  const top = mode === 'cp' ? last.top_cp_abs : last.top_bb_abs;
-  const bottom = mode === 'cp' ? last.bottom_cp_abs : last.bottom_bb_abs;
+
+  if (mode === 'cp') {
+    // Live signed mode. Read the CURRENT bias off last tick:
+    //   call > 0 && put < 0  → tape bullish (calls being bought, puts being sold)
+    //   call < 0 && put > 0  → tape bearish (calls being sold, puts being bought)
+    //   mixed                 → show net = call − put
+    const call = last.top_cp;
+    const put = last.bottom_cp;
+    if (call > 0 && put < 0) {
+      return { text: `Tape bullish · calls +${formatPulseDollars(Math.abs(call))} · puts ${formatPulseDollars(put)}`, tone: 'top' };
+    }
+    if (call < 0 && put > 0) {
+      return { text: `Tape bearish · calls ${formatPulseDollars(call)} · puts +${formatPulseDollars(Math.abs(put))}`, tone: 'bottom' };
+    }
+    const net = call - put;
+    if (Math.abs(net) < 1) return { text: 'Tape flat', tone: 'flat' };
+    if (net > 0) return { text: `Net bullish ${formatPulseDollars(net)}`, tone: 'top' };
+    return { text: `Net bearish ${formatPulseDollars(Math.abs(net))}`, tone: 'bottom' };
+  }
+
+  // Mode 'bb' — cumulative magnitudes (unchanged behavior).
+  const top = last.top_bb_abs;
+  const bottom = last.bottom_bb_abs;
   const spread = Math.abs(top - bottom);
   const total = top + bottom;
-  // "Balanced" if the two halves are within 5% of total (and total > 0).
   if (total > 0 && spread / total < 0.05) {
-    return {
-      text: `Tape balanced, ${formatPulseDollars(spread)} apart`,
-      tone: 'flat',
-    };
+    return { text: `Tape balanced, ${formatPulseDollars(spread)} apart`, tone: 'flat' };
   }
   if (top >= bottom) {
-    const lead = mode === 'cp' ? 'Calls leading' : 'Bulls leading';
-    return { text: `${lead} ${formatPulseDollars(spread)} today`, tone: 'top' };
+    return { text: `Bulls leading ${formatPulseDollars(spread)} today`, tone: 'top' };
   }
-  const lead = mode === 'cp' ? 'Puts leading' : 'Bears leading';
-  return { text: `${lead} ${formatPulseDollars(spread)} today`, tone: 'bottom' };
+  return { text: `Bears leading ${formatPulseDollars(spread)} today`, tone: 'bottom' };
 }
 
 function dteLabel(d: DteKey): string {
@@ -261,25 +347,39 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
   const [mode, setMode] = useState<ModeKey>('cp');
   const [dte, setDte] = useState<DteKey>('all');
 
-  const { points, isLoading, isError } = useFlowPulseChart(ticker, rangeToMin(range));
-  const data = useMemo(() => buildButterfly(points, dte), [points, dte]);
+  // Mode 'cp' (live signed) reads ct_net_premium_ticks via the new RPC + Realtime.
+  // Mode 'bb' (cumulative mirrored) reads ct_flow_alerts via the legacy RPC.
+  // Both hooks always run (rules of hooks); we just feed the right one to the
+  // builder based on mode.
+  const cpQuery = useNetPremiumSeries(ticker, rangeToMin(range));
+  const bbQuery = useFlowPulseChart(ticker, rangeToMin(range));
+
+  const data = useMemo(() => {
+    if (mode === 'cp') return buildLiveCp(cpQuery.points);
+    return buildButterfly(bbQuery.points, dte);
+  }, [mode, cpQuery.points, bbQuery.points, dte]);
+
   const headline = useMemo(() => buildHeadline(data, mode), [data, mode]);
 
-  // Detect whether the backend filled in directional fields. If every bucket
-  // has bullish_*/bearish_* === 0 AND there's any flow at all on the C/P side,
-  // we treat directional as unavailable (the parallel agent said this can
-  // happen if `side` doesn't exist on ct_flow_alerts yet).
+  const isLoading = mode === 'cp' ? cpQuery.isLoading : bbQuery.isLoading;
+  const isError = mode === 'cp' ? cpQuery.isError : bbQuery.isError;
+
+  // Mode 'bb' only — detect whether the backend filled in directional fields.
+  // (Live mode 'cp' doesn't have this concern; net premium ticks are signed by
+  // construction.)
   const hasDirectional = useMemo(() => {
-    if (points.length === 0) return true;   // empty state handles itself
+    if (mode !== 'bb') return true;
+    const points = bbQuery.points;
+    if (points.length === 0) return true;
     let cpFlow = 0;
     let dirFlow = 0;
     for (const p of points) {
       cpFlow += pickField(p, 'calls', 'all') + pickField(p, 'puts', 'all');
       dirFlow += pickField(p, 'bullish', 'all') + pickField(p, 'bearish', 'all');
     }
-    if (cpFlow === 0) return true;   // no flow at all — don't pre-disable mode
+    if (cpFlow === 0) return true;
     return dirFlow > 0;
-  }, [points]);
+  }, [mode, bbQuery.points]);
 
   const hasData = data.length > 0;
   const showDirectionalEmpty = mode === 'bb' && hasData && !hasDirectional;
@@ -410,7 +510,7 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
 
       <div className="mt-1 text-[9.5px] text-muted-foreground/70">
         {mode === 'cp'
-          ? 'Cumulative call premium climbs up; cumulative put premium climbs down. The asymmetry between the two halves is the signal — calls naturally outflow puts, so watch the ratio of slopes, not just the side that’s leading.'
+          ? 'Live net call premium (top) and net put premium (bottom), refreshed tick-by-tick. Lines cross when the tape flips — calls negative = call selling; puts positive = put buying.'
           : 'Aggressive bull bets (bought calls + sold puts) climb up; aggressive bear bets (bought puts + sold calls) climb down. Refreshes every 60s.'}
       </div>
     </Card>
@@ -448,7 +548,7 @@ export function FlowPulseChartPanel({ ticker, onTickerChange }: CollapsibleProps
         <LineChartIcon className="w-3.5 h-3.5" />
         <span className="font-semibold uppercase tracking-wider">Flow Butterfly</span>
         <span className="text-muted-foreground/60 normal-case">
-          ({ticker ?? 'MARKET'} · cumulative both sides)
+          ({ticker ?? 'MARKET'} · live signed net premium)
         </span>
         <ChevronDown
           className={cn(

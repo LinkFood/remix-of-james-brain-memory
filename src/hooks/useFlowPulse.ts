@@ -15,8 +15,8 @@
  * ing a 404 endpoint. Next 30s poll will pick it up cleanly once deployed.
  */
 
-import { useMemo } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 
 export interface FlowPulseRow {
@@ -246,6 +246,89 @@ export function useFlowPulseChart(ticker?: string, sinceMin?: number) {
       const { data, error } = await (supabase.rpc as any)('ct_flow_pulse_chart', params);
       if (error) throw error;
       return (Array.isArray(data) ? data : []) as FlowPulseChartPoint[];
+    },
+  });
+
+  return {
+    points: query.data ?? [],
+    isLoading: query.isLoading,
+    isError: query.isError,
+  };
+}
+
+/**
+ * useNetPremiumSeries — live signed net call/put premium ticks.
+ *
+ * Powers the live (non-cumulative) Flow Butterfly. Reads the ct_net_premium_series
+ * RPC which streams per-minute ticks from ct_net_premium_ticks. Values are SIGNED:
+ *   net_call_premium > 0 → call buying (bullish);  < 0 → call selling
+ *   net_put_premium  > 0 → put buying (bearish);   < 0 → put selling
+ *
+ * Plot raw — no cumsum, no mirror. Lines cross when the tape flips.
+ *
+ * Realtime: subscribes to INSERT on ct_net_premium_ticks and invalidates the
+ * React Query cache. Fallback poll every 30s in case Realtime drops an event.
+ * staleTime 10s so a focus-refetch after backgrounding is cheap.
+ *
+ * Pre-deploy behavior: if the RPC isn't live yet, query errors → isError true.
+ * `retry: false` to avoid hammering a missing endpoint; the 30s interval will
+ * pick it up cleanly once deployed.
+ */
+export interface NetPremiumSeriesPoint {
+  tick_timestamp: string;
+  ticker: string;
+  net_call_premium: number;
+  net_put_premium: number;
+}
+
+export function useNetPremiumSeries(ticker?: string, sinceMin?: number) {
+  const qc = useQueryClient();
+  const queryKey = ['net-premium-series', ticker ?? 'MARKET', sinceMin ?? 'today'] as const;
+
+  // Realtime invalidation on new ticks. We can't filter server-side by ticker
+  // in the postgres_changes payload reliably (tick rows are written per-ticker
+  // for every watchlist symbol every minute), so subscribe broadly and let the
+  // RPC filter on requery. Volume is low — one INSERT per ticker per minute.
+  useEffect(() => {
+    const chan = supabase
+      .channel(`ct_net_premium_ticks_${ticker ?? 'MARKET'}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'ct_net_premium_ticks' },
+        (payload) => {
+          // Client-side ticker filter to skip irrelevant invalidations when a
+          // single ticker is selected. MARKET mode invalidates on every tick.
+          if (ticker) {
+            const row = (payload as { new?: { ticker?: string } }).new;
+            if (row?.ticker && row.ticker !== ticker) return;
+          }
+          qc.invalidateQueries({ queryKey });
+        },
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(chan);
+    };
+    // queryKey is derived from ticker+sinceMin, so those deps cover it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [qc, ticker, sinceMin]);
+
+  const query = useQuery<NetPremiumSeriesPoint[]>({
+    queryKey: [...queryKey],
+    staleTime: 10_000,
+    refetchInterval: 30_000,
+    retry: false,
+    queryFn: async () => {
+      const params: Record<string, unknown> = {
+        p_ticker: ticker ?? null,
+      };
+      if (sinceMin && sinceMin > 0) {
+        params.p_since = new Date(Date.now() - sinceMin * 60_000).toISOString();
+      }
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.rpc as any)('ct_net_premium_series', params);
+      if (error) throw error;
+      return (Array.isArray(data) ? data : []) as NetPremiumSeriesPoint[];
     },
   });
 
