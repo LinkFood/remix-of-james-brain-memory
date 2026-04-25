@@ -36,11 +36,14 @@ interface FlowAlertRow {
   strike: number | null;
   expiry: string | null;
   premium: number | null;
+  price: number | null;
   executed_at: string | null;
   ingested_at: string;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   raw: any;
 }
+
+type Direction = 'bullish' | 'bearish' | 'neutral';
 
 interface SignatureStat {
   signature_label: string;
@@ -290,7 +293,7 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
     const end = Math.min(offset + PAGE_SIZE - 1, SCAN_LIMIT - 1);
     const { data: page, error } = await supabase
       .from('ct_flow_alerts')
-      .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, premium, executed_at, ingested_at, raw')
+      .select('alert_id, ticker, side, is_ask, is_bid, strike, expiry, premium, price, executed_at, ingested_at, raw')
       .gt('ingested_at', watermark)
       .in('ticker', Array.from(watchlist))
       .order('ingested_at', { ascending: true })
@@ -412,6 +415,46 @@ async function runSweep(supabase: SupabaseClient, thresholds: AlarmThresholds): 
           score,
         });
       if (insertErr) stats.errors.push(`log insert ${a.alert_id}: ${insertErr.message}`);
+
+      // Mirror into the unified ct_flags table so the alarm shows up next
+      // to specialist + star flags on /flags and gets contract-axis graded
+      // by ct-flag-grader. tags carry the signature class so future
+      // aggregation can group on it without re-parsing the label.
+      const direction: Direction = source === 'aggressive_ask_call' || source === 'aggressive_bid_put'
+        ? 'bullish'
+        : source === 'aggressive_bid_call' || source === 'aggressive_ask_put'
+        ? 'bearish'
+        : 'neutral';
+      const horizonHours = 4;
+      const horizonTs = new Date(Date.now() + horizonHours * 60 * 60_000).toISOString();
+      const entryPrice = a.price == null ? null : Number(a.price);
+      const targetPrice = entryPrice != null && Number.isFinite(entryPrice)
+        ? Number((entryPrice * (1 + medianPeak)).toFixed(4))
+        : null;
+      const thesis =
+        `Signature class match: ${label}. Historical median peak +${peakPctStr} on n=${stat.n_tracks}. Premium ${premKstr}.`;
+
+      const { error: flagErr } = await supabase
+        .from('ct_flags')
+        .insert({
+          source: 'signature_alarm',
+          specialist_ticker: null,
+          instrument: ticker,
+          option_symbol: optionSymbol,
+          strike: a.strike,
+          expiry: a.expiry,
+          side,
+          direction,
+          score: score ?? 0,
+          tags: ['signature_alarm', label],
+          thesis,
+          horizon_hours: horizonHours,
+          horizon_ts: horizonTs,
+          entry_price: entryPrice,
+          target_price: targetPrice,
+          status: 'active',
+        });
+      if (flagErr) stats.errors.push(`flag insert ${a.alert_id}: ${flagErr.message}`);
 
       stats.alarms_fired += 1;
     } catch (e) {
