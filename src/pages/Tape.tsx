@@ -34,6 +34,8 @@ import { TickerSheet } from '@/components/command/TickerSheet';
 import { ContractPnLChip } from '@/components/co-trader/ContractPnLChip';
 import { ContractGradeChips } from '@/components/co-trader/ContractGradeChips';
 import { ContractDrillSheet } from '@/components/co-trader/ContractDrillSheet';
+import { AlarmBanner } from '@/components/co-trader/AlarmBanner';
+import { useAlarmRealtime } from '@/hooks/useAlarmRealtime';
 import {
   useContractTracksByAlerts,
   useContractGradesByAlerts,
@@ -438,6 +440,9 @@ export default function Tape() {
   // ct_contract_tracks row. Defensive — silently no-ops if the table or
   // realtime channel isn't deployed yet.
   useContractTracksRealtime();
+
+  // Live tiered alarms from ct-signature-watcher — banner pills + per-row glow.
+  const { glowingForSymbol } = useAlarmRealtime();
 
   // Refetch interval scales with LIVE mode — 5s when on, 20s baseline.
   const tapeInterval = filters.liveMode ? 5_000 : 20_000;
@@ -1167,6 +1172,8 @@ export default function Tape() {
           </div>
         </Card>
 
+        <AlarmBanner />
+
         {/* Tape table */}
         <Card className="p-0 overflow-hidden">
           <div className="overflow-x-auto">
@@ -1232,11 +1239,18 @@ export default function Tape() {
                       );
                     }
                     const r = it.row;
+                    const glowTier = glowingForSymbol(r.option_symbol);
                     return (
                     <TableRow
                       key={r.key}
+                      data-option-symbol={r.option_symbol}
                       onClick={() => setActiveSymbol(r.option_symbol)}
-                      className="cursor-pointer hover:bg-muted/40 border-b border-border/50"
+                      className={cn(
+                        'cursor-pointer hover:bg-muted/40 border-b border-border/50',
+                        glowTier === 'gold' && 'alarm-row-gold',
+                        glowTier === 'silver' && 'alarm-row-silver',
+                        glowTier === 'bronze' && 'alarm-row-bronze',
+                      )}
                     >
                       <TableCell className="py-2 px-2 font-mono tabular-nums text-muted-foreground">
                         {formatTimeET(r.event_ts)}
