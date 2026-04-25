@@ -86,6 +86,26 @@ function rangeToMin(r: RangeKey): number | undefined {
   return undefined;
 }
 
+/**
+ * True if an ISO timestamp is pre-market in NY time (< 09:30 ET). Used to
+ * clip raw ticks so the chart doesn't start its cumsum from 06:00 ET noise
+ * before the bell. Weekend data (rare — ingester is weekday-only) also falls
+ * on the non-RTH side and gets dropped.
+ */
+function isPreMarketET(iso: string): boolean {
+  const d = new Date(iso);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(d);
+  const h = parseInt(parts.find(p => p.type === 'hour')!.value, 10);
+  const m = parseInt(parts.find(p => p.type === 'minute')!.value, 10);
+  const minsOfDay = h * 60 + m;
+  return minsOfDay < (9 * 60 + 30);
+}
+
 function fmtTime(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleTimeString('en-US', {
@@ -143,11 +163,12 @@ function buildButterfly(points: FlowPulseChartPoint[], dte: DteKey): ButterflyPo
  * Aggregation: single ticker → one row per ts; MARKET → many rows per ts,
  * summed to a single MARKET ribbon. Sort by time first, then integrate.
  */
-function buildLiveCp(points: NetPremiumSeriesPoint[]): ButterflyPoint[] {
+function buildLiveCp(points: NetPremiumSeriesPoint[], skipPreMarket: boolean): ButterflyPoint[] {
   if (points.length === 0) return [];
 
   const byTime = new Map<string, { call: number; put: number }>();
   for (const p of points) {
+    if (skipPreMarket && isPreMarketET(p.tick_timestamp)) continue;
     const ts = p.tick_timestamp;
     const call = Number.isFinite(p.net_call_premium) ? p.net_call_premium : 0;
     const put = Number.isFinite(p.net_put_premium) ? p.net_put_premium : 0;
@@ -251,9 +272,17 @@ function Butterfly({ data, mode, height = 280 }: ButterflyProps) {
           <YAxis
             stroke="#71717a"
             tick={{ fontSize: 10, fontFamily: 'monospace' }}
-            tickFormatter={(v: number) => formatPulseDollars(Math.abs(v))}
+            tickFormatter={(v: number) => {
+              // Mode 'cp' = signed running sum; labels must carry sign.
+              // Mode 'bb' = mirrored magnitudes; absolute reads naturally.
+              if (mode === 'cp') {
+                if (Math.abs(v) < 1) return '$0';
+                return `${v < 0 ? '−' : ''}${formatPulseDollars(Math.abs(v))}`;
+              }
+              return formatPulseDollars(Math.abs(v));
+            }}
             domain={domain}
-            width={64}
+            width={72}
           />
           <ReferenceLine y={0} stroke="#a1a1aa" strokeOpacity={0.6} strokeDasharray="1 3" />
           <Tooltip
@@ -362,9 +391,13 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
   const bbQuery = useFlowPulseChart(ticker, rangeToMin(range));
 
   const data = useMemo(() => {
-    if (mode === 'cp') return buildLiveCp(cpQuery.points);
+    if (mode === 'cp') {
+      // Only clip pre-market on the full-day view. 1h/30m windows are already
+      // "last N minutes" so whatever they catch is what the user asked for.
+      return buildLiveCp(cpQuery.points, range === 'today');
+    }
     return buildButterfly(bbQuery.points, dte);
-  }, [mode, cpQuery.points, bbQuery.points, dte]);
+  }, [mode, cpQuery.points, bbQuery.points, dte, range]);
 
   const headline = useMemo(() => buildHeadline(data, mode), [data, mode]);
 
@@ -431,42 +464,31 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
           ))}
         </div>
 
-        <div className="flex items-center gap-1 ml-auto">
-          {(['all', 'short', 'long'] as const).map((d) => (
-            <button
-              key={d}
-              onClick={() => setDte(d)}
-              className={cn(
-                'text-[10px] font-mono px-2 py-0.5 rounded transition-colors',
-                dte === d
-                  ? 'bg-primary/10 text-primary border border-primary/30'
-                  : 'bg-muted/20 text-muted-foreground hover:text-foreground border border-transparent',
-              )}
-              title={`Filter to ${dteLabel(d)}`}
-            >
-              {dteLabel(d)}
-            </button>
-          ))}
-        </div>
+        {/* DTE filter only applies to the legacy 'bb' path. Hidden in live
+            'cp' mode since net_premium_ticks doesn't split by expiry. */}
+        {mode === 'bb' && (
+          <div className="flex items-center gap-1 ml-auto">
+            {(['all', 'short', 'long'] as const).map((d) => (
+              <button
+                key={d}
+                onClick={() => setDte(d)}
+                className={cn(
+                  'text-[10px] font-mono px-2 py-0.5 rounded transition-colors',
+                  dte === d
+                    ? 'bg-primary/10 text-primary border border-primary/30'
+                    : 'bg-muted/20 text-muted-foreground hover:text-foreground border border-transparent',
+                )}
+                title={`Filter to ${dteLabel(d)}`}
+              >
+                {dteLabel(d)}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Mode tabs (Calls/Puts vs Bulls/Bears) */}
-      <Tabs value={mode} onValueChange={(v) => setMode(v as ModeKey)} className="mb-2">
-        <TabsList className="h-7 p-0.5 bg-muted/30 border border-border/40">
-          <TabsTrigger
-            value="cp"
-            className="text-[10px] font-mono uppercase tracking-wider px-3 py-1 h-6 data-[state=active]:bg-background data-[state=active]:text-primary"
-          >
-            Calls vs Puts
-          </TabsTrigger>
-          <TabsTrigger
-            value="bb"
-            className="text-[10px] font-mono uppercase tracking-wider px-3 py-1 h-6 data-[state=active]:bg-background data-[state=active]:text-primary"
-          >
-            Bulls vs Bears
-          </TabsTrigger>
-        </TabsList>
-      </Tabs>
+      {/* Mode tabs — Bulls vs Bears hidden until it's migrated to the live
+          signed path. Showing a broken option produced noise in testing. */}
 
       {/* Headline */}
       {hasData && headline.text && !showDirectionalEmpty && (
