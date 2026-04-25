@@ -782,6 +782,362 @@ export async function pullWatcherState(tickers: readonly string[] = WATCHLIST): 
 }
 
 // ============================================================================
+// Per-option-contract — intraday bars / daily history / per-print flow
+// ============================================================================
+//
+// Foundation for the contract-grading layer (Co-Trader edge attribution v2).
+// Live-probed against UW REST 2026-04-24 with SHEL260515C00095000:
+//
+//   /api/option-contract/{symbol}/intraday  → { data: [bar...] }
+//     bar fields: start_time (ISO Z), open, high, low, close, avg_price,
+//     iv_low, iv_high, premium_{bid,ask,mid,no}_side, volume_{bid,ask,mid,no}_side,
+//     volume_multi, volume_stock_multi.   NO bid/ask/mid quotes — only
+//     premium-side breakdowns. Bars are returned newest-first.
+//
+//   /api/option-contract/{symbol}/historic  → { chains: [row...], etf_holdings: [...] }
+//     row fields: date (YYYY-MM-DD), last_price, nbbo_bid, nbbo_ask,
+//     open_price, high_price, low_price, avg_price, iv_low, iv_high,
+//     volume, open_interest, bid_volume, ask_volume, mid_volume,
+//     trades, sweep_volume, floor_volume, cross_volume, last_tape_time.
+//     Top-level key is `chains`, NOT `data` (anomaly vs. rest of UW REST).
+//
+//   /api/option-contract/{symbol}/flow      → { data: [print...], date }
+//     print fields: id, executed_at, price, size, premium, nbbo_bid,
+//     nbbo_ask, ask_vol, bid_vol, mid_vol, no_side_vol, tags ([bullish|
+//     bearish|bid_side|ask_side|...]), exchange, option_type, strike,
+//     expiry, theo, delta, gamma, theta, vega, rho, implied_volatility,
+//     underlying_price, sector, marketcap, full_name, report_flags,
+//     option_chain_id, flow_alert_id, upstream_condition_detail.
+//
+// MCP coverage (per ct-uw-mcp-scout 2026-04-24): only `get_historic_chains`
+// covers per-contract daily history (cap 50 rows). No MCP equivalent for
+// intraday or per-contract flow — REST is the only path. Sticking with REST
+// for all three keeps the call shape uniform and the rate-limit accounting
+// in one place.
+//
+// Rate cost: 1 UW request unit per call. Daily budget 20,000 (per
+// x-uw-token-req-limit header observed); minute budget 120.
+
+export type UwResultBase = {
+  ok: boolean;
+  error?: string;
+  status?: number;
+};
+
+/** Normalized intraday bar — what callers consume. Premium fields are dollars. */
+export type UwOptionBar = {
+  ts: string;          // ISO 8601 (start of bar)
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number | null;
+  avg_price: number | null;
+  iv_low: number | null;
+  iv_high: number | null;
+  premium_bid_side: number | null;
+  premium_ask_side: number | null;
+  premium_mid_side: number | null;
+  volume_bid_side: number | null;
+  volume_ask_side: number | null;
+  volume_mid_side: number | null;
+};
+
+export type UwIntradayResult = UwResultBase & {
+  bars: UwOptionBar[];
+  /** Most-recent bar first if true (UW default). */
+  newest_first: boolean;
+};
+
+/** Normalized daily-history row. */
+export type UwOptionDaily = {
+  date: string;                 // YYYY-MM-DD
+  last_price: number | null;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  avg_price: number | null;
+  nbbo_bid: number | null;
+  nbbo_ask: number | null;
+  iv_low: number | null;
+  iv_high: number | null;
+  volume: number | null;
+  open_interest: number | null;
+  bid_volume: number | null;
+  ask_volume: number | null;
+  mid_volume: number | null;
+  trades: number | null;
+  sweep_volume: number | null;
+  floor_volume: number | null;
+  cross_volume: number | null;
+  last_tape_time: string | null;
+};
+
+export type UwHistoricResult = UwResultBase & {
+  rows: UwOptionDaily[];
+};
+
+/** Normalized per-print row. Keeps the raw payload for callers that need extras. */
+export type UwOptionPrint = {
+  id: string | null;
+  executed_at: string | null;
+  price: number | null;
+  size: number | null;
+  premium: number | null;
+  nbbo_bid: number | null;
+  nbbo_ask: number | null;
+  ask_vol: number | null;
+  bid_vol: number | null;
+  mid_vol: number | null;
+  no_side_vol: number | null;
+  tags: string[];
+  exchange: string | null;
+  option_type: 'call' | 'put' | null;
+  strike: number | null;
+  expiry: string | null;
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  rho: number | null;
+  implied_volatility: number | null;
+  underlying_price: number | null;
+  report_flags: string[];
+  raw: Record<string, unknown>;
+};
+
+export type UwContractFlowResult = UwResultBase & {
+  prints: UwOptionPrint[];
+};
+
+function _n(v: unknown): number | null {
+  if (v === null || v === undefined || v === '') return null;
+  const n = typeof v === 'number' ? v : parseFloat(String(v));
+  return Number.isFinite(n) ? n : null;
+}
+
+function _str(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v);
+  return s.length === 0 ? null : s;
+}
+
+function _strArr(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.filter(x => typeof x === 'string') as string[];
+}
+
+/**
+ * Intraday bars for one contract through the current session.
+ *
+ * Note: UW returns bars NEWEST-FIRST. We surface that via `newest_first: true`
+ * and do not reverse — callers that want oldest-first can `.reverse()`. No
+ * server-side `since` / `timeframe` params are documented; UW returns whatever
+ * granularity it sees fit (~5m equivalent observed in live probe). The opts
+ * here are placeholders for the published surface; we forward them so a future
+ * UW change can add server-side filtering without a wrapper signature break.
+ */
+export async function getOptionContractIntraday(
+  optionSymbol: string,
+  opts: { timeframe?: '1m' | '5m'; sinceISO?: string } = {},
+): Promise<UwIntradayResult> {
+  if (!optionSymbol) return { ok: false, bars: [], newest_first: true, error: 'option_symbol required' };
+  try {
+    const params: Record<string, string | undefined> = {};
+    if (opts.timeframe) params.timeframe = opts.timeframe;
+    if (opts.sinceISO) params.since = opts.sinceISO;
+    const raw = await uwGet<{ data?: unknown[] }>(`/api/option-contract/${optionSymbol}/intraday`, params);
+    const data = Array.isArray(raw?.data) ? raw.data : [];
+    const bars: UwOptionBar[] = data.map((r) => {
+      const x = r as Record<string, unknown>;
+      const volume = (() => {
+        const direct = _n(x.volume);
+        if (direct !== null) return direct;
+        // Sum side breakdowns when the top-level volume is absent (observed shape).
+        const sides = [_n(x.volume_bid_side), _n(x.volume_ask_side), _n(x.volume_mid_side), _n(x.volume_no_side)];
+        const sum = sides.reduce((acc, v) => acc + (v ?? 0), 0);
+        return sides.some(v => v !== null) ? sum : null;
+      })();
+      return {
+        ts: _str(x.start_time) ?? _str(x.ts) ?? '',
+        open: _n(x.open),
+        high: _n(x.high),
+        low: _n(x.low),
+        close: _n(x.close),
+        volume,
+        avg_price: _n(x.avg_price),
+        iv_low: _n(x.iv_low),
+        iv_high: _n(x.iv_high),
+        premium_bid_side: _n(x.premium_bid_side),
+        premium_ask_side: _n(x.premium_ask_side),
+        premium_mid_side: _n(x.premium_mid_side),
+        volume_bid_side: _n(x.volume_bid_side),
+        volume_ask_side: _n(x.volume_ask_side),
+        volume_mid_side: _n(x.volume_mid_side),
+      };
+    }).filter(b => b.ts);
+    return { ok: true, bars, newest_first: true };
+  } catch (e) {
+    const status = e instanceof UwError ? e.status : 500;
+    return { ok: false, bars: [], newest_first: true, error: e instanceof Error ? e.message : String(e), status };
+  }
+}
+
+/**
+ * Daily OHLC + IV + OI history for one contract.
+ *
+ * UW shape gotcha: top-level key is `chains`, not `data`. Returns an
+ * `etf_holdings` block too (irrelevant for grading; ignored).
+ */
+export async function getOptionContractHistoric(
+  optionSymbol: string,
+  opts: { sinceDate?: string; limit?: number } = {},
+): Promise<UwHistoricResult> {
+  if (!optionSymbol) return { ok: false, rows: [], error: 'option_symbol required' };
+  try {
+    const params: Record<string, string | number | undefined> = {};
+    if (opts.sinceDate) params.since = opts.sinceDate;
+    if (opts.limit) params.limit = opts.limit;
+    const raw = await uwGet<{ chains?: unknown[]; data?: unknown[] }>(`/api/option-contract/${optionSymbol}/historic`, params);
+    // Defensive: prefer `chains`, fall back to `data` in case UW normalizes later.
+    const list = Array.isArray(raw?.chains) ? raw.chains : (Array.isArray(raw?.data) ? raw.data : []);
+    const rows: UwOptionDaily[] = list.map((r) => {
+      const x = r as Record<string, unknown>;
+      return {
+        date: _str(x.date) ?? '',
+        last_price: _n(x.last_price ?? x.close ?? x.close_price),
+        open: _n(x.open_price ?? x.open),
+        high: _n(x.high_price ?? x.high),
+        low: _n(x.low_price ?? x.low),
+        avg_price: _n(x.avg_price),
+        nbbo_bid: _n(x.nbbo_bid),
+        nbbo_ask: _n(x.nbbo_ask),
+        iv_low: _n(x.iv_low),
+        iv_high: _n(x.iv_high),
+        volume: _n(x.volume),
+        open_interest: _n(x.open_interest),
+        bid_volume: _n(x.bid_volume),
+        ask_volume: _n(x.ask_volume),
+        mid_volume: _n(x.mid_volume),
+        trades: _n(x.trades),
+        sweep_volume: _n(x.sweep_volume),
+        floor_volume: _n(x.floor_volume),
+        cross_volume: _n(x.cross_volume),
+        last_tape_time: _str(x.last_tape_time),
+      };
+    }).filter(r => r.date);
+    return { ok: true, rows };
+  } catch (e) {
+    const status = e instanceof UwError ? e.status : 500;
+    return { ok: false, rows: [], error: e instanceof Error ? e.message : String(e), status };
+  }
+}
+
+/**
+ * Recent prints on one specific contract — ground truth for grading and the
+ * fallback source for live mid extraction (the flow rows carry NBBO; intraday
+ * bars do not).
+ */
+export async function getOptionContractFlow(
+  optionSymbol: string,
+  opts: { limit?: number } = {},
+): Promise<UwContractFlowResult> {
+  if (!optionSymbol) return { ok: false, prints: [], error: 'option_symbol required' };
+  try {
+    const params: Record<string, string | number> = { limit: opts.limit ?? 50 };
+    const raw = await uwGet<{ data?: unknown[] }>(`/api/option-contract/${optionSymbol}/flow`, params);
+    const data = Array.isArray(raw?.data) ? raw.data : [];
+    const prints: UwOptionPrint[] = data.map((r) => {
+      const x = r as Record<string, unknown>;
+      const optType = _str(x.option_type);
+      return {
+        id: _str(x.id),
+        executed_at: _str(x.executed_at),
+        price: _n(x.price),
+        size: _n(x.size),
+        premium: _n(x.premium),
+        nbbo_bid: _n(x.nbbo_bid),
+        nbbo_ask: _n(x.nbbo_ask),
+        ask_vol: _n(x.ask_vol),
+        bid_vol: _n(x.bid_vol),
+        mid_vol: _n(x.mid_vol),
+        no_side_vol: _n(x.no_side_vol),
+        tags: _strArr(x.tags),
+        exchange: _str(x.exchange),
+        option_type: (optType === 'call' || optType === 'put') ? optType : null,
+        strike: _n(x.strike),
+        expiry: _str(x.expiry),
+        delta: _n(x.delta),
+        gamma: _n(x.gamma),
+        theta: _n(x.theta),
+        vega: _n(x.vega),
+        rho: _n(x.rho),
+        implied_volatility: _n(x.implied_volatility),
+        underlying_price: _n(x.underlying_price),
+        report_flags: _strArr(x.report_flags),
+        raw: x,
+      };
+    });
+    return { ok: true, prints };
+  } catch (e) {
+    const status = e instanceof UwError ? e.status : 500;
+    return { ok: false, prints: [], error: e instanceof Error ? e.message : String(e), status };
+  }
+}
+
+/**
+ * Latest-mid extraction. ONE UW call. Used by the contract poller for live
+ * tracking. Calls `/flow?limit=1` because flow rows carry true `nbbo_bid` and
+ * `nbbo_ask` — intraday bars don't.
+ *
+ * The `spreadPct` is `(ask - bid) / mid`. Caller decides whether to skip the
+ * update (recommended cutoffs from the spec: skip if `mid < 0.05` OR
+ * `spreadPct > 0.30`). We DO NOT null-out the price ourselves — surfacing the
+ * spread metric lets the poller decide per-contract.
+ *
+ * Returns nulls everywhere on failure / no-print rather than throwing — the
+ * poller treats null as "no quote available this tick", not a hard error.
+ */
+export async function getOptionContractLatestMid(
+  optionSymbol: string,
+): Promise<{
+  mid: number | null;
+  bid: number | null;
+  ask: number | null;
+  last: number | null;
+  ts: string | null;
+  spreadPct: number | null;
+  ok: boolean;
+  error?: string;
+}> {
+  const flow = await getOptionContractFlow(optionSymbol, { limit: 1 });
+  if (!flow.ok || flow.prints.length === 0) {
+    return {
+      mid: null, bid: null, ask: null, last: null, ts: null, spreadPct: null,
+      ok: false, error: flow.error ?? 'no_prints',
+    };
+  }
+  const p = flow.prints[0];
+  const bid = p.nbbo_bid;
+  const ask = p.nbbo_ask;
+  const last = p.price;
+  const mid = (bid !== null && ask !== null) ? (bid + ask) / 2 : last;
+  let spreadPct: number | null = null;
+  if (bid !== null && ask !== null && mid !== null && mid > 0) {
+    spreadPct = (ask - bid) / mid;
+  }
+  return {
+    mid,
+    bid,
+    ask,
+    last,
+    ts: p.executed_at,
+    spreadPct,
+    ok: true,
+  };
+}
+
+// ============================================================================
 // Endpoint registry — consumed by ct-uw-endpoint-health-check
 // ============================================================================
 
@@ -834,4 +1190,11 @@ export const UW_ENDPOINT_REGISTRY: Array<{
   { wrapper: 'getRiskReversalSkew',      path_template: '/api/stock/{ticker}/historical-risk-reversal-skew',     probe: () => getRiskReversalSkew('SPY') },
   { wrapper: 'getFinancials',            path_template: '/api/stock/{ticker}/financials',                        probe: () => getFinancials('SPY') },
   { wrapper: 'getTechnicalIndicator',    path_template: '/api/stock/{ticker}/technical-indicator/{function}',    probe: () => getTechnicalIndicator('SPY', 'RSI', { interval: 'daily', time_period: 14 }) },
+  // Per-contract endpoints. Probe symbol is a long-dated SPY call deep ATM —
+  // pick something with reliable activity so the probe rarely returns empty.
+  // Expiry / strike will need rolling forward periodically (or move to a
+  // dynamic SELECT-from-ct_sweeps probe in a follow-up wave).
+  { wrapper: 'getOptionContractIntraday', path_template: '/api/option-contract/{symbol}/intraday', probe: () => getOptionContractIntraday('SPY260918C00650000') },
+  { wrapper: 'getOptionContractHistoric', path_template: '/api/option-contract/{symbol}/historic', probe: () => getOptionContractHistoric('SPY260918C00650000', { limit: 5 }) },
+  { wrapper: 'getOptionContractFlow',     path_template: '/api/option-contract/{symbol}/flow',     probe: () => getOptionContractFlow('SPY260918C00650000', { limit: 1 }) },
 ];
