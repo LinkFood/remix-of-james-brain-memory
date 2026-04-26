@@ -264,6 +264,23 @@ function formatTimeET(iso: string): string {
   }
 }
 
+// Compact date label for multi-day views — "Fri 4/24" or "Wed 4/22".
+// Used as a prefix on time cells when separator rows can't be relied on
+// (e.g. user is sorted by score, not time).
+function formatDateLabelET(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString('en-US', {
+      timeZone: 'America/New_York',
+      weekday: 'short',
+      month: 'numeric',
+      day: 'numeric',
+    });
+  } catch {
+    return iso.slice(5, 10);
+  }
+}
+
 function premiumColor(n: number | null): string {
   if (n == null) return 'text-muted-foreground';
   if (n >= 1_000_000) return 'text-emerald-400 font-semibold';
@@ -1275,7 +1292,14 @@ export default function Tape() {
                       )}
                     >
                       <TableCell className="py-2 px-2 font-mono tabular-nums text-muted-foreground">
-                        {formatTimeET(r.event_ts)}
+                        {(dayFilter === 'last3d' || dayFilter === 'all' || filters.sortBy !== 'event_ts') ? (
+                          <div className="flex flex-col leading-tight">
+                            <span className="text-[10px] text-muted-foreground/70">{formatDateLabelET(r.event_ts)}</span>
+                            <span>{formatTimeET(r.event_ts)}</span>
+                          </div>
+                        ) : (
+                          formatTimeET(r.event_ts)
+                        )}
                       </TableCell>
                       <TableCell
                         className="py-2 px-2"
