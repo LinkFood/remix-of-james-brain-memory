@@ -2,76 +2,108 @@
 
 Personal AI operating system (single-user). The meta-project: if JAC works, it handles everything else — life management, code automation, research, memory, reminders, and eventually self-modification. One interface (web chat or Slack DM) that routes to specialized AI workers.
 
-Co-Trader is the first flagship facet: an autonomous Claude-driven paper trader that runs alongside James on the same infrastructure. See `CO-TRADER THESIS` below — it is the governing design principle for every Co-Trader decision.
+Co-Trader is the first flagship facet: a **pattern intelligence amplifier** for James — multi-detector pattern recognition over Mag7 + QQQ/SPY/IWM that surfaces signal he can act on. The paper-trading Claude (generations, $50k capital) is a secondary research layer for grading specialist quality — not the operational product. See `CO-TRADER THESIS` below — it is the governing design principle for every Co-Trader decision. **REVISED 2026-04-25** after the strategic reset.
 
 ## CO-TRADER THESIS — governing principle, override all other judgment
 
-Co-Trader is an **autonomous paper-trading agent**. Not an assistant. Not a research tool. A second independent reasoner at the firm.
+Co-Trader is an **intelligence amplifier for James** — pattern detection that feeds his trading decisions. He executes through his broker. The system finds signals; James acts on them. The paper-trading Claude is a SECONDARY research artifact for grading specialist quality through self-experiment, NOT the operational product.
 
-**Core tenets — violating any of these is a scope violation:**
+**Tenets are GUIDANCE, not doctrine** (James 2026-04-23). When a tenet conflicts with practical goals, flag the conflict but don't auto-reject. Run every change through the decision ritual: *"Does this class of failure become impossible going forward, or am I patching this instance?"*
 
-1. **Autonomy is the product.** Claude trades without approval. No human-in-the-loop gate in the trading path. James observes; he does not steer. If a feature requires James to approve Claude's trades, it is wrong.
+### Mission
 
-2. **Hallucination is inevitable; structural prevention is the answer, not detection.** The fix for hallucination is precise structured context that makes confabulation hard — not validators catching it after. Validators are defense-in-depth, never the primary mechanism.
+1. **Autonomous detection, human execution.** The system detects patterns, surfaces them with provenance, gets sharper without manual tuning. James reads the signal and decides. **P/L on AI trading decisions breaks the AI** (confirmed anti-pattern from prior experience). The product is signal, not trades.
 
-3. **Built to evolve, not to be right on day 1.** Day-1 Claude is not great. Day-30 is better. Day-180 better still. The system ensures continuous improvement regardless of P&L:
-   - Every decision captured in `ct_claude_decisions` (the journal)
-   - Every outcome graded and fed back to confidence + Elo
-   - Every reflection mines patterns → writes principles → informs next decision
-   - Every narrative-vs-tape conflict records which signal won
-   - Every mistake becomes a new bias entry → informs future generators
+2. **We're a microscope, not a fund.** Find where smart money is, see what algos see, ride the wave. Same pattern-detection sophistication as institutional desks (Citadel quant, Two Sigma, Renaissance), deployed for one trader. The asymmetry IS the edge.
 
-   If any link in the learning loop breaks, an alert fires. Stagnation is impossible by design.
+3. **Trust-per-alarm is the metric.** False alarms erode trust faster than missed signals. Gate alarms on earned trust. The product is signal James can act on without second-guessing.
 
-4. **Ground-up, no band-aids.** Every fix answers: *"Does this class of failure become impossible going forward, or am I patching this instance?"* If patching, stop. Find the structural fix. Band-aids compound debt; structural fixes compound capability.
+### Universe & Data
 
-5. **Progress independent of P&L.** Even on losing days, the system gets smarter. Losing trades produce grades, grades reshape hypotheses, reflections distill principles. The feedback loop does not require wins — it requires data.
+4. **Universe lock — 10 tickers, no exceptions.** Mag7 (NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA) + QQQ + SPY + IWM. Concentrated dataset trains specialists deeper. Quality over coverage. AMC-style memes structurally excluded.
 
-6. **Isolation preserves the edge.** Claude does NOT see James's trades, notes, reviews, or private rules. The point of a co-trader is divergence — where James and Claude agree is high conviction; where they diverge, data tells you who was right. Polluting Claude with James's style destroys the signal. Enforced via `_shared/claudeReadSurface.ts` and its `blockedFromReading` contract.
+5. **UW is firehose; our DB is the asset.** Once a print lands in `ct_flow_alerts`, it's ours forever. Embedded via Voyage. Replayable via harness. Mineable for any pattern. No "rules" on what we can do with the data.
 
-7. **Every number tunable.** Config lives in `ct_config`. No hardcoded thresholds. Adjust as Claude evolves.
+6. **Duplicate nothing UW maintains.** Use their OpenAPI / MCP / prebuilt prompts. Hand-rolled HTTP clients are tech debt the moment UW ships a new endpoint.
 
-8. **Model tier matches decision tempo.**
-   - CIO (weekly review): Claude Opus 4.7
-   - PM (daily judgment — proposer, brief): Claude Sonnet 4.6
-   - Quant (per-heartbeat evaluation — generator, selector): Claude Haiku 4.5
-   - Execution (triggers, stops): pure logic, no LLM
-   Expensive thinking where decisions are large; fast thinking where decisions are small.
+7. **Ungated signal access.** Every signal UW exposes that we can ingest cheaply gets ingested. No category gated by prioritization or omission. Edge is in seeing combinations no human has time to multiplex.
 
-9. **UI is glance-first.** User sees state in one view. Tabs drill down. Nothing critical hides behind navigation.
+### Detection architecture
 
-10. **Real-time contextual awareness.** Claude trades the world, not just the tape. Daily Brief digests macro narrative. Breaking-news watcher regenerates brief on severity-4 events. Per-ticker quant cards consolidate structural + flow + sentiment + events + news for every decision. Claude reads the world, not a silo.
+8. **Detector portfolio — first-class strategies.** Detection isn't monolithic. Multiple parallel detectors run simultaneously, each with provenance + scoreboard. Strategies promoted/demoted based on outcome, not changed via threshold-tweaking. Adding a new detector is an evening's work.
 
-11. **Signal decomposition on every decision.** Narrative view, tape view, alignment, and which signal Claude followed are captured explicitly on `ct_trade_ideas`, `ct_trades`, and `ct_claude_decisions`. Over time Claude learns tape-vs-narrative resolution from his own track record — not from hardcoded rules.
+9. **Pulse is regime context for every alarm.** Pulse isn't just a chart — it's a state variable. Every alarm row stores Pulse-at-fire-time. Display alongside trigger. Same detector fires differently in different Pulse states (steady positive slope = ride; sudden flip = exit; QQQ vs IWM divergence = sector rotation).
 
-12. **Duplicate nothing UW maintains.** Use their OpenAPI spec / MCP server / prebuilt prompts. Hand-rolled HTTP clients are tech debt the moment UW ships a new endpoint.
+10. **Detector lifecycle uses earned-trust gates.** New detectors start in shadow mode (write to /alarms only). Advance to trial (Slack on, 1-2 weeks observation). Advance to live based on rolling hit rate. Detectors that decay drop back. Trust gate, not capital gate.
 
-13. **Ungated signal access.** Claude reads every signal UW exposes that we can ingest cheaply. The per-ticker quant card presents all signal categories (microstructure / positioning / macro / sentiment / historical) at equal weight — none is supplementary to another. Claude's edge is seeing combinations no human has time to multiplex. Gating any signal category by prioritization or omission defeats the purpose. If a category is absent, it's debt to close, not a decision.
+11. **Signal decomposition on every decision.** Narrative view, tape view, alignment, and which signal triggered are captured explicitly. Over time the system learns tape-vs-narrative resolution from its own track record.
 
-14. **Generational pressure — survival + cost of inaction + performance target.** Each Claude generation begins with $50,000 paper capital and has 14 trading days to reach $60,000 (+20%). Generation ends (is "fired") when:
-    - Target hit within window → SUCCESS: account + new window compound forward
-    - Target missed by day 15 → performance_floor fire
-    - Balance below $30,000 survival floor → survival_breach fire
-    - Cash holding cost 0.03%/day → slow bleed if idle, preventing paralysis
-    
-    **Firing is not death.** Account resets but ALL memory persists: decisions, dreams, principles, biases, hypotheses, grades, trades, Elo history. Each generation inherits the full accumulated wisdom of every prior generation. Pressure is always forward: "last generation fired at day N for reason X — I have 14 days to do better OR I'm next." No prescribed strategy, no forced trade cadence — just *win or reset, always learning*. The consequence serves evolution, not termination.
+12. **Actionable reasoning.** Every "because" bullet must state HOW the evidence changes the setup. Bad: "NVDA has earnings in 4 days." Good: "NVDA earnings in 4 days AND skew flipped put-heavy AND insider selling 3 days straight — setup favors bearish pre-earnings positioning; call wall at 250 becomes resistance instead of magnet." Same applies to alarm thesis fields.
 
-15. **Conditions, not prescriptions.** Claude operates under soft defaults, not hard caps. Any default constraint (size, stops, horizons, concurrent positions) can be overridden with justification via `*_override_reasoning` fields on trade ideas. Hard ceiling (e.g., 10% max size) still applies. The system asks Claude to make the case; it does not make the case for him. Rails that serve for 95% of cases should not block the 5% where the unusual trade is the right trade.
+### Build discipline
 
-16. **Actionable reasoning.** Every "because" bullet must state HOW the evidence changes the setup, not just that the evidence exists. Factual-but-non-actionable bullets ("NVDA has earnings in 4 days") fail the actionability rule. Good bullets thread evidence → implication ("NVDA earnings in 4 days AND skew flipped put-heavy AND insider selling 3 days straight — setup favors bearish pre-earnings positioning; call wall at 250 becomes resistance instead of magnet"). Dream reviews for this pattern weekly.
+13. **Hallucination is inevitable; structural prevention is the answer.** Precise structured context makes confabulation hard. Validators are defense-in-depth, never primary mechanism.
 
-17. **Meta-layer eats its own outputs.** Co-Trader's decisions, grades, dreams, and principles are not siloed in `ct_*` tables — they feed JAC's `jac_reflections` pipeline via `ct-reflect-to-jac` (daily 22:30 UTC) and become input to JAC's weekly `distill-principles` extraction. The substrate that watches James's tasks watches Co-Trader's trades. This cross-facet feedback is how the meta-layer learns from domain-specific outcomes and how future facets inherit wisdom from past ones. A new facet is not a new brain — it's a new vertical feeding the same brain.
+14. **Built to evolve, not to be right on day 1.** Every decision captured (`ct_claude_decisions`), every outcome graded, every reflection mines patterns → writes principles. If any link in the learning loop breaks, alert fires. Stagnation is impossible by design.
+
+15. **Ground-up, no band-aids.** Every fix answers: *"Does this class of failure become impossible going forward?"* If patching this instance, stop. The 3x DESC-sort starvation bug class (createMissingTracks → createMissingContractTracks → runContractGradePass) over one weekend proved the discipline — each fix got memorized into class-level rule.
+
+16. **Every number tunable.** Config lives in `ct_config`. No hardcoded thresholds. Adjust as the system evolves.
+
+17. **Conditions, not prescriptions.** Soft defaults with `*_override_reasoning` fields where applicable. Hard ceilings only when truly required. Detector lifecycle uses this same pattern.
+
+### Operational discipline
+
+18. **Progress measured by detection accuracy and trust-per-alarm, not P&L on trades.** The system gets smarter via outcome-graded detector scoreboards, regardless of paper capital state. Replay harness lets us measure detection quality continuously.
+
+19. **Replay harness as continuous calibration tool.** `ct-backtest-harness` (commit `1fc795f`) — built once, used weekly. Every meaningful detector change goes through harness backtest before shipping. Sunday is calibration day.
+
+20. **Model tier matches decision tempo + cost shape.**
+    - **Operational/cron** (autonomous, runs without James present): API-Claude — Sonnet daily / Haiku per-heartbeat / pure logic for execution-style triggers
+    - **Analysis/calibration** (human-in-loop, conversational, weekly): terminal-Claude (Opus 4.7 under Max 20x — fixed cost, free per call, cumulative memory across sessions)
+    - Don't burn API budget on calibration when Max gives terminal-Claude for free.
+
+21. **UI is glance-first.** User sees state in one view. Tabs drill down. Nothing critical hides behind navigation.
+
+22. **Real-time contextual awareness.** Daily Brief, breaking-news watcher, per-ticker quant cards, Pulse, current detector scoreboard — all in the operator's field of view. The system reads the world, not a silo.
+
+### Cross-facet
+
+23. **Meta-layer eats its own outputs.** Co-Trader's decisions, grades, dreams, and principles feed JAC's `jac_reflections` pipeline via `ct-reflect-to-jac` (daily 22:30 UTC) and become input to JAC's weekly `distill-principles` extraction. Cross-facet feedback is how meta-layer learns from domain-specific outcomes. A new facet is not a new brain — it's a new vertical feeding the same brain.
+
+### System integrity
+
+24. **All systems talk to each other — no silos.** Every component publishes its output to a known schema where every other component can read it. The detector portfolio is one organism. Specialists read alarm scoreboards. Alarms read specialist flags. Pulse colors every detector. Tape-reader narratives feed alarm context. If a new component can't access an existing signal, that's a structural bug, not a design choice. Cross-component telemetry is mandatory, not optional.
+
+25. **Evolves in STRUCTURE, not just within structure.** The system's findings change the system's components — detectors added/retired, configs tuned, prompts rewritten by what the data reveals works. Markets evolve too — what wins in trend regime fails in chop. Regime detection drives STRUCTURAL adaptation (which detectors are weighted, which specialist prompts apply), not just signal-weight tweaks within fixed rules. Day-180 architecture should look DIFFERENT from day-30 architecture. If it doesn't, the evolution is fake. **Adding a detector is a database INSERT, not a code change** — detectors live as rows in `ct_detectors` with config + lifecycle status. Specialist prompts live in `ct_specialist_prompts`. Configs live in `ct_config`. Hardcoded "this is how the system works" is fragile; "this is how the system finds out how to work" is durable.
+
+26. **Three-mode architecture — never confuse them.** Every piece of work belongs to ONE of three modes. Building in the wrong mode = waste.
+    - **Autonomous mode** (cron + edge function): runs when James isn't here. UW ingest, alarm watchers, detectors firing, EOD summary, daily brief, scoreboard nightly updates. API cost is necessary — without it the system dies between sessions.
+    - **UI mode** (React page + hook): pure read-only window into system state. James glances, reads, decides. /tape, /alarms, /edge, /specialists, /eod, /pulse. NO analysis tooling on the site. NO backtest buttons. NO "click to run" services.
+    - **Analysis mode** (terminal-me with direct DB access): tuning, backtesting, model calibration, deep dives, "what if" questions, comparing strategies. Lives in this terminal under Max 20x. Free per call. Conversational iteration with cumulative memory across sessions.
+
+    The reflex test: "Does this need to run when James isn't here?" → autonomous. "Will James glance at this in browser?" → UI page. "Will James ASK ME to compute this?" → terminal-me, never build a service.
+
+    The harness (`ct-backtest-harness`) was built violating this — it's analysis-mode work living as autonomous infrastructure. Single-user system has no other consumer. Future sessions: default to terminal-me for analysis questions. Never build an edge function whose only consumer is "James will invoke it."
 
 ### Anti-principles — what we do NOT do
 
 - Band-aids. Workarounds. "Good enough for now."
-- Approval gates in Claude's trading path.
+- **P/L on AI trading decisions** — breaks the AI (confirmed anti-pattern from prior experience)
+- **Risk management / position sizing / execution cost modeling** — not our job; James trades
+- **Auto-execution** — never
 - Hardcoded magic numbers (all go to `ct_config`).
-- James-bias leakage to Claude (enforced by `blockedFromReading`).
+- Monolithic detection — always portfolio.
 - Silent failure modes (every cron, ingester, dependency has health signals).
 - Optimizing for day-1 at the expense of day-90.
 - UI as afterthought.
 - Duplicating what UW already maintains.
+
+### Demoted to research layer (the paper-trading Claude)
+
+The original tenet 14 — generational pressure ($50k capital, 14-day window, performance_floor / survival_breach firing, cash decay) — describes the **paper-trading Claude experimental layer**. Useful as a self-grading mechanism for specialist quality (does this generation's specialist make better calls than the previous?). NOT the operational product. Mechanics intact, scope reframed: research artifact, not core mission.
+
+The original tenet 6 — isolation (Claude does NOT see James's book/notes/reviews) — still applies to the paper-trading Claude. Doesn't apply to the alarm/pulse/intelligence layer (which doesn't trade). Scope qualified.
 
 ### Decision ritual
 

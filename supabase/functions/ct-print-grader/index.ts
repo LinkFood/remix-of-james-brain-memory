@@ -27,6 +27,11 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
+import {
+  inferDirection,
+  type Direction,
+  type FlowAlertRow,
+} from '../_shared/directionInference.ts';
 
 // ---------------------------------------------------------------------------
 // Tunables (cron header / safety rails — NOT thresholds; thresholds live in ct_config)
@@ -60,27 +65,9 @@ const GRADING_METHOD = 'underlying_v1';
 const HORIZONS: HorizonName[] = ['30m', '2h', 'eod', 'plus1d'];
 
 type HorizonName = '30m' | '2h' | 'eod' | 'plus1d';
-type Direction = 'up' | 'down';
 type Grade = 'WIN' | 'LOSS' | 'FLAT';
 type TrackStatus = 'WORKING' | 'REALIZED' | 'FAILING' | 'FLAT' | 'EXPIRED';
 type DteBucket = '0dte' | 'short' | 'mid' | 'long';
-
-interface FlowAlertRow {
-  alert_id: string;
-  ticker: string;
-  side: string | null;
-  is_ask: boolean | null;
-  is_bid: boolean | null;
-  strike: number | null;
-  expiry: string | null;
-  executed_at: string | null;
-  ingested_at: string;
-  // Optional — present in Pass 2 contract-track creation queries only.
-  option_symbol?: string | null;
-  price?: number | null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  raw: any;
-}
 
 // ---------------------------------------------------------------------------
 // OCC-symbol synthesis. ct_flow_alerts.option_symbol is null on every row
@@ -109,11 +96,6 @@ function buildOccSymbol(
   return `${ticker.toUpperCase()}${yymmdd}${sideChar}${strikeStr}`;
 }
 
-interface DirectionInference {
-  direction: Direction;
-  source: string;
-}
-
 interface SnapshotThresholds {
   '30m': number;
   '2h': number;
@@ -132,83 +114,9 @@ interface TrackingConfig {
   maxDays: number;
 }
 
-// ---------------------------------------------------------------------------
-// Direction inference — return null if undeterminable (mid-print or unknown side).
-// ---------------------------------------------------------------------------
-function inferDirection(row: FlowAlertRow): DirectionInference | null {
-  const side = (row.side ?? '').toLowerCase();
-  if (side !== 'call' && side !== 'put') return null;
-
-  const raw = row.raw ?? {};
-  const askPremRaw = raw['total_ask_side_prem'];
-  const bidPremRaw = raw['total_bid_side_prem'];
-  const askPrem = askPremRaw == null ? null : Number(askPremRaw);
-  const bidPrem = bidPremRaw == null ? null : Number(bidPremRaw);
-  const askPremValid = askPrem !== null && Number.isFinite(askPrem);
-  const bidPremValid = bidPrem !== null && Number.isFinite(bidPrem);
-
-  // Mid-print check: both sides effectively zero — no directional signal.
-  if (askPremValid && bidPremValid && askPrem < 1 && bidPrem < 1) {
-    return null;
-  }
-
-  // Determine ask-vs-bid pressure.
-  let aggressiveAsk = false;
-  let aggressiveBid = false;
-  let sourceTag: 'ask' | 'bid' | null = null;
-
-  if (row.is_ask === true) {
-    aggressiveAsk = true;
-    sourceTag = 'ask';
-  } else if (row.is_bid === true) {
-    aggressiveBid = true;
-    sourceTag = 'bid';
-  } else {
-    // No explicit aggressor flag. UW's RepeatedHits* rules ARE accumulation
-    // by definition — repeated fills into the same contract. Cheap OTM/0DTE
-    // buyers routinely lift at the bid (MM willing to sell), which inverts
-    // total_bid_side_prem and bear-tagged a +475% NVDA 0DTE call on 2026-04-24.
-    // Trust the rule's directional intent: call=ask-aggressive, put=bid-aggressive.
-    const alertRule = typeof raw['alert_rule'] === 'string' ? raw['alert_rule'] : '';
-    const isRepeatedHits = alertRule.startsWith('RepeatedHits');
-    if (isRepeatedHits) {
-      if (side === 'call') { aggressiveAsk = true; sourceTag = 'ask'; }
-      else { aggressiveBid = true; sourceTag = 'bid'; }
-    } else if (askPremValid && bidPremValid) {
-      if (askPrem > bidPrem) {
-        aggressiveAsk = true;
-        sourceTag = 'ask';
-      } else if (bidPrem > askPrem) {
-        aggressiveBid = true;
-        sourceTag = 'bid';
-      } else {
-        return null; // tied, no edge
-      }
-    } else if (askPremValid && askPrem > 0 && (!bidPremValid || bidPrem === 0)) {
-      aggressiveAsk = true;
-      sourceTag = 'ask';
-    } else if (bidPremValid && bidPrem > 0 && (!askPremValid || askPrem === 0)) {
-      aggressiveBid = true;
-      sourceTag = 'bid';
-    } else {
-      return null;
-    }
-  }
-
-  // Map side + ask/bid → direction.
-  let direction: Direction;
-  if (aggressiveAsk) {
-    direction = side === 'call' ? 'up' : 'down';
-  } else if (aggressiveBid) {
-    // call selling = bearish; put selling = bullish
-    direction = side === 'call' ? 'down' : 'up';
-  } else {
-    return null;
-  }
-
-  const source = `aggressive_${sourceTag}_${side}`;
-  return { direction, source };
-}
+// Direction inference now lives in `_shared/directionInference.ts` and is
+// imported above. Keep all changes there so ct-prediction-backfill stays in
+// lockstep with grader behavior.
 
 // ---------------------------------------------------------------------------
 // Horizon-time computation.
