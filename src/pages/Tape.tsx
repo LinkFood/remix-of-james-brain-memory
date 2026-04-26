@@ -80,6 +80,25 @@ function rthOpenCutoffUtc(daysAgo = 0): Date {
   return new Date(`${yyyy}-${mm}-${dd}T13:30:00Z`);
 }
 
+// Trading-day-aware cutoff. Walks back N TRADING days from today's UTC date
+// (skips Sat/Sun) and returns RTH open of that day. Use for "Last N trading days"
+// filters so weekend viewing still shows the right window. Plain calendar math
+// would give Sat-3 = Wed but our viewing-on-Saturday user wants the last 3 actual
+// trading days = Wed-Thu-Fri.
+function tradingDaysAgoCutoff(tradingDaysAgo: number): Date {
+  const d = new Date();
+  let count = 0;
+  while (count < tradingDaysAgo) {
+    d.setUTCDate(d.getUTCDate() - 1);
+    const wd = d.getUTCDay();
+    if (wd >= 1 && wd <= 5) count++;
+  }
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(d.getUTCDate()).padStart(2, '0');
+  return new Date(`${yyyy}-${mm}-${dd}T13:30:00Z`);
+}
+
 /** ET calendar date string (YYYY-MM-DD) for a given ISO timestamp. Used for separator grouping. */
 function etDateKey(iso: string): string {
   try {
@@ -425,8 +444,11 @@ export default function Tape() {
       from: rthOpenCutoffUtc(1).toISOString(),
       to: rthOpenCutoffUtc(0).toISOString(),
     };
-    // last3d — 3 calendar days back from today's RTH open.
-    return { from: rthOpenCutoffUtc(3).toISOString(), to: null };
+    // last3d — 3 TRADING days back (skips Sat/Sun) so weekend viewing still
+    // shows Wed-Thu-Fri. Calendar math (rthOpenCutoffUtc(3)) gives Thursday-only
+    // on a Saturday and excludes Wednesday. tradingDaysAgoCutoff(3) walks back
+    // 3 actual trading sessions regardless of which weekday it's run on.
+    return { from: tradingDaysAgoCutoff(3).toISOString(), to: null };
   }, [dayFilter]);
   const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
   const [activeTicker, setActiveTicker] = useState<string | null>(null);
