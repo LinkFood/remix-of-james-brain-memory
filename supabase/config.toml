@@ -387,6 +387,21 @@ verify_jwt = false
 [functions.ct-detector-pair-qqq-iwm]
 verify_jwt = false
 
+[functions.ct-detector-smart-money-repeat]
+verify_jwt = false
+
+[functions.ct-detector-weekly-atm-voi]
+verify_jwt = false
+
+[functions.ct-detector-zerodte-opening-call]
+verify_jwt = false
+
+[functions.ct-detector-zerodte-put-voi]
+verify_jwt = false
+
+[functions.ct-detector-small-cap-inverted-put]
+verify_jwt = false
+
 [functions.ct-backtest-harness]
 verify_jwt = false
 
