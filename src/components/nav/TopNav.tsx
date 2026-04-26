@@ -181,7 +181,7 @@ export function TopNav({ userId }: TopNavProps) {
   const navigate = useNavigate();
   const time = useClock();
   const { killAll, isKilling } = useKillSwitch();
-  const { totalCostToday, recentTasks } = useTokenCounter(userId);
+  const { totalCostToday, jacCostToday, ctCostToday, recentTasks, ctBreakdownToday, last7Days, weeklyCost } = useTokenCounter(userId);
   const { runningTasks, reminders } = useTickerData(userId);
 
   const [lastHeartbeat, setLastHeartbeat] = useState<string | null>(null);
@@ -403,31 +403,95 @@ export function TopNav({ userId }: TopNavProps) {
               <span>{formatCost(totalCostToday)} today</span>
             </button>
           </PopoverTrigger>
-          <PopoverContent className="w-72 p-3" align="end">
-            <div className="text-xs font-medium mb-2">Today's costs</div>
-            <div className="text-lg font-bold mb-3">{formatCost(totalCostToday)}</div>
-            {recentTasks.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No tasks today.</p>
-            ) : (
-              <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                {recentTasks.map((task) => (
-                  <div key={task.id} className="flex items-center justify-between text-xs">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <span className="text-muted-foreground shrink-0">
-                        {task.agent ? (AGENT_LABELS[task.agent] || task.agent) : '?'}
+          <PopoverContent className="w-80 p-3" align="end">
+            <div className="text-xs font-medium mb-1">Today's costs</div>
+            <div className="text-lg font-bold leading-tight">{formatCost(totalCostToday)}</div>
+            <div className="text-[10px] text-muted-foreground mb-3">
+              CT {formatCost(ctCostToday)} · JAC {formatCost(jacCostToday)}
+            </div>
+
+            {/* 7-day rolling — sparkline + per-day list */}
+            {last7Days.length > 0 && (
+              <div className="mb-3 pb-3 border-b border-white/10">
+                <div className="flex items-baseline justify-between mb-1.5">
+                  <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Last 7 days</span>
+                  <span className="text-xs font-mono">{formatCost(weeklyCost)}</span>
+                </div>
+                <div className="flex items-end gap-0.5 h-8 mb-1.5">
+                  {(() => {
+                    const max = Math.max(...last7Days.map((d) => d.cost), 0.01);
+                    return last7Days.map((d) => {
+                      const isToday = d.date === new Date().toISOString().slice(0, 10) ||
+                        d.date === `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+                      const h = Math.max(2, (d.cost / max) * 32);
+                      return (
+                        <div
+                          key={d.date}
+                          title={`${d.date}: ${formatCost(d.cost)}`}
+                          className={`flex-1 rounded-sm ${isToday ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+                          style={{ height: `${h}px` }}
+                        />
+                      );
+                    });
+                  })()}
+                </div>
+                <div className="flex justify-between text-[9px] text-muted-foreground">
+                  {last7Days.map((d) => {
+                    const dt = new Date(d.date + 'T12:00:00');
+                    return (
+                      <span key={d.date} className="flex-1 text-center">
+                        {dt.toLocaleDateString(undefined, { weekday: 'narrow' })}
                       </span>
-                      <span className="truncate text-foreground/70">
-                        {task.intent?.slice(0, 40) || 'task'}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0 ml-2">
-                      <span className="text-muted-foreground">{timeAgo(task.created_at)}</span>
-                      <span className="font-mono">{task.cost_usd ? formatCost(task.cost_usd) : '--'}</span>
-                    </div>
-                  </div>
-                ))}
+                    );
+                  })}
+                </div>
               </div>
             )}
+
+            {/* CT autonomous breakdown — top spenders today */}
+            {ctBreakdownToday.length > 0 && (
+              <div className="mb-3">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">CT autonomous (today)</div>
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {ctBreakdownToday.map((row) => (
+                    <div key={row.source} className="flex items-center justify-between text-xs">
+                      <span className="truncate text-foreground/80">{row.source}</span>
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        <span className="text-[10px] text-muted-foreground">{row.calls}</span>
+                        <span className="font-mono text-[11px]">{formatCost(row.cost)}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* JAC tasks — recent */}
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">JAC tasks (today)</div>
+              {recentTasks.length === 0 ? (
+                <p className="text-xs text-muted-foreground">No JAC tasks today.</p>
+              ) : (
+                <div className="space-y-1 max-h-32 overflow-y-auto">
+                  {recentTasks.map((task) => (
+                    <div key={task.id} className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-muted-foreground shrink-0">
+                          {task.agent ? (AGENT_LABELS[task.agent] || task.agent) : '?'}
+                        </span>
+                        <span className="truncate text-foreground/70">
+                          {task.intent?.slice(0, 40) || 'task'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0 ml-2">
+                        <span className="text-muted-foreground">{timeAgo(task.created_at)}</span>
+                        <span className="font-mono">{task.cost_usd ? formatCost(task.cost_usd) : '--'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </PopoverContent>
         </Popover>
 
