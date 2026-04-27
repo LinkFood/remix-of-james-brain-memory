@@ -15,19 +15,8 @@ Found during pre-open + first 15 min of trading. Ordered by impact. Fix after cl
 
 ---
 
-### 0b. Single-name 0DTE prints exist in our data — investigate
-**Symptom:** Today (Mon 2026-04-27) we ingested fresh prints into 04/27-expiring single-name contracts: TSLA(7), NVDA(9), GOOGL(4), MSFT(2), AAPL(1), AMZN(1), META(0). Per James's market-structure understanding, single names shouldn't have 0DTE prints on Monday — they only have weekly Friday expiries. Minimum DTE on Mon for single names should be 4 (this Friday).
-
-**Why this matters:** the 5 new shadow detectors include `zerodte_opening_call_v1` and `zerodte_put_voi_extreme_v1`. If single-name 0DTE flow is structurally bogus on Mondays, these detectors will fire on phantom signals when promoted from shadow → trial.
-
-**Possibilities to verify:**
-- (a) Are these legit institutional close-out flows on contracts originally listed weeks ago? (UW returned real bid/ask, so contracts exist on the exchange)
-- (b) Has UW changed how it labels expiry, or are some single names quietly added Monday weeklies?
-- (c) Is `expiry` column derived from a different field than I think?
-
-**Sample to verify:** `alert_id=4764a624-3d15-4796-a628-9065ff06d0ee` — GOOGL fresh print today with `raw.expiry=2026-04-27, raw.option_chain=GOOGL260427C00342500`. UW raw payload directly says 04/27 expiry.
-
-**Defer-but-resolve:** must answer before promoting 0DTE detectors out of shadow. Add expiry-validity guard to OCC synthesis if it turns out to be data corruption.
+### 0b. ~~Single-name 0DTE investigation~~ — RESOLVED, NOT A BUG
+**Resolution (2026-04-27 mid-session):** Nasdaq added Mon/Wed expirations for AAPL, META, AMZN, GOOGL, TSLA, MSFT, NVDA, IBIT, AVGO effective 2026-01-26. First Monday expiry was Feb 2. Today's single-name 0DTE prints are legitimate — UW data is correct, pipeline is correct, `zerodte_*` detectors were correctly designed. See memory `reference_options_expiry_calendar.md` so future sessions don't re-question this.
 
 ---
 
