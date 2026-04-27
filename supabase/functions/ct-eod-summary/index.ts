@@ -401,6 +401,61 @@ serve(async (req) => {
     console.warn('[ct-eod-summary] ct_print_tracks threw:', String(e));
   }
 
+  // ct_contract_tracks (Pass 3 grader, added 2026-04-25) — the contract-axis
+  // grader where today's actual WIN/LOSS lives. EOD pre-dates this layer and
+  // was reading 0 realized tracks despite real WINs (TSLA P 365 +109%, SPY
+  // 714C +85%, etc.). Load WIN + LOSS for today's session as parallel source.
+  // Adapted to PrintTrackRow shape so it merges cleanly into downstream
+  // counts and topRealizedTracks slicing — column-mapping below preserves
+  // the legacy interface.
+  let contractRealizedToday: PrintTrackRow[] = [];
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (sb.from('ct_contract_tracks' as never) as any)
+      .select('alert_id, ticker, option_symbol, peak_contract_pct, peak_contract_at, max_drawdown_pct, track_status, first_tracked_at, last_tracked_at, dte_at_print')
+      .in('track_status', ['WIN', 'LOSS'])
+      .gte('first_tracked_at', sessionDayStartUtc)
+      .lte('first_tracked_at', sessionDayEndUtc)
+      .order('peak_contract_pct', { ascending: false, nullsFirst: false })
+      .limit(50);
+    if (error) {
+      console.warn('[ct-eod-summary] ct_contract_tracks WIN/LOSS load failed:', error.message);
+    } else {
+      // Map contract-axis schema → PrintTrackRow shape for downstream merge.
+      // dte_bucket synthesized from dte_at_print (0=0DTE, 1-5=weekly, 6+=swing).
+      contractRealizedToday = ((data ?? []) as Array<Record<string, unknown>>).map((r) => {
+        const dte = typeof r.dte_at_print === 'number' ? r.dte_at_print : null;
+        const dte_bucket = dte === null ? null
+          : dte === 0 ? '0DTE'
+          : dte <= 5 ? 'weekly'
+          : 'swing';
+        return {
+          print_id: (r.alert_id as string) ?? '',
+          alert_id: (r.alert_id as string) ?? '',
+          ticker: (r.ticker as string) ?? '',
+          signature_key: (r.option_symbol as string) ?? null,
+          print_time: (r.first_tracked_at as string) ?? '',
+          peak_favorable_pct: r.peak_contract_pct as number | null,
+          peak_favorable_at: r.peak_contract_at as string | null,
+          peak_adverse_pct: r.max_drawdown_pct as number | null,
+          threshold_pct: null,
+          track_status: r.track_status as string,
+          realized_at: (r.last_tracked_at as string) ?? (r.first_tracked_at as string) ?? '',
+          dte_bucket,
+        } as PrintTrackRow;
+      });
+      console.log(`[ct-eod-summary] contract-axis WIN/LOSS today: ${contractRealizedToday.length}`);
+    }
+  } catch (e) {
+    console.warn('[ct-eod-summary] ct_contract_tracks threw:', String(e));
+  }
+
+  // Merge: print-axis tracks (legacy) + contract-axis tracks (new layer).
+  // Sort descending by peak_favorable_pct so topRealizedTracks captures the
+  // best of both axes.
+  realizedTracksToday = [...realizedTracksToday, ...contractRealizedToday]
+    .sort((a, b) => (b.peak_favorable_pct ?? 0) - (a.peak_favorable_pct ?? 0));
+
   // ct_signatures library health
   let signaturesAll: SignatureRow[] = [];
   let signaturesPromoted: SignatureRow[] = [];
