@@ -107,7 +107,17 @@ function expectedCadenceMinutes(schedule: string): number {
     (dow === '*' || /^[\d,-]+$/.test(dow))
   ) {
     const hours = hour.split(',').filter(Boolean).length || 1;
-    return Math.max(60, Math.floor((24 * 60) / hours));
+    let baseCadence = Math.max(60, Math.floor((24 * 60) / hours));
+    // Weekday-only daily crons (e.g. `0 22 * * 1-5`) skip Sat+Sun. The
+    // gap between Fri's last fire and Mon's next fire is 72h, so a 24h-
+    // cadence threshold would alarm every Monday morning on every such
+    // cron. Triple the base cadence to absorb the weekend gap. Hit live
+    // 2026-04-27 — 13 weekday-daily crons (ct-spy-capture, ct-vix-capture,
+    // ct-eod-positioning, etc.) all flared "stale 63-71h" simultaneously.
+    if (/^1-5$/.test(dow) || /^[1-5](,[1-5])+$/.test(dow)) {
+      baseCadence *= 3;
+    }
+    return baseCadence;
   }
 
   // Weekly-ish schedule (specific dow).
