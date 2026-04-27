@@ -432,6 +432,13 @@ export function useNetPremiumExpirySplit(ticker?: string, sinceMin?: number) {
  * pre-market or off-hours so we still show something useful on a pre-open
  * read. Caveat: during EST (Nov-Mar) 13:30 UTC is actually 08:30 ET — off
  * by an hour. For a window-minute calc that's fine.
+ *
+ * Min floor of 30: in the first half-hour after open the window is too
+ * narrow to aggregate meaningful flow (capture cron is 5min, RPC reads
+ * raw alerts) — entire per-ticker table renders zeros. The 30-min floor
+ * means "Today" always has enough lookback to show real numbers. This
+ * was hit live 2026-04-27 first portfolio test — table looked broken
+ * for first 14 minutes when actually data was just landing.
  */
 export function computeTodayWindowMin(): number {
   const now = new Date();
@@ -444,5 +451,5 @@ export function computeTodayWindowMin(): number {
   const diffMin = Math.floor((now.getTime() - openUtc.getTime()) / 60_000);
   if (diffMin <= 0) return 360;   // pre-market — show last 6h
   if (diffMin > 480) return 480;  // after close — cap at 8h so we show RTH only
-  return diffMin;
+  return Math.max(30, diffMin);
 }

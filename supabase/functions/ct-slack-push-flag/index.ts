@@ -42,9 +42,23 @@ function directionEmoji(direction: string | null | undefined): string {
   return ':white_circle:';
 }
 
+// Resolve the display ticker. Detector-portfolio flags (signature/cluster/
+// whale/etc.) write specialist_ticker=NULL because they don't belong to any
+// per-ticker specialist; fall back to instrument, then derive from the OCC
+// option_symbol prefix. Without this, headers render the literal "null".
+function resolveTicker(flag: Flag): string {
+  if (flag.specialist_ticker && flag.specialist_ticker !== 'null') return flag.specialist_ticker;
+  if (flag.instrument && flag.instrument !== 'null') return flag.instrument;
+  if (flag.option_symbol) {
+    const m = flag.option_symbol.match(/^([A-Z]+)\d/);
+    if (m) return m[1];
+  }
+  return 'UNKNOWN';
+}
+
 interface Flag {
   id: string;
-  specialist_ticker: string;
+  specialist_ticker: string | null;
   instrument: string | null;
   option_symbol: string | null;
   strike: number | null;
@@ -164,8 +178,9 @@ serve(async (req) => {
     const convBadge = flag.status === 'conviction' ? ' · [CONVICTION]' : '';
     const dirUpper = (flag.direction ?? 'neutral').toUpperCase();
 
+    const ticker = resolveTicker(flag);
     const headerText =
-      `${emoji} ${flag.specialist_ticker}${convBadge} — ${dirUpper} · score ${Math.round(flag.score)}`;
+      `${emoji} ${ticker}${convBadge} — ${dirUpper} · score ${Math.round(flag.score)}`;
 
     const contractLine = flag.option_symbol
       ? `\`${flag.option_symbol}\` · strike ${fmtNum(flag.strike)} · exp ${flag.expiry ?? 'n/a'}`
@@ -187,7 +202,7 @@ serve(async (req) => {
     }
 
     const fallbackText =
-      `${flag.specialist_ticker} ${dirUpper} flag score ${Math.round(flag.score)}${convBadge} — ${flag.option_symbol ?? 'underlying'}`;
+      `${ticker} ${dirUpper} flag score ${Math.round(flag.score)}${convBadge} — ${flag.option_symbol ?? 'underlying'}`;
 
     const blocks: Array<Record<string, unknown>> = [
       { type: 'header', text: { type: 'plain_text', text: headerText.slice(0, 150), emoji: true } },
