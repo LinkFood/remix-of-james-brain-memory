@@ -254,34 +254,58 @@ function isWeekendUtc(d: Date = new Date()): boolean {
 }
 
 /** Best-effort "is this schedule's window currently open?" — used to suppress
- *  stale alerts for RTH-only crons outside their window. A stale alert
- *  during the window is still legit.
+ *  stale alerts for crons outside their declared hour window.
+ *
+ *  Handles three cases:
+ *   1. RTH-restricted (hour AND dow restricted) — original case
+ *   2. Hour-only-restricted (any hour gap, dow=*) — added 2026-04-27 after
+ *      my own grader/detector cron splits created off-hours lanes like
+ *      `0,30 0-12,21-23 * * *` that legitimately don't fire during RTH but
+ *      were flaring stale every RTH. Schedule-aware suppression had to
+ *      generalize beyond just RTH-tagged schedules.
+ *   3. Otherwise — return true (treat as always-open).
  */
 function isScheduleWindowOpen(schedule: string, d: Date = new Date()): boolean {
-  // If schedule isn't RTH-restricted, consider window always open.
-  if (!isRthRestrictedSchedule(schedule)) return true;
-
-  // Quickly check current hour against the schedule's hour range in UTC.
   const parts = schedule.trim().split(/\s+/);
   if (parts.length !== 5) return true;
   const hour = parts[1];
+  const dow = parts[4];
   const utcHour = d.getUTCHours();
   const utcDay = d.getUTCDay();
-  // Weekend — if the cron is dow-restricted to 1-5, the window is closed.
-  if (utcDay === 0 || utcDay === 6) return false;
 
+  // Hour field is `*` — any hour fits → always open (defer to dow check
+  // elsewhere via isCronDayActive).
+  if (hour === '*') return true;
+
+  // RTH-style: weekend on dow=1-5 → window closed.
+  if (/^1-5$/.test(dow) && (utcDay === 0 || utcDay === 6)) return false;
+
+  // Range form `lo-hi`.
   const rangeMatch = hour.match(/^(\d+)-(\d+)$/);
   if (rangeMatch) {
     const lo = parseInt(rangeMatch[1], 10);
     const hi = parseInt(rangeMatch[2], 10);
     return utcHour >= lo && utcHour <= hi;
   }
-  const listMatch = hour.match(/^(\d+)(,\d+)*$/);
-  if (listMatch) {
-    const hours = hour.split(',').map((h) => parseInt(h, 10));
-    return hours.includes(utcHour);
+
+  // List form `H1,H2,H3` OR list of ranges `H1-H2,H3-H4`. Both supported.
+  // Common case for off-hours crons: `0-12,21-23` excludes RTH window.
+  const tokens = hour.split(',');
+  for (const tok of tokens) {
+    const r = tok.match(/^(\d+)-(\d+)$/);
+    if (r) {
+      const lo = parseInt(r[1], 10);
+      const hi = parseInt(r[2], 10);
+      if (utcHour >= lo && utcHour <= hi) return true;
+      continue;
+    }
+    const single = tok.match(/^\d+$/);
+    if (single && parseInt(tok, 10) === utcHour) return true;
   }
-  // Fallback — if we can't decide, conservatively treat as open.
+  // Hour field is restricted but current hour matched none — window closed.
+  if (/^[\d,-]+$/.test(hour)) return false;
+
+  // Fallback — unparseable hour → conservatively treat as open.
   return true;
 }
 
