@@ -6,19 +6,28 @@ Found during pre-open + first 15 min of trading. Ordered by impact. Fix after cl
 
 ## P0 — Fix today after close (could repeat tomorrow open)
 
-### 0. ct-print-grader cron too sparse for live RTH — P/L gap on /tape
-**Symptom:** Half of today's watchlist prints showed empty P/L chips for up to 30 min after the print landed. Real fix manually triggered the grader live; next cron (14:30) caught up.
+### 0. ct-print-grader cron too sparse for live RTH ✅ FIXED LIVE 2026-04-27
+**Status:** Fixed mid-session via `20260427150000_grader_cron_faster_rth.sql`. Split single `*/30` cron into:
+- `ct-print-grader-rth`: `*/10 13-20 * * 1-5` (every 10 min RTH+1h, weekdays)
+- `ct-print-grader-offhours`: `0,30 0-12,21-23 * * *` (every 30 min off-hours, daily)
 
-**Cause:** `ct-print-grader` cron is `*/30 * * * *` — fires every 30 min. With 5+ alerts/min during open, the gap between print and track-creation can hit 30 min. UI reads `ct_contract_tracks` for the chip — no track row = empty chip.
+**Watch for tomorrow:** P/L coverage should stay ≥90% throughout RTH instead of sawtooth-ing 75%↔97% every 30 min.
 
-**Files:**
-- `supabase/migrations/20260425000010_print_grades.sql:99-103` (cron schedule)
-- `supabase/functions/ct-print-grader/index.ts:46,49` (`PASS2_NEW_SCAN_LIMIT=800, PASS2_CONTRACT_NEW_WORK_LIMIT=150`)
+---
 
-**Fix options (pick one):**
-- Shorten RTH cron to `*/10 * * * 1-5` (3x faster)
-- Or trigger on `ct_flow_alerts` insert via realtime/trigger (sub-second)
-- Or just bump `PASS2_CONTRACT_NEW_WORK_LIMIT` to 300 if 30-min cadence is fine
+### 0b. Single-name 0DTE prints exist in our data — investigate
+**Symptom:** Today (Mon 2026-04-27) we ingested fresh prints into 04/27-expiring single-name contracts: TSLA(7), NVDA(9), GOOGL(4), MSFT(2), AAPL(1), AMZN(1), META(0). Per James's market-structure understanding, single names shouldn't have 0DTE prints on Monday — they only have weekly Friday expiries. Minimum DTE on Mon for single names should be 4 (this Friday).
+
+**Why this matters:** the 5 new shadow detectors include `zerodte_opening_call_v1` and `zerodte_put_voi_extreme_v1`. If single-name 0DTE flow is structurally bogus on Mondays, these detectors will fire on phantom signals when promoted from shadow → trial.
+
+**Possibilities to verify:**
+- (a) Are these legit institutional close-out flows on contracts originally listed weeks ago? (UW returned real bid/ask, so contracts exist on the exchange)
+- (b) Has UW changed how it labels expiry, or are some single names quietly added Monday weeklies?
+- (c) Is `expiry` column derived from a different field than I think?
+
+**Sample to verify:** `alert_id=4764a624-3d15-4796-a628-9065ff06d0ee` — GOOGL fresh print today with `raw.expiry=2026-04-27, raw.option_chain=GOOGL260427C00342500`. UW raw payload directly says 04/27 expiry.
+
+**Defer-but-resolve:** must answer before promoting 0DTE detectors out of shadow. Add expiry-validity guard to OCC synthesis if it turns out to be data corruption.
 
 ---
 
