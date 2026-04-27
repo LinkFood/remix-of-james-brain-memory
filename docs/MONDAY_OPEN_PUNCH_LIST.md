@@ -130,14 +130,12 @@ Slack template now uses `resolveTicker()` helper that prefers `specialist_ticker
 
 ---
 
-### 2b. Ticker sparklines render only for some tickers (3/10)
-**Symptom:** /tape top-bar ticker chips — sparklines show only on AAPL, GOOGL, AMZN. SPY, QQQ, IWM, MSFT, META, NVDA, TSLA blank. (Screenshot 10:21 ET 2026-04-27.)
+### 2b. ✅ FIXED LIVE 2026-04-27 — Ticker sparklines (PostgREST 1000-row cap)
+**Root cause (after deeper dig):** Wrong component initially. The /tape ticker-chip sparklines come from `useMacroSparklines` (NOT FlowPulseSparkline). It batched all 10 tickers' last-6h price bars in one `.in('ticker', TICKERS)` query — totaling ~5000 rows, capped at PostgREST's 1000. Alphabetically-first 2-3 tickers (AAPL/AMZN/GOOGL) got their full series; others got 0 rows = empty sparkline.
 
-**Cause:** Likely sparkline data source (`ct_flow_pulse_ticks` series via `useFlowPulseSeries`) thresholds — needs N>X data points to render, or specific tickers missing rows. Same screenshot showed numbers populated for all 10, just no sparkline.
+**Fix:** Per-ticker queries via `Promise.all()` — each well under cap.
 
-**Files to check:**
-- `src/components/command/FlowPulseSparkline.tsx`
-- `src/hooks/useFlowPulse.ts:164` (`useFlowPulseSeries`)
+**Same class as `feedback_postgrest_1000_row_cap.md`** — third time this bug class has hit production this week. Worth a project-wide audit for `.in()` queries that could exceed 1000 rows.
 
 ---
 
