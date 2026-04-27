@@ -78,6 +78,28 @@ function pickGrade(flag: { ct_flag_grades: FlagGrade[] | FlagGrade | null }): Fl
 
 type OutcomeFilter = 'active' | 'won' | 'lost' | 'neutral' | 'all';
 
+type DateRangeFilter = 'today' | '7d' | '30d' | 'all';
+
+/** Convert a date-range filter to an ISO cutoff for `created_at >=` queries.
+ *  'today' = NY-tz midnight today; '7d' / '30d' = N days ago; 'all' = null. */
+function dateRangeCutoff(range: DateRangeFilter): string | null {
+  if (range === 'all') return null;
+  const now = new Date();
+  if (range === 'today') {
+    // NY-tz midnight to align with the trader's calendar day.
+    const nyParts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(now).reduce<Record<string, string>>((acc, p) => {
+      if (p.type !== 'literal') acc[p.type] = p.value;
+      return acc;
+    }, {});
+    // Construct an ISO that represents NY-midnight today.
+    return new Date(`${nyParts.year}-${nyParts.month}-${nyParts.day}T00:00:00-04:00`).toISOString();
+  }
+  const days = range === '7d' ? 7 : 30;
+  return new Date(now.getTime() - days * 24 * 60 * 60_000).toISOString();
+}
+
 interface Filters {
   specialists: Set<string>;
   status: 'all' | Status;
@@ -85,6 +107,7 @@ interface Filters {
   outcome: OutcomeFilter;
   minScore: number;
   onlySlacked: boolean;
+  dateRange: DateRangeFilter;
 }
 
 interface JamesFlagGrade {
@@ -486,6 +509,7 @@ export default function Flags() {
     outcome: 'active',
     minScore: 70,
     onlySlacked: false,
+    dateRange: 'today',
   });
   const [selectedFlag, setSelectedFlag] = useState<Flag | null>(null);
   const [selectedContract, setSelectedContract] = useState<string | null>(null);
@@ -500,6 +524,7 @@ export default function Flags() {
       direction: filters.direction,
       minScore: filters.minScore,
       onlySlacked: filters.onlySlacked,
+      dateRange: filters.dateRange,
     }],
     queryFn: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -516,6 +541,8 @@ export default function Flags() {
       if (filters.direction !== 'all') q = q.eq('direction', filters.direction);
       if (filters.onlySlacked) q = q.not('slacked_at', 'is', null);
       q = q.gte('score', filters.minScore);
+      const cutoff = dateRangeCutoff(filters.dateRange);
+      if (cutoff) q = q.gte('created_at', cutoff);
       const { data, error } = await q;
       if (error) throw error;
       return (data ?? []) as unknown as Flag[];
@@ -551,6 +578,7 @@ export default function Flags() {
     queryKey: ['ct_james_flags_live', {
       specialists: Array.from(filters.specialists).sort(),
       direction: filters.direction,
+      dateRange: filters.dateRange,
     }],
     queryFn: async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -566,6 +594,8 @@ export default function Flags() {
         q = q.in('instrument', Array.from(filters.specialists));
       }
       if (filters.direction !== 'all') q = q.eq('direction', filters.direction);
+      const cutoff = dateRangeCutoff(filters.dateRange);
+      if (cutoff) q = q.gte('created_at', cutoff);
       const { data, error } = await q;
       if (error) throw error;
       return (data ?? []) as unknown as JamesFlag[];
@@ -715,6 +745,30 @@ export default function Flags() {
                 {m === 'mine' && <Star className="w-3 h-3 mr-1" />}
                 {m}
               </Button>
+            ))}
+          </div>
+
+          {/* Date range — Today is the default so /flags opens to fresh signal */}
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-muted-foreground mr-1">When:</span>
+            {([
+              { key: 'today', label: 'Today' },
+              { key: '7d', label: '7d' },
+              { key: '30d', label: '30d' },
+              { key: 'all', label: 'All' },
+            ] as const).map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setFilters((p) => ({ ...p, dateRange: key }))}
+                className={cn(
+                  'text-[11px] font-mono px-2 py-1 rounded border transition-colors',
+                  filters.dateRange === key
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-muted bg-muted/20 text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {label}
+              </button>
             ))}
           </div>
 
