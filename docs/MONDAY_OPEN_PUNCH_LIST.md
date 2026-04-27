@@ -6,6 +6,27 @@ Found during pre-open + first 15 min of trading. Ordered by impact. Fix after cl
 
 ## P0 — Fix today after close (could repeat tomorrow open)
 
+### 00. **TOP PRIORITY** — 0DTE detectors miss the actual money
+**Symptom (confirmed live 2026-04-27 ~14:15 ET):** Today's 10 contracts at peak ≥+50% all fired ZERO flags. ZERO. Top winners: TSLA 0DTE P $365 +109%, SPY 0DTE C $714 +85%, NVDA 0DTE C $215 +81%, TSLA 0DTE C $372.50 +80%, NVDA 0DTE C $210 +70.5%, GOOGL 0DTE C $342.50 +63%. The system that should amplify intelligence found NONE of them.
+
+**Root cause (confirmed via manual detector invoke):**
+- `zerodte_opening_call_v1` filters: `alarms_off_hour` rejects anything outside opening window. Today's winners hit later — system blind to mid-day 0DTE flow.
+- `alarms_skipped_non_0dte`: detector's 0DTE classification is likely using `dte_class='0dte'` column (added Saturday) — but that column may not be populated correctly on incoming `ct_flow_alerts`, so real 0DTE prints get rejected as "non-0DTE".
+
+**What we caught vs missed today:**
+- Caught (7 high-score flags): META 515C / 710C / 680C swings, GOOGL 605C $350, MSFT 501C $437.50 — all longer-dated (11-39 DTE). Valid signals but not where the money was.
+- Missed: 10 contracts at +50%+ peak, every one 0DTE. Plus the 12 LOSSES today which are also all 0DTE (volatility-not-direction reasserted).
+
+**Fix path (in order):**
+1. Verify `dte_class` column on today's `ct_flow_alerts` rows. If it's null/wrong on confirmed 0DTE prints, fix the trigger that populates it (or compute at detector-time from `expiry` vs trade-date).
+2. Widen `zerodte_opening_call_v1` time-of-day filter. Either remove the "opening hour only" rule or make it a separate detector ("zerodte_intraday_call").
+3. Lower predicate bars in shadow for one week to get sample data on what they WOULD have fired on.
+4. Add a "missed-winners" report to Sunday calibration: "for any contract that peaked ≥+50% today, list which detectors saw the print and why they didn't fire."
+
+**Don't promote zerodte_* detectors out of shadow until #1 + #2 fixed** — promoting them now means they'd Slack on the wrong stuff.
+
+---
+
 ### 0. ct-print-grader cron too sparse for live RTH ✅ FIXED LIVE 2026-04-27
 **Status:** Fixed mid-session via `20260427150000_grader_cron_faster_rth.sql`. Split single `*/30` cron into:
 - `ct-print-grader-rth`: `*/10 13-20 * * 1-5` (every 10 min RTH+1h, weekdays)
