@@ -97,15 +97,24 @@ export function useMacroSparklines(): MacroSparklinesResult {
     refetchInterval: 60_000,
     retry: false,
     queryFn: async () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.from('ct_price_bars' as never) as any)
-        .select('ticker,ts,close')
-        .in('ticker', Array.from(TICKERS))
-        .gte('ts', sinceIso)
-        .order('ticker', { ascending: true })
-        .order('ts', { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as PriceBarRow[];
+      // PostgREST caps every response at 1000 rows. With 10 tickers × ~500
+      // bars each (≈5000 total), a single batched query truncates to the
+      // alphabetically-first 2 tickers — leaving 7-8 watchlist sparklines
+      // empty for the entire session. Hit live 2026-04-27 first portfolio
+      // test. Fix: per-ticker queries in parallel; each well under cap.
+      const results = await Promise.all(
+        TICKERS.map(async (t) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data, error } = await (supabase.from('ct_price_bars' as never) as any)
+            .select('ticker,ts,close')
+            .eq('ticker', t)
+            .gte('ts', sinceIso)
+            .order('ts', { ascending: true });
+          if (error) throw error;
+          return (data ?? []) as PriceBarRow[];
+        }),
+      );
+      return results.flat();
     },
   });
 
