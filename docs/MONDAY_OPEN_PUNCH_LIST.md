@@ -35,18 +35,36 @@ Found during pre-open + first 15 min of trading. Ordered by impact. Fix after cl
 
 ---
 
-### 2. Flag data quality — null specialist_ticker + bullish-on-puts
-**Symptom:** All 319 backlog flags drained Slack as `null BULLISH flag score 85 — SPY260501P00709000` (PUT options labeled BULLISH). If new detectors fire today with the same upstream bug, real signals will spam.
+### 2. Flag data quality — null specialist_ticker on REAL signals (CONFIRMED LIVE)
+**Status update 2026-04-27 ~13:00 ET:** Confirmed firing on real signals, not just backlog. **4 of 7 high-score Slack pushes today read `null BULLISH flag score X — SYMBOL`.** Specifically: META 515C $675 at 13:32, GOOGL 605C $350 at 14:58 (twice), MSFT 501C $437.50 at 15:11. The signature_v1 + cluster detectors are NOT writing `specialist_ticker` at all — only specialist-direct flags populate it.
 
-**Cause:**
-- `specialist_ticker` written as NULL on every flag in `ct_flags` from the Friday-Saturday batch
-- `direction='bullish'` on every flag regardless of put/call symbol (the documented bullish-bias from `project_co_trader_specialist_bias_weekend.md`)
+**Root cause (confirmed):** `signature_v1` and the cluster detectors don't have a `specialist_ticker` to attach (they fire from raw flow patterns, not from a per-ticker specialist). The Slack template was written assuming all flags came from a specialist. When the field is null, the template renders the literal string "null".
 
-**Fix:**
-- Add NOT NULL constraint on `ct_flags.specialist_ticker` (after backfilling existing NULLs from `option_symbol` parse)
-- Either auto-derive direction from contract side at insert (PUT → bearish unless explicitly overridden by specialist) OR validate direction matches contract type and reject mismatches with a logged warning
+**Fix options:**
+- Update Slack template: fall back to `flag.ticker` (extracted from `option_symbol`) when `specialist_ticker IS NULL`
+- Or backfill `specialist_ticker` from option_symbol parse at insert time (cheaper than touching template)
+- Or rename the column to `attribution_ticker` and ALWAYS populate it with `ticker || specialist_ticker` semantics
 
-**Watch for repeat today:** if any flag fires after open with `specialist_ticker IS NULL` or PUT+bullish mismatch, this is P0-now, not P0-after-close.
+**Don't add NOT NULL constraint yet** — would break the signature/cluster detectors which legitimately have no specialist.
+
+---
+
+### 2-bias. Severe bullish bias — multi-day pattern (CONFIRMED LIVE)
+**Status:** James confirms bullish bias has been present "the last few days." Today: **7 of 7 high-score (≥80) flags fired bullish. Zero bearish.** Despite a mixed-to-green tape, that's structurally suspicious. Quick-patch from Fri morning (added bearish few-shot example to 7 prompts) is not holding.
+
+**Risk:** A bullish-only system in a green tape looks fine. On the next red day, it'll be either silent or wrong. The system appears smart but isn't actually multi-directional.
+
+**Hypotheses to test this weekend:**
+- (a) Specialist prompts still framing "find the conviction signal" in a way that biases toward continuation/momentum (which is more often bullish on Mag7)
+- (b) Signature classes themselves are imbalanced — "aggressive_ask_call" patterns far outnumber "aggressive_bid_put" in our corpus, so high-confidence matches skew bullish
+- (c) Scorer weighting favors call-side flow inputs
+- (d) Direction-inference (`inferDirection` helper) may misclassify ambiguous flow as bullish by default
+
+**Fix path:**
+1. Run a corpus query: high-score flags last 5 trading days, group by direction. Quantify the bias.
+2. Audit signature class table — `select direction, count(*) from ct_signature_classes group by direction`
+3. Bullish-bias-audit on each specialist prompt (proper rewrite was already parked for this weekend per `project_co_trader_specialist_bias_weekend.md`)
+4. Add a direction-balance health metric to ct-cron-health-check — if 5-day rolling high-score-flag bullish ratio >85%, alarm.
 
 ---
 
