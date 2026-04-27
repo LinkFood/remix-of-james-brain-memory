@@ -63,7 +63,7 @@ After force-redeploying both 0DTE detectors (parallel deploy script earlier had 
 
 ---
 
-### 1. FlowPulse "Today" window starts too narrow
+### 1. ✅ FIXED LIVE 2026-04-27 — FlowPulse "Today" window floor
 **Symptom:** First 0-15 min of every session, the per-ticker FlowPulse table shows all zeros even when data is flowing. Caused real "is it broken?" panic this morning.
 
 **Cause:** `computeTodayWindowMin()` returns `minutes-since-13:30-UTC`. At 9:31 ET that's 1 minute. RPC has nothing to aggregate.
@@ -78,7 +78,13 @@ After force-redeploying both 0DTE detectors (parallel deploy script earlier had 
 
 ---
 
-### 2. Flag data quality — null specialist_ticker on REAL signals (CONFIRMED LIVE)
+### 2. ✅ FIXED LIVE 2026-04-27 — null specialist_ticker on REAL signals
+
+Slack template now uses `resolveTicker()` helper that prefers `specialist_ticker` → `instrument` → derive from OCC option_symbol. No more "null BULLISH flag score X — META260515C00675000" — will read "META BULLISH..." instead.
+
+---
+
+### 2-OLD-DETAILS. Flag data quality — null specialist_ticker on REAL signals (CONFIRMED LIVE)
 **Status update 2026-04-27 ~13:00 ET:** Confirmed firing on real signals, not just backlog. **4 of 7 high-score Slack pushes today read `null BULLISH flag score X — SYMBOL`.** Specifically: META 515C $675 at 13:32, GOOGL 605C $350 at 14:58 (twice), MSFT 501C $437.50 at 15:11. The signature_v1 + cluster detectors are NOT writing `specialist_ticker` at all — only specialist-direct flags populate it.
 
 **Root cause (confirmed):** `signature_v1` and the cluster detectors don't have a `specialist_ticker` to attach (they fire from raw flow patterns, not from a per-ticker specialist). The Slack template was written assuming all flags came from a specialist. When the field is null, the template renders the literal string "null".
@@ -135,7 +141,7 @@ After force-redeploying both 0DTE detectors (parallel deploy script earlier had 
 
 ---
 
-### 2c. /flags page has no "today" filter
+### 2c. ✅ FIXED LIVE 2026-04-27 — /flags page date filter
 **Symptom:** All flags ever fired pile onto the page in one list. No way to filter by date — can't see just today's signals.
 
 **Fix:** Add date chip filter (Today / 7d / 30d / All) to /flags top bar, mirror what /alarms or /tape does.
@@ -155,7 +161,7 @@ After force-redeploying both 0DTE detectors (parallel deploy script earlier had 
 
 ---
 
-### 4. ct-cron-health-check not schedule-aware
+### 4. ✅ FIXED LIVE 2026-04-27 — ct-cron-health-check now schedule-aware (3x cadence on weekday-daily)
 **Symptom:** 1152 unresolved cron failures in 24h again — same Sunday-only crons re-flagging since the bulk-resolve last night.
 
 **Cause:** Already documented in playbook bug pattern #6. Health check treats `>24h since last run` as stale, but Sunday-only crons (cron `0 22 * * 0`) legitimately don't run Mon-Sat.
