@@ -53,22 +53,34 @@ export function useDarkPoolChart() {
     enabled: !!startISO && !!endISO,
     refetchInterval: 30_000,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from('ct_dark_pool_prints')
-        .select('id, ticker, size, price, notional_value, executed_at')
-        .in('ticker', DARK_POOL_CHART_TICKERS as unknown as string[])
-        .gte('executed_at', startISO!)
-        .lt('executed_at', endISO!)
-        .order('executed_at', { ascending: true })
-        .limit(10_000);
-      if (error) throw error;
+      // PostgREST hard-caps every response at 1000 rows regardless of
+      // .limit() — confirmed empirically 2026-04-27 (even Range:0-9999
+      // returned 999 of 50k+). Per-ticker fan-out via Promise.all stays
+      // under cap and matches the fix pattern from useMacroSparklines.
+      // On a normal trading day, ct_dark_pool_prints sees thousands of
+      // rows during RTH; the previous .in() + .limit(10_000) silently
+      // dropped everything past row 999.
+      const results = await Promise.all(
+        DARK_POOL_CHART_TICKERS.map(async (t) => {
+          const { data, error } = await supabase
+            .from('ct_dark_pool_prints')
+            .select('id, ticker, size, price, notional_value, executed_at')
+            .eq('ticker', t)
+            .gte('executed_at', startISO!)
+            .lt('executed_at', endISO!)
+            .order('executed_at', { ascending: true });
+          if (error) throw error;
+          return (data ?? []) as DarkPoolPrintLite[];
+        }),
+      );
 
-      const rows = (data ?? []) as DarkPoolPrintLite[];
       const byTicker = new Map<string, DarkPoolPrintLite[]>();
       for (const t of DARK_POOL_CHART_TICKERS) byTicker.set(t, []);
-      for (const r of rows) {
-        const bucket = byTicker.get(r.ticker);
-        if (bucket) bucket.push(r);
+      for (const arr of results) {
+        for (const r of arr) {
+          const bucket = byTicker.get(r.ticker);
+          if (bucket) bucket.push(r);
+        }
       }
 
       const groups: DarkPoolChartGroup[] = DARK_POOL_CHART_TICKERS.map(ticker => ({
