@@ -6,6 +6,22 @@ Found during pre-open + first 15 min of trading. Ordered by impact. Fix after cl
 
 ## P0 — Fix today after close (could repeat tomorrow open)
 
+### 0. ct-print-grader cron too sparse for live RTH — P/L gap on /tape
+**Symptom:** Half of today's watchlist prints showed empty P/L chips for up to 30 min after the print landed. Real fix manually triggered the grader live; next cron (14:30) caught up.
+
+**Cause:** `ct-print-grader` cron is `*/30 * * * *` — fires every 30 min. With 5+ alerts/min during open, the gap between print and track-creation can hit 30 min. UI reads `ct_contract_tracks` for the chip — no track row = empty chip.
+
+**Files:**
+- `supabase/migrations/20260425000010_print_grades.sql:99-103` (cron schedule)
+- `supabase/functions/ct-print-grader/index.ts:46,49` (`PASS2_NEW_SCAN_LIMIT=800, PASS2_CONTRACT_NEW_WORK_LIMIT=150`)
+
+**Fix options (pick one):**
+- Shorten RTH cron to `*/10 * * * 1-5` (3x faster)
+- Or trigger on `ct_flow_alerts` insert via realtime/trigger (sub-second)
+- Or just bump `PASS2_CONTRACT_NEW_WORK_LIMIT` to 300 if 30-min cadence is fine
+
+---
+
 ### 1. FlowPulse "Today" window starts too narrow
 **Symptom:** First 0-15 min of every session, the per-ticker FlowPulse table shows all zeros even when data is flowing. Caused real "is it broken?" panic this morning.
 
@@ -37,6 +53,38 @@ Found during pre-open + first 15 min of trading. Ordered by impact. Fix after cl
 ---
 
 ## P1 — Fix this week
+
+### 2a. Glow/highlight box on contract drill goes away after ~1 sec
+**Symptom:** Click an alarm → opens contract drill → highlight pulse fades in <1 second. Want it persistent until user clicks elsewhere.
+
+**Likely fix:** CSS animation on `ContractDrillSheet` or the row highlight — currently a one-shot animation, change to sticky-on-mount until close/reselect.
+
+**Files to check:**
+- `src/components/co-trader/ContractDrillSheet.tsx`
+- whichever parent component dispatches `setOpenAlertId`
+
+---
+
+### 2b. Ticker sparklines render only for some tickers (3/10)
+**Symptom:** /tape top-bar ticker chips — sparklines show only on AAPL, GOOGL, AMZN. SPY, QQQ, IWM, MSFT, META, NVDA, TSLA blank. (Screenshot 10:21 ET 2026-04-27.)
+
+**Cause:** Likely sparkline data source (`ct_flow_pulse_ticks` series via `useFlowPulseSeries`) thresholds — needs N>X data points to render, or specific tickers missing rows. Same screenshot showed numbers populated for all 10, just no sparkline.
+
+**Files to check:**
+- `src/components/command/FlowPulseSparkline.tsx`
+- `src/hooks/useFlowPulse.ts:164` (`useFlowPulseSeries`)
+
+---
+
+### 2c. /flags page has no "today" filter
+**Symptom:** All flags ever fired pile onto the page in one list. No way to filter by date — can't see just today's signals.
+
+**Fix:** Add date chip filter (Today / 7d / 30d / All) to /flags top bar, mirror what /alarms or /tape does.
+
+**Files:**
+- `src/pages/Flags.tsx` (or wherever /flags page lives)
+
+---
 
 ### 3. Slack pusher silent dead-zone went 3 days unnoticed
 **Symptom:** `ct-slack-push-flag` had ZERO writes to `ct_slack_log` from Fri 2026-04-24 16:11 ET → Mon 2026-04-27 09:22 ET. Then suddenly woke up and drained 125 backlog flags at 10/min cap. No alarm during the dead window.
@@ -85,6 +133,7 @@ Quick-patched with bearish few-shot examples (commit from Fri morning). Proper r
 - ✅ Confirmed all 5 new detector crons fire on schedule (:00-:04 lanes)
 - ✅ Confirmed flow ingest is healthy (was named `ct-flow-ingester`, not `ct-uw-flow-ingest` as I initially queried)
 - ✅ UW budget on track (~22% by 9:36 ET, well under 30% baseline)
+- ✅ ct-print-grader manually invoked at 14:29 UTC — tracks 149→297 (97.7% of watchlist alerts now have a track row, P/L chips populate on refresh)
 
 ---
 
