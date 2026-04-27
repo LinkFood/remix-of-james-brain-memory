@@ -238,7 +238,7 @@ async function runSweep(supabase: SupabaseClient): Promise<Stats> {
           entry_price: entryPrice,
           target_price: null,
           status: 'active',
-          source_flow_ids: [a.alert_id],
+          source_flow_ids: null,
         });
       if (flagErr) {
         stats.errors.push(`flag insert ${a.alert_id}: ${flagErr.message}`);
