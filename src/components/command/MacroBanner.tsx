@@ -129,19 +129,28 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
   const sinceIso = lookbackIso(48);
 
   // 48h price bars — covers pre-market when "today" has zero bars yet.
+  // Per-ticker fan-out via Promise.all to avoid PostgREST's 1000-row cap;
+  // 14 tickers × ~500 bars/ticker would otherwise truncate to alphabetically-
+  // first 2 tickers and silently drop the rest. Same fix pattern as
+  // useMacroSparklines (commit 3c5e312, 2026-04-27).
   const { data: priceBars } = useQuery<PriceBarRow[]>({
     queryKey: ['ct_macro_price_bars', sinceIso.slice(0, 10)],
     refetchInterval: 30_000,
     queryFn: async () => {
       const allTickers = Array.from(new Set<string>([...TICKERS, ...MACRO_TICKERS]));
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.from('ct_price_bars' as never) as any)
-        .select('ticker,ts,close')
-        .in('ticker', allTickers)
-        .gte('ts', sinceIso)
-        .order('ts', { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as PriceBarRow[];
+      const results = await Promise.all(
+        allTickers.map(async (t) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data, error } = await (supabase.from('ct_price_bars' as never) as any)
+            .select('ticker,ts,close')
+            .eq('ticker', t)
+            .gte('ts', sinceIso)
+            .order('ts', { ascending: true });
+          if (error) throw error;
+          return (data ?? []) as PriceBarRow[];
+        }),
+      );
+      return results.flat();
     },
   });
 

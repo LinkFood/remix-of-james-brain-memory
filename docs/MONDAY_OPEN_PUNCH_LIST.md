@@ -130,6 +130,31 @@ Slack template now uses `resolveTicker()` helper that prefers `specialist_ticker
 
 ---
 
+### 2b-AUDIT. ✅ Project-wide PostgREST 1000-row cap audit (2026-04-27)
+
+Triggered by 3rd hit of this bug class in one week. Audited all 40+ `.in()` queries in the codebase.
+
+**Confirmed buggy + fixed live:**
+- `src/hooks/useMacroSparklines.ts` (commit `3c5e312`) — 10 tickers × 500 bars
+- `src/components/command/MacroBanner.tsx:138-144` (commit pending) — 14 tickers × 48h, separate query in same file
+
+**Confirmed safe (already paginated):**
+- `supabase/functions/ct-print-grader/index.ts:820, 971` — uses `.range(offset, end)` with pageSize=1000
+- `supabase/functions/ct-print-grader/index.ts:1137` — `.limit(MAX_TRACKS_PER_RUN=150)`
+- `src/pages/Tape.tsx:535, 560` — uses `.range(start, end)` pagination
+- `src/hooks/useContractTracks.ts:131, 202` — explicit chunking at CHUNK=500
+- All `.in('status', [...])` / `.in('content_type', [...])` / `.in('subject_type', [...])` etc — small enums
+
+**Suspected risky, needs verification:**
+- `src/hooks/useDarkPoolChart.ts:59` — has `.limit(10_000)` but PostgREST default cap is 1000. Today's dark pool data was empty so couldn't observe live, but the pattern matches.
+- `src/components/command/MacroBanner.tsx:163` — `.in('ticker', TICKERS).limit(40)` — likely OK
+- `supabase/functions/ct-detector-*/index.ts` (whale, unusual_oi, smart_money_repeat, weekly_atm_voi) — `.in('ticker', watchlist)` for ct_flow_alerts. Need to verify if they paginate. (Whale + signature_v1 work today, so probably OK.)
+
+**Pattern to add as lint/CI check:**
+- Any `.in('column', array)` against `ct_flow_alerts`, `ct_price_bars`, `ct_dark_pool_prints`, or `ct_contract_quotes` where array.length > 2 SHOULD use either per-element parallel queries OR explicit `.range()` pagination loop.
+
+---
+
 ### 2b. ✅ FIXED LIVE 2026-04-27 — Ticker sparklines (PostgREST 1000-row cap)
 **Root cause (after deeper dig):** Wrong component initially. The /tape ticker-chip sparklines come from `useMacroSparklines` (NOT FlowPulseSparkline). It batched all 10 tickers' last-6h price bars in one `.in('ticker', TICKERS)` query — totaling ~5000 rows, capped at PostgREST's 1000. Alphabetically-first 2-3 tickers (AAPL/AMZN/GOOGL) got their full series; others got 0 rows = empty sparkline.
 
