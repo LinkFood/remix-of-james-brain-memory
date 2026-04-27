@@ -15,8 +15,21 @@ Found during pre-open + first 15 min of trading. Ordered by impact. Fix after cl
 
 ---
 
-### 00. **TOP PRIORITY (REFINED)** — 0DTE-specific detectors still silent after bigint fix
-**Symptom (refined 2026-04-27 14:50 ET, after bigint fix):** Even with the bigint fix opening up the floodgates (136 new flags from unusual_oi + smart_money_repeat), the `zerodte_*` detectors still fire zero. Today's top winners (TSLA 0DTE P $365 +109%, SPY 0DTE C $714 +85%, etc.) remain MISSED by the dedicated 0DTE detectors.
+### 00. ✅ RESOLVED 2026-04-27 ~15:00 ET — ALL today's winners now flagged
+After force-redeploying both 0DTE detectors (parallel deploy script earlier had race), and re-running over today's data: **8 of 8 top winners flagged**. TSLA P 365 caught by unusual_oi + zerodte_put_voi_extreme. SPY C 714 by unusual_oi + zerodte_opening_call. Etc. The system was finding signal all along — bigint bug was hiding all the inserts.
+
+**Remaining gap**: detector flags fire with `score=0` (raw alarms), below the slack_threshold of 80. They appear on /flags page but don't push to Slack. **Need scoring layer to grade detector alarms** before they can promote out of shadow. That's the next architectural work.
+
+**Direction labeling nuance**: detector flags use `direction='bullish'` to mean "contract is being bought aggressively" — even on puts. So a TSLA put flagged "bullish" = bearish on TSLA. Confusing label; UI should say "flow direction: aggressive ask buy" not "bullish/bearish". Adding to UI cleanup list.
+
+---
+
+### 00b. Next gap — score the detector-portfolio alarms
+**Symptom (now scoping 00b after fix):** All 7 new detectors now fire successfully and catch today's winners. But raw flags get `score=0`. With the slack_threshold at 80, they never push to Slack. So even though the system *sees* the signal, James doesn't get notified.
+
+**Hypothesis:** Need a scoring layer that takes detector alarms + signature class match + cluster size + contract liquidity + Pulse regime context → produces a 0-100 score. Could re-use the signature_v1 scorer. Or add a separate `ct-detector-scorer` that runs after each detector sweep.
+
+**Defer to weekend:** properly designing the scoring layer is bigger than a punch-list item. For now, the alarms exist on /flags and unblock manual review.
 
 **Root cause (confirmed via manual detector invoke):**
 - `zerodte_opening_call_v1` filters: `alarms_off_hour` rejects anything outside opening window. Today's winners hit later — system blind to mid-day 0DTE flow.
