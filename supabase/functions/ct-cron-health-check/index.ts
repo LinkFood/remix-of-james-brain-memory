@@ -329,9 +329,13 @@ function classify(row: CronRow, now: Date): Classification {
   const dayActiveNow = isCronDayActive(row.schedule, now);
   const weekendNow = isWeekendUtc(now);
   // Off-hours for THIS cron specifically — covers weekday-only-on-weekend,
-  // weekend-only-on-weekday, and RTH-hour-restricted-outside-window in one
-  // predicate. Used to suppress both `stale` and `never_ran` symmetrically.
-  const offHoursForCron = !dayActiveNow || (rthRestricted && !windowOpen);
+  // weekend-only-on-weekday, RTH-hour-restricted-outside-window, AND any
+  // hour-list gap schedule (e.g. `0-12,21-23` off-hours lanes). The
+  // !windowOpen branch used to be gated on `rthRestricted` (hour AND dow
+  // restricted), which excluded my own grader/detector off-hours splits
+  // that have dow=*. Generalized 2026-04-27 (later that day) — windowOpen
+  // already understands hour-list gaps, so just trusting it.
+  const offHoursForCron = !dayActiveNow || !windowOpen;
 
   // failed: trumps everything. Even an off-hours cron that failed should
   // alert — the failure happened, regardless of current hour.
