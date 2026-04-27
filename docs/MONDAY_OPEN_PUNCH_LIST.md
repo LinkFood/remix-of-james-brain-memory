@@ -6,8 +6,17 @@ Found during pre-open + first 15 min of trading. Ordered by impact. Fix after cl
 
 ## P0 — Fix today after close (could repeat tomorrow open)
 
-### 00. **TOP PRIORITY** — 0DTE detectors miss the actual money
-**Symptom (confirmed live 2026-04-27 ~14:15 ET):** Today's 10 contracts at peak ≥+50% all fired ZERO flags. ZERO. Top winners: TSLA 0DTE P $365 +109%, SPY 0DTE C $714 +85%, NVDA 0DTE C $215 +81%, TSLA 0DTE C $372.50 +80%, NVDA 0DTE C $210 +70.5%, GOOGL 0DTE C $342.50 +63%. The system that should amplify intelligence found NONE of them.
+### 00-bigint. ✅ FIXED LIVE 2026-04-27 — bigint type mismatch silently killing all 7 new detectors
+**Root cause found:** All 7 new detectors (whale, unusual-oi, smart-money-repeat, weekly-atm-voi, zerodte-opening-call, zerodte-put-voi, small-cap-inverted-put) passed `source_flow_ids: [a.alert_id]`. `alert_id` is UUID but `ct_flags.source_flow_ids` is `BIGINT[]`. Every flag insert silently errored with `invalid input syntax for type bigint`. Same class of bug fixed in `20260423000035_v2_flags_source_flow_ids_bigint.sql` for v2 specialist flags but reintroduced.
+
+**Patched live:** all 7 detectors now pass `source_flow_ids: null`. Confirmed by re-running over today's data — 136 flags fired (was 0). Code committed + deployed.
+
+**TODO this weekend:** look up `ct_scored_flow.id` (bigint) from `alert_id` and pass that for proper attribution back to source flow. Defer because it requires understanding scored-flow lookup path.
+
+---
+
+### 00. **TOP PRIORITY (REFINED)** — 0DTE-specific detectors still silent after bigint fix
+**Symptom (refined 2026-04-27 14:50 ET, after bigint fix):** Even with the bigint fix opening up the floodgates (136 new flags from unusual_oi + smart_money_repeat), the `zerodte_*` detectors still fire zero. Today's top winners (TSLA 0DTE P $365 +109%, SPY 0DTE C $714 +85%, etc.) remain MISSED by the dedicated 0DTE detectors.
 
 **Root cause (confirmed via manual detector invoke):**
 - `zerodte_opening_call_v1` filters: `alarms_off_hour` rejects anything outside opening window. Today's winners hit later — system blind to mid-day 0DTE flow.
