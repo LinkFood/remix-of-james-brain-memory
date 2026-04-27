@@ -62,27 +62,39 @@ async function ingestFlowAlerts(supabase: SupabaseClient, extraArgs: Record<stri
     const data = (raw && typeof raw === 'object') ? (raw as { data?: unknown }).data : null;
     if (!Array.isArray(data) || data.length === 0) return { seen: 0, inserted: 0, path };
 
-    const rows = (data as Array<Record<string, unknown>>).map((r) => ({
-      alert_id: (r.id as string | undefined) ?? (r.alert_id as string | undefined) ?? `${r.ticker_symbol}-${r.executed_at ?? r.timestamp ?? ''}-${r.option_symbol ?? ''}`,
-      ticker: (r.ticker_symbol as string | undefined) ?? (r.ticker as string | undefined) ?? 'UNKNOWN',
-      option_symbol: (r.option_symbol as string | undefined) ?? null,
-      strike: numOrNull(r.strike),
-      expiry: (r.expiry as string | undefined) ?? (r.expiration as string | undefined) ?? null,
-      side: (r.type as string | undefined) ?? (r.side as string | undefined) ?? null,
-      is_ask: boolOrNull(r.is_ask_side ?? r.is_ask),
-      is_bid: boolOrNull(r.is_bid_side ?? r.is_bid),
-      is_otm: boolOrNull(r.is_otm),
-      size: numOrNull(r.size ?? r.total_size),
-      volume: numOrNull(r.volume ?? r.total_volume),
-      open_interest: numOrNull(r.open_interest),
-      size_gt_oi: boolOrNull(r.size_greater_oi ?? r.size_gt_oi),
-      premium: numOrNull(r.premium ?? r.total_premium),
-      price: numOrNull(r.price),
-      underlying_price: numOrNull(r.underlying_price),
-      executed_at: (r.executed_at as string | undefined) ?? (r.timestamp as string | undefined) ?? null,
-      alert_type: (r.alert_type as string | undefined) ?? (r.type as string | undefined) ?? null,
-      raw: r,
-    }));
+    // WATCHLIST FILTER AT INSERTION (added 2026-04-27 evening).
+    // Per James + tenet 4 (universe lock): /tape, specialists, and detectors
+    // are all watchlist-only by design. Off-watchlist alerts get fetched by
+    // the market-wide UW call but were being WRITTEN to ct_flow_alerts even
+    // though no consumer reads them. Today's audit: 5,236 of 6,799 alerts
+    // (77%) were off-watchlist noise — bloated DB, slowed detector scans,
+    // cluttered /tape's "ALL" view. Filter at insertion = invisible to all
+    // downstream code, since detectors already filter via .in('ticker', WL).
+    const rows = (data as Array<Record<string, unknown>>)
+      .map((r) => ({
+        alert_id: (r.id as string | undefined) ?? (r.alert_id as string | undefined) ?? `${r.ticker_symbol}-${r.executed_at ?? r.timestamp ?? ''}-${r.option_symbol ?? ''}`,
+        ticker: (r.ticker_symbol as string | undefined) ?? (r.ticker as string | undefined) ?? 'UNKNOWN',
+        option_symbol: (r.option_symbol as string | undefined) ?? null,
+        strike: numOrNull(r.strike),
+        expiry: (r.expiry as string | undefined) ?? (r.expiration as string | undefined) ?? null,
+        side: (r.type as string | undefined) ?? (r.side as string | undefined) ?? null,
+        is_ask: boolOrNull(r.is_ask_side ?? r.is_ask),
+        is_bid: boolOrNull(r.is_bid_side ?? r.is_bid),
+        is_otm: boolOrNull(r.is_otm),
+        size: numOrNull(r.size ?? r.total_size),
+        volume: numOrNull(r.volume ?? r.total_volume),
+        open_interest: numOrNull(r.open_interest),
+        size_gt_oi: boolOrNull(r.size_greater_oi ?? r.size_gt_oi),
+        premium: numOrNull(r.premium ?? r.total_premium),
+        price: numOrNull(r.price),
+        underlying_price: numOrNull(r.underlying_price),
+        executed_at: (r.executed_at as string | undefined) ?? (r.timestamp as string | undefined) ?? null,
+        alert_type: (r.alert_type as string | undefined) ?? (r.type as string | undefined) ?? null,
+        raw: r,
+      }))
+      .filter((r) => WATCHLIST.includes(r.ticker as typeof WATCHLIST[number]));
+
+    if (rows.length === 0) return { seen: 0, inserted: 0, path };
 
     const { error, count } = await supabase
       .from('ct_flow_alerts')
@@ -474,9 +486,24 @@ serve(async (req) => {
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   const startedAt = Date.now();
 
+  // Optional invocation flag: skip the market-wide pass when called from
+  // the per-ticker-only cron lane. Lets us run per-ticker every 5min while
+  // market-wide runs every 30min — saves UW calls on noisy market-wide
+  // data we mostly filter out anyway. Body shape: {"per_ticker_only": true}
+  let perTickerOnly = false;
   try {
-    // Market-wide
-    const flow = await ingestFlowAlerts(supabase);
+    const body = await req.clone().json().catch(() => ({}));
+    perTickerOnly = body && typeof body === 'object' && body.per_ticker_only === true;
+  } catch { /* no body or invalid JSON — keep default */ }
+
+  try {
+    // Market-wide flow + market context (top movers + sweeps). Skipped when
+    // per_ticker_only=true (the every-5min lane). Otherwise runs every 30min
+    // via the market-wide lane. Cuts ~250 UW calls/day vs running market-
+    // wide on every 5min invocation.
+    const flow = perTickerOnly
+      ? { seen: 0, inserted: 0, path: 'mcp' as const }
+      : await ingestFlowAlerts(supabase);
     // Per-watchlist flow alerts — the fix for "0 watchlist sweeps captured".
     // Market-wide pass rarely lands on SPY/QQQ/IWM/Mag7; specialists need
     // scored flow on the watchlist to wake up and write flags (Co-Trader v2).
@@ -484,8 +511,12 @@ serve(async (req) => {
     // Dark pool removed 2026-04-23 — we can't reliably classify direction
     // and it was burning ~14% of UW budget for noise. Freed calls reallocated
     // to net-premium ticks (more often) + greek-flow (all 12 tickers).
-    const topMovers = await ingestTopMovers(supabase);
-    const sweeps = await ingestSweeps(supabase);
+    const topMovers = perTickerOnly
+      ? { inserted: 0 }
+      : await ingestTopMovers(supabase);
+    const sweeps = perTickerOnly
+      ? { inserted: 0 }
+      : await ingestSweeps(supabase);
 
     // Per-ticker net premium + greek flow + NOPE for ALL watchlist tickers.
     // NOPE was previously index-only (SPY/QQQ/IWM) under the theory that it's
