@@ -11,7 +11,8 @@
  * pure renderer — no network reads of its own.
  */
 
-import { Area, AreaChart, ResponsiveContainer } from 'recharts';
+import { useMemo } from 'react';
+import { Area, AreaChart, ReferenceLine, ResponsiveContainer, YAxis } from 'recharts';
 import { Card } from '@/components/ui/card';
 import { ChartSafe } from '@/components/ChartSafe';
 import { cn } from '@/lib/utils';
@@ -84,6 +85,32 @@ export function MacroTile({
   const points = sparkline?.points ?? [];
   const hasSparkline = points.length >= 2;
 
+  // Normalize to percent-change-from-first-point so visual impact scales
+  // with INTRADAY MOVE, not absolute price. Without this, recharts auto-
+  // scales y to the range of absolute prices — a 1% intraday move on a
+  // $700 stock collapses to a near-flat line. Reference line at 0% gives
+  // a stable "above/below open" anchor across all 10 tiles.
+  const pctPoints = useMemo(() => {
+    if (points.length === 0) return [] as { t: number; pct: number }[];
+    const first = points[0].c;
+    if (!Number.isFinite(first) || first === 0) return [] as { t: number; pct: number }[];
+    return points.map((p) => ({ t: p.t, pct: ((p.c - first) / first) * 100 }));
+  }, [points]);
+
+  // Force a symmetric domain with a min half-range of 0.5% so even quiet
+  // sessions show shape. Asymmetric data still looks honest because we
+  // expand to the larger absolute extreme — just with a floor.
+  const yDomain = useMemo<[number, number]>(() => {
+    if (pctPoints.length === 0) return [-0.5, 0.5];
+    let min = 0, max = 0;
+    for (const p of pctPoints) {
+      if (p.pct < min) min = p.pct;
+      if (p.pct > max) max = p.pct;
+    }
+    const half = Math.max(0.5, Math.abs(min), Math.abs(max));
+    return [-half, half];
+  }, [pctPoints]);
+
   const leanScore = lean?.score ?? null;
   const leanArrow = momentumArrow(lean?.momentum_delta);
   const leanMomentum =
@@ -125,16 +152,23 @@ export function MacroTile({
           {hasSparkline ? (
             <ChartSafe>
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={points} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
+                <AreaChart data={pctPoints} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
                   <defs>
                     <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={stroke} stopOpacity={0.35} />
+                      <stop offset="0%" stopColor={stroke} stopOpacity={0.45} />
                       <stop offset="100%" stopColor={stroke} stopOpacity={0.0} />
                     </linearGradient>
                   </defs>
+                  <YAxis hide domain={yDomain} />
+                  <ReferenceLine
+                    y={0}
+                    stroke="hsl(var(--muted-foreground))"
+                    strokeOpacity={0.35}
+                    strokeDasharray="2 3"
+                  />
                   <Area
                     type="monotone"
-                    dataKey="c"
+                    dataKey="pct"
                     stroke={stroke}
                     strokeWidth={1.5}
                     fill={`url(#${gradientId})`}
