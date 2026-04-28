@@ -127,6 +127,17 @@ After the directionInference fix, corpus has 37 `aggressive_ask_put` (bearish) c
 ### 10. Ct_signature_alarm_log → ct_flags 1:1 audit
 Some flag rows may not have matching alarm_log entries (and vice versa) — would explain occasional grader misses. Worth a Sunday SQL audit.
 
+### 11b. ct_compute_gamma_flip last-resort fallback picks bad strikes
+**Symptom:** Sometimes returns far-OTM strike (NVDA showed 1.5 with spot 213, QQQ 451 with spot 658). Happens when sign-change scan finds no crossing in the meaningful-strikes window, or when spot is null (QQQ). The function falls back to "smallest |net_gex| across all strikes" which on sparse gex chains picks a thin OTM tail.
+
+**Cause:** Two separate issues:
+1. Sign-change scan filters strikes via `meaningful` CTE (drops strikes with no call_gex + put_gex activity). On thin chains, the meaningful set may be all-positive or all-negative — no crossing exists.
+2. Final fallback `LIMIT 1` on `ORDER BY abs(net_gex) ASC` picks the global minimum, which is often a near-zero far-OTM strike.
+
+**Fix path:** Tighten the fallback to "min |net_gex| WITHIN 10% of spot" (already exists as middle fallback). Drop the global-min last-resort entirely — return NULL if no flip detected near spot. Better to show "—" in the UI than 1.5.
+
+---
+
 ### 11a. QQQ underlying_price null in ct_gex_timeseries
 **Symptom:** QQQ snapshot shows spot=null, gamma_flip falls back to last-resort logic (451 vs spot ~658). All other 9 watchlist tickers have spot populated correctly.
 
