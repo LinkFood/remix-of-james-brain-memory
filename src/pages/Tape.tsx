@@ -27,7 +27,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import { cn } from '@/lib/utils';
-import { Waves, RefreshCw, ArrowUp, ArrowDown, Minus, Star, Radio } from 'lucide-react';
+import { Waves, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, Minus, Star, Radio } from 'lucide-react';
 import { toast } from 'sonner';
 import { ContractSheet } from '@/components/command/ContractSheet';
 import { TickerSheet } from '@/components/command/TickerSheet';
@@ -60,7 +60,8 @@ const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','T
 type Direction = 'bullish' | 'bearish' | 'neutral';
 type Classification = 'opening_buy' | 'opening_sell' | 'closing' | 'hedge' | 'ambiguous';
 type DteBand = 'any' | '0-7' | '7-30' | '30-90' | '90+';
-type SortKey = 'event_ts' | 'score' | 'premium' | 'vol_oi';
+type SortKey = 'event_ts' | 'score' | 'premium' | 'vol_oi' | 'dte' | 'volume' | 'ask_pct' | 'pnl' | 'stack';
+type SortDir = 'asc' | 'desc';
 type DayFilter = 'today' | 'yesterday' | 'last3d' | 'all';
 
 /**
@@ -222,6 +223,7 @@ interface Filters {
   direction: 'all' | Direction;
   side: 'all' | 'call' | 'put';
   sortBy: SortKey;
+  sortDir: SortDir;
   showUnscored: boolean;
   mineOnly: boolean;
   liveMode: boolean;
@@ -419,6 +421,63 @@ interface MarkDialogState {
   saving: boolean;
 }
 
+/**
+ * Clickable column-header component with sort-direction indicator.
+ * Click an inactive column → sets it as active sort with default direction.
+ * Click the active column → flips direction asc ↔ desc.
+ *
+ * The faint ↕ icon when inactive is a discoverability cue — users see at a
+ * glance which columns are sortable.
+ */
+function SortableHead({
+  colKey,
+  defaultDir = 'desc',
+  children,
+  align = 'left',
+  filters,
+  setFilters,
+  className,
+  title,
+}: {
+  colKey: SortKey;
+  defaultDir?: SortDir;
+  children: React.ReactNode;
+  align?: 'left' | 'right' | 'center';
+  filters: Filters;
+  setFilters: React.Dispatch<React.SetStateAction<Filters>>;
+  className?: string;
+  title?: string;
+}) {
+  const isActive = filters.sortBy === colKey;
+  const dir = isActive ? filters.sortDir : null;
+
+  const handleClick = () => {
+    setFilters((prev) => {
+      if (prev.sortBy !== colKey) {
+        return { ...prev, sortBy: colKey, sortDir: defaultDir };
+      }
+      return { ...prev, sortDir: prev.sortDir === 'asc' ? 'desc' : 'asc' };
+    });
+  };
+
+  const justify = align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start';
+  const Icon = dir === 'asc' ? ArrowUp : dir === 'desc' ? ArrowDown : ArrowUpDown;
+  const iconColor = isActive ? 'text-foreground' : 'text-muted-foreground/40';
+
+  return (
+    <TableHead
+      className={cn('h-9 px-2 text-[11px] uppercase tracking-wider cursor-pointer select-none hover:bg-muted/30 transition-colors', className)}
+      onClick={handleClick}
+      title={title}
+    >
+      <div className={cn('flex items-center gap-1', justify)}>
+        <span>{children}</span>
+        <Icon className={cn('w-3 h-3', iconColor)} />
+      </div>
+    </TableHead>
+  );
+}
+
 // Subtle inline pill: which tickers actually have 0DTE expiry today.
 // Hides itself if config hasn't loaded so it never flashes empty state.
 function DteEligibilityPill() {
@@ -446,6 +505,7 @@ export default function Tape() {
     direction: 'all',
     side: 'all',
     sortBy: 'event_ts',
+    sortDir: 'desc',
     showUnscored: false,
     mineOnly: false,
     liveMode: false,
@@ -832,40 +892,49 @@ export default function Tape() {
       return true;
     });
 
-    // Sort.
+    // Sort — only fields available on the row itself. PnL + stack sort
+    // happens in a second pass once those maps are joined in below.
+    const dirMul = filters.sortDir === 'asc' ? -1 : 1;
     filtered.sort((a, b) => {
-      if (filters.sortBy === 'event_ts') return Date.parse(b.event_ts) - Date.parse(a.event_ts);
-      if (filters.sortBy === 'score') return (b.score ?? -1) - (a.score ?? -1);
-      if (filters.sortBy === 'premium') return (b.premium ?? 0) - (a.premium ?? 0);
-      if (filters.sortBy === 'vol_oi') return (b.vol_oi ?? 0) - (a.vol_oi ?? 0);
-      return 0;
+      let cmp = 0;
+      switch (filters.sortBy) {
+        case 'event_ts':
+          cmp = Date.parse(b.event_ts) - Date.parse(a.event_ts);
+          break;
+        case 'score':
+          cmp = (b.score ?? -1) - (a.score ?? -1);
+          break;
+        case 'premium':
+          cmp = (b.premium ?? 0) - (a.premium ?? 0);
+          break;
+        case 'vol_oi':
+          cmp = (b.vol_oi ?? 0) - (a.vol_oi ?? 0);
+          break;
+        case 'dte':
+          // For DTE, default desc means furthest expiry first; asc = soonest.
+          // Most useful is asc (0DTE/short first), so we invert here so that
+          // the SortableHead's first click on DTE gives soonest-first.
+          cmp = (a.dte ?? 999) - (b.dte ?? 999);
+          break;
+        case 'volume':
+          cmp = (b.volume ?? 0) - (a.volume ?? 0);
+          break;
+        case 'ask_pct':
+          cmp = (b.ask_side_perc ?? 0) - (a.ask_side_perc ?? 0);
+          break;
+        // pnl + stack handled below after joins
+        case 'pnl':
+        case 'stack':
+          cmp = 0;
+          break;
+      }
+      return cmp * dirMul;
     });
 
     return filtered;
   }, [scored, unscored, alertMeta, oiMap, filters, flaggedSymbols]);
 
   const totalBeforeFilter = (scored?.length ?? 0) + (filters.showUnscored ? (unscored?.length ?? 0) : 0);
-
-  // Interleave day-separator markers into the sorted rows. Walks in render order
-  // (which is newest → oldest when sortBy = event_ts) and drops a separator
-  // whenever the ET calendar date changes. Always emits a leading separator
-  // for the first row so the user sees which day they're starting on.
-  type TapeItem =
-    | { type: 'sep'; key: string; label: string }
-    | { type: 'row'; row: TapeRow };
-  const items = useMemo<TapeItem[]>(() => {
-    const out: TapeItem[] = [];
-    let lastDate: string | null = null;
-    for (const r of rows) {
-      const d = etDateKey(r.event_ts);
-      if (d !== lastDate) {
-        out.push({ type: 'sep', key: `sep-${d}`, label: formatSeparatorLabel(d) });
-        lastDate = d;
-      }
-      out.push({ type: 'row', row: r });
-    }
-    return out;
-  }, [rows]);
 
   // Batch-load contract tracks for visible rows. Keyed off the set of
   // alert_ids the rows point at — TanStack dedupes the network call. The
@@ -877,6 +946,56 @@ export default function Tape() {
   );
   const { data: contractTracks } = useContractTracksByAlerts(visibleAlertIds);
   const { data: contractGradesByAlert } = useContractGradesByAlerts(visibleAlertIds);
+
+  // Second-pass sort: pnl + stack require joined data (contractTracks +
+  // stackBySymbol) that isn't available inside the rows useMemo above. When
+  // the user picks one of those columns, reorder here. Other sort keys
+  // already ran their primary sort — pass-through.
+  const displayRows = useMemo<TapeRow[]>(() => {
+    if (filters.sortBy !== 'pnl' && filters.sortBy !== 'stack') return rows;
+    const dirMul = filters.sortDir === 'asc' ? -1 : 1;
+    const copy = [...rows];
+    if (filters.sortBy === 'pnl') {
+      copy.sort((a, b) => {
+        const pa = a.alert_id ? contractTracks?.get(a.alert_id)?.current_contract_pct ?? null : null;
+        const pb = b.alert_id ? contractTracks?.get(b.alert_id)?.current_contract_pct ?? null : null;
+        return ((pb ?? -Infinity) - (pa ?? -Infinity)) * dirMul;
+      });
+    } else if (filters.sortBy === 'stack') {
+      copy.sort((a, b) => {
+        const sa = stackBySymbol.get(a.option_symbol)?.prints_count ?? 0;
+        const sb = stackBySymbol.get(b.option_symbol)?.prints_count ?? 0;
+        return (sb - sa) * dirMul;
+      });
+    }
+    return copy;
+  }, [rows, filters.sortBy, filters.sortDir, contractTracks, stackBySymbol]);
+
+  // Interleave day-separator markers into the sorted rows. Walks in render order
+  // (which is newest → oldest when sortBy = event_ts) and drops a separator
+  // whenever the ET calendar date changes. Always emits a leading separator
+  // for the first row so the user sees which day they're starting on.
+  type TapeItem =
+    | { type: 'sep'; key: string; label: string }
+    | { type: 'row'; row: TapeRow };
+  const items = useMemo<TapeItem[]>(() => {
+    // Skip day separators when sorting by anything other than event_ts —
+    // separators are only meaningful when rows are time-ordered.
+    if (filters.sortBy !== 'event_ts') {
+      return displayRows.map((row) => ({ type: 'row', row } as TapeItem));
+    }
+    const out: TapeItem[] = [];
+    let lastDate: string | null = null;
+    for (const r of displayRows) {
+      const d = etDateKey(r.event_ts);
+      if (d !== lastDate) {
+        out.push({ type: 'sep', key: `sep-${d}`, label: formatSeparatorLabel(d) });
+        lastDate = d;
+      }
+      out.push({ type: 'row', row: r });
+    }
+    return out;
+  }, [displayRows, filters.sortBy]);
 
   // Header count line — honest about what the filter is showing.
   const headerCountText = useMemo(() => {
@@ -1166,7 +1285,9 @@ export default function Tape() {
               ).map(([k, label]) => (
                 <button
                   key={k}
-                  onClick={() => setFilters((p) => ({ ...p, sortBy: k }))}
+                  onClick={() => setFilters((p) => p.sortBy === k
+                    ? { ...p, sortDir: p.sortDir === 'asc' ? 'desc' : 'asc' }
+                    : { ...p, sortBy: k, sortDir: 'desc' })}
                   className={cn(
                     'text-[10px] font-mono px-2 py-0.5 rounded transition-colors',
                     filters.sortBy === k
@@ -1215,32 +1336,32 @@ export default function Tape() {
 
         {/* Tape table */}
         <Card className="p-0 overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="overflow-auto max-h-[70vh] border rounded-md">
             <Table className="text-xs">
-              <TableHeader>
+              <TableHeader className="sticky top-0 z-10 bg-card shadow-sm">
                 <TableRow className="border-b border-border hover:bg-transparent">
-                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Time</TableHead>
+                  <SortableHead colKey="event_ts" defaultDir="desc" filters={filters} setFilters={setFilters}>Time</SortableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Ticker</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Spot</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Strike</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Side</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Exp</TableHead>
-                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">DTE</TableHead>
+                  <SortableHead colKey="dte" defaultDir="asc" align="right" filters={filters} setFilters={setFilters}>DTE</SortableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Tape</TableHead>
-                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Prem</TableHead>
-                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Vol</TableHead>
+                  <SortableHead colKey="premium" defaultDir="desc" align="right" filters={filters} setFilters={setFilters}>Prem</SortableHead>
+                  <SortableHead colKey="volume" defaultDir="desc" align="right" filters={filters} setFilters={setFilters}>Vol</SortableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">OI</TableHead>
-                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">V/OI</TableHead>
+                  <SortableHead colKey="vol_oi" defaultDir="desc" align="right" filters={filters} setFilters={setFilters}>V/OI</SortableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">OI Δ1d</TableHead>
-                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Ask%</TableHead>
-                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right" title="Volatility-magnitude detector (0-100). High = setup likely to MOVE big; direction is the specialist's job, not this score's. Per 4,300-event analysis, scorer is a volatility predictor not a direction predictor.">Score</TableHead>
+                  <SortableHead colKey="ask_pct" defaultDir="desc" align="right" filters={filters} setFilters={setFilters}>Ask%</SortableHead>
+                  <SortableHead colKey="score" defaultDir="desc" align="right" filters={filters} setFilters={setFilters} title="Volatility-magnitude detector (0-100). High = setup likely to MOVE big; direction is the specialist's job, not this score's. Per 4,300-event analysis, scorer is a volatility predictor not a direction predictor.">Score</SortableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider">Tags</TableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-center w-10">
                     <Star className="w-3.5 h-3.5 inline" />
                   </TableHead>
-                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">P&amp;L</TableHead>
+                  <SortableHead colKey="pnl" defaultDir="desc" align="right" filters={filters} setFilters={setFilters}>P&amp;L</SortableHead>
                   <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-center w-[200px]">Horizons</TableHead>
-                  <TableHead className="h-9 px-2 text-[11px] uppercase tracking-wider text-right">Stack</TableHead>
+                  <SortableHead colKey="stack" defaultDir="desc" align="right" filters={filters} setFilters={setFilters}>Stack</SortableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
