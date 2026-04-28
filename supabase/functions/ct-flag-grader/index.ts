@@ -261,32 +261,25 @@ async function loadContractTrack(
   optionSymbol: string,
   flagCreatedAt: string,
 ): Promise<{ peak_contract_pct: number | null; max_drawdown_pct: number | null } | null> {
-  const flagTs = new Date(flagCreatedAt).getTime();
-  const lo = new Date(flagTs - 60 * 60 * 1000).toISOString();
-  const hi = new Date(flagTs + 6 * 60 * 60 * 1000).toISOString();
-  const { data } = await supabase
-    .from('ct_contract_tracks')
-    .select('peak_contract_pct, max_drawdown_pct, print_time')
-    .eq('option_symbol', optionSymbol)
-    .gte('print_time', lo)
-    .lte('print_time', hi)
-    .order('print_time', { ascending: true })
-    .limit(20);
-  if (!data || data.length === 0) return null;
-  // Pick closest to flag.created_at
-  let best: { peak_contract_pct: number | null; max_drawdown_pct: number | null } | null = null;
-  let bestDelta = Infinity;
-  for (const row of data) {
-    const delta = Math.abs(new Date(row.print_time as string).getTime() - flagTs);
-    if (delta < bestDelta) {
-      bestDelta = delta;
-      best = {
-        peak_contract_pct: row.peak_contract_pct == null ? null : Number(row.peak_contract_pct),
-        max_drawdown_pct: row.max_drawdown_pct == null ? null : Number(row.max_drawdown_pct),
-      };
-    }
-  }
-  return best;
+  // Use the MAX peak across all tracks for this option_symbol in the flag
+  // window, not the closest-by-print_time. Print-grader creates a new track
+  // per print of the same contract, so an option_symbol typically has 2-18
+  // tracks. The closest-by-print_time approach grabbed whichever track had
+  // the same fired-at timestamp as the flag — often a brand-new track that
+  // got polled once and froze at peak=0. Taking MAX captures the contract's
+  // actual best move, regardless of which track sample observed it.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase.rpc as any)('ct_max_peak_for_flag', {
+    p_option_symbol: optionSymbol,
+    p_flag_created: flagCreatedAt,
+  });
+  if (error || !data || (Array.isArray(data) ? data.length === 0 : !data)) return null;
+  const row = Array.isArray(data) ? data[0] : data;
+  if (row == null || (row.track_count ?? 0) === 0) return null;
+  return {
+    peak_contract_pct: row.peak_contract_pct == null ? null : Number(row.peak_contract_pct),
+    max_drawdown_pct: row.max_drawdown_pct == null ? null : Number(row.max_drawdown_pct),
+  };
 }
 
 // ---------------------------------------------------------------------------
