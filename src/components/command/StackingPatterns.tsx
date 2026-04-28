@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { Activity, ChevronDown, ChevronUp, Zap } from 'lucide-react';
+import { Activity, ArrowUp, ArrowDown, ArrowUpDown, ChevronDown, ChevronUp, Zap } from 'lucide-react';
 import {
   useContractStacking,
   formatStackCount,
@@ -25,6 +25,57 @@ import {
   interpretStack,
   type StackRow,
 } from '@/hooks/useContractStacking';
+
+// Sort state — these are the columns where sort actually adds value.
+// Contract / Buy-Sell / Signal stay static (alphabetical or text-categorical
+// orderings don't help the user's "what's hot" scan).
+type SortKey = 'prints' | 'premium' | 'ask_pct' | 'last' | 'accel';
+type SortDir = 'asc' | 'desc';
+
+/** Plain-<th> sortable header. Faint ↕ when inactive, solid ▼/▲ when active. */
+function SortableTh({
+  colKey,
+  defaultDir = 'desc',
+  children,
+  align = 'right',
+  sortKey,
+  sortDir,
+  onSort,
+}: {
+  colKey: SortKey;
+  defaultDir?: SortDir;
+  children: React.ReactNode;
+  align?: 'left' | 'right' | 'center';
+  sortKey: SortKey | null;
+  sortDir: SortDir;
+  onSort: (k: SortKey, d: SortDir) => void;
+}) {
+  const isActive = sortKey === colKey;
+  const dir = isActive ? sortDir : null;
+  const handleClick = () => {
+    if (!isActive) onSort(colKey, defaultDir);
+    else onSort(colKey, sortDir === 'asc' ? 'desc' : 'asc');
+  };
+  const justify = align === 'right' ? 'justify-end' : align === 'center' ? 'justify-center' : 'justify-start';
+  const Icon = dir === 'asc' ? ArrowUp : dir === 'desc' ? ArrowDown : ArrowUpDown;
+  const iconColor = isActive ? 'text-foreground' : 'text-muted-foreground/40';
+  return (
+    <th
+      className={cn(
+        'py-1.5 px-2 text-[10px] uppercase tracking-wider font-medium text-muted-foreground cursor-pointer select-none hover:bg-muted/40 transition-colors',
+        align === 'right' && 'text-right',
+        align === 'left' && 'text-left',
+        align === 'center' && 'text-center',
+      )}
+      onClick={handleClick}
+    >
+      <div className={cn('flex items-center gap-1', justify)}>
+        <span>{children}</span>
+        <Icon className={cn('w-3 h-3', iconColor)} />
+      </div>
+    </th>
+  );
+}
 
 interface Props {
   onContractClick?: (optionSymbol: string, ticker: string) => void;
@@ -171,6 +222,40 @@ export function StackingPatterns({ onContractClick, windowMin = 360 }: Props) {
     }
   }, [collapsed]);
 
+  // Sort state — default matches the hook's pre-sort (prints desc).
+  const [sortKey, setSortKey] = useState<SortKey>('prints');
+  const [sortDir, setSortDir] = useState<SortDir>('desc');
+
+  const sortedRows = useMemo(() => {
+    const dirMul = sortDir === 'asc' ? -1 : 1;
+    const copy = [...rows];
+    copy.sort((a, b) => {
+      let cmp = 0;
+      switch (sortKey) {
+        case 'prints':
+          cmp = b.prints_count - a.prints_count;
+          break;
+        case 'premium':
+          cmp = (b.premium_total ?? 0) - (a.premium_total ?? 0);
+          break;
+        case 'ask_pct':
+          cmp = (b.ask_dominant_pct ?? -1) - (a.ask_dominant_pct ?? -1);
+          break;
+        case 'last':
+          cmp = Date.parse(b.last_ts) - Date.parse(a.last_ts);
+          break;
+        case 'accel':
+          // Boolean sort: accelerating rows first when desc.
+          cmp = (b.is_accelerating ? 1 : 0) - (a.is_accelerating ? 1 : 0);
+          // Tiebreak by prints so the accelerating bucket itself stays useful.
+          if (cmp === 0) cmp = b.prints_count - a.prints_count;
+          break;
+      }
+      return cmp * dirMul;
+    });
+    return copy;
+  }, [rows, sortKey, sortDir]);
+
   const acceleratingCount = useMemo(
     () => rows.filter((r) => r.is_accelerating).length,
     [rows],
@@ -225,22 +310,22 @@ export function StackingPatterns({ onContractClick, windowMin = 360 }: Props) {
         </div>
       ) : rows.length === 0 ? null : (
         <Card className="p-0 overflow-hidden">
-          <div className="overflow-x-auto">
+          <div className="overflow-auto max-h-[500px]">
             <table className="w-full text-xs">
-              <thead>
+              <thead className="sticky top-0 z-10 bg-card shadow-sm">
                 <tr className="border-b border-border bg-muted/20">
                   <th className="py-1.5 px-2 text-left text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Contract</th>
-                  <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Prints</th>
-                  <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">$ Cum</th>
-                  <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Ask%</th>
+                  <SortableTh colKey="prints" defaultDir="desc" sortKey={sortKey} sortDir={sortDir} onSort={(k, d) => { setSortKey(k); setSortDir(d); }}>Prints</SortableTh>
+                  <SortableTh colKey="premium" defaultDir="desc" sortKey={sortKey} sortDir={sortDir} onSort={(k, d) => { setSortKey(k); setSortDir(d); }}>$ Cum</SortableTh>
+                  <SortableTh colKey="ask_pct" defaultDir="desc" sortKey={sortKey} sortDir={sortDir} onSort={(k, d) => { setSortKey(k); setSortDir(d); }}>Ask%</SortableTh>
                   <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Buy/Sell</th>
-                  <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Last</th>
-                  <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Accel</th>
+                  <SortableTh colKey="last" defaultDir="desc" sortKey={sortKey} sortDir={sortDir} onSort={(k, d) => { setSortKey(k); setSortDir(d); }}>Last</SortableTh>
+                  <SortableTh colKey="accel" defaultDir="desc" sortKey={sortKey} sortDir={sortDir} onSort={(k, d) => { setSortKey(k); setSortDir(d); }}>Accel</SortableTh>
                   <th className="py-1.5 px-2 text-right text-[10px] uppercase tracking-wider font-medium text-muted-foreground">Signal</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {sortedRows.map((r) => (
                   <StackRowItem
                     key={r.option_symbol}
                     r={r}
