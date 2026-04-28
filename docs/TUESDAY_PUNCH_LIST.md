@@ -6,6 +6,44 @@ Tracking what surfaced today during live ops + what's outstanding for after clos
 
 ## P0 — Calibration / signal quality
 
+### 0. Re-poll canonical week + diff signature corpus  ⏰ run when UW budget has headroom
+
+**The problem:** Every detector predicate was built off the canonical Mon-Fri 4/20→4/24 corpus. That corpus reads from `ct_contract_tracks.peak_contract_pct`. ~60% of tracks have peak=0 because the poller couldn't keep up before today's throughput bump. The winners pool is structurally under-inclusive — we tuned detectors against ~70% of actual winners, missing the long tail of fast-spike winners whose track only got one poll.
+
+**Implication:** Detectors aren't wrong (every flag is a real pattern), but they're under-inclusive (missing patterns the corpus didn't see). Sunday calibration was built on biased data.
+
+**The fix is a one-shot re-poll of the canonical week:**
+
+1. Wait until UW daily budget has headroom (tonight if we close ≤70%, otherwise Sat/Sun when nothing competes for budget)
+2. Force-fire `ct-contract-poller` in `offhours` mode against tracks `print_time >= 2026-04-20 AND print_time < 2026-04-25`
+3. Bypass cadence filter (these are cold tracks, every poll captures real movement)
+4. Estimated cost: ~5k UW calls (5,000 tracks × 1-2 polls each)
+5. Will take ~2 hours via */3 cron at maxPerRun=100, OR ~30 min force-fired manually
+
+**Diff procedure:**
+1. Snapshot `ct_signature_magnitude_stats` BEFORE re-poll → save as `pre_repoll_corpus.json`
+2. Run re-poll
+3. Snapshot AFTER → save as `post_repoll_corpus.json`
+4. Diff: new signature_classes appearing? hit_rates shifting? n_tracks growing? Class with biggest delta = the one most affected by polling bias.
+
+**Sunday calibration agenda after re-poll:**
+- Re-run detector portfolio backtest against corrected corpus
+- Identify classes that promoted/demoted
+- Adjust detector thresholds for the new winner distribution
+- Some detectors may stay identical; others may shift
+
+**Trigger conditions to run NOW (tonight):**
+- UW close ≤70% AND
+- Off-hours window (post-21:00 UTC) AND
+- No active backfill pipe running
+
+**Trigger condition Sat/Sun:**
+- Whenever — UW budget is unconstrained on weekends
+
+**Why this is P0 and not Sunday-default:** detector portfolio depends on this. Every day we don't run it, new flags fire on a biased corpus. Once shipped, it's permanent — corpus stays clean going forward because the poller now keeps up.
+
+---
+
 ### 1. DTE-bucketed win threshold (grader)
 **Symptom:** Today's high-conviction flags showed +7-11% peaks but the grader's `alarmWinPct=50` (fixed) marks them as `partial` because none hit +50%. The Won tab is artificially empty for non-0DTE setups even when the system found real movement.
 
