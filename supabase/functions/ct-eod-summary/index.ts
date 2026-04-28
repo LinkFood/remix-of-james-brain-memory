@@ -222,6 +222,25 @@ serve(async (req) => {
     });
   }
 
+  // Optional body — `{ "skip_slack": true }` for re-fires so we don't
+  // double-Slack the channel (cron fires once at 20:30 UTC; manual re-runs
+  // exist only to repair the row). Body parse is best-effort; missing or
+  // malformed body is fine.
+  let skipSlack = false;
+  try {
+    if (req.method === 'POST') {
+      const text = await req.text();
+      if (text && text.trim().length > 0) {
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === 'object' && parsed.skip_slack === true) {
+          skipSlack = true;
+        }
+      }
+    }
+  } catch {
+    // ignore — empty/invalid body just means default behavior (Slack on)
+  }
+
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
@@ -841,8 +860,65 @@ serve(async (req) => {
     : {};
 
   const tracksRealizedTodayCount = edgeDaily?.tracks_realized_today ?? realizedTracksToday.length;
-  const snapshotHitRate = edgeDaily?.overall_hit_rate ?? null;
-  const regimeTag = edgeDaily?.regime_tag ?? null;
+
+  // ---- Derive regime_tag + snapshot_hit_rate locally when ct_edge_daily
+  // hasn't populated yet. Edge miner runs after this report, so most days
+  // these columns came back null and the Slack message read "regime
+  // untagged · n/a hit rate". Now we compute from data already in scope.
+  // ct_edge_daily values still take precedence when present.
+  // -----------------------------------------------------------------------
+
+  // 1) snapshot_hit_rate from market grade_breakdown.
+  //    wins / (wins + losses + partial) * 100. Returns null if denom = 0.
+  //    Stored as 0..100 percent (NOT a 0..1 ratio) to match the Slack
+  //    template expectation. Edge-daily's overall_hit_rate is 0..1, so
+  //    when it lands we multiply for display in the same line.
+  const gb = marketStats.grade_breakdown;
+  const denom = gb.win + gb.loss + gb.partial;
+  const derivedSnapshotHitRate: number | null =
+    denom > 0 ? Math.round((gb.win / denom) * 1000) / 10 : null;
+
+  // 2) regime_tag from market premium delta + per-ticker regime_shift majority.
+  //    Reuses the $1M threshold from the ticker-level computation upstream
+  //    so market-level tagging matches per-ticker semantics. If MARKET pulse
+  //    didn't write (open=0 race or sparse session), fall back to the most
+  //    common ticker-level regime_shift across the watchlist.
+  function deriveRegimeTagLocal(): string | null {
+    if (mktPremOpen != null && mktPremClose != null) {
+      if (mktPremOpen < 0 && mktPremClose > 0) return 'bearish→bullish';
+      if (mktPremOpen > 0 && mktPremClose < 0) return 'bullish→bearish';
+      const delta = mktPremClose - mktPremOpen;
+      if (Math.abs(delta) > 1_000_000) {
+        return delta > 0 ? 'bullish acceleration' : 'bearish acceleration';
+      }
+      // Within noise band — call it balanced rather than untagged.
+      return 'balanced';
+    }
+    // Pulse missing — promote the most-common per-ticker regime_shift.
+    const shiftCounts = new Map<string, number>();
+    for (const t of WATCHLIST) {
+      const shift = tickerStats[t]?.regime_shift;
+      if (!shift) continue;
+      shiftCounts.set(shift, (shiftCounts.get(shift) ?? 0) + 1);
+    }
+    if (shiftCounts.size === 0) return null;
+    let best: string | null = null;
+    let bestN = 0;
+    for (const [k, n] of shiftCounts) {
+      if (n > bestN) { best = k; bestN = n; }
+    }
+    return best;
+  }
+
+  const derivedRegimeTag = deriveRegimeTagLocal();
+
+  // edge_daily wins when present; otherwise local derivation. Edge daily's
+  // overall_hit_rate is 0..1 — convert to 0..100 to match column scale.
+  const edgeHitRatePct = edgeDaily?.overall_hit_rate != null
+    ? Math.round(Number(edgeDaily.overall_hit_rate) * 1000) / 10
+    : null;
+  const snapshotHitRate: number | null = edgeHitRatePct ?? derivedSnapshotHitRate;
+  const regimeTag: string | null = edgeDaily?.regime_tag ?? derivedRegimeTag;
 
   // ----- Build Sonnet prompt --------------------------------------------------
   const promptLines: string[] = [];
@@ -1142,10 +1218,12 @@ End with a single closing sentence on the day's regime → tomorrow's setup.`;
     .single();
 
   // ----- Slack push (best-effort) --------------------------------------------
-  let slackOutcome: 'sent' | 'skipped_no_user' | 'error' | 'skipped_api_error' = 'skipped_no_user';
+  let slackOutcome: 'sent' | 'skipped_no_user' | 'error' | 'skipped_api_error' | 'skipped_manual' = 'skipped_no_user';
   let slackError: string | null = null;
 
-  if (!apiError) {
+  if (skipSlack) {
+    slackOutcome = 'skipped_manual';
+  } else if (!apiError) {
     try {
       // Single-user pattern matches ct-slack-digest
       const { data: users } = await sb.from('profiles').select('id').limit(1);
@@ -1163,8 +1241,9 @@ End with a single closing sentence on the day's regime → tomorrow's setup.`;
         const winLossLine = grades.length > 0
           ? `${marketStats.grade_breakdown.win}W / ${marketStats.grade_breakdown.loss}L / ${marketStats.grade_breakdown.partial}P / ${marketStats.grade_breakdown.invalidated_early}IE`
           : 'no flag grades yet';
+        // snapshotHitRate is stored 0..100 (percent), not 0..1.
         const hitRateStr = snapshotHitRate != null
-          ? `${(Number(snapshotHitRate) * 100).toFixed(1)}%`
+          ? `${Number(snapshotHitRate).toFixed(1)}%`
           : 'n/a';
         const regimeStr = regimeTag ?? 'untagged';
         const slowBurnCount = slowBurnList.length;
