@@ -402,6 +402,9 @@ verify_jwt = false
 [functions.ct-detector-small-cap-inverted-put]
 verify_jwt = false
 
+[functions.ct-detector-scorer]
+verify_jwt = false
+
 [functions.ct-backtest-harness]
 verify_jwt = false
 
