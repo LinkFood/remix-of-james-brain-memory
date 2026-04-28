@@ -127,6 +127,15 @@ After the directionInference fix, corpus has 37 `aggressive_ask_put` (bearish) c
 ### 10. Ct_signature_alarm_log → ct_flags 1:1 audit
 Some flag rows may not have matching alarm_log entries (and vice versa) — would explain occasional grader misses. Worth a Sunday SQL audit.
 
+### 11a. QQQ underlying_price null in ct_gex_timeseries
+**Symptom:** QQQ snapshot shows spot=null, gamma_flip falls back to last-resort logic (451 vs spot ~658). All other 9 watchlist tickers have spot populated correctly.
+
+**Cause:** Whichever ingester populates `ct_gex_timeseries.underlying_price` is failing for QQQ specifically. UW returns the data; something downstream isn't setting the column.
+
+**Fix:** Find the ingester (`ct-gex-ingester` or similar), check if it explicitly handles QQQ vs index ETFs differently, fix the column write. One-off ingester fix, ≤30 min.
+
+---
+
 ### 11. Pulse zero-rate residual
 40-50% of `ct_flow_pulse_ticks` rows still have all-zero counts. Pre-fix-cron rows account for most. Don't backfill; let the new schedule's healthy rows crowd them out over a few sessions.
 
