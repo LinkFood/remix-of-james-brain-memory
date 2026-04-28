@@ -514,6 +514,10 @@ export default function Flags() {
   });
   const [selectedFlag, setSelectedFlag] = useState<Flag | null>(null);
   const [selectedContract, setSelectedContract] = useState<string | null>(null);
+  // Hint flag: true when we auto-bumped Today→7d because the user picked a
+  // graded outcome (won/lost/neutral) on Today. Cleared the moment the user
+  // touches the date filter directly (any range), so manual control wins.
+  const [autoBumpedDateForOutcome, setAutoBumpedDateForOutcome] = useState(false);
 
   const specialistsActive = mode === 'specialists' || mode === 'both';
   const mineActive = mode === 'mine' || mode === 'both';
@@ -811,7 +815,12 @@ export default function Flags() {
             ] as const).map(({ key, label }) => (
               <button
                 key={key}
-                onClick={() => setFilters((p) => ({ ...p, dateRange: key }))}
+                onClick={() => {
+                  setFilters((p) => ({ ...p, dateRange: key }));
+                  // Manual date change wins — drop the auto-bump hint regardless
+                  // of which range the user picked (including 7d itself).
+                  setAutoBumpedDateForOutcome(false);
+                }}
                 className={cn(
                   'text-[11px] font-mono px-2 py-1 rounded border transition-colors',
                   filters.dateRange === key
@@ -822,6 +831,11 @@ export default function Flags() {
                 {label}
               </button>
             ))}
+            {autoBumpedDateForOutcome && (
+              <span className="text-[10px] text-muted-foreground italic ml-1">
+                (showing past 7 days for graded outcomes)
+              </span>
+            )}
           </div>
 
           {/* Specialist chips */}
@@ -906,7 +920,22 @@ export default function Flags() {
                     key={key}
                     size="sm"
                     variant={filters.outcome === key ? 'default' : 'outline'}
-                    onClick={() => setFilters((p) => ({ ...p, outcome: key }))}
+                    onClick={() => {
+                      // Auto-bump Today → 7d when user picks a graded outcome.
+                      // Today's flags rarely grade same-day (4h horizons expire
+                      // post-close), so the won/lost/neutral panes look empty.
+                      // 7d gives them a populated view; hint explains why.
+                      const isGradedOutcome = key === 'won' || key === 'lost' || key === 'neutral';
+                      if (isGradedOutcome && filters.dateRange === 'today') {
+                        setFilters((p) => ({ ...p, outcome: key, dateRange: '7d' }));
+                        setAutoBumpedDateForOutcome(true);
+                      } else {
+                        setFilters((p) => ({ ...p, outcome: key }));
+                        // Switching to Active/All clears any prior auto-bump
+                        // hint — it's only meaningful while on a graded tab.
+                        if (!isGradedOutcome) setAutoBumpedDateForOutcome(false);
+                      }
+                    }}
                     className="h-7 px-2 text-[11px]"
                   >
                     {label}
