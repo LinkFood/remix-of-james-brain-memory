@@ -707,10 +707,17 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
   // clock window that has no data.
   // Historical: pass dateRange — hook switches off realtime + refetch.
   const cpQuery = useNetPremiumExpirySplit(ticker, undefined, dateRange ?? undefined);
-  // bb mode is intentionally not extended for historical reads (ct_flow_pulse_chart
-  // wasn't migrated). When in past mode the UI hides the bb path; this query still
-  // fires for live consumption when the user is on cp + live.
-  const bbQuery = useFlowPulseChart(ticker, isPast ? undefined : rangeToMin(range));
+  // Hook signature is now symmetric with useNetPremiumExpirySplit: dateRange
+  // threads through, the hook switches to a static (no-poll) query, and the
+  // `p_since` anchor lands at start-day 13:30 ET. The underlying RPC
+  // `ct_flow_pulse_chart` does NOT yet accept `p_until` — see TODO in the hook.
+  // Until that migration ships, bb-historical reads from start through "now"
+  // (no end-bound), and the UI keeps the bb tab hidden while in past mode.
+  const bbQuery = useFlowPulseChart(
+    ticker,
+    isPast ? undefined : rangeToMin(range),
+    dateRange ?? undefined,
+  );
 
   const cpData = useMemo(
     () => buildLiveCp4Series(

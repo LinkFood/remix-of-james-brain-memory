@@ -226,19 +226,49 @@ export interface FlowPulseChartPoint {
  * Pass ticker=undefined for the watchlist aggregate, or a specific symbol.
  * sinceMin → server interprets as "now() - sinceMin minutes"; if undefined,
  * server defaults to NY-tz midnight (today).
+ *
+ * Historical mode (`dateRange`): signature symmetric with useNetPremiumSeries
+ * + useNetPremiumExpirySplit so the FlowPulseChart caller can stop branching
+ * on mode. Today the underlying RPC `ct_flow_pulse_chart(TEXT, TIMESTAMPTZ,
+ * INT)` only accepts `p_since` — it has no `p_until` (see migration
+ * 20260428160000_net_premium_series_p_until.sql comment: "(ct_flow_pulse_chart)
+ * is intentionally not extended; the UI hides bb in past mode"). When a
+ * dateRange is passed we thread `p_since` from the start day's RTH bell and
+ * the query becomes static (no polling, no realtime). `p_until` is left wired
+ * but UNSENT until the RPC is migrated to accept it — re-enabling bb-historical
+ * is a one-line backend migration + adding `params.p_until = …` below.
  */
-export function useFlowPulseChart(ticker?: string, sinceMin?: number) {
+export function useFlowPulseChart(
+  ticker?: string,
+  sinceMin?: number,
+  dateRange?: FlowPulseDateRange,
+) {
+  const isHistorical = !!dateRange;
+  const rangeKey = dateRange ? `${dateRange.start}_${dateRange.end}` : null;
   const query = useQuery<FlowPulseChartPoint[]>({
-    queryKey: ['flow-pulse-chart', ticker ?? 'MARKET', sinceMin ?? 'today'],
-    staleTime: 60_000,
-    refetchInterval: 60_000,
+    queryKey: [
+      'flow-pulse-chart',
+      ticker ?? 'MARKET',
+      sinceMin ?? 'today',
+      rangeKey ?? 'live',
+    ],
+    staleTime: isHistorical ? Infinity : 60_000,
+    refetchInterval: isHistorical ? false : 60_000,
     retry: false,
     queryFn: async () => {
       const params: Record<string, unknown> = {
         p_ticker: ticker ?? null,
         p_bucket_min: 5,
       };
-      if (sinceMin && sinceMin > 0) {
+      if (dateRange) {
+        // Symmetric with the cp-mode hooks: anchor at start-day 13:30 ET.
+        params.p_since = dateRangeAnchorToIso(dateRange.start, '13:30');
+        // TODO(bb-historical): RPC currently has no `p_until` — the line below
+        // is intentionally commented. When ct_flow_pulse_chart is migrated to
+        // accept (TEXT, TIMESTAMPTZ, TIMESTAMPTZ, INT), uncomment + drop the
+        // `bbDisabledForHistorical` guard in FlowPulseChart.tsx.
+        // params.p_until = dateRangeAnchorToIso(dateRange.end, '20:00');
+      } else if (sinceMin && sinceMin > 0) {
         const since = new Date(Date.now() - sinceMin * 60_000).toISOString();
         params.p_since = since;
       }
