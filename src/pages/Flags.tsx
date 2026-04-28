@@ -604,14 +604,17 @@ export default function Flags() {
     enabled: mineActive,
   });
 
-  // Unique tickers we need live spot for — only non-terminal specialist flags with entry+target.
+  // Unique tickers we need live spot for — non-terminal flags with entry+target.
+  // Fall back to instrument when specialist_ticker is null (detector_alarm and
+  // signature_alarm flags don't populate specialist_ticker, only specialist flags do).
   const tickersNeedingSpot = useMemo(() => {
     if (!filteredFlags) return [] as string[];
     const set = new Set<string>();
     for (const f of filteredFlags) {
       if (f.status === 'graded' || f.status === 'invalidated') continue;
       if (f.entry_price == null || f.target_price == null) continue;
-      if (f.specialist_ticker) set.add(f.specialist_ticker);
+      const ticker = f.specialist_ticker ?? f.instrument;
+      if (ticker) set.add(ticker);
     }
     return Array.from(set).sort();
   }, [filteredFlags]);
@@ -940,7 +943,7 @@ export default function Flags() {
                   key={item.key}
                   flag={item.flag}
                   onOpen={setSelectedFlag}
-                  spot={spotMap?.get(item.flag.specialist_ticker)}
+                  spot={spotMap?.get(item.flag.specialist_ticker ?? item.flag.instrument)}
                 />
               ) : (
                 <JamesFlagTile
