@@ -140,12 +140,87 @@ serve(async (req) => {
     });
   }
 
+  // ---- Cluster dedup ------------------------------------------------------
+  // Same contract + direction + minute → multiple detectors firing on the
+  // same signal. Push only the highest-score flag; suppress the rest.
+  // Bucket key: prefer option_symbol when present (canonical OCC). Fall back
+  // to (instrument|side|strike|expiry) for flags that didn't set it.
+  function clusterKey(f: Flag): string {
+    const minute = (f.created_at || '').slice(0, 16); // YYYY-MM-DDTHH:MM
+    const dir = f.direction ?? 'neutral';
+    if (f.option_symbol) return `os:${f.option_symbol}|${dir}|${minute}`;
+    return `cmp:${f.instrument ?? ''}|${f.side ?? ''}|${f.strike ?? ''}|${f.expiry ?? ''}|${dir}|${minute}`;
+  }
+
+  const groups = new Map<string, Flag[]>();
+  for (const f of flags) {
+    const k = clusterKey(f);
+    const arr = groups.get(k);
+    if (arr) arr.push(f); else groups.set(k, [f]);
+  }
+
+  const leaderIds = new Set<string>();
+  const suppressed: Array<{ flag: Flag; leaderId: string; leaderScore: number }> = [];
+  for (const [, members] of groups) {
+    if (members.length === 1) {
+      leaderIds.add(members[0].id);
+      continue;
+    }
+    // Highest score wins; tie → earliest created_at (first-fired) wins.
+    const sorted = [...members].sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return Date.parse(a.created_at) - Date.parse(b.created_at);
+    });
+    const leader = sorted[0];
+    leaderIds.add(leader.id);
+    for (let i = 1; i < sorted.length; i++) {
+      suppressed.push({ flag: sorted[i], leaderId: leader.id, leaderScore: leader.score });
+    }
+  }
+
+  // Write suppression audit + stamp slacked_at so the loser flags don't
+  // re-enter next sweep. ct_slack_log row = audit; slacked_at = the dedupe
+  // floor (same convention the rest of this function uses).
+  const nowIso = new Date().toISOString();
+  for (const { flag, leaderId, leaderScore } of suppressed) {
+    try {
+      await supabase.from('ct_slack_log').insert({
+        source: 'flag',
+        state: flag.status === 'conviction' ? 'CONVICTION' : 'FLAG',
+        instruments: flag.instrument ? [flag.instrument] : [],
+        direction: flag.direction ?? null,
+        alert_trigger: null,
+        conviction: Math.round(flag.score),
+        event_id: flag.id,
+        summary: `cluster_dedup: leader=${leaderId.slice(0, 8)} leader_score=${Math.round(leaderScore)} suppressed_score=${Math.round(flag.score)} contract=${flag.option_symbol ?? 'underlying'}`.slice(0, 300),
+        pushed: false,
+        skip_reason: 'cluster_dedup_lower_score',
+      });
+    } catch (e) {
+      console.warn(`[ct-slack-push-flag] cluster log insert failed for ${flag.id}:`, e instanceof Error ? e.message : e);
+    }
+    const { error: updErr } = await supabase
+      .from('ct_flags')
+      .update({ slacked_at: nowIso })
+      .eq('id', flag.id);
+    if (updErr) {
+      console.warn(`[ct-slack-push-flag] cluster slacked_at update failed for ${flag.id}:`, updErr.message);
+    }
+  }
+
+  // Continue with leaders only — order preserved from the original sort.
+  const leaders = flags.filter(f => leaderIds.has(f.id));
+
   let pushed = 0;
   let skippedMultiDay = 0;
   let failed = 0;
-  const decisions: Array<{ id: string; decision: 'pushed' | 'skip_multi_day_wait_conviction' | 'push_failed' }> = [];
+  const clusterSuppressed = suppressed.length;
+  const decisions: Array<{ id: string; decision: 'pushed' | 'skip_multi_day_wait_conviction' | 'push_failed' | 'cluster_dedup_suppressed'; cluster_leader_id?: string }> = [];
+  for (const s of suppressed) {
+    decisions.push({ id: s.flag.id, decision: 'cluster_dedup_suppressed', cluster_leader_id: s.leaderId });
+  }
 
-  for (const flag of flags) {
+  for (const flag of leaders) {
     // Same-day vs multi-day gate.
     const isMultiDay = flag.horizon_hours > sameDayHorizonH;
     if (requireConfirm && isMultiDay && flag.status !== 'conviction') {
@@ -278,6 +353,7 @@ serve(async (req) => {
     ok: true,
     pushed,
     skipped_multi_day: skippedMultiDay,
+    cluster_suppressed: clusterSuppressed,
     failed,
     threshold: scoreThreshold,
     require_confirmation: requireConfirm,
