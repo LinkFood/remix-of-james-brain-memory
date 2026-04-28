@@ -53,7 +53,7 @@ For terminal-Claude sessions, the same content auto-loads from `~/.claude/projec
 
 ## Tuesday morning verification checklist
 
-Use the watch script: `bash /tmp/tuesday_watch.sh` (5-min refresh, knows new architecture).
+Use the watch script: `bash scripts/morning_watch.sh` from the repo root (5-min refresh, knows new architecture).
 
 **At 9:30 ET (open)**:
 - [ ] /tape "ALL" view shows ONLY watchlist tickers (no INTC/AMD/etc.)
@@ -86,7 +86,7 @@ Use the watch script: `bash /tmp/tuesday_watch.sh` (5-min refresh, knows new arc
 
 ### Step 1 — open this in a terminal pane:
 ```bash
-bash /tmp/tuesday_watch.sh
+bash scripts/morning_watch.sh   # from repo root
 ```
 
 Refreshes every 5 min. Shows: per-detector flag counts, UW headroom, cost burn, cron failure count, watchlist purity, Slack quality, watermark advancement.
@@ -146,7 +146,7 @@ If something unexpected happens (good OR bad), append it to "Bug pattern catalog
 
 ## File map
 
-- `/tmp/tuesday_watch.sh` — live ops monitor (5min refresh)
+- `scripts/morning_watch.sh` — live ops monitor (5min refresh) — committed to repo so it survives terminal restart
 - `~/.claude/projects/-Users-jameschellis/memory/project_co_trader_morning_ops_checklist.md` — full memory version (auto-loads in Claude sessions)
 - `docs/MONDAY_OPEN_PUNCH_LIST.md` — punch list with completed + pending items
 - `supabase/migrations/20260427150000_grader_cron_faster_rth.sql` — grader cron split
