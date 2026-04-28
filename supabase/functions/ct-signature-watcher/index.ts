@@ -483,13 +483,18 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
       // race can't leave a flag with score=0. The dedupe in alarm_log means
       // we get one shot per option_symbol per dedupe-window, so we cannot
       // afford to fire with a missing score.
+      // executed_at is null on RepeatedHits* rules (~30% of alerts), so fall
+      // back to ingested_at as the event timestamp for the recovery scoring.
       let score: number | null = await loadScoreForAlert(supabase, a.alert_id);
-      if (score === null && a.executed_at) {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (supabase.rpc as any)('ct_score_existing_flow', {
-          p_since: new Date(Date.parse(a.executed_at) - 60_000).toISOString(),
-        });
-        score = await loadScoreForAlert(supabase, a.alert_id);
+      if (score === null) {
+        const eventTs = a.executed_at ?? a.ingested_at;
+        if (eventTs) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await (supabase.rpc as any)('ct_score_existing_flow', {
+            p_since: new Date(Date.parse(eventTs) - 120_000).toISOString(),
+          });
+          score = await loadScoreForAlert(supabase, a.alert_id);
+        }
       }
 
       stats.alarms_total_evaluated += 1;
