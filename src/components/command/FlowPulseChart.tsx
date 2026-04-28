@@ -29,6 +29,7 @@
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import {
+  CalendarDays,
   ChevronDown,
   LineChart as LineChartIcon,
 } from 'lucide-react';
@@ -46,11 +47,14 @@ import {
   YAxis,
 } from 'recharts';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   useFlowPulseChart,
   useNetPremiumExpirySplit,
   formatPulseDollars,
   type FlowPulseChartPoint,
+  type FlowPulseDateRange,
   type NetPremiumExpirySplitPoint,
 } from '@/hooks/useFlowPulse';
 
@@ -131,27 +135,113 @@ function fmtTime(iso: string): string {
   });
 }
 
+/**
+ * NY-tz calendar date for an ISO timestamp, formatted YYYY-MM-DD. Used to
+ * detect session boundaries when rendering a multi-day historical Flow
+ * Butterfly — each day's cumsum resets to zero so the user reads the shape
+ * of every session independently instead of a 5-day running total.
+ */
+function nyDateKey(iso: string): string {
+  const d = new Date(iso);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d);
+  const y = parts.find((p) => p.type === 'year')?.value ?? '0000';
+  const m = parts.find((p) => p.type === 'month')?.value ?? '00';
+  const day = parts.find((p) => p.type === 'day')?.value ?? '00';
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Time label that includes a date prefix when crossing days. fmtTime alone
+ * collapses to e.g. "9:32 AM" which is ambiguous in a multi-day view. Used
+ * for x-axis ticks in historical mode.
+ */
+function fmtTimeWithDate(iso: string): string {
+  const d = new Date(iso);
+  const dateStr = d.toLocaleDateString('en-US', {
+    timeZone: 'America/New_York',
+    month: 'numeric',
+    day: 'numeric',
+  });
+  const time = d.toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/New_York',
+    hour12: true,
+  });
+  return `${dateStr} ${time}`;
+}
+
+function todayNyIsoDate(): string {
+  return nyDateKey(new Date().toISOString());
+}
+
+function yesterdayNyIsoDate(): string {
+  // 24h-back probe is good enough; nyDateKey collapses DST drift to date.
+  return nyDateKey(new Date(Date.now() - 24 * 60 * 60_000).toISOString());
+}
+
 function pickField(p: FlowPulseChartPoint, side: 'calls' | 'puts' | 'bullish' | 'bearish', dte: DteKey): number {
   const key = `${side}_${dte}` as keyof FlowPulseChartPoint;
   const v = p[key];
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;
 }
 
-function buildButterfly(points: FlowPulseChartPoint[], dte: DteKey): ButterflyPoint[] {
+function buildButterfly(
+  points: FlowPulseChartPoint[],
+  dte: DteKey,
+  multiDay: boolean = false,
+): ButterflyPoint[] {
   let cumBull = 0;
   let cumBear = 0;
-  return points.map((p) => {
+  let prevDay: string | null = null;
+  const out: ButterflyPoint[] = [];
+  // Cast values through unknown so the ButterflyPoint shape can carry sentinel
+  // nulls for Recharts gap-rendering. Internal builder only — public type stays
+  // numeric so existing consumers don't have to handle nulls.
+  type SentinelPoint = Omit<ButterflyPoint, 'top_bb' | 'bottom_bb' | 'top_bb_abs' | 'bottom_bb_abs'> & {
+    top_bb: number | null;
+    bottom_bb: number | null;
+    top_bb_abs: number | null;
+    bottom_bb_abs: number | null;
+  };
+
+  for (const p of points) {
+    if (multiDay) {
+      const day = nyDateKey(p.bucket_time);
+      if (prevDay !== null && day !== prevDay) {
+        // Session boundary — emit a null sentinel so Recharts breaks the line,
+        // then reset cumulative counters before the next day's first bucket.
+        const sentinel: SentinelPoint = {
+          time: '',
+          bucket_time: p.bucket_time,
+          top_bb: null,
+          bottom_bb: null,
+          top_bb_abs: null,
+          bottom_bb_abs: null,
+        };
+        out.push(sentinel as unknown as ButterflyPoint);
+        cumBull = 0;
+        cumBear = 0;
+      }
+      prevDay = day;
+    }
     cumBull += pickField(p, 'bullish', dte);
     cumBear += pickField(p, 'bearish', dte);
-    return {
-      time: fmtTime(p.bucket_time),
+    out.push({
+      time: multiDay ? fmtTimeWithDate(p.bucket_time) : fmtTime(p.bucket_time),
       bucket_time: p.bucket_time,
       top_bb: cumBull,
       bottom_bb: -cumBear,
       top_bb_abs: cumBull,
       bottom_bb_abs: cumBear,
-    };
-  });
+    });
+  }
+  return out;
 }
 
 /**
@@ -172,6 +262,7 @@ function buildLiveCp4Series(
   points: NetPremiumExpirySplitPoint[],
   skipPreMarket: boolean,
   trailingMinutes?: number,
+  multiDay: boolean = false,
 ): FourSeriesPoint[] {
   if (points.length === 0) return [];
 
@@ -204,14 +295,46 @@ function buildLiveCp4Series(
   let cumAllPut = 0;
   let cumNextCall = 0;
   let cumNextPut = 0;
+  let prevDay: string | null = null;
+
+  // Sentinel-aware shape: lets us push nulls for session boundaries so
+  // Recharts breaks the line. Public type stays numeric — we cast at push.
+  type SentinelFour = Omit<FourSeriesPoint,
+    'cum_all_call' | 'cum_all_put' | 'cum_next_call' | 'cum_next_put'
+  > & {
+    cum_all_call: number | null;
+    cum_all_put: number | null;
+    cum_next_call: number | null;
+    cum_next_put: number | null;
+  };
+
   const out: FourSeriesPoint[] = [];
   for (const [ts, v] of sorted) {
+    if (multiDay) {
+      const day = nyDateKey(ts);
+      if (prevDay !== null && day !== prevDay) {
+        const sentinel: SentinelFour = {
+          time: '',
+          bucket_time: ts,
+          cum_all_call: null,
+          cum_all_put: null,
+          cum_next_call: null,
+          cum_next_put: null,
+        };
+        out.push(sentinel as unknown as FourSeriesPoint);
+        cumAllCall = 0;
+        cumAllPut = 0;
+        cumNextCall = 0;
+        cumNextPut = 0;
+      }
+      prevDay = day;
+    }
     cumAllCall += v.allCall;
     cumAllPut += v.allPut;
     cumNextCall += v.nextCall;
     cumNextPut += v.nextPut;
     out.push({
-      time: fmtTime(ts),
+      time: multiDay ? fmtTimeWithDate(ts) : fmtTime(ts),
       bucket_time: ts,
       cum_all_call: cumAllCall,
       cum_all_put: cumAllPut,
@@ -223,8 +346,9 @@ function buildLiveCp4Series(
   // 1h / 30m tabs slice the tail of the cumulative series. We rebase each
   // line so the visible window starts at zero — otherwise the slice would
   // show whatever the running totals happened to be at that tick, which is
-  // only meaningful in the full-session context.
-  if (trailingMinutes && trailingMinutes > 0 && out.length > 0) {
+  // only meaningful in the full-session context. Skipped in multiDay mode
+  // (date-range view doesn't combine with trailing-window tabs).
+  if (!multiDay && trailingMinutes && trailingMinutes > 0 && out.length > 0) {
     const lastMs = Date.parse(out[out.length - 1].bucket_time);
     const cutoffMs = lastMs - trailingMinutes * 60_000;
     const sliced = out.filter((p) => Date.parse(p.bucket_time) >= cutoffMs);
@@ -562,6 +686,17 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
   const [mode, setMode] = useState<ModeKey>('cp');
   const [dte, setDte] = useState<DteKey>('all');
 
+  // Historical date-range state. When `dateRange` is set, the chart shows
+  // a past session (single day or multi-day span) instead of the live tape.
+  // The picker popover edits these draft values, which are committed to
+  // `dateRange` on Apply.
+  const [dateRange, setDateRange] = useState<FlowPulseDateRange | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [draftStart, setDraftStart] = useState<string>(yesterdayNyIsoDate());
+  const [draftEnd, setDraftEnd] = useState<string>(yesterdayNyIsoDate());
+  const isPast = !!dateRange;
+  const multiDay = !!(dateRange && dateRange.start !== dateRange.end);
+
   // Mode 'cp' (live signed, 4-series) reads ct_net_premium_expiry_split via the
   // new RPC + Realtime on ct_flow_alerts. Mode 'bb' (cumulative mirrored) reads
   // ct_flow_alerts via the legacy bucketed RPC. Both hooks always run (rules of
@@ -570,18 +705,26 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
   // the same data, rebased to zero at the window start (see buildLiveCp4Series).
   // This way those tabs keep working after-hours instead of querying a wall-
   // clock window that has no data.
-  const cpQuery = useNetPremiumExpirySplit(ticker, undefined);
-  const bbQuery = useFlowPulseChart(ticker, rangeToMin(range));
+  // Historical: pass dateRange — hook switches off realtime + refetch.
+  const cpQuery = useNetPremiumExpirySplit(ticker, undefined, dateRange ?? undefined);
+  // bb mode is intentionally not extended for historical reads (ct_flow_pulse_chart
+  // wasn't migrated). When in past mode the UI hides the bb path; this query still
+  // fires for live consumption when the user is on cp + live.
+  const bbQuery = useFlowPulseChart(ticker, isPast ? undefined : rangeToMin(range));
 
   const cpData = useMemo(
     () => buildLiveCp4Series(
       cpQuery.points,
-      /* skipPreMarket */ true,
-      /* trailingMinutes */ rangeToMin(range),
+      /* skipPreMarket */ !isPast,  // historical: keep all rows the RPC returned
+      /* trailingMinutes */ isPast ? undefined : rangeToMin(range),
+      /* multiDay */ multiDay,
     ),
-    [cpQuery.points, range],
+    [cpQuery.points, range, isPast, multiDay],
   );
-  const bbData = useMemo(() => buildButterfly(bbQuery.points, dte), [bbQuery.points, dte]);
+  const bbData = useMemo(
+    () => buildButterfly(bbQuery.points, dte, /* multiDay */ multiDay),
+    [bbQuery.points, dte, multiDay],
+  );
 
   const headline = useMemo(() => {
     return mode === 'cp' ? buildHeadlineCp(cpData) : buildHeadlineBb(bbData);
@@ -633,22 +776,110 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
           ))}
         </select>
 
-        <div className="flex items-center gap-1">
-          {(['today', '1h', '30m'] as const).map((r) => (
+        {/* Live windowing tabs — hidden in past mode (a past date implies an
+            entire session, not a trailing tail). */}
+        {!isPast && (
+          <div className="flex items-center gap-1">
+            {(['today', '1h', '30m'] as const).map((r) => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className={cn(
+                  'text-[10px] font-mono px-2 py-0.5 rounded transition-colors',
+                  range === r
+                    ? 'bg-primary/10 text-primary'
+                    : 'bg-muted/20 text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {r === 'today' ? 'Today' : r === '1h' ? '1h' : '30m'}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Past date picker. Click to open popover with start + end inputs. */}
+        <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+          <PopoverTrigger asChild>
             <button
-              key={r}
-              onClick={() => setRange(r)}
+              type="button"
               className={cn(
-                'text-[10px] font-mono px-2 py-0.5 rounded transition-colors',
-                range === r
+                'flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded transition-colors',
+                isPast
                   ? 'bg-primary/10 text-primary'
                   : 'bg-muted/20 text-muted-foreground hover:text-foreground',
               )}
+              title="View a past session or date range"
             >
-              {r === 'today' ? 'Today' : r === '1h' ? '1h' : '30m'}
+              <CalendarDays className="w-3 h-3" />
+              <span>Past</span>
             </button>
-          ))}
-        </div>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-auto p-3 space-y-2">
+            <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+              View past session
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] font-mono text-muted-foreground w-10">From</label>
+              <input
+                type="date"
+                value={draftStart}
+                max={todayNyIsoDate()}
+                onChange={(e) => setDraftStart(e.target.value)}
+                className="bg-muted/30 border border-border/40 rounded text-[11px] font-mono px-2 py-1 text-foreground focus:outline-none focus:border-primary/60"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-[10px] font-mono text-muted-foreground w-10">To</label>
+              <input
+                type="date"
+                value={draftEnd}
+                max={todayNyIsoDate()}
+                onChange={(e) => setDraftEnd(e.target.value)}
+                className="bg-muted/30 border border-border/40 rounded text-[11px] font-mono px-2 py-1 text-foreground focus:outline-none focus:border-primary/60"
+              />
+            </div>
+            <div className="flex items-center gap-2 pt-1">
+              <Button
+                size="sm"
+                variant="default"
+                className="h-7 text-[11px]"
+                disabled={!draftStart || !draftEnd || draftStart > draftEnd}
+                onClick={() => {
+                  setDateRange({ start: draftStart, end: draftEnd });
+                  setPickerOpen(false);
+                }}
+              >
+                Apply
+              </Button>
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-7 text-[11px]"
+                onClick={() => setPickerOpen(false)}
+              >
+                Cancel
+              </Button>
+            </div>
+          </PopoverContent>
+        </Popover>
+
+        {/* Past-mode label + Back-to-live button */}
+        {isPast && dateRange && (
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono text-primary/80">
+              Viewing: {dateRange.start}
+              {dateRange.start !== dateRange.end ? ` → ${dateRange.end}` : ''}
+            </span>
+            <button
+              type="button"
+              onClick={() => setDateRange(null)}
+              className="text-[10px] font-mono px-2 py-0.5 rounded bg-muted/20 text-muted-foreground hover:text-foreground transition-colors"
+              title="Resume the live view"
+            >
+              Back to live
+            </button>
+          </div>
+        )}
 
         {/* DTE filter only applies to the legacy 'bb' path. Hidden in live
             'cp' mode since net_premium_ticks doesn't split by expiry. */}
@@ -707,10 +938,14 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
       ) : !hasDataForMode ? (
         <div className="w-full h-[280px] flex flex-col items-center justify-center gap-1 text-center px-4">
           <span className="text-[12px] text-muted-foreground italic">
-            No flow in {range === '30m' ? 'last 30 min' : range === '1h' ? 'last hour' : 'today’s session'}
+            {isPast && dateRange
+              ? `No flow between ${dateRange.start} and ${dateRange.end}`
+              : `No flow in ${range === '30m' ? 'last 30 min' : range === '1h' ? 'last hour' : 'today’s session'}`}
           </span>
           <span className="text-[10px] text-muted-foreground/70">
-            Market may be closed — try the &ldquo;Today&rdquo; window for the most recent RTH session.
+            {isPast
+              ? 'Try a different range — historical data starts 2026-04-17.'
+              : 'Market may be closed — try the “Today” window for the most recent RTH session.'}
           </span>
         </div>
       ) : showDirectionalEmpty ? (

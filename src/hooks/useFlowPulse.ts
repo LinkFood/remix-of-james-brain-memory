@@ -281,15 +281,73 @@ export interface NetPremiumSeriesPoint {
   net_put_premium: number;
 }
 
-export function useNetPremiumSeries(ticker?: string, sinceMin?: number) {
+/**
+ * Historical date-range, NY-tz interpretation. start/end are 'YYYY-MM-DD'.
+ * When provided:
+ *  - p_since = start @ 13:30 ET (RTH bell on the start day)
+ *  - p_until = end @ 20:00 ET   (post-close on the end day, inclusive)
+ *  - refetchInterval is paused (historical = static)
+ *  - Realtime channel subscription is skipped (no live invalidations)
+ *  - queryKey includes the range so cache slices per [start, end]
+ *
+ * Inclusive on both ends. end < start is illegal — caller validates.
+ */
+export interface FlowPulseDateRange {
+  start: string;  // YYYY-MM-DD
+  end: string;    // YYYY-MM-DD
+}
+
+/**
+ * Convert an NY-tz date+time-of-day pair to an ISO string. We're not pulling
+ * in date-fns-tz for one-off bell/close anchors — DST-correct hard-coded
+ * offsets aren't worth a dependency. Use the IANA offset that's correct for
+ * the date in question via a quick formatter probe, then build the ISO string.
+ *
+ * `timeOfDay` is 'HH:MM' in 24h. Returns ISO 8601 with the resolved offset.
+ */
+function dateRangeAnchorToIso(date: string, timeOfDay: string): string {
+  // Probe the offset for that date at noon (anything inside the day works).
+  // 'short' returns e.g. "GMT-4" / "GMT-5" — extract the sign and hours.
+  const probe = new Date(`${date}T12:00:00Z`);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    timeZoneName: 'shortOffset',
+  }).formatToParts(probe);
+  const tzPart = parts.find((p) => p.type === 'timeZoneName')?.value ?? 'GMT-4';
+  // Match "GMT-5" / "GMT+0" / "GMT-4:30" defensively.
+  const m = tzPart.match(/GMT([+-])(\d{1,2})(?::(\d{2}))?/);
+  let offset = '-04:00';
+  if (m) {
+    const sign = m[1];
+    const hh = m[2].padStart(2, '0');
+    const mm = (m[3] ?? '00').padStart(2, '0');
+    offset = `${sign}${hh}:${mm}`;
+  }
+  return `${date}T${timeOfDay}:00${offset}`;
+}
+
+export function useNetPremiumSeries(
+  ticker?: string,
+  sinceMin?: number,
+  dateRange?: FlowPulseDateRange,
+) {
   const qc = useQueryClient();
-  const queryKey = ['net-premium-series', ticker ?? 'MARKET', sinceMin ?? 'today'] as const;
+  const isHistorical = !!dateRange;
+  const rangeKey = dateRange ? `${dateRange.start}_${dateRange.end}` : null;
+  const queryKey = [
+    'net-premium-series',
+    ticker ?? 'MARKET',
+    sinceMin ?? 'today',
+    rangeKey ?? 'live',
+  ] as const;
 
   // Realtime invalidation on new ticks. We can't filter server-side by ticker
   // in the postgres_changes payload reliably (tick rows are written per-ticker
   // for every watchlist symbol every minute), so subscribe broadly and let the
   // RPC filter on requery. Volume is low — one INSERT per ticker per minute.
+  // Historical mode: skip the channel entirely — past data is static.
   useEffect(() => {
+    if (isHistorical) return;
     const chan = supabase
       .channel(`ct_net_premium_ticks_${ticker ?? 'MARKET'}`)
       .on(
@@ -309,20 +367,24 @@ export function useNetPremiumSeries(ticker?: string, sinceMin?: number) {
     return () => {
       supabase.removeChannel(chan);
     };
-    // queryKey is derived from ticker+sinceMin, so those deps cover it.
+    // queryKey is derived from ticker+sinceMin+rangeKey; deps cover it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qc, ticker, sinceMin]);
+  }, [qc, ticker, sinceMin, isHistorical, rangeKey]);
 
   const query = useQuery<NetPremiumSeriesPoint[]>({
     queryKey: [...queryKey],
-    staleTime: 10_000,
-    refetchInterval: 30_000,
+    staleTime: isHistorical ? Infinity : 10_000,
+    // Historical = static data — no polling. Live = 30s safety net behind realtime.
+    refetchInterval: isHistorical ? false : 30_000,
     retry: false,
     queryFn: async () => {
       const params: Record<string, unknown> = {
         p_ticker: ticker ?? null,
       };
-      if (sinceMin && sinceMin > 0) {
+      if (dateRange) {
+        params.p_since = dateRangeAnchorToIso(dateRange.start, '13:30');
+        params.p_until = dateRangeAnchorToIso(dateRange.end, '20:00');
+      } else if (sinceMin && sinceMin > 0) {
         params.p_since = new Date(Date.now() - sinceMin * 60_000).toISOString();
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -371,14 +433,26 @@ export interface NetPremiumExpirySplitPoint {
   next_net_put: number;
 }
 
-export function useNetPremiumExpirySplit(ticker?: string, sinceMin?: number) {
+export function useNetPremiumExpirySplit(
+  ticker?: string,
+  sinceMin?: number,
+  dateRange?: FlowPulseDateRange,
+) {
   const qc = useQueryClient();
-  const queryKey = ['net-premium-expiry-split', ticker ?? 'MARKET', sinceMin ?? 'today'] as const;
+  const isHistorical = !!dateRange;
+  const rangeKey = dateRange ? `${dateRange.start}_${dateRange.end}` : null;
+  const queryKey = [
+    'net-premium-expiry-split',
+    ticker ?? 'MARKET',
+    sinceMin ?? 'today',
+    rangeKey ?? 'live',
+  ] as const;
 
   // Realtime invalidation on new flow alerts. Ticker filter is best-effort —
   // ct_flow_alerts INSERTs fire across every watched symbol; the RPC re-filters
-  // on requery so a stray invalidation is cheap.
+  // on requery so a stray invalidation is cheap. Historical mode: skip entirely.
   useEffect(() => {
+    if (isHistorical) return;
     const chan = supabase
       .channel(`ct_flow_alerts_expiry_split_${ticker ?? 'MARKET'}`)
       .on(
@@ -396,20 +470,23 @@ export function useNetPremiumExpirySplit(ticker?: string, sinceMin?: number) {
     return () => {
       supabase.removeChannel(chan);
     };
-    // queryKey is derived from ticker+sinceMin, so those deps cover it.
+    // queryKey is derived from ticker+sinceMin+rangeKey; deps cover it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [qc, ticker, sinceMin]);
+  }, [qc, ticker, sinceMin, isHistorical, rangeKey]);
 
   const query = useQuery<NetPremiumExpirySplitPoint[]>({
     queryKey: [...queryKey],
-    staleTime: 10_000,
-    refetchInterval: 30_000,
+    staleTime: isHistorical ? Infinity : 10_000,
+    refetchInterval: isHistorical ? false : 30_000,
     retry: false,
     queryFn: async () => {
       const params: Record<string, unknown> = {
         p_ticker: ticker ?? null,
       };
-      if (sinceMin && sinceMin > 0) {
+      if (dateRange) {
+        params.p_since = dateRangeAnchorToIso(dateRange.start, '13:30');
+        params.p_until = dateRangeAnchorToIso(dateRange.end, '20:00');
+      } else if (sinceMin && sinceMin > 0) {
         params.p_since = new Date(Date.now() - sinceMin * 60_000).toISOString();
       }
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
