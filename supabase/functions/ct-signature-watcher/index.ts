@@ -574,9 +574,15 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
       const horizonHours = 4;
       const horizonTs = new Date(Date.now() + horizonHours * 60 * 60_000).toISOString();
       const entryPrice = a.price == null ? null : Number(a.price);
-      // Target uses signature median when present; falls back to 0 (no projected target).
-      const targetPrice = entryPrice != null && Number.isFinite(entryPrice) && validSigMedian != null
-        ? Number((entryPrice * (1 + validSigMedian)).toFixed(4))
+      // Target: signature median when present, else +50% fallback for score-only fires.
+      // Invalidation: -30% contract loss buffer (puts also lose value when wrong on bearish).
+      const targetPrice = entryPrice != null && Number.isFinite(entryPrice)
+        ? validSigMedian != null
+          ? Number((entryPrice * (1 + validSigMedian)).toFixed(4))
+          : Number((entryPrice * 1.5).toFixed(4))
+        : null;
+      const invalidationPrice = entryPrice != null && Number.isFinite(entryPrice)
+        ? Number((entryPrice * 0.7).toFixed(4))
         : null;
       const thesis = validSigMedian != null
         ? `[${tier.toUpperCase()}] Signature class match: ${label}. Historical median peak +${peakPctStr} on n=${nForDisplay}. Premium ${premKstr}. ${scoreStr}.`
@@ -606,6 +612,7 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
           horizon_ts: horizonTs,
           entry_price: entryPrice,
           target_price: targetPrice,
+          invalidation_price: invalidationPrice,
           status: 'active',
           pulse_net_premium_at_fire: pulse.netPremium,
           pulse_slope_5min_at_fire: pulse.slope5min,
@@ -662,6 +669,7 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
               horizon_ts: horizonTs,
               entry_price: entryPrice,
               target_price: targetPrice,
+              invalidation_price: invalidationPrice,
               status: 'active',
               pulse_net_premium_at_fire: pulse.netPremium,
               pulse_slope_5min_at_fire: pulse.slope5min,

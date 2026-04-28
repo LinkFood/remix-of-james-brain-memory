@@ -217,6 +217,10 @@ async function runSweep(supabase: SupabaseClient): Promise<Stats> {
       const horizonHours = 4;
       const horizonTs = new Date(Date.now() + horizonHours * 60 * 60_000).toISOString();
       const entryPrice = a.price == null ? null : Number(a.price);
+      // Contract-side target/invalidation: 50% contract gain target, ~30% loss invalidation.
+      // 4-hour horizon detectors: this is what flow patterns typically deliver when they work.
+      const targetContractPrice = entryPrice != null && Number.isFinite(entryPrice) ? Number((entryPrice * 1.5).toFixed(4)) : null;
+      const invalidationContractPrice = entryPrice != null && Number.isFinite(entryPrice) ? Number((entryPrice * 0.7).toFixed(4)) : null;
 
       const { error: flagErr } = await supabase
         .from('ct_flags')
@@ -236,7 +240,8 @@ async function runSweep(supabase: SupabaseClient): Promise<Stats> {
           horizon_hours: horizonHours,
           horizon_ts: horizonTs,
           entry_price: entryPrice,
-          target_price: null,
+          target_price: targetContractPrice,
+          invalidation_price: invalidationContractPrice,
           status: 'active',
           source_flow_ids: null,
         });

@@ -228,8 +228,8 @@ function ProgressChip({
   const { entry_price, target_price, direction } = flag;
   if (entry_price == null || target_price == null || spot == null) {
     return (
-      <div className="text-[10px] text-muted-foreground tabular-nums">
-        spot — · target {target_price != null ? `$${target_price.toFixed(2)}` : '—'}
+      <div className="text-[10px] text-muted-foreground tabular-nums italic">
+        no progress yet — {target_price == null ? 'target not set' : spot == null ? 'spot loading' : 'awaiting entry'}
       </div>
     );
   }
