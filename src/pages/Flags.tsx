@@ -40,6 +40,7 @@ interface FlagGrade {
 
 interface Flag {
   id: string;
+  source: string;
   specialist_ticker: string;
   instrument: string;
   option_symbol: string | null;
@@ -604,17 +605,32 @@ export default function Flags() {
     enabled: mineActive,
   });
 
-  // Unique tickers we need live spot for — non-terminal flags with entry+target.
-  // Fall back to instrument when specialist_ticker is null (detector_alarm and
-  // signature_alarm flags don't populate specialist_ticker, only specialist flags do).
+  // Two reference-value lookups: underlying-axis flags (specialist) compare
+  // ticker spot vs entry/target. Contract-axis flags (signature_alarm,
+  // detector_alarm) compare current contract price vs entry/target. Mixing
+  // them produces 19,000% bars because contract entry is $1.79 but underlying
+  // spot is $710.
   const tickersNeedingSpot = useMemo(() => {
     if (!filteredFlags) return [] as string[];
     const set = new Set<string>();
     for (const f of filteredFlags) {
+      if (f.source !== 'specialist') continue;
       if (f.status === 'graded' || f.status === 'invalidated') continue;
       if (f.entry_price == null || f.target_price == null) continue;
       const ticker = f.specialist_ticker ?? f.instrument;
       if (ticker) set.add(ticker);
+    }
+    return Array.from(set).sort();
+  }, [filteredFlags]);
+
+  const optionsNeedingContractPrice = useMemo(() => {
+    if (!filteredFlags) return [] as string[];
+    const set = new Set<string>();
+    for (const f of filteredFlags) {
+      if (f.source === 'specialist') continue;
+      if (f.status === 'graded' || f.status === 'invalidated') continue;
+      if (f.entry_price == null || f.target_price == null) continue;
+      if (f.option_symbol) set.add(f.option_symbol);
     }
     return Array.from(set).sort();
   }, [filteredFlags]);
@@ -632,6 +648,39 @@ export default function Flags() {
       const m = new Map<string, number>();
       for (const row of (data ?? []) as Array<{ ticker: string; spot: number | null }>) {
         if (row.spot != null) m.set(row.ticker, row.spot);
+      }
+      return m;
+    },
+  });
+
+  // Contract-price map: latest current_contract_price per option_symbol from
+  // ct_contract_tracks. Multiple tracks per symbol exist (one per print);
+  // take the freshest non-null. Polled by ct-contract-poller every 3min RTH.
+  const { data: contractPriceMap } = useQuery<Map<string, number>>({
+    queryKey: ['ct_flags_contract_price_map', optionsNeedingContractPrice],
+    enabled: optionsNeedingContractPrice.length > 0,
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const m = new Map<string, number>();
+      // Fan-out per option_symbol — PostgREST .in on this many is fine but
+      // we want the latest row per symbol. Promise.all keeps it parallel.
+      const results = await Promise.all(
+        optionsNeedingContractPrice.map(async (sym) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const { data } = await (supabase.from('ct_contract_tracks' as never) as any)
+            .select('current_contract_price, last_quoted_at')
+            .eq('option_symbol', sym)
+            .not('current_contract_price', 'is', null)
+            .order('last_quoted_at', { ascending: false, nullsFirst: false })
+            .limit(1);
+          const row = Array.isArray(data) && data[0] ? data[0] as { current_contract_price: number | string | null } : null;
+          const price = row?.current_contract_price;
+          const n = typeof price === 'number' ? price : price != null ? Number(price) : NaN;
+          return [sym, Number.isFinite(n) ? n : null] as const;
+        }),
+      );
+      for (const [sym, price] of results) {
+        if (price != null) m.set(sym, price);
       }
       return m;
     },
@@ -943,7 +992,13 @@ export default function Flags() {
                   key={item.key}
                   flag={item.flag}
                   onOpen={setSelectedFlag}
-                  spot={spotMap?.get(item.flag.specialist_ticker ?? item.flag.instrument)}
+                  spot={
+                    item.flag.source === 'specialist'
+                      ? spotMap?.get(item.flag.specialist_ticker ?? item.flag.instrument)
+                      : item.flag.option_symbol
+                        ? contractPriceMap?.get(item.flag.option_symbol)
+                        : undefined
+                  }
                 />
               ) : (
                 <JamesFlagTile
