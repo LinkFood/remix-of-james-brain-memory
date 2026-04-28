@@ -2,6 +2,8 @@
 
 Tracking what surfaced today during live ops + what's outstanding for after close. Today shipped 10 fixes live; this captures what we found that we're NOT fixing right now.
 
+**Updated 2026-04-28 ~23:15 UTC after evening polish session.** 6 of 12 items shipped + verified live (#5, #6, #7 from P1, #11b from P2, plus EOD `regime_tag/snapshot_hit_rate` and ct-cron-health-check step-interval suppression — both new items not on original list). 2 read-only diagnostics run on remaining items — see "Tonight's diagnostic findings" below.
+
 ---
 
 ## P0 — Calibration / signal quality
@@ -95,24 +97,30 @@ Each one was structurally distinct and only visible against live flow. There may
 
 ---
 
-### 5. Flow Butterfly mode 'bb' historical view
+### 5. Flow Butterfly mode 'bb' historical view ✅ SHIPPED 2026-04-28 evening (commit `7755a30`)
 **Status:** Today's date-range fix only extended mode 'cp' (calls vs puts). The agent skipped 'bb' (cumulative bullish/bearish) because that mode is hardcoded off in the UI right now. If we ever turn it back on, historical view won't work for it.
 
 **Fix path:** Apply same `p_until` parameter to `ct_flow_pulse_chart` RPC + thread through `useFlowPulseChart` hook. Already half-done.
 
+**Resolution:** Hook signature now accepts `dateRange` symmetrically for both cp and bb modes. RPC `ct_flow_pulse_chart` does NOT accept `p_until` — that's an out-of-scope migration. The bb call site has the param threaded but commented with a TODO. Re-enable path: ALTER `ct_flow_pulse_chart` to accept 4th TIMESTAMPTZ param, uncomment one line in `useFlowPulse.ts`. Code-level symmetry achieved; bb stays hidden in UI.
+
 ---
 
-### 6. Cluster detector firing duplicates
+### 6. Cluster detector firing duplicates ✅ SHIPPED 2026-04-28 evening (commit `e5c5f11`)
 **Today's evidence:** MSFT 425C bullish 85 fired on three detectors simultaneously (signature_v1 + cluster_default + cluster_slow_stacker), all at the same minute, all pushed to Slack. James got 3 Slack messages for 1 actual signal.
 
 **Fix path:** Slack pusher dedups by `(option_symbol, direction, minute)` and only pushes the highest-scoring of the cluster within a window.
 
+**Resolution:** ct-slack-push-flag groups pending flags by `(option_symbol, direction, minute_bucket)`, sorts by score DESC + created_at ASC, pushes leader only. Non-leaders get `ct_slack_log` rows with `pushed=false, skip_reason='cluster_dedup_lower_score'` and `slacked_at` stamped to keep them out of next sweep. Composite key falls back to `(instrument, side, strike, expiry, direction, minute)` when option_symbol is null. Audit query: `SELECT * FROM ct_slack_log WHERE skip_reason = 'cluster_dedup_lower_score'` — accumulates as live clusters fire.
+
 ---
 
-### 7. /flags page — sticky filter for "Today" should auto-include 7d for outcome tabs
+### 7. /flags page — sticky filter for "Today" should auto-include 7d for outcome tabs ✅ SHIPPED 2026-04-28 evening (commit `3e592ff`)
 **Symptom:** Today's flags don't have grades yet (horizons haven't expired). Won/Lost/Neutral tabs return zero on Today filter. Confusing UX.
 
 **Fix path:** When user clicks Won/Lost/Neutral while on "Today", auto-bump date filter to 7d AND show a small "(showing past 7 days for graded outcomes)" hint.
+
+**Resolution:** Auto-bump fires on Won/Lost/Neutral click when date is Today. Hint renders next to date pills, clears on any manual date change. Active and All outcomes do NOT trigger auto-bump (control case). Verified live in browser end-to-end.
 
 ---
 
@@ -124,10 +132,17 @@ v2 prompts shipped this morning have hard-gated bias audit + 3:3:1 few-shot. Dir
 ### 9. Bear-side signature class corpus growth
 After the directionInference fix, corpus has 37 `aggressive_ask_put` (bearish) classes, all with hit_rate 0-4% historically because the recent regime has been bullish. As bearish moves materialize, those classes will accumulate winners and signature_v1 will start firing bearish.
 
-### 10. Ct_signature_alarm_log → ct_flags 1:1 audit
+### 10. Ct_signature_alarm_log → ct_flags 1:1 audit ⚠ DIAGNOSTIC RUN 2026-04-28 evening — gap confirmed
 Some flag rows may not have matching alarm_log entries (and vice versa) — would explain occasional grader misses. Worth a Sunday SQL audit.
 
-### 11b. ct_compute_gamma_flip last-resort fallback picks bad strikes
+**Diagnostic finding (read-only, last 7d):**
+- ct_flags signature_alarm rows: **733**
+- ct_signature_alarm_log entries: **610**
+- **Gap: 123 flags without an alarm log entry (16.8%)**
+
+123 missing alarm log rows means 16.8% of signature_alarm flags have no provenance row in the log table. That's enough to explain the periodic "flag exists but grader can't find lineage" misses. Not fixed tonight — needs Sunday SQL audit to determine: (a) which fired path skips the log write, (b) whether the gap is a cron timing race (flag written before log row commits) or a logic gap (no log write call on that code path), (c) backfill rule for missing rows. **Fix is structural — find the path that doesn't write the log row, add the write, audit class becomes impossible.**
+
+### 11b. ct_compute_gamma_flip last-resort fallback picks bad strikes ✅ SHIPPED 2026-04-28 evening (commit `d0973cc`)
 **Symptom:** Sometimes returns far-OTM strike (NVDA showed 1.5 with spot 213, QQQ 451 with spot 658). Happens when sign-change scan finds no crossing in the meaningful-strikes window, or when spot is null (QQQ). The function falls back to "smallest |net_gex| across all strikes" which on sparse gex chains picks a thin OTM tail.
 
 **Cause:** Two separate issues:
@@ -136,14 +151,18 @@ Some flag rows may not have matching alarm_log entries (and vice versa) — woul
 
 **Fix path:** Tighten the fallback to "min |net_gex| WITHIN 10% of spot" (already exists as middle fallback). Drop the global-min last-resort entirely — return NULL if no flip detected near spot. Better to show "—" in the UI than 1.5.
 
+**Resolution:** Migration `20260428223000_gamma_flip_drop_global_min_fallback.sql` removed the global-min last-resort. Function now returns NULL when no near-spot crossing exists. Verified across all 10 watchlist tickers post-fix — every gamma_flip within 5% of spot. The 1.5 / 451 fabrication class is structurally impossible going forward.
+
 ---
 
-### 11a. QQQ underlying_price null in ct_gex_timeseries
+### 11a. QQQ underlying_price null in ct_gex_timeseries ❌ FALSE PREMISE — investigation found different cause
 **Symptom:** QQQ snapshot shows spot=null, gamma_flip falls back to last-resort logic (451 vs spot ~658). All other 9 watchlist tickers have spot populated correctly.
 
 **Cause:** Whichever ingester populates `ct_gex_timeseries.underlying_price` is failing for QQQ specifically. UW returns the data; something downstream isn't setting the column.
 
 **Fix:** Find the ingester (`ct-gex-ingester` or similar), check if it explicitly handles QQQ vs index ETFs differently, fix the column write. One-off ingester fix, ≤30 min.
+
+**2026-04-28 evening investigation:** Database shows QQQ has 286,149 rows with `underlying_price` populated and only 4,296 null (FEWER nulls than SPY's 5,806). Today's QQQ snapshots all have `underlying_price=658.0105` correctly. **The bug premise was wrong.** The bad gamma_flip 451 / NVDA 1.5 symptoms were the gamma_flip global-min fallback (item 11b) picking far-OTM strikes from the adjusted-options chain, NOT a null-spot bug. With 11b shipped, the symptom is gone. Closing this item — no fix needed.
 
 ---
 
@@ -152,6 +171,19 @@ Some flag rows may not have matching alarm_log entries (and vice versa) — woul
 
 ### 12. MaxPerRun bump beyond 100
 The poller's at 100 now (was 60). UW budget allows higher. Could bump to 120-150 if 1-sweep % stays above 10% for too long. Watch metric: 1-sweep % over 7d should trend toward 5%.
+
+---
+
+## New items surfaced 2026-04-28 evening
+
+### N1. EOD generator left `regime_tag` + `snapshot_hit_rate` null ✅ SHIPPED (commit `920071e`)
+EOD Slack message went out Mon + Tue saying "regime untagged · n/a hit rate" because generator never wrote to those columns despite them existing on `ct_eod_summaries`. Fixed: regime_tag derived from market_premium delta, snapshot_hit_rate computed from grade breakdown. Verified live.
+
+### N2. ct-cron-health-check step-interval false alarm ✅ SHIPPED (commit `ba3938b`)
+Health monitor was paging Slack hourly all night for `ct-self-grader` (schedule `0 13-20/2 * * 1-5` — RTH-only by design, fires 13/15/17/19 UTC then quiet). Schedule parser handled continuous ranges but treated step intervals as "active until 20:00 UTC", missing that the LAST scheduled hour was 19:00. Fixed: step intervals expanded to last-actual-fire-hour. Two consecutive post-fix ticks (23:00, 23:10 UTC) silent on ct-self-grader.
+
+### N3. QQQ adjusted-strike series in ct_gex_timeseries — NOT a bug
+Diagnostic ran 2026-04-28 evening: QQQ today has 438 strikes in latest snapshot, 88 of which end in `.78` (e.g., 174.78, 179.78, 184.78). These are **legitimate adjusted-strike option series** (post-corporate-action chains). They have small but non-zero OI/gex. Pre-fix, gamma_flip global-min fallback picked them on sparse chains. Post-fix (item 11b), gamma_flip returns NULL on sparse cases. The downstream symptom is resolved. **Open question for future tuning:** should adjusted-strike chains be filtered from gex calculation, or kept for completeness? Not blocking — file as P3.
 
 ---
 
@@ -172,6 +204,15 @@ The poller's at 100 now (was 60). UW budget allows higher. Could bump to 120-150
 13. Signature watcher score-race v2 (per-alert inline recovery)
 14. Signature watcher score-race v3 (executed_at→ingested_at fallback)
 15. Flow Butterfly historical date-range view (cp mode)
+
+## Evening polish session shipped (2026-04-28 ~21:00–23:30 UTC)
+
+16. EOD generator populates regime_tag + snapshot_hit_rate (commit `920071e`)
+17. ct-cron-health-check step-interval suppression (commit `ba3938b`)
+18. ct-slack-push-flag cluster dedup (commit `e5c5f11`)
+19. ct_compute_gamma_flip drop global-min fallback (commit `d0973cc`)
+20. /flags Won/Lost/Neutral auto-bump to 7d (commit `3e592ff`)
+21. FlowPulse symmetric p_until threading for bb mode (commit `7755a30`)
 
 ---
 
