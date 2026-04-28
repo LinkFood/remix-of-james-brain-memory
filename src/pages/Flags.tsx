@@ -531,7 +531,7 @@ export default function Flags() {
       let q: any = supabase
         .from('ct_flags' as never)
         .select('*, ct_flag_grades(outcome, alpha_pct, price_change_pct, graded_at)')
-        .eq('source', 'specialist')
+        .in('source', ['specialist', 'signature_alarm', 'detector_alarm'])
         .order('created_at', { ascending: false })
         .limit(200);
       if (filters.specialists.size > 0) {
