@@ -369,6 +369,17 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
     errors: [],
   };
 
+  // Score-first: run ct_score_existing_flow inline before scanning alerts.
+  // Without this, alerts ingested in the gap between pg_cron's inline scoring
+  // and the edge function's actual cold-start landing slip through with
+  // score=null → flag.score=0 → alarm dedupe blocks re-fire when score arrives.
+  // 5-minute lookback is enough — earlier alerts already scored by previous fires.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: scoreErr } = await (supabase.rpc as any)('ct_score_existing_flow', {
+    p_since: new Date(Date.now() - 5 * 60_000).toISOString(),
+  });
+  if (scoreErr) stats.errors.push(`inline score: ${scoreErr.message}`);
+
   const watermark = await loadWatermark(supabase);
   stats.watermark_before = watermark;
 
@@ -467,7 +478,19 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
       const validSigMedian = sigMedian != null && Number.isFinite(sigMedian) ? sigMedian : null;
 
       // Score lives on ct_scored_flow, not ct_flow_alerts — shared helper.
-      const score: number | null = await loadScoreForAlert(supabase, a.alert_id);
+      // If null, the alert was likely ingested between this run's startup
+      // scoring and the alert scan. Force-score this alert inline so the
+      // race can't leave a flag with score=0. The dedupe in alarm_log means
+      // we get one shot per option_symbol per dedupe-window, so we cannot
+      // afford to fire with a missing score.
+      let score: number | null = await loadScoreForAlert(supabase, a.alert_id);
+      if (score === null && a.executed_at) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase.rpc as any)('ct_score_existing_flow', {
+          p_since: new Date(Date.parse(a.executed_at) - 60_000).toISOString(),
+        });
+        score = await loadScoreForAlert(supabase, a.alert_id);
+      }
 
       stats.alarms_total_evaluated += 1;
       const tier = evaluateTier(score, validSigMedian, sigN, thresholds);
