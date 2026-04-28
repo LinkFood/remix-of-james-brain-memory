@@ -68,6 +68,66 @@ interface Classification {
 // surfaces agree on every classification decision. Keep these in sync.
 // ---------------------------------------------------------------------------
 
+// Expand a cron hour-field token into a concrete set of UTC hours.
+// Handles `*`, `H`, `H-H`, `H-H/N` (range with step), star-slash-N (every N
+// hours), and comma-lists of any of those (e.g. `0-12,21-23` or `13-20/2`).
+//
+// Returns null when the token is unrecognized — callers should fall back
+// to conservative defaults (don't suppress, don't tighten cadence).
+//
+// Live bug 2026-04-28 — `13-20/2` (= 13,15,17,19) silently failed both
+// the cadence parser and the window-open parser, so step-interval
+// schedules like ct-self-grader's `0 13-20/2 * * 1-5` were getting flagged
+// stale at 21+ UTC every weekday night despite no cron tick being
+// expected until next morning at 13:00 UTC.
+function expandHourField(hour: string): Set<number> | null {
+  if (!hour) return null;
+  if (hour === '*') {
+    const all = new Set<number>();
+    for (let h = 0; h < 24; h++) all.add(h);
+    return all;
+  }
+  const out = new Set<number>();
+  for (const tok of hour.split(',')) {
+    if (!tok) return null;
+    // `*/N`
+    const everyNMatch = tok.match(/^\*\/(\d+)$/);
+    if (everyNMatch) {
+      const step = Math.max(1, parseInt(everyNMatch[1], 10));
+      for (let h = 0; h < 24; h += step) out.add(h);
+      continue;
+    }
+    // `lo-hi/N` — range with step
+    const rangeStepMatch = tok.match(/^(\d+)-(\d+)\/(\d+)$/);
+    if (rangeStepMatch) {
+      const lo = parseInt(rangeStepMatch[1], 10);
+      const hi = parseInt(rangeStepMatch[2], 10);
+      const step = Math.max(1, parseInt(rangeStepMatch[3], 10));
+      if (lo > hi || lo < 0 || hi > 23) return null;
+      for (let h = lo; h <= hi; h += step) out.add(h);
+      continue;
+    }
+    // `lo-hi` — plain range
+    const rangeMatch = tok.match(/^(\d+)-(\d+)$/);
+    if (rangeMatch) {
+      const lo = parseInt(rangeMatch[1], 10);
+      const hi = parseInt(rangeMatch[2], 10);
+      if (lo > hi || lo < 0 || hi > 23) return null;
+      for (let h = lo; h <= hi; h++) out.add(h);
+      continue;
+    }
+    // single literal hour
+    if (/^\d+$/.test(tok)) {
+      const h = parseInt(tok, 10);
+      if (h < 0 || h > 23) return null;
+      out.add(h);
+      continue;
+    }
+    return null; // unrecognized token shape
+  }
+  return out.size > 0 ? out : null;
+}
+
 function expectedCadenceMinutes(schedule: string): number {
   const s = (schedule ?? '').trim();
   if (!s) return 60;
@@ -98,26 +158,29 @@ function expectedCadenceMinutes(schedule: string): number {
   // `N * * * *` → once an hour
   if (/^\d+$/.test(minute) && hour === '*') return 60;
 
-  // Specific hour(s) — daily-ish cadence.
+  // Specific hour set — daily-ish cadence. Use expandHourField so
+  // step-interval ranges (`13-20/2` = 13,15,17,19) are counted correctly.
   if (
     /^\d+$/.test(minute) &&
-    /^[\d,-]+$/.test(hour) &&
     dom === '*' &&
     month === '*' &&
     (dow === '*' || /^[\d,-]+$/.test(dow))
   ) {
-    const hours = hour.split(',').filter(Boolean).length || 1;
-    let baseCadence = Math.max(60, Math.floor((24 * 60) / hours));
-    // Weekday-only daily crons (e.g. `0 22 * * 1-5`) skip Sat+Sun. The
-    // gap between Fri's last fire and Mon's next fire is 72h, so a 24h-
-    // cadence threshold would alarm every Monday morning on every such
-    // cron. Triple the base cadence to absorb the weekend gap. Hit live
-    // 2026-04-27 — 13 weekday-daily crons (ct-spy-capture, ct-vix-capture,
-    // ct-eod-positioning, etc.) all flared "stale 63-71h" simultaneously.
-    if (/^1-5$/.test(dow) || /^[1-5](,[1-5])+$/.test(dow)) {
-      baseCadence *= 3;
+    const hourSet = expandHourField(hour);
+    if (hourSet && hourSet.size > 0) {
+      const hours = hourSet.size;
+      let baseCadence = Math.max(60, Math.floor((24 * 60) / hours));
+      // Weekday-only daily crons (e.g. `0 22 * * 1-5`) skip Sat+Sun. The
+      // gap between Fri's last fire and Mon's next fire is 72h, so a 24h-
+      // cadence threshold would alarm every Monday morning on every such
+      // cron. Triple the base cadence to absorb the weekend gap. Hit live
+      // 2026-04-27 — 13 weekday-daily crons (ct-spy-capture, ct-vix-capture,
+      // ct-eod-positioning, etc.) all flared "stale 63-71h" simultaneously.
+      if (/^1-5$/.test(dow) || /^[1-5](,[1-5])+$/.test(dow)) {
+        baseCadence *= 3;
+      }
+      return baseCadence;
     }
-    return baseCadence;
   }
 
   // Weekly-ish schedule (specific dow).
@@ -280,33 +343,52 @@ function isScheduleWindowOpen(schedule: string, d: Date = new Date()): boolean {
   // RTH-style: weekend on dow=1-5 → window closed.
   if (/^1-5$/.test(dow) && (utcDay === 0 || utcDay === 6)) return false;
 
-  // Range form `lo-hi`.
-  const rangeMatch = hour.match(/^(\d+)-(\d+)$/);
-  if (rangeMatch) {
-    const lo = parseInt(rangeMatch[1], 10);
-    const hi = parseInt(rangeMatch[2], 10);
-    return utcHour >= lo && utcHour <= hi;
-  }
-
-  // List form `H1,H2,H3` OR list of ranges `H1-H2,H3-H4`. Both supported.
-  // Common case for off-hours crons: `0-12,21-23` excludes RTH window.
-  const tokens = hour.split(',');
-  for (const tok of tokens) {
-    const r = tok.match(/^(\d+)-(\d+)$/);
-    if (r) {
-      const lo = parseInt(r[1], 10);
-      const hi = parseInt(r[2], 10);
+  // Per-token check — preserves disjoint-windows semantics (a token like
+  // `0-12,21-23` is OPEN at 22 and CLOSED at 15). For step-interval
+  // ranges we treat the bracketing range [lo..hi] as the open window
+  // PLUS one cadence step of grace beyond hi — accommodates a lagging
+  // last-fire that still sits "inside" its scheduled tick.
+  //
+  // Live bug 2026-04-28 — `0 13-20/2 * * 1-5` (= 13,15,17,19 UTC) was
+  // hitting the unparseable-fallback (`return true`) at hour 22 because
+  // the previous parser only knew `lo-hi` and `lo,hi` shapes. Now
+  // `13-20/2` collapses to hours {13,15,17,19} → window open during 13-20
+  // (range-end hi+1 generosity for the trailing tick), closed at 21+.
+  for (const tok of hour.split(',')) {
+    if (!tok) continue;
+    // `*/N` — every N hours, treated as 24h window
+    const everyNMatch = tok.match(/^\*\/(\d+)$/);
+    if (everyNMatch) return true;
+    // `lo-hi/N` — range with step. Use the bracketing range as the open
+    // window so we suppress past hi (the end of the schedule's day).
+    const rangeStepMatch = tok.match(/^(\d+)-(\d+)\/(\d+)$/);
+    if (rangeStepMatch) {
+      const lo = parseInt(rangeStepMatch[1], 10);
+      const hi = parseInt(rangeStepMatch[2], 10);
       if (utcHour >= lo && utcHour <= hi) return true;
       continue;
     }
-    const single = tok.match(/^\d+$/);
-    if (single && parseInt(tok, 10) === utcHour) return true;
+    // `lo-hi` — plain range
+    const rangeMatch = tok.match(/^(\d+)-(\d+)$/);
+    if (rangeMatch) {
+      const lo = parseInt(rangeMatch[1], 10);
+      const hi = parseInt(rangeMatch[2], 10);
+      if (utcHour >= lo && utcHour <= hi) return true;
+      continue;
+    }
+    // single literal hour
+    if (/^\d+$/.test(tok)) {
+      if (parseInt(tok, 10) === utcHour) return true;
+      continue;
+    }
+    // unrecognized token — bail on conservative open. Any tok we can't
+    // parse means we'd rather over-suppress than over-alert (mirrors
+    // the original code's safety stance).
+    return true;
   }
-  // Hour field is restricted but current hour matched none — window closed.
-  if (/^[\d,-]+$/.test(hour)) return false;
-
-  // Fallback — unparseable hour → conservatively treat as open.
-  return true;
+  // Hour field is restricted, parsed cleanly, and current hour matched
+  // no token — window closed.
+  return false;
 }
 
 // ---------------------------------------------------------------------------
