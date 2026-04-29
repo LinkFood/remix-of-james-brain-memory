@@ -30,6 +30,7 @@ import {
   TrendingUp,
   Radio,
   FileText,
+  Moon,
   Search as SearchIcon,
   AlertTriangle,
 } from 'lucide-react';
@@ -48,6 +49,7 @@ interface RouteEntry {
   path: string;
   label: string;
   group: string;
+  icon?: React.ComponentType<{ className?: string }>;
 }
 
 const ROUTES: RouteEntry[] = [
@@ -58,6 +60,7 @@ const ROUTES: RouteEntry[] = [
   // Review
   { path: '/edge',         label: 'Edge',           group: 'Review' },
   { path: '/patterns',     label: 'Patterns',       group: 'Review' },
+  { path: '/eod-report',   label: 'EOD Report',     group: 'Review', icon: Moon },
   // System
   { path: '/health',       label: 'Health',         group: 'System' },
   { path: '/cost',         label: 'Cost',           group: 'System' },
@@ -304,7 +307,7 @@ export function CommandPalette() {
         label: r.label,
         hint: `→ ${r.path}`,
         section: `Routes · ${r.group}`,
-        icon: Compass,
+        icon: r.icon ?? Compass,
         execute: () => goRoute(r.path),
       });
     }

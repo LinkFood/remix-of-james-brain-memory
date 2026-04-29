@@ -90,6 +90,55 @@ Tonight's already-spent 96 credits aren't in `ct_tavily_usage` (we started count
 
 ### Deferred (next week or later)
 
+---
+
+## EOD Report — 2026-04-29 ~23:30 UTC
+
+Forward-looking close-to-open handoff shipped tonight. Structural twin of the morning brief; loop-closes by grading this morning's brief calls against actual outcomes. Journal (`ct-eod-summary`) untouched — report is purely additive.
+
+### Architecture
+
+- **`ct_eod_reports`** table — UNIQUE(session_date), 13 jsonb/text fields mirroring morning brief shape + new `morning_brief_scorecard`
+- **`ct-eod-report`** edge function — fires `0 21 * * 1-5` (5 PM ET, 30 min after journal). Reads journal + this morning's brief + price/flow/specialist data. Computes verdicts DETERMINISTICALLY in code (not Sonnet), passes structured input to Sonnet via forced tool-use (`emit_eod_report`). UPSERTs row.
+- **Verdict math** in code: long_lean/short_lean win at ±0.4%, neutral wins if |session| <0.4%, avoid wins on chop (range ≥1.5% AND |session| <0.8%). Thresholds tunable via `ct_config`.
+- **Sonnet's role**: write commentary strings only. Function overwrites verdict / alpha_pct / scorecard_summary fields with pre-computed values to prevent hallucinated grades.
+- **Slack push**: Block Kit, structurally distinct from journal Slack (forward-looking vs attribution). Both pushes coexist for now; evaluate after a week.
+- **`/eod-report`** page — mirrors `/morning-brief` styling. Tilt cards, scorecard chips with verdict colors, carryover pills, overnight catalyst rows, tomorrow watchlist + skip lists, lessons + script.
+
+### Test fire on today's data
+
+Fired manually for session_date=2026-04-29 with skip_slack=true. Output:
+- 10/10 per_ticker_close cards populated
+- 10/10 scorecard verdicts (all `neutral` — correct since today's brief had every ticker as `avoid` and the day was calm <0.5% moves)
+- 4 substantive carryover themes (Fed binary, Big Tech earnings paradox, specialist divergence, negative gamma regime)
+- 6 overnight catalysts pulled from ct_events
+- 3 tomorrow_watchlist entries with specific reasoning (AAPL high, AMZN high, QQQ medium)
+- 2 skip_tomorrow entries
+- 3 lessons_today (avoid strategy validated, specialist conviction divergence, oil-shock prediction confirmed)
+- 30 breaking events (sev≥3) captured
+- Script: 971 chars, narratable
+- Cost: $0.127 per fire (~$2.65/month at 21 weekdays)
+
+### Tomorrow's 5 PM ET cron fires clean
+
+- Cron schedule live: `0 21 * * 1-5`
+- Function deployed; tool-use mode tested working
+- Slack push will fire (skip_slack defaults to false on scheduled invocations)
+
+### Deferred — Phase 5: Morning brief consumes EOD report
+
+`ct-daily-brief` should read yesterday's `ct_eod_reports` and feed `carryover_themes`, `tomorrow_watchlist`, `skip_tomorrow`, `lessons_today` into its prompt context. Closes the close-to-open loop. ~8 lines in ct-daily-brief; defer to Sunday weekend session.
+
+### Other deferred
+
+- Verdict-threshold calibration after a week of fires (current: lean ±0.4%, neutral_loss 0.8%, avoid_chop_range 1.5%)
+- Decide whether to silence journal Slack push once report Slack proves itself (~1 week)
+- /budget consolidation page (UW + Tavily + Claude all in one place; nav links already point at /budget)
+
+---
+
+## Tavily — Deferred
+
 #### T-1. Day-of-month-adjusted pace alarm
 Current alarm fires at 90% absolute pct. Smarter: fire if linear-projection close > 100% (e.g. 50% used by day 5 should alarm even though 50 < 90). Defer to v2 of budget guard.
 
