@@ -45,11 +45,17 @@ import { ChatPanel } from "./components/command/ChatPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { useMarketHoursTrigger } from "@/hooks/useMarketHoursTrigger";
 
 const queryClient = new QueryClient();
 
 /** Wraps routes with activity tracking when user is authenticated */
 const TrackedRoutes = () => {
+  // Bell-ring invalidator — refetches all ct_* queries on 09:30/16:00 ET
+  // crossings so refetchInterval callbacks pick up the new market-hours
+  // value without requiring window focus or a reload.
+  useMarketHoursTrigger();
+
   const [userId, setUserId] = useState<string>('');
 
   useEffect(() => {

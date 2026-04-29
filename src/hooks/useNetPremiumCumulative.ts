@@ -10,6 +10,7 @@
  */
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
+import { isMarketHoursET } from '@/lib/marketHours';
 
 export interface NetPremCumPoint {
   t: string;                       // minute ISO (UW tape_time, UTC)
@@ -43,29 +44,6 @@ const DEFAULT_TICKERS = [
   'SPY', 'QQQ', 'IWM',
   'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA',
 ];
-
-/**
- * True if the NY clock is inside the regular session right now.
- * Uses `en-US` Intl formatter with America/New_York tz so DST is handled
- * without a dateutil dep.
- */
-function isMarketHoursET(now: Date = new Date()): boolean {
-  const fmt = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    hour12: false,
-    weekday: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-  const parts = fmt.formatToParts(now);
-  const weekday = parts.find(p => p.type === 'weekday')?.value ?? '';
-  const hour = Number(parts.find(p => p.type === 'hour')?.value ?? '0');
-  const minute = Number(parts.find(p => p.type === 'minute')?.value ?? '0');
-  if (weekday === 'Sat' || weekday === 'Sun') return false;
-  const mins = hour * 60 + minute;
-  // 09:30 = 570, 16:00 = 960
-  return mins >= 570 && mins < 960;
-}
 
 export function useNetPremiumCumulative(tickers: string[] = DEFAULT_TICKERS) {
   const key = tickers.join(',');
