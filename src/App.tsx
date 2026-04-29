@@ -39,6 +39,7 @@ import CostDashboard from "./pages/CostDashboard";
 import Patterns from "./pages/Patterns";
 import Budget from "./pages/Budget";
 import Eod from "./pages/Eod";
+import MorningBrief from "./pages/MorningBrief";
 import Alarms from "./pages/Alarms";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { CommandPalette } from "./components/CommandPalette";
@@ -82,6 +83,7 @@ const TrackedRoutes = () => {
       <Route path="/patterns" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/patterns"><Patterns /></RouteBoundary></AuthLayout>} />
       <Route path="/budget" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/budget"><Budget /></RouteBoundary></AuthLayout>} />
       <Route path="/eod" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/eod"><Eod /></RouteBoundary></AuthLayout>} />
+      <Route path="/morning-brief" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/morning-brief"><MorningBrief /></RouteBoundary></AuthLayout>} />
       <Route path="/alarms" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/alarms"><Alarms /></RouteBoundary></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
