@@ -530,22 +530,39 @@ export default function Flags() {
       minScore: filters.minScore,
       onlySlacked: filters.onlySlacked,
       dateRange: filters.dateRange,
+      outcome: filters.outcome,
     }],
     queryFn: async () => {
+      const isOutcomeFilter = filters.outcome === 'won' || filters.outcome === 'lost' || filters.outcome === 'neutral';
+      // When user explicitly filters Won/Lost/Neutral, switch to inner-join on
+      // ct_flag_grades and bypass the fire-time score floor. Otherwise low-
+      // conviction flags that later graded WIN never surface — score=0 wins
+      // exist in DB but are score-filtered out before client-side outcome
+      // bucketing runs.
+      const select = isOutcomeFilter
+        ? '*, ct_flag_grades!inner(outcome, alpha_pct, price_change_pct, graded_at)'
+        : '*, ct_flag_grades(outcome, alpha_pct, price_change_pct, graded_at)';
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       let q: any = supabase
         .from('ct_flags' as never)
-        .select('*, ct_flag_grades(outcome, alpha_pct, price_change_pct, graded_at)')
+        .select(select)
         .in('source', ['specialist', 'signature_alarm', 'detector_alarm'])
         .order('created_at', { ascending: false })
         .limit(200);
+      if (isOutcomeFilter) {
+        if (filters.outcome === 'won') q = q.eq('ct_flag_grades.outcome', 'win');
+        else if (filters.outcome === 'lost') q = q.eq('ct_flag_grades.outcome', 'loss');
+        else if (filters.outcome === 'neutral') q = q.in('ct_flag_grades.outcome', ['partial', 'invalidated_early']);
+      }
       if (filters.specialists.size > 0) {
         q = q.in('specialist_ticker', Array.from(filters.specialists));
       }
       if (filters.status !== 'all') q = q.eq('status', filters.status);
       if (filters.direction !== 'all') q = q.eq('direction', filters.direction);
       if (filters.onlySlacked) q = q.not('slacked_at', 'is', null);
-      q = q.gte('score', filters.minScore);
+      // Skip fire-time score floor on outcome-filtered views — low-score
+      // flags can still grade WIN if the underlying moved enough.
+      if (!isOutcomeFilter) q = q.gte('score', filters.minScore);
       const cutoff = dateRangeCutoff(filters.dateRange);
       if (cutoff) q = q.gte('created_at', cutoff);
       const { data, error } = await q;

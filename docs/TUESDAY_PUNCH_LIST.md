@@ -176,6 +176,31 @@ The poller's at 100 now (was 60). UW budget allows higher. Could bump to 120-150
 
 ## New items surfaced 2026-04-28 evening
 
+### N0. Unified grading vision — /flags + /tape + drill sheet should tell ONE story  📅 WEEKEND DISCUSSION
+
+**Problem James caught 2026-04-28 night:** /tape HORIZONS column shows "won 4h" / "loss 2h" tags on individual flow alerts (sourced from `ct_print_grades` / `ct_print_tracks` — print-grader Pass 1 + Pass 2). Meanwhile /flags Won/Lost tabs were empty because `ct_flag_grades` is a separate table with different criteria (target_price hit by horizon expiry, gated on score ≥ 70 fire-time). Two grading systems, two visual presentations, no connection. User sees winners on /tape but nothing on /flags and asks "does that make sense?"
+
+**Tonight's quick-fix (commit shipped 2026-04-28 night, ship-Option-C):** /flags Won/Lost/Neutral now uses `ct_flag_grades!inner` + DB-level outcome filter + bypasses fire-time score floor when on outcome filter. So at least /flags surfaces its OWN graded wins/losses honestly. But the bigger question stays open.
+
+**Weekend question to discuss:**
+- Should /flags ALSO show print-level outcomes for the contract? E.g., MSFT 425C flag fires at score 70 → flag_grade looks at MSFT spot at horizon → win/loss verdict. But the SAME contract's prints get graded by print-grader against the contract's own price move. Both views are valid. Should the drill sheet show BOTH? "Flag-level: WIN (alpha +1.4%) | Print-level: WIN (contract paid +47% in 2h)"
+- Or unify: drop ct_flag_grades entirely and have /flags read its outcome from ct_print_tracks for the contract? Means the flag inherits the contract's lifetime outcome, regardless of fire-time horizon.
+- Or hybrid: flag-grader still runs but UI surfaces both verdicts side-by-side, makes the difference legible.
+
+**What this would change on the site:**
+- Drill sheet shows two verdicts (alpha-axis + contract-axis) — answers different questions
+- /flags Won/Lost would have tighter signal (a flag with both verdicts matching is high-confidence)
+- Detector calibration becomes richer — train against contract-level outcomes (where money was made), not just alpha-vs-spy
+
+**What it would change architecturally:**
+- ct_flag_grades + ct_print_grades + ct_contract_tracks all touch the same conceptual question: "did the signal pay?"
+- Today they answer different versions of that question silently
+- Worth a calibration philosophy chat on Saturday before any code touches
+
+**Why this is on the punch list (not Sunday-default):** Sunday calibration sprint is detector-threshold tuning. This is one layer up — what the system MEANS by "win." Belongs in a Saturday architectural discussion before the Sunday tuning runs.
+
+---
+
 ### N1. EOD generator left `regime_tag` + `snapshot_hit_rate` null ✅ SHIPPED (commit `920071e`)
 EOD Slack message went out Mon + Tue saying "regime untagged · n/a hit rate" because generator never wrote to those columns despite them existing on `ct_eod_summaries`. Fixed: regime_tag derived from market_premium delta, snapshot_hit_rate computed from grade breakdown. Verified live.
 
