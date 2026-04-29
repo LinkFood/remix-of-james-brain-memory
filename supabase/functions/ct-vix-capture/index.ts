@@ -1,15 +1,24 @@
 /**
  * ct-vix-capture — capture current VIX into ct_vix_history.
  *
- * REWRITE 2026-04-23: The prior version used getSpotGexByStrike('VIX')
- * + VIXY fallback via the REST spot-exposures endpoint. UW 4xx'd both
- * and the table stayed empty since the endpoint stopped resolving the
- * index. Now we use UW MCP's get_futures_indices tool (category =
- * 'indices') which returns a list of global indices including VIX.
+ * REWRITE 2026-04-23: switched from spot-exposures REST to UW MCP.
  *
- * Scheduled daily at 21:05 UTC (post-close). Also fires mid-session at
- * 15:00 and 18:30 UTC for intraday capture — not just close-of-day —
- * so Claude can see VIX regime shifts during the session.
+ * REWRITE 2026-04-29: schema is now intraday. PK is surrogate id, not date.
+ * Multiple rows per day allowed (uniqueness on date + created_at). change_pct
+ * and tier are no longer GENERATED — we compute them here. Captures every 10
+ * min during RTH so /tape, FlowPulse, and Pulse get a real intraday curve.
+ *
+ * Decimal-precision fix: `get_ticker_ohlc_latest_or_date` rounds VIX
+ * open/high/close to integers (only `low` keeps decimals — UW data quality
+ * quirk). `get_ticker_indicator_series` returns intraday 5m bars with full
+ * 2-decimal precision in `close`, so that's now the primary source.
+ *
+ * Probe results (2026-04-29):
+ *   - get_ticker_indicator_series: close=18.81, high=18.82 → PRIMARY
+ *   - get_ticker_ohlc_latest_or_date: close="18", low="17.81" → fallback (use low only)
+ *   - get_market_state: no VIX field → unused
+ *   - get_ticker_candles_by_range: returns empty for VIX → unused
+ *   - get_futures_indices: returns no rows for VIX in any category → unused
  *
  * Auth: service role only.
  */
@@ -21,15 +30,27 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
 import { mcpCallToolAsData } from '../_shared/uwMcpClient.ts';
 
-interface IndexRow {
-  symbol?: string;
-  ticker?: string;
-  name?: string;
-  price?: number | string;
+interface OhlcRow {
+  open?: number | string;
+  high?: number | string;
+  low?: number | string;
+  close?: number | string;
   last_price?: number | string;
+  price?: number | string;
   level?: number | string;
-  change_pct?: number | string;
-  percent_change?: number | string;
+  [key: string]: unknown;
+}
+
+interface SeriesBar {
+  c?: number | string;
+  close?: number | string;
+  h?: number | string;
+  l?: number | string;
+  o?: number | string;
+  start?: string;
+  start_time?: string;
+  end?: string;
+  ticker?: string;
   [key: string]: unknown;
 }
 
@@ -39,18 +60,11 @@ function parseNum(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function findVix(rows: unknown): { level: number; change_pct: number | null; raw: unknown } | null {
-  if (!Array.isArray(rows)) return null;
-  for (const r of rows as IndexRow[]) {
-    const sym = String(r.symbol ?? r.ticker ?? r.name ?? '').toUpperCase();
-    if (sym === 'VIX' || sym.startsWith('VIX ') || sym === '^VIX' || sym === 'CBOE:VIX') {
-      const level = parseNum(r.price) ?? parseNum(r.last_price) ?? parseNum(r.level);
-      if (level == null || level <= 0) continue;
-      const change = parseNum(r.change_pct) ?? parseNum(r.percent_change);
-      return { level, change_pct: change, raw: r };
-    }
-  }
-  return null;
+function tierFor(level: number): string {
+  if (level < 15) return 'low';
+  if (level < 25) return 'mid';
+  if (level < 40) return 'elevated';
+  return 'stressed';
 }
 
 serve(async (req) => {
@@ -69,73 +83,56 @@ serve(async (req) => {
     return killSwitchSkipResponse(supabase, 'ct-vix-capture', corsHeaders);
   }
 
-  // Try 3 MCP tool paths in priority order:
-  //   1. get_ticker_ohlc_latest_or_date(ticker='VIX') — purpose-built per-ticker
-  //   2. get_market_state — market-wide snapshot may embed VIX
-  //   3. get_futures_indices with a dozen plausible category values
-  let found: { level: number; change_pct: number | null; raw: unknown; via: string } | null = null;
+  let found: { level: number; raw: unknown; via: string } | null = null;
   const errors: string[] = [];
 
-  // Attempt 1: direct VIX OHLC (verified via shape-probe 2026-04-23 —
-  // requires `date` param, omitting silently returns empty).
+  // Primary: 5m indicator series. Last bar's `close` carries 2-decimal
+  // precision (verified 2026-04-29). The `indicators` array isn't needed for
+  // the price — we ask for `rsi` (cheapest) just to keep the response shape
+  // happy.
   try {
-    const today = new Date().toISOString().slice(0, 10);
-    const result = await mcpCallToolAsData('get_ticker_ohlc_latest_or_date', {
-      ticker: 'VIX', date: today,
+    const result = await mcpCallToolAsData('get_ticker_indicator_series', {
+      ticker: 'VIX', indicators: ['rsi'], range: '5m', interval: '1d', end_interval: '0d',
     });
     const data = (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>))
       ? (result as { data: unknown }).data
       : result;
-    const row = Array.isArray(data) ? data[0] : data;
-    if (row && typeof row === 'object') {
-      const r = row as IndexRow;
-      const level = parseNum(r.close ?? r.last_price ?? r.price ?? r.level);
+    const arr = Array.isArray(data) ? data : [];
+    if (arr.length > 0) {
+      const lastBar = arr[arr.length - 1] as SeriesBar;
+      const level = parseNum(lastBar.close ?? lastBar.c);
       if (level && level > 0) {
-        const change = parseNum(r.change_pct) ?? parseNum(r.percent_change);
-        found = { level, change_pct: change, raw: r, via: 'get_ticker_ohlc_latest_or_date' };
+        found = { level, raw: lastBar, via: 'get_ticker_indicator_series' };
       }
     }
   } catch (e) {
-    errors.push(`ohlc: ${e instanceof Error ? e.message : String(e)}`.slice(0, 120));
+    errors.push(`series: ${e instanceof Error ? e.message : String(e)}`.slice(0, 120));
   }
 
-  // Attempt 2: market_state aggregate
+  // Fallback 1: OHLC. close is rounded to int but `low` keeps precision —
+  // so prefer `low` over `close` here since that's the only precision-bearing
+  // field on the OHLC tool. Better than nothing if the series tool 5xx's.
   if (!found) {
     try {
-      const result = await mcpCallToolAsData('get_market_state', {});
+      const today = new Date().toISOString().slice(0, 10);
+      const result = await mcpCallToolAsData('get_ticker_ohlc_latest_or_date', {
+        ticker: 'VIX', date: today,
+      });
       const data = (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>))
         ? (result as { data: unknown }).data
         : result;
-      if (data && typeof data === 'object' && !Array.isArray(data)) {
-        const r = data as Record<string, unknown>;
-        const level = parseNum(r.vix) ?? parseNum(r.vix_level) ?? parseNum(r.vix_close);
+      const row = Array.isArray(data) ? data[0] : data;
+      if (row && typeof row === 'object') {
+        const r = row as OhlcRow;
+        // `low` is the only field with decimal precision on this tool for
+        // VIX; the other fields are rounded to ints. Better than `close`.
+        const level = parseNum(r.low) ?? parseNum(r.close) ?? parseNum(r.last_price) ?? parseNum(r.price);
         if (level && level > 0) {
-          found = { level, change_pct: parseNum(r.vix_change_pct), raw: r, via: 'get_market_state' };
+          found = { level, raw: r, via: 'get_ticker_ohlc_latest_or_date[low]' };
         }
       }
     } catch (e) {
-      errors.push(`market_state: ${e instanceof Error ? e.message : String(e)}`.slice(0, 120));
-    }
-  }
-
-  // Attempt 3: wide sweep of get_futures_indices categories
-  if (!found) {
-    const categoriesToTry = [
-      'indices', 'index', 'global_indices', 'us_indices', 'volatility',
-      'vix', 'futures', 'index_futures', 'all', 'global', 'commodities',
-      'equity_indices', 'equities',
-    ];
-    for (const cat of categoriesToTry) {
-      try {
-        const result = await mcpCallToolAsData('get_futures_indices', { type: cat });
-        const data = (result && typeof result === 'object' && 'data' in (result as Record<string, unknown>))
-          ? (result as { data: unknown }).data
-          : result;
-        const v = findVix(data);
-        if (v) { found = { ...v, via: `get_futures_indices[${cat}]` }; break; }
-      } catch (e) {
-        errors.push(`fi[${cat}]: ${e instanceof Error ? e.message : String(e)}`.slice(0, 100));
-      }
+      errors.push(`ohlc: ${e instanceof Error ? e.message : String(e)}`.slice(0, 120));
     }
   }
 
@@ -150,33 +147,48 @@ serve(async (req) => {
   const nowIso = new Date().toISOString();
   const today  = nowIso.slice(0, 10);
 
+  // prev_close = most recent ROW from a strictly-prior date. Intraday captures
+  // share a date with each other, so `lt('date', today)` skips today's earlier
+  // ticks and locks onto yesterday's last close — exactly what change_pct
+  // wants for a session-vs-session delta.
   const { data: prior } = await supabase
     .from('ct_vix_history')
-    .select('date, level')
+    .select('date, level, created_at')
     .lt('date', today)
     .order('date', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle();
   const prevClose = (prior as { level?: number } | null)?.level ?? null;
 
-  const { error: upsertErr } = await supabase
+  const level = +found.level.toFixed(4);
+  const change_pct = (prevClose != null && prevClose !== 0)
+    ? +(((level - Number(prevClose)) / Number(prevClose)) * 100).toFixed(4)
+    : null;
+
+  const { error: insertErr } = await supabase
     .from('ct_vix_history')
-    .upsert({
+    .insert({
       date: today,
-      level: +found.level.toFixed(4),
+      level,
       prev_close: prevClose != null ? +Number(prevClose).toFixed(4) : null,
+      change_pct,
+      tier: tierFor(level),
       source: 'VIX',
       endpoint: `mcp:${found.via}`,
-    }, { onConflict: 'date' });
+    });
 
-  if (upsertErr) {
-    console.error('[ct-vix-capture] upsert failed:', upsertErr.message);
-    return new Response(JSON.stringify({ error: upsertErr.message }),
+  if (insertErr) {
+    // Defensive: if two captures land in the same millisecond they collide on
+    // the (date, created_at) unique idx. Surface the error but don't crash —
+    // the next */10 fire is 10 min away, not catastrophic.
+    console.error('[ct-vix-capture] insert failed:', insertErr.message);
+    return new Response(JSON.stringify({ error: insertErr.message }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
 
   return new Response(JSON.stringify({
-    ok: true, date: today, level: found.level, change_pct: found.change_pct,
-    prev_close: prevClose, category: found.category,
+    ok: true, date: today, level, change_pct, tier: tierFor(level),
+    prev_close: prevClose, via: found.via,
   }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 });

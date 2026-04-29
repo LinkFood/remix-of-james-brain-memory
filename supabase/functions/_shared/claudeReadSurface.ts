@@ -1042,10 +1042,12 @@ export async function buildClaudeContext(
   // --- VIX latest --------------------------------------------------------
   let vixLatest: VixLatest | null = null;
   try {
+    // Schema is intraday (2026-04-29) — order by created_at to pick up the
+    // freshest tick, not just the latest date.
     const { data } = await supabase
       .from('ct_vix_history')
-      .select('date, level, change_pct, tier')
-      .order('date', { ascending: false })
+      .select('date, level, change_pct, tier, created_at')
+      .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
     if (data) {

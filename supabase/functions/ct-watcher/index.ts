@@ -1051,10 +1051,12 @@ serve(async (req) => {
     // null in the condensed snapshot. Never crashes the cycle.
     let vixPrevClose: number | null = null;
     try {
+      // Schema is intraday (2026-04-29) — multiple rows per day, distinct by
+      // created_at. Read the freshest tick, not the latest date.
       const { data: priorVix } = await supabase
         .from('ct_vix_history')
-        .select('level, date')
-        .order('date', { ascending: false })
+        .select('level, date, created_at')
+        .order('created_at', { ascending: false })
         .limit(1)
         .maybeSingle();
       if (priorVix?.level != null && Number.isFinite(Number(priorVix.level))) {
