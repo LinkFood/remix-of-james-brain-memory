@@ -22,7 +22,7 @@ import {
   Activity, RefreshCw, ArrowUp, ArrowDown, Minus, Send, ChevronDown, ChevronUp, Star,
 } from 'lucide-react';
 import { FlagDetailSheet } from '@/components/command/FlagDetailSheet';
-import { ContractSheet } from '@/components/command/ContractSheet';
+import { ContractDrillSheet } from '@/components/co-trader/ContractDrillSheet';
 
 type Mode = 'specialists' | 'mine' | 'both';
 
@@ -1081,8 +1081,8 @@ export default function Flags() {
         onOpenChange={(o) => { if (!o) setSelectedFlag(null); }}
       />
 
-      {/* Contract sheet for James's stars */}
-      <ContractSheet
+      {/* Contract drill-down for James's stars (sole drill component as of 2026-04-29). */}
+      <ContractDrillSheet
         optionSymbol={selectedContract}
         open={selectedContract !== null}
         onOpenChange={(o) => { if (!o) setSelectedContract(null); }}

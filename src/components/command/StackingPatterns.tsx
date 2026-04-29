@@ -1,8 +1,8 @@
 /**
  * StackingPatterns — leaderboard of contracts being hit repeatedly in the
  * current session. A single row per contract (not per print), sorted by
- * prints_count desc. Click a row → ContractSheet drill-down (same mechanism
- * as OvernightPositioning / Tape rows).
+ * prints_count desc. Click a row → ContractDrillSheet drill-down (same
+ * mechanism as OvernightPositioning / Tape rows).
  *
  * Default collapsed. When collapsed, the header carries the summary:
  *   "STACKING — 8 contracts stacking today · 2 accelerating"

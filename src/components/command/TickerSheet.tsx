@@ -7,7 +7,7 @@
  *   3. Specialist's latest take — pulled from ct_specialist_memory if present,
  *      else ct_flags thesis of the most recent flag
  *
- * Click hot contract → opens ContractSheet for that option_symbol.
+ * Click hot contract → opens ContractDrillSheet for that option_symbol.
  */
 
 import { useMemo, useState } from 'react';
@@ -22,7 +22,7 @@ import { Flame, Activity, Brain, TrendingUp, TrendingDown, ArrowUp, ArrowDown, M
 import { toast } from 'sonner';
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { ChartSafe } from '@/components/ChartSafe';
-import { ContractSheet } from './ContractSheet';
+import { ContractDrillSheet } from '@/components/co-trader/ContractDrillSheet';
 import {
   useOvernightPositioning,
   normalizeSide,
@@ -960,8 +960,10 @@ export function TickerSheet({ ticker, open, onOpenChange }: Props) {
         </SheetContent>
       </Sheet>
 
-      {/* Drill-down to contract when user clicks a hot row */}
-      <ContractSheet
+      {/* Drill-down to contract when user clicks a hot row. No onTickerClick
+          here — we're already inside the ticker briefing sheet, so the
+          "{ticker} dashboard →" button would be a no-op cycle. */}
+      <ContractDrillSheet
         optionSymbol={drillSymbol}
         open={drillSymbol !== null}
         onOpenChange={(o) => { if (!o) setDrillSymbol(null); }}

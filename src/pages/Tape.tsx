@@ -5,7 +5,8 @@
  * ct_scored_flow (classified + scored), fallback union with unscored
  * ct_flow_alerts rows when "Show unscored" is on. Reads like UW's own flow
  * view — dense tabular rows, sticky filter strip, row click opens the
- * ContractSheet drill-down.
+ * ContractDrillSheet drill-down (the sole contract drill component as of
+ * 2026-04-29 — old ContractSheet was deleted in the convergence sweep).
  *
  * Pillar 2 (Claude specialists) runs alongside; /flags shows their output.
  * This page is the human reading surface.
@@ -29,7 +30,6 @@ import {
 import { cn } from '@/lib/utils';
 import { Waves, RefreshCw, ArrowUp, ArrowDown, ArrowUpDown, Minus, Star, Radio } from 'lucide-react';
 import { toast } from 'sonner';
-import { ContractSheet } from '@/components/command/ContractSheet';
 import { TickerSheet } from '@/components/command/TickerSheet';
 import { ContractPnLChip } from '@/components/co-trader/ContractPnLChip';
 import { ContractGradeChips } from '@/components/co-trader/ContractGradeChips';
@@ -528,10 +528,10 @@ export default function Tape() {
     // 3 actual trading sessions regardless of which weekday it's run on.
     return { from: tradingDaysAgoCutoff(3).toISOString(), to: null };
   }, [dayFilter]);
-  const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
   const [activeTicker, setActiveTicker] = useState<string | null>(null);
   // Drill sheet target — prefer option_symbol (canonical track lookup),
-  // keep alert_id around for the empty-state fallback path.
+  // keep alert_id around for the empty-state fallback path. Sole contract
+  // drill-down state (2026-04-29: replaced legacy activeSymbol/ContractSheet).
   const [drillTarget, setDrillTarget] = useState<{ optionSymbol: string | null; alertId: string | null } | null>(null);
   const [markDialog, setMarkDialog] = useState<MarkDialogState>({
     open: false, row: null, note: '', direction_view: null, saving: false,
@@ -1031,9 +1031,9 @@ export default function Tape() {
         <TapeReaderBanner />
         <MacroBanner onTickerClick={(t) => setActiveTicker(t)} />
         <FlowPulse onTickerClick={(t) => setActiveTicker(t)} />
-        <StackingPatterns onContractClick={(sym) => setActiveSymbol(sym)} />
+        <StackingPatterns onContractClick={(sym) => setDrillTarget({ optionSymbol: sym, alertId: null })} />
         <OvernightPositioning
-          onContractClick={(sym) => setActiveSymbol(sym)}
+          onContractClick={(sym) => setDrillTarget({ optionSymbol: sym, alertId: null })}
           onTickerClick={(t) => setActiveTicker(t)}
         />
         <header className="flex items-center justify-between">
@@ -1414,7 +1414,7 @@ export default function Tape() {
                     <TableRow
                       key={r.key}
                       data-option-symbol={r.option_symbol}
-                      onClick={() => setActiveSymbol(r.option_symbol)}
+                      onClick={() => setDrillTarget({ optionSymbol: r.option_symbol, alertId: r.alert_id ?? null })}
                       className={cn(
                         'cursor-pointer hover:bg-muted/40 border-b border-border/50',
                         glowTier === 'gold' && 'alarm-row-gold',
@@ -1664,14 +1664,6 @@ export default function Tape() {
           </aside>
       </div>
 
-      {/* Contract drill-down sheet */}
-      <ContractSheet
-        optionSymbol={activeSymbol}
-        open={activeSymbol !== null}
-        onOpenChange={(o) => { if (!o) setActiveSymbol(null); }}
-        onTickerClick={(t) => { setActiveSymbol(null); setActiveTicker(t); }}
-      />
-
       {/* Ticker briefing sheet */}
       <TickerSheet
         ticker={activeTicker}
@@ -1679,13 +1671,18 @@ export default function Tape() {
         onOpenChange={(o) => { if (!o) setActiveTicker(null); }}
       />
 
-      {/* Contract-axis P&L drill sheet (Phase D) — keyed by option_symbol so re-prints
-          surface the canonical aggregated track (print_count, last_print_at). */}
+      {/* SOLE contract drill-down sheet — handles every "click into a contract"
+          path on the page. Keyed by option_symbol so re-prints surface the
+          canonical aggregated track (print_count, last_print_at); alert_id is
+          the fallback path for ledger lookup. Contains both contract-axis P&L
+          (Phase D grading) and the today's-context layer ported from the
+          deleted ContractSheet on 2026-04-29. */}
       <ContractDrillSheet
         optionSymbol={drillTarget?.optionSymbol ?? null}
         alertId={drillTarget?.alertId ?? null}
         open={drillTarget !== null}
         onOpenChange={(o) => { if (!o) setDrillTarget(null); }}
+        onTickerClick={(t) => { setDrillTarget(null); setActiveTicker(t); }}
       />
 
       {/* Mark-as-interesting dialog */}
