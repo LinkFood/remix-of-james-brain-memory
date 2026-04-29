@@ -462,9 +462,13 @@ async function fetchExistingTrackIds(
   return out;
 }
 
-// Sibling of fetchExistingTrackIds for ct_contract_tracks. Same chunked
-// pattern (PostgREST `in.()` clause limit safety).
-async function fetchExistingContractTrackIds(
+// Pre-RPC alert_id idempotency check (post-2026-04-28 per-symbol identity
+// migration). Reads ct_contract_track_alerts (the append-only alert ledger)
+// to identify which incoming alert_ids have already been folded into a
+// track. The RPC ct_upsert_contract_track also consults this ledger as a
+// safety net, but we filter client-side so we don't pay N RPC round-trips
+// per cron tick on alerts that are guaranteed to be no-ops.
+async function fetchAppliedAlertIds(
   supabase: SupabaseClient,
   alertIds: string[],
 ): Promise<Set<string>> {
@@ -474,11 +478,11 @@ async function fetchExistingContractTrackIds(
   for (let i = 0; i < alertIds.length; i += chunkSize) {
     const slice = alertIds.slice(i, i + chunkSize);
     const { data, error } = await supabase
-      .from('ct_contract_tracks')
+      .from('ct_contract_track_alerts')
       .select('alert_id')
       .in('alert_id', slice);
     if (error) {
-      console.warn(`[ct-print-grader] existing contract track lookup: ${error.message}`);
+      console.warn(`[ct-print-grader] applied alert ledger lookup: ${error.message}`);
       continue;
     }
     for (const row of (data ?? [])) {
@@ -981,14 +985,18 @@ async function createMissingContractTracks(
   }
   if (alerts.length === 0) return;
 
+  // Per-symbol identity migration (2026-04-28) keys ct_contract_tracks on
+  // option_symbol, not alert_id. The append-only ct_contract_track_alerts
+  // ledger records every alert_id ever folded into a track. This filter
+  // skips alerts that are already in the ledger so we don't pay an RPC
+  // round-trip on guaranteed no-ops. The RPC also consults the ledger as
+  // a safety net — this is pure throughput optimization.
   const alertIds = alerts.map((a) => a.alert_id).filter((x): x is string => !!x);
-  const existing = await fetchExistingContractTrackIds(supabase, alertIds);
+  const appliedAlertIds = await fetchAppliedAlertIds(supabase, alertIds);
 
-  // Filter to alerts that don't already have a contract track and cap to
-  // work limit. Same semantics as createMissingTracks but against
-  // ct_contract_tracks.
+  // Filter to alerts that haven't been applied yet, then cap to work limit.
   const workable = (alerts as FlowAlertRow[])
-    .filter((a) => !!a.alert_id && !existing.has(a.alert_id))
+    .filter((a) => !!a.alert_id && !appliedAlertIds.has(a.alert_id))
     .slice(0, overrides.workLimit ?? PASS2_CONTRACT_NEW_WORK_LIMIT);
 
   const toCreate: Record<string, unknown>[] = [];
@@ -1087,17 +1095,26 @@ async function createMissingContractTracks(
 
   if (toCreate.length === 0) return;
 
-  const chunkSize = 200;
-  for (let i = 0; i < toCreate.length; i += chunkSize) {
-    const slice = toCreate.slice(i, i + chunkSize);
-    const { error: insErr, count } = await supabase
-      .from('ct_contract_tracks')
-      .upsert(slice, { onConflict: 'alert_id', ignoreDuplicates: true, count: 'exact' });
-    if (insErr) {
-      stats.errors.push(`p2 contract create-insert: ${insErr.message.slice(0, 200)}`);
+  // Per-symbol identity writer (post-2026-04-28 dedup migration). Each call
+  // hits ct_upsert_contract_track which:
+  //   - increments print_count + bumps last_print_at if a WORKING track for
+  //     this option_symbol already exists,
+  //   - otherwise inserts a new track with print_count=1.
+  // The partial UNIQUE INDEX ct_contract_tracks_option_symbol_working_uniq
+  // enforces this structurally — we cannot accidentally create a duplicate
+  // even if this code regresses.
+  // Per-row RPC instead of batch .upsert because the conditional
+  // increment/insert semantic isn't expressible in PostgREST onConflict.
+  // stats.contract_tracks_created counter name is preserved for stats
+  // backwards-compat — it counts SUCCESSFUL upserts (new + re-prints) now.
+  for (const row of toCreate) {
+    const optSym = row.option_symbol as string | undefined;
+    const { error: rpcErr } = await supabase.rpc('ct_upsert_contract_track', { p_track: row });
+    if (rpcErr) {
+      stats.errors.push(`p2 contract upsert ${optSym ?? '?'}: ${rpcErr.message.slice(0, 200)}`);
       continue;
     }
-    stats.contract_tracks_created += count ?? slice.length;
+    stats.contract_tracks_created += 1;
   }
 }
 
