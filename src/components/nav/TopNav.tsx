@@ -36,6 +36,7 @@ import { useTokenCounter } from '@/hooks/useTokenCounter';
 import { BookSparkline } from '@/components/BookSparkline';
 import { useTickerData } from '@/hooks/useTickerData';
 import { UwUsageBadge } from '@/components/command/UwUsageBadge';
+import { TavilyUsageBadge } from '@/components/command/TavilyUsageBadge';
 import { MarketClock } from '@/components/nav/MarketClock';
 import { PreflightChip } from '@/components/nav/PreflightChip';
 import { StreakPill } from '@/components/nav/StreakPill';
@@ -395,6 +396,9 @@ export function TopNav({ userId }: TopNavProps) {
 
         {/* Unusual Whales usage — moved from CommandStation header */}
         <UwUsageBadge />
+
+        {/* Tavily monthly budget — sibling of UW */}
+        <TavilyUsageBadge />
 
         {/* Token counter */}
         <Popover>

@@ -18,6 +18,7 @@ import { extractUserId, extractUserIdWithServiceRole, isServiceRoleRequest } fro
 import { checkRateLimit, RATE_LIMIT_CONFIGS, getRateLimitHeaders } from '../_shared/rateLimit.ts';
 import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
 import { parseJsonBody } from '../_shared/validation.ts';
+import { searchTavilyRaw, TavilyBudgetError, TavilyError } from '../_shared/tavilyClient.ts';
 
 interface WebSearchRequest {
   /** The search query */
@@ -138,40 +139,31 @@ serve(async (req) => {
 
     console.log(`Tavily search: "${enhancedQuery}" (depth: ${searchDepth})`);
 
-    // Call Tavily Search API
-    const tavilyResponse = await fetch('https://api.tavily.com/search', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        api_key: tavilyApiKey,
+    let tavilyData;
+    try {
+      tavilyData = await searchTavilyRaw({
         query: enhancedQuery,
-        search_depth: searchDepth,
-        include_answer: includeAnswer,
-        include_raw_content: false,
-        max_results: maxResults,
-        // Focus on educational/documentation content
-        include_domains: [],
-        exclude_domains: [],
-      }),
-    });
-
-    if (!tavilyResponse.ok) {
-      const errText = await tavilyResponse.text();
-      console.error('Tavily API error:', tavilyResponse.status, errText);
-      
-      if (tavilyResponse.status === 401) {
-        return errorResponse(req, 'Invalid Tavily API key', 500);
+        caller: 'jac-web-search',
+        searchDepth,
+        maxResults,
+        includeAnswer,
+        includeRawContent: false,
+        includeDomains: [],
+        excludeDomains: [],
+      });
+    } catch (e) {
+      if (e instanceof TavilyBudgetError) {
+        return errorResponse(req,
+          `Tavily monthly budget tight (${e.tier}). Try again after the next month rollover, or upgrade plan.`,
+          429);
       }
-      if (tavilyResponse.status === 429) {
-        return errorResponse(req, 'Tavily rate limit exceeded', 429);
+      if (e instanceof TavilyError) {
+        if (e.status === 401) return errorResponse(req, 'Invalid Tavily API key', 500);
+        if (e.status === 429) return errorResponse(req, 'Tavily rate limit exceeded', 429);
+        return errorResponse(req, 'Web search failed', 500);
       }
-      
-      return errorResponse(req, 'Web search failed', 500);
+      throw e;
     }
-
-    const tavilyData: TavilyResponse = await tavilyResponse.json();
     console.log(`Tavily returned ${tavilyData.results.length} results in ${tavilyData.response_time}s`);
 
     // Transform results into our format

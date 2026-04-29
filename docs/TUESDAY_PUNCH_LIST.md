@@ -25,9 +25,90 @@ Crossed `critical` tier (≥90%) at 16:56 ET. Slack alarm fired (one-shot per da
 - Non-poller floor is ~7,200 calls/day = 36% of budget regardless of market activity. With sector-tide cut: floor drops to ~32.5%.
 - Only **3 of 41** UW callers checked the budget guard pre-tonight. **Hygiene pass tonight tagged the other 38** so future audits attribute by `caller=` instead of guessing from endpoint paths.
 
-### Shipped tonight
+### Shipped tonight (UW)
 - ✅ **Sector-tide */5 → */15** — migration `20260429220000_sector_tide_cadence_cut.sql`. Saves 688 calls/day = 3.4% budget.
 - ✅ **`setUwCaller()` / `setMcpCaller()` hygiene pass** — 38 functions tagged. Non-functional; makes future audits 1-query instead of detective work.
+
+---
+
+## Tavily Audit + Rebuild — 2026-04-29 ~22:00 UTC (96/4000 used)
+
+Caught at 96 credits / 4000 monthly cap (~2.4% used in <1 day on the new key). Forecast at status quo: ~10,140 credits/month = 254% over budget. Tavily exposes no remaining-credits API, so the redesign tracks usage locally + tier-gates every caller.
+
+### Architecture rebuilt tonight
+
+**Foundation (migration `20260429230000_tavily_budget_tracking.sql`)**
+- `ct_tavily_usage` table — per-call log, every Tavily fetch records caller + query + depth + status + ms + credits_charged
+- `ct_tavily_usage_monthly` view — month-to-date counter (resets on calendar month rollover)
+- `ct_tavily_budget_tier()` RPC — returns tier (`unrestricted`/`tightened`/`critical`/`exhausted`) + monthly_count + pct_used
+- `ct_tavily_alarm_state` table — one-fire-per-month-per-tier Slack alarm tracking
+- `ct_config` keys: `tavily_monthly_limit` (4000), tier thresholds (70/90/95), per-caller kill switches, `news_sweep_hot_ticker_lookback_min` (30)
+
+**Shared client (`_shared/tavilyClient.ts`)**
+- `searchTavily(opts)` and `searchTavilyRaw(opts)` — single source of truth for every Tavily call
+- Auto-logs every call to `ct_tavily_usage` (basic=1 credit, advanced=2)
+- Auto-checks budget tier — throws `TavilyBudgetError` at `exhausted` or kill-switched callers
+- 60s-cached kill-switch lookup per isolate
+- Replaces 3 separate hand-rolled fetch blocks (news-sweep, news-watcher, jac-web-search)
+
+**News-sweep redesign (`*/10` → `*/30`, hot-ticker filter)**
+- Cron migration `20260429230100_news_sweep_cadence_cut.sql`
+- Pre-fetch query: `SELECT instrument FROM ct_flags WHERE created_at >= now() - 30min`
+- Zero hot tickers → return early, zero Tavily calls
+- Tier-aware caps: unrestricted=10, tightened=5, critical=2, exhausted=0
+- Sweeps the RIGHT tickers (where flow is pointing) instead of all 10 every cycle
+
+**Watcher redesign (5-slot macro rotation, weekend cut)**
+- Cron migration `20260429230200_tavily_watcher_weekend_cut.sql` (weekend `0 */2` → `0 14,22`)
+- Slots: `macro_us_markets`, `geopolitical`, `policy_fed_cpi`, `earnings_today` (NEW), `commodities_currencies` (NEW)
+- Per-ticker rotation slots removed (news-sweep covers per-ticker on signal)
+- Same per-fire cost (1 credit), more macro coverage
+
+**jac-web-search**
+- Migrated to shared client (gets budget tracking + tier gating for free)
+- At `critical` tier returns 429 with user-friendly message instead of silent over-spend
+
+**Frontend**
+- New `TavilyUsageBadge` component, sibling to `UwUsageBadge` in TopNav
+- Shows month-to-date credits + tier color (TVLY label, same green/yellow/orange/red shading)
+- Reads `ct_tavily_usage_monthly` view, refetches every 60s
+
+### Forecast under new architecture
+
+| Caller | Credits/mo | Old |
+|---|---|---|
+| Macro watcher (5 slots) | ~478 | ~580 |
+| News-sweep (hot-ticker, */30) | ~1,176 | 9,600 |
+| jac-web-search | ~50 | ~50 |
+| **Total** | **~1,704** | **~10,140** |
+
+**Headroom**: 4000 - 1704 = 2,296 credits/month (57% of budget unused). Plenty of margin for spikes.
+
+### Initial-state caveat
+
+Tonight's already-spent 96 credits aren't in `ct_tavily_usage` (we started counting from this build forward). The badge will read 0 until the first new fire post-deploy. By next month rollover, our local count is fully self-consistent.
+
+### Deferred (next week or later)
+
+#### T-1. Day-of-month-adjusted pace alarm
+Current alarm fires at 90% absolute pct. Smarter: fire if linear-projection close > 100% (e.g. 50% used by day 5 should alarm even though 50 < 90). Defer to v2 of budget guard.
+
+#### T-2. Drift calibration vs Tavily dashboard
+After 1 week of clean operation, check Tavily dashboard `credits_used` vs `ct_tavily_usage_monthly.monthly_count`. Adjust `credits_charged` semantics if drift > 5%.
+
+#### T-3. /budget consolidation page
+Both UW and Tavily badges link to `/budget`. Page doesn't exist yet — add later. Should show both metrics + per-caller breakdown + alarm history. ~1 hour build.
+
+#### T-4. Trigger expansion for news-sweep
+Today's hot-ticker selector keys off `ct_flags`. Could also include: IV rank spikes, gap detections, unusual flow rank. Each addition = better coverage of "hot" without burning budget on truly quiet tickers. Add only if hot-ticker selector misses signals in the next 2 weeks of operation.
+
+#### T-5. MCP transport for Tavily
+Tavily exposes search + extract via MCP. Same credit cost (verified). Only useful if/when we want native Anthropic MCP tooling. Defer.
+
+#### T-6. Macro-rollup query mode
+Replace 10 per-ticker queries with 1 multi-ticker query. 10x cost reduction but loses per-ticker scoping. The hot-ticker filter already gets us to ~5 tickers/sweep, so this is incremental gain. Revisit only if monthly forecast trends back over 80%.
+
+---
 
 ### Deferred (this weekend or later)
 

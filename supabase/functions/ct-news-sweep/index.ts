@@ -1,29 +1,27 @@
 /**
- * ct-news-sweep — per-ticker Tavily news sweep (every 10 min during US RTH).
+ * ct-news-sweep — per-ticker Tavily news sweep, fired only on FRESH FLOW SIGNAL.
  *
- * Complements ct-tavily-news-watcher (which is ONE query per call, via rotation
- * cursor). This function is the per-ticker-loop variant: for each ticker in the
- * watchlist, fire a fresh Tavily search and ingest any net-new articles.
- *
- * Thesis: options front-run news. Sweeping per-ticker every 10 min gives the
- * specialists a narrower, per-name news surface than the rotation can provide.
+ * Complements ct-tavily-news-watcher (one rotated query per call). This function
+ * sweeps a hot subset of the watchlist: tickers that fired flags inside a recent
+ * lookback window get a Tavily search; quiet tickers do not.
  *
  * Flow per invocation:
- *   1. Load watchlist (10 tickers by default).
- *   2. For each ticker:
- *        a. Tavily search `"$TICKER stock news today"` (max_results=8, days=1).
- *        b. Dedupe URLs against ct_breaking_news where source='tavily_sweep'
- *           in the last 48h.
- *        c. For each new article → Haiku classify (minimal: severity, sentiment,
- *           tickers_affected, category, summary).
- *        d. Insert row with source='tavily_sweep'.
- *        e. On Haiku 429 or any classify failure: insert a "raw" row with
- *           severity=1 (lowest) so the URL is recorded and we don't re-classify
- *           it on every subsequent tick.
- *        f. Sleep 1s between tickers (polite to Tavily + Haiku).
- *   3. Return per-ticker new-article counts + aggregate cost + elapsed.
+ *   1. Build hot-ticker list from ct_flags within last `news_sweep_hot_ticker_lookback_min`
+ *      minutes, intersected with the watchlist, sorted by flag count desc.
+ *   2. Call tavilyBudgetTier() and cap hot-ticker count by tier:
+ *        unrestricted=10, tightened=5, critical=2, exhausted=0.
+ *   3. For each capped hot ticker:
+ *        a. searchTavily() via shared client (auto-logs to ct_tavily_usage,
+ *           auto-refuses on exhaustion or kill-switch).
+ *        b. Dedupe URLs against ct_breaking_news (source='tavily_sweep') in the
+ *           last 48h.
+ *        c. Haiku classify each fresh article.
+ *        d. Insert row with source='tavily_sweep', or severity=1 fallback row
+ *           on classify failure (preserves dedupe key).
+ *        e. Sleep 1s between tickers.
+ *   4. Return per-ticker stats + tier + pct_used + hot/swept counts.
  *
- * Auth: service role only. Called by pg_cron every 10 min weekdays 13-20 UTC.
+ * Auth: service role only. Called by pg_cron every 30 min during US RTH.
  */
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
@@ -38,6 +36,15 @@ import {
   ClaudeError,
 } from '../_shared/anthropic.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
+import { getConfig } from '../_shared/configCache.ts';
+import {
+  searchTavily,
+  tavilyBudgetTier,
+  TavilyBudgetError,
+  TavilyError,
+  type TavilyResult,
+  type TavilyTier,
+} from '../_shared/tavilyClient.ts';
 
 // ---------------------------------------------------------------------------
 // Minimal Haiku classifier prompt — narrower than ct-tavily-news-watcher's
@@ -74,20 +81,12 @@ const TAVILY_DAYS = 1;
 const SLEEP_BETWEEN_TICKERS_MS = 1000;
 const CLASSIFY_FAILURE_SEVERITY = 1; // Insert row with severity=1 when classify fails (NOT NULL constraint)
 
-interface TavilyResult {
-  title: string;
-  url: string;
-  content: string;
-  score?: number;
-  published_date?: string | null;
-}
-
-interface TavilyResponse {
-  answer?: string | null;
-  query?: string;
-  response_time?: number;
-  results: TavilyResult[];
-}
+const TIER_CAPS: Record<TavilyTier, number> = {
+  unrestricted: 10,
+  tightened: 5,
+  critical: 2,
+  exhausted: 0,
+};
 
 interface Classification {
   severity: number;
@@ -130,41 +129,6 @@ function validateClassification(raw: unknown, watchlist: string[]): Classificati
   if (!summary) return null;
 
   return { severity, sentiment, tickers_affected: tickers, category, summary };
-}
-
-// ---------------------------------------------------------------------------
-// Tavily call — per-ticker scoped.
-// ---------------------------------------------------------------------------
-async function searchTavily(query: string): Promise<TavilyResult[]> {
-  const apiKey = Deno.env.get('TAVILY_API_KEY');
-  if (!apiKey) throw new Error('TAVILY_API_KEY not configured');
-
-  const resp = await fetch('https://api.tavily.com/search', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      api_key: apiKey,
-      query,
-      max_results: TAVILY_MAX_RESULTS,
-      search_depth: 'basic',
-      days: TAVILY_DAYS,
-      topic: 'news',
-      include_answer: false,
-      include_raw_content: false,
-    }),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    console.error(`[news-sweep] tavily ${resp.status}: ${text.slice(0, 300)}`);
-    if (resp.status >= 400 && resp.status < 500) {
-      throw new Error(`Tavily ${resp.status}: ${text.slice(0, 200)}`);
-    }
-    throw new Error(`Tavily ${resp.status}`);
-  }
-
-  const data = (await resp.json()) as TavilyResponse;
-  return Array.isArray(data.results) ? data.results : [];
 }
 
 interface ClassifyOutcome {
@@ -257,6 +221,74 @@ serve(async (req) => {
   try {
     const watchlist = await getWatchlist(supabase);
 
+    // -----------------------------------------------------------------------
+    // Step 1: Hot-ticker selector — count flags per watchlist ticker in window.
+    // ct_flags.instrument holds the underlying ticker (specialist_ticker is
+    // populated only for specialist-routed flags; null on detector flags).
+    // -----------------------------------------------------------------------
+    const lookbackMin = Number(await getConfig<number>('news_sweep_hot_ticker_lookback_min', 30));
+    const since = new Date(Date.now() - lookbackMin * 60_000).toISOString();
+
+    const { data: flagRows } = await supabase
+      .from('ct_flags')
+      .select('instrument')
+      .gte('created_at', since)
+      .in('instrument', watchlist);
+
+    const flagCount = new Map<string, number>();
+    for (const r of (flagRows ?? [])) {
+      const t = (r as { instrument: string }).instrument;
+      if (t) flagCount.set(t, (flagCount.get(t) ?? 0) + 1);
+    }
+
+    const hotTickers = Array.from(flagCount.entries())
+      .sort((a, b) => b[1] - a[1])
+      .map(([t]) => t);
+
+    const elapsedMsEarly = () => Date.now() - startedAt;
+
+    if (hotTickers.length === 0) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          skipped: 'no_hot_tickers',
+          queries_fired: 0,
+          hot_tickers_found: 0,
+          tickers_swept: 0,
+          lookback_min: lookbackMin,
+          elapsed_ms: elapsedMsEarly(),
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
+    // -----------------------------------------------------------------------
+    // Step 2: Tier-aware ticker cap.
+    // -----------------------------------------------------------------------
+    const tierResult = await tavilyBudgetTier();
+    const cap = TIER_CAPS[tierResult.tier] ?? 10;
+
+    if (cap === 0) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          skipped: 'tavily_exhausted',
+          tier: tierResult.tier,
+          pct_used: tierResult.pct_used,
+          queries_fired: 0,
+          hot_tickers_found: hotTickers.length,
+          tickers_swept: 0,
+          elapsed_ms: elapsedMsEarly(),
+        }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+
+    const tickersToSweep = hotTickers.slice(0, cap);
+
+    // -----------------------------------------------------------------------
+    // Step 3: Per-ticker Tavily call via shared client.
+    // -----------------------------------------------------------------------
     const newPerTicker: Record<string, number> = {};
     const errorsPerTicker: Record<string, string> = {};
     let queriesFired = 0;
@@ -266,22 +298,37 @@ serve(async (req) => {
     let rateLimitHits = 0;
 
     // Pre-compute 48h dedupe lookback window once.
-    const since = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
+    const dedupeSince = new Date(Date.now() - 48 * 3600 * 1000).toISOString();
 
-    for (let i = 0; i < watchlist.length; i++) {
-      const ticker = watchlist[i];
+    for (let i = 0; i < tickersToSweep.length; i++) {
+      const ticker = tickersToSweep[i];
       const query = `${ticker} stock news today`;
       newPerTicker[ticker] = 0;
 
-      // 1. Tavily
-      let results: TavilyResult[] = [];
+      // 1. Tavily via shared client.
+      let results: TavilyResult[];
       try {
-        results = await searchTavily(query);
+        results = await searchTavily({
+          query,
+          caller: 'ct-news-sweep',
+          maxResults: TAVILY_MAX_RESULTS,
+          searchDepth: 'basic',
+          topic: 'news',
+          days: TAVILY_DAYS,
+        });
         queriesFired += 1;
       } catch (e) {
-        errorsPerTicker[ticker] = `tavily: ${e instanceof Error ? e.message : String(e)}`;
-        // polite sleep even on error before next ticker
-        if (i < watchlist.length - 1) await sleep(SLEEP_BETWEEN_TICKERS_MS);
+        if (e instanceof TavilyBudgetError) {
+          // Budget tier flipped to exhausted (or caller killed) mid-loop.
+          errorsPerTicker[ticker] = `tavily_budget: ${e.tier}`;
+          break;
+        }
+        if (e instanceof TavilyError) {
+          errorsPerTicker[ticker] = `tavily: ${e.message}`;
+        } else {
+          errorsPerTicker[ticker] = `tavily: ${e instanceof Error ? e.message : String(e)}`;
+        }
+        if (i < tickersToSweep.length - 1) await sleep(SLEEP_BETWEEN_TICKERS_MS);
         continue;
       }
 
@@ -293,7 +340,7 @@ serve(async (req) => {
           .from('ct_breaking_news')
           .select('url')
           .eq('source', 'tavily_sweep')
-          .gte('ingested_at', since)
+          .gte('ingested_at', dedupeSince)
           .in('url', urls);
         seen = new Set(
           (existing ?? [])
@@ -363,7 +410,7 @@ serve(async (req) => {
       }
 
       // 4. Polite sleep between tickers.
-      if (i < watchlist.length - 1) {
+      if (i < tickersToSweep.length - 1) {
         await sleep(SLEEP_BETWEEN_TICKERS_MS);
       }
     }
@@ -380,6 +427,10 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         ok: true,
+        tier: tierResult.tier,
+        pct_used: tierResult.pct_used,
+        hot_tickers_found: hotTickers.length,
+        tickers_swept: tickersToSweep.length,
         queries_fired: queriesFired,
         new_articles_per_ticker: newPerTicker,
         total_new: totalNew,

@@ -1,13 +1,15 @@
 /**
- * ct-tavily-news-watcher — Tavily-powered breaking-news watcher.
+ * ct-tavily-news-watcher — Tavily-powered macro breaking-news watcher.
  *
- * Wave F of the Claude Co-Trader Phase 1 build. Complements ct-news-ingester
- * (which pulls per-ticker from UW) by scanning Tavily for macro / geopolitical
- * / policy catalysts that never hit UW's ticker feeds. Each invocation:
+ * Per-ticker news coverage lives in ct-news-sweep (UW-driven, hot-ticker
+ * filtered). This watcher's job is the macro layer Tavily earns its keep on:
+ * geopolitical / policy / Fed/CPI / earnings reactions / commodities, etc.
+ * Each invocation:
  *
- *   1. Pick ONE query from a 16-slot rotation (3 macro + 13 per-ticker).
+ *   1. Pick ONE query from a 5-slot macro-only rotation.
  *      Rotation cursor lives in ct_config['tavily_news_watcher_cursor'].
- *   2. POST to https://api.tavily.com/search → top 10 results.
+ *   2. searchTavily() via _shared/tavilyClient.ts → top 10 results
+ *      (budget tier + usage logging handled by the shared client).
  *   3. Dedupe against ct_breaking_news (source='tavily') on URL.
  *   4. For each NEW article, ask Claude Haiku to classify
  *      (severity, sentiment, tickers_affected[], category, macro_wide, summary).
@@ -16,7 +18,7 @@
  *      ct-daily-brief { triggered_by: 'breaking_news', reason }.
  *   7. Record one ct_claude_decisions row decision_type='breaking_news_processed'.
  *
- * Runs weekdays every 30 min (11:00-22:00 UTC) and every 2h on weekends.
+ * Runs weekdays every 30 min (11:00-22:00 UTC) and twice daily on weekends.
  * Auth: service role only. Called by pg_cron.
  */
 
@@ -28,14 +30,20 @@ import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_sh
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { getConfig } from '../_shared/configCache.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
+import { searchTavily, TavilyBudgetError, TavilyError, TavilyResult } from '../_shared/tavilyClient.ts';
 
 // ---------------------------------------------------------------------------
-// Query rotation — 3 macro slots + N per-ticker slots. One query per call.
+// Query rotation — 5 macro-only slots. Per-ticker coverage lives in
+// ct-news-sweep (UW-driven, hot-ticker filtered). This watcher's job is to
+// catch macro / geopolitical / policy / earnings / commodities catalysts UW
+// doesn't surface.
 // ---------------------------------------------------------------------------
-const MACRO_QUERIES: Array<{ id: string; query: string; category: string }> = [
-  { id: 'macro_us_markets',  query: 'US stock market today breaking news',             category: 'macro' },
-  { id: 'geopolitical',      query: 'geopolitical conflict war Iran Russia China today', category: 'geopolitical' },
-  { id: 'policy_fed_cpi',    query: 'Fed rate decision CPI inflation',                 category: 'policy' },
+const SLOTS: Array<{ id: string; query: string; category: string }> = [
+  { id: 'macro_us_markets',       query: 'US stock market today breaking news',                  category: 'macro' },
+  { id: 'geopolitical',           query: 'geopolitical conflict war Iran Russia China today',     category: 'geopolitical' },
+  { id: 'policy_fed_cpi',         query: 'Fed rate decision CPI inflation',                       category: 'policy' },
+  { id: 'earnings_today',         query: 'earnings report today after hours pre market reaction', category: 'earnings' },
+  { id: 'commodities_currencies', query: 'oil gold US dollar treasury yields today',              category: 'macro' },
 ];
 
 const ROTATION_CURSOR_KEY = 'tavily_news_watcher_cursor';
@@ -68,21 +76,6 @@ Rules:
   - Be conservative with severity=5 — reserve for genuine session-altering events.
   - tickers_affected MUST be a subset of the watchlist you are given. Never invent tickers.
   - sentiment is from the perspective of risk assets (SPY-direction). "bullish" = risk-on.`;
-
-interface TavilyResult {
-  title: string;
-  url: string;
-  content: string;
-  score?: number;
-  published_date?: string | null;
-}
-
-interface TavilyResponse {
-  answer?: string | null;
-  query?: string;
-  response_time?: number;
-  results: TavilyResult[];
-}
 
 interface Classification {
   severity: number;
@@ -123,41 +116,6 @@ function validateClassification(raw: unknown, watchlist: string[]): Classificati
 
   if (!summary) return null;
   return { severity, sentiment, tickers_affected: tickers, category, macro_wide, summary };
-}
-
-// ---------------------------------------------------------------------------
-// Tavily call
-// ---------------------------------------------------------------------------
-async function searchTavily(query: string, maxResults = 10): Promise<TavilyResult[]> {
-  const apiKey = Deno.env.get('TAVILY_API_KEY');
-  if (!apiKey) throw new Error('TAVILY_API_KEY not configured');
-
-  const resp = await fetch('https://api.tavily.com/search', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      api_key: apiKey,
-      query,
-      search_depth: 'basic',
-      include_answer: false,
-      include_raw_content: false,
-      max_results: maxResults,
-      topic: 'news',
-    }),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    console.error(`[tavily-news] ${resp.status} ${text.slice(0, 300)}`);
-    // 4xx errors are permanent — propagate the message but don't retry
-    if (resp.status >= 400 && resp.status < 500) {
-      throw new Error(`Tavily ${resp.status}: ${text.slice(0, 200)}`);
-    }
-    throw new Error(`Tavily ${resp.status}`);
-  }
-
-  const data = (await resp.json()) as TavilyResponse;
-  return Array.isArray(data.results) ? data.results : [];
 }
 
 async function classifyArticle(
@@ -273,16 +231,8 @@ serve(async (req) => {
     const watchlist = await getWatchlist(supabase);
     const severityThreshold = Number(await getConfig<number>('claude_breaking_news_severity_rebrief', 4));
 
-    // Rotation state — macro queries first, then one per ticker.
-    const slots: Array<{ id: string; query: string; category: string; ticker?: string }> = [
-      ...MACRO_QUERIES,
-      ...watchlist.map((t) => ({
-        id: `ticker_${t}`,
-        query: `${t} stock recent news`,
-        category: 'sector',
-        ticker: t,
-      })),
-    ];
+    // Rotation state — 5 macro-only slots.
+    const slots = SLOTS;
 
     const cursorRaw = await getConfig<number>(ROTATION_CURSOR_KEY, 0);
     const cursor = ((Number(cursorRaw) || 0) % slots.length + slots.length) % slots.length;
@@ -306,13 +256,25 @@ serve(async (req) => {
       console.warn('[tavily-news] cursor advance failed:', String(e));
     }
 
-    // Search Tavily
+    // Search Tavily via the shared client (handles budget tier + usage logging).
     let results: TavilyResult[] = [];
     let tavilyError: string | null = null;
     try {
-      results = await searchTavily(slot.query, 10);
+      results = await searchTavily({
+        query: slot.query,
+        caller: 'ct-tavily-news-watcher',
+        maxResults: 10,
+        searchDepth: 'basic',
+        topic: 'news',
+      });
     } catch (e) {
-      tavilyError = e instanceof Error ? e.message : String(e);
+      if (e instanceof TavilyBudgetError) {
+        tavilyError = `budget_${e.tier}`;
+      } else if (e instanceof TavilyError) {
+        tavilyError = e.message;
+      } else {
+        tavilyError = e instanceof Error ? e.message : String(e);
+      }
     }
 
     // Dedupe against last 48h of ct_breaking_news for this source.
@@ -355,11 +317,6 @@ serve(async (req) => {
       }
 
       const triggersRebrief = classification.severity >= severityThreshold;
-      // Bias "sector" single-ticker queries toward their own ticker when macro_wide
-      // isn't claimed — keeps the per-ticker rotation useful even if Haiku forgot.
-      if (slot.ticker && classification.tickers_affected.length === 0 && !classification.macro_wide) {
-        classification.tickers_affected = [slot.ticker];
-      }
 
       const { error: insertErr } = await supabase.from('ct_breaking_news').insert({
         headline: (result.title || '(no title)').slice(0, 500),
