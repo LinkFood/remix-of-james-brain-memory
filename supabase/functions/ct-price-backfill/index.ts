@@ -14,7 +14,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { mcpCallToolAsData } from '../_shared/uwMcpClient.ts';
+import { mcpCallToolAsData, setMcpCaller } from '../_shared/uwMcpClient.ts';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -146,6 +146,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ error: 'Unauthorized' }),
       { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+  setMcpCaller('ct-price-backfill');
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   const body = await req.json().catch(() => ({})) as { lookback_days?: number; include_5m?: boolean };
   const lookbackDays1m = Math.min(Math.max(body.lookback_days ?? 3, 1), 7);

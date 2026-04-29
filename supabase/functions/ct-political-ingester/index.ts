@@ -9,8 +9,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getCongressTrades } from '../_shared/uwClient.ts';
-import { mcpCallToolAsData, isUwRateLimit } from '../_shared/uwMcpClient.ts';
+import { getCongressTrades, setUwCaller } from '../_shared/uwClient.ts';
+import { mcpCallToolAsData, isUwRateLimit, setMcpCaller } from '../_shared/uwMcpClient.ts';
 import { recordDecision } from '../_shared/decisionJournal.ts';
 
 type Row = {
@@ -91,6 +91,9 @@ serve(async (req) => {
   if (!isServiceRoleRequest(req)) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+
+  setUwCaller('ct-political-ingester');
+  setMcpCaller('ct-political-ingester');
 
   const startedAt = Date.now();
   const errors: string[] = [];

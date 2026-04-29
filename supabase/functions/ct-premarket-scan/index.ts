@@ -29,7 +29,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
-import { getSpotGexByStrike } from '../_shared/uwClient.ts';
+import { getSpotGexByStrike, setUwCaller } from '../_shared/uwClient.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 
@@ -167,6 +167,8 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  setUwCaller('ct-premarket-scan');
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,

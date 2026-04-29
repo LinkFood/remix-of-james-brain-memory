@@ -15,7 +15,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
-import { mcpCallToolAsData } from '../_shared/uwMcpClient.ts';
+import { mcpCallToolAsData, setMcpCaller } from '../_shared/uwMcpClient.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
 function parseNum(v: unknown): number | null {
@@ -186,6 +186,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ error: 'Unauthorized' }),
       { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+  setMcpCaller('ct-interval-flow-ingester');
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,

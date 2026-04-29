@@ -11,7 +11,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getSectorTide } from '../_shared/uwClient.ts';
+import { getSectorTide, setUwCaller } from '../_shared/uwClient.ts';
 
 type Row = {
   sector: string;
@@ -79,6 +79,8 @@ serve(async (req) => {
   if (!isServiceRoleRequest(req)) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+
+  setUwCaller('ct-sector-tide-ingester');
 
   const startedAt = Date.now();
   const errors: string[] = [];

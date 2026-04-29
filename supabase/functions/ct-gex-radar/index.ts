@@ -25,7 +25,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getOptionContracts, getSpotGexByStrike } from '../_shared/uwClient.ts';
+import { getOptionContracts, getSpotGexByStrike, setUwCaller } from '../_shared/uwClient.ts';
 import { computeTickerScores, type UWContract, type TickerScores } from '../_shared/attentionScore.ts';
 
 const DEFAULT_TICKERS = ['SPY', 'QQQ', 'IWM'];
@@ -519,6 +519,8 @@ serve(async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
   const corsHeaders = getCorsHeaders(req);
+
+  setUwCaller('ct-gex-radar');
 
   try {
     let body: Record<string, unknown> = {};

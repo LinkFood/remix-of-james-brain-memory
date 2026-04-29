@@ -33,7 +33,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getFinancials, getIncomeStatements, getEarnings } from '../_shared/uwClient.ts';
+import { getFinancials, getIncomeStatements, getEarnings, setUwCaller } from '../_shared/uwClient.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
 const TTL_DAYS = 7;
@@ -273,6 +273,8 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  setUwCaller('ct-fundamentals-sync');
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;

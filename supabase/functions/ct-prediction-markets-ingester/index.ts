@@ -17,7 +17,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { mcpCallToolAsData } from '../_shared/uwMcpClient.ts';
+import { mcpCallToolAsData, setMcpCaller } from '../_shared/uwMcpClient.ts';
 
 function numOrNull(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;
@@ -107,6 +107,7 @@ serve(async (req) => {
   if (!isServiceRoleRequest(req)) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+  setMcpCaller('ct-prediction-markets-ingester');
 
   const startedAt = Date.now();
   const errors: string[] = [];

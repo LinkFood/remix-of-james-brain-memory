@@ -27,7 +27,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
-import { WATCHLIST, MARKET_BANNER_SYMBOL } from '../_shared/uwClient.ts';
+import { WATCHLIST, MARKET_BANNER_SYMBOL, setUwCaller } from '../_shared/uwClient.ts';
 import { getConfig } from '../_shared/configCache.ts';
 
 // Window to pull recent iv-rank rows from — wide enough to safely cover
@@ -121,6 +121,8 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  setUwCaller('ct-iv-shift-watch');
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,

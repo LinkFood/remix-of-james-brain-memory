@@ -6,6 +6,54 @@ Tracking what surfaced today during live ops + what's outstanding for after clos
 
 ---
 
+## UW Budget Audit — 2026-04-29 21:00 UTC (91.7% close)
+
+Crossed `critical` tier (≥90%) at 16:56 ET. Slack alarm fired (one-shot per day per tier). Audit traced the budget across categorized callers:
+
+| Category | Calls | % | Notes |
+|---|---|---|---|
+| contract-poller | 9,979 | 54% | Only tier-aware caller. Already throttled */3→*/4 mid-day. |
+| flow-alerts (mcp) + net-prem-ticks + nope + greek-flow | ~3,600 | 19% | Live UI signal — **don't touch**. |
+| sector-tide | 1,051 | 5.7% | **Cut to */15 tonight (commit `<TBD>`)** — saves ~688/day. |
+| gex-radar (spot + greek exposures) | 789 | 4.3% | Frontend-driven. |
+| mcp-handshake | 332 | 1.8% | Per-isolate handshake; already optimal within Supabase Edge constraints. |
+| options-volume + historic-chains + options-chain + others | ~895 | 4.9% | |
+| news-headlines | 223 | 1.2% | |
+
+**Key findings:**
+- Flow alerts essentially flat Tuesday → Wednesday (1,694 → 1,756, +3.7%). Earnings/FOMC heaviness showed up in **poller workload** (more new contracts → more polls), not flow ingest.
+- Non-poller floor is ~7,200 calls/day = 36% of budget regardless of market activity. With sector-tide cut: floor drops to ~32.5%.
+- Only **3 of 41** UW callers checked the budget guard pre-tonight. **Hygiene pass tonight tagged the other 38** so future audits attribute by `caller=` instead of guessing from endpoint paths.
+
+### Shipped tonight
+- ✅ **Sector-tide */5 → */15** — migration `20260429220000_sector_tide_cadence_cut.sql`. Saves 688 calls/day = 3.4% budget.
+- ✅ **`setUwCaller()` / `setMcpCaller()` hygiene pass** — 38 functions tagged. Non-functional; makes future audits 1-query instead of detective work.
+
+### Deferred (this weekend or later)
+
+#### B-1. Tier-aware non-poller ingesters (medium juice)
+Pattern-match `ct-contract-poller`'s `uwBudgetTier()` design into:
+- `ct-news-ingester`: at `tightened` cut to */30; at `critical` cut to */60. Saves ~70 calls.
+- `ct-options-screener-ingester`: similar throttle.
+- `ct-flow-ingester` per-ticker: skip lowest-priority tickers at `critical`. Risky — needs careful priority design, this IS the live signal.
+- `ct-net-prem-cumulative` and pulse-tick: SAME risk class as flow-ingester.
+
+Each needs a `TierFilter` design like contract-poller's `tierFilterFor()`. Don't copy-paste — every consumer has different "what can I drop" semantics.
+
+#### B-2. `ct-price-backfill-nightly` budget guard (low juice, defensive)
+Function spends ~10-20 calls per fire at 22:30 UTC. No guard today → at 99% it would burn through 100% with no awareness. Add `uwBudgetOk()` check before the per-ticker loop.
+
+#### B-3. Frontend gex-radar tier-awareness (medium juice, UI-coupled)
+`useGexRadar` refetches every 30s during market hours regardless of UW pressure. At `critical`, frontend should slow to 60s or 120s. Requires a tier exposure mechanism (e.g. publish current tier to a frontend-readable view) — not a 1-line fix.
+
+#### B-4. MCP-to-REST migration audit (low juice, high churn)
+332 daily handshake calls (1.8%) come from cold-starting MCP per cron-fire. Supabase Edge Functions can't cache cross-isolate, so the handshake is unavoidable as long as MCP is used. Migrating MCP-using callers back to REST endpoints (where there's no `initialize` overhead) would eliminate the 332/day. Likely not worth the churn. Audit only.
+
+#### B-5. Acceptance threshold tuning
+Current alarm at 90% (`uw_budget_critical_pct`) is correct. Treat 80% weekday-close as healthy target, 88-93% as expected on heavy days, ≥95% as escalation. After sector-tide cut, expected daily-close shifts from 91% → ~87.5% on a comparable heavy day.
+
+---
+
 ## P0 — Calibration / signal quality
 
 ### 0. Re-poll canonical week + diff signature corpus  ⏰ run when UW budget has headroom

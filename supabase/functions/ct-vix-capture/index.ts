@@ -28,7 +28,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
-import { mcpCallToolAsData } from '../_shared/uwMcpClient.ts';
+import { mcpCallToolAsData, setMcpCaller } from '../_shared/uwMcpClient.ts';
 
 interface OhlcRow {
   open?: number | string;
@@ -74,6 +74,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ error: 'Unauthorized' }),
       { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+  setMcpCaller('ct-vix-capture');
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,

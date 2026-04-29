@@ -16,7 +16,7 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserIdWithServiceRole, createServiceClient } from '../_shared/auth.ts';
-import { getNetPremiumTicks } from '../_shared/uwClient.ts';
+import { getNetPremiumTicks, setUwCaller } from '../_shared/uwClient.ts';
 
 const DEFAULT_TICKERS = [
   'SPY', 'QQQ', 'IWM',
@@ -255,6 +255,8 @@ serve(async (req) => {
       headers: jsonHeaders,
     });
   }
+
+  setUwCaller('ct-net-prem-cumulative');
 
   const reqTickers = body.tickers;
   const tickers: string[] = Array.isArray(reqTickers) && reqTickers.length > 0

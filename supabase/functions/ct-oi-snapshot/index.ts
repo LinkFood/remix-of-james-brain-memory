@@ -22,8 +22,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { WATCHLIST } from '../_shared/uwClient.ts';
-import { mcpCallToolAsData, isUwRateLimit } from '../_shared/uwMcpClient.ts';
+import { WATCHLIST, setUwCaller } from '../_shared/uwClient.ts';
+import { mcpCallToolAsData, isUwRateLimit, setMcpCaller } from '../_shared/uwMcpClient.ts';
 
 type SnapSlot = 'open' | 'mid' | 'close';
 
@@ -409,6 +409,9 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  setUwCaller('ct-oi-snapshot');
+  setMcpCaller('ct-oi-snapshot');
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,

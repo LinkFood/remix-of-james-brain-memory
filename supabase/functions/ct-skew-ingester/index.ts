@@ -11,7 +11,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getRiskReversalSkew } from '../_shared/uwClient.ts';
+import { getRiskReversalSkew, setUwCaller } from '../_shared/uwClient.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
 type Row = {
@@ -78,6 +78,8 @@ serve(async (req) => {
   if (!isServiceRoleRequest(req)) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+
+  setUwCaller('ct-skew-ingester');
 
   const supabase: SupabaseClient = createClient(
     Deno.env.get('SUPABASE_URL')!,

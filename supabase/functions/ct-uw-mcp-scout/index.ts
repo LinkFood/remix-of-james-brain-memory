@@ -23,6 +23,7 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import {
   mcpListTools,
   mcpListPrompts,
+  setMcpCaller,
   UW_MCP_ENDPOINT,
   UW_MCP_PROTOCOL_VERSION,
   type McpTool,
@@ -40,6 +41,7 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+  setMcpCaller('ct-uw-mcp-scout');
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;

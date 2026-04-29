@@ -15,7 +15,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getMaxPain, getIvRank, WATCHLIST, MARKET_BANNER_SYMBOL } from '../_shared/uwClient.ts';
+import { getMaxPain, getIvRank, WATCHLIST, MARKET_BANNER_SYMBOL, setUwCaller } from '../_shared/uwClient.ts';
 
 function numOrNull(v: unknown): number | null {
   if (v === null || v === undefined) return null;
@@ -180,6 +180,8 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  setUwCaller('ct-eod-positioning');
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   const startedAt = Date.now();

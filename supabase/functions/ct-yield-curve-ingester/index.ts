@@ -14,7 +14,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { mcpCallToolAsData, UwMcpError } from '../_shared/uwMcpClient.ts';
+import { mcpCallToolAsData, setMcpCaller, UwMcpError } from '../_shared/uwMcpClient.ts';
 
 // UW's MCP get_yield_curve uses `bc_<duration>` keys (verified 2026-04-18):
 //   bc_1month, bc_2month, bc_3month, bc_6month, bc_1year, bc_2year,
@@ -110,6 +110,7 @@ serve(async (req) => {
   if (!isServiceRoleRequest(req)) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+  setMcpCaller('ct-yield-curve-ingester');
 
   const startedAt = Date.now();
   const errors: string[] = [];

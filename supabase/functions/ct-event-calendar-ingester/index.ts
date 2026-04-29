@@ -14,6 +14,7 @@ import {
   getEarningsPremarket,
   getFdaCalendar,
   getEconomicCalendar,
+  setUwCaller,
 } from '../_shared/uwClient.ts';
 
 type EventRow = {
@@ -257,6 +258,8 @@ serve(async (req) => {
   if (!isServiceRoleRequest(req)) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+
+  setUwCaller('ct-event-calendar-ingester');
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
   const startedAt = Date.now();

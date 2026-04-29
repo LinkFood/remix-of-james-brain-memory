@@ -21,7 +21,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getNewsHeadlines } from '../_shared/uwClient.ts';
+import { getNewsHeadlines, setUwCaller } from '../_shared/uwClient.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { NEWS_ANALYSIS_SYSTEM } from '../_shared/ctPrompts.ts';
@@ -260,6 +260,8 @@ serve(async (req) => {
   const cors = handleCors(req); if (cors) return cors;
   const corsHeaders = getCorsHeaders(req);
   if (!isServiceRoleRequest(req)) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+
+  setUwCaller('ct-news-ingester');
 
   // Parse body for explicit is_weekend flag; fall back to UTC day-of-week.
   // Using UTC day matches the cron's schedule timezone so manual invocations

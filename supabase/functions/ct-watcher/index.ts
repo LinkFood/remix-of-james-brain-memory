@@ -23,7 +23,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive, killSwitchSkipResponse } from '../_shared/killSwitch.ts';
-import { pullWatcherState } from '../_shared/uwClient.ts';
+import { pullWatcherState, setUwCaller } from '../_shared/uwClient.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 import { now as clockNow } from '../_shared/clock.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
@@ -951,6 +951,8 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  setUwCaller('ct-watcher');
 
   const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;

@@ -39,6 +39,7 @@ import {
   getSpotGexByStrike,
   getVixSpot,
   MARKET_BANNER_SYMBOL,
+  setUwCaller,
 } from '../_shared/uwClient.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
@@ -93,6 +94,8 @@ serve(async (req) => {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
+
+  setUwCaller('ct-price-tick-capture');
 
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL')!,

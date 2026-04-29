@@ -14,8 +14,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { getAnalystRatings } from '../_shared/uwClient.ts';
-import { mcpCallToolAsData, isUwRateLimit } from '../_shared/uwMcpClient.ts';
+import { getAnalystRatings, setUwCaller } from '../_shared/uwClient.ts';
+import { mcpCallToolAsData, isUwRateLimit, setMcpCaller } from '../_shared/uwMcpClient.ts';
 import { recordDecision } from '../_shared/decisionJournal.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 
@@ -104,6 +104,9 @@ serve(async (req) => {
   if (!isServiceRoleRequest(req)) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   }
+
+  setUwCaller('ct-analyst-ingester');
+  setMcpCaller('ct-analyst-ingester');
 
   const supabase: SupabaseClient = createClient(
     Deno.env.get('SUPABASE_URL')!,
