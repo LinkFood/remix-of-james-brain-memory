@@ -246,3 +246,40 @@ Diagnostic ran 2026-04-28 evening: QQQ today has 438 strikes in latest snapshot,
 The morning's 10 structural fixes weren't pre-planned — each surfaced when live data exposed a bug that was invisible in test data. The pattern: ship, watch, see what breaks, fix, repeat.
 
 For tomorrow: same loop. Don't wait for a "calibration sprint" — fix what we see when we see it.
+
+---
+
+## Wednesday 2026-04-29 — added during open watch
+
+### Frontend — bell-ring refetch invalidation (caught 9:35 ET)
+- Hooks with `refetchInterval: () => (isMarketHoursET() ? N : false)` freeze if the page is loaded pre-bell. React Query doesn't re-evaluate the interval at the 9:30 ET transition.
+- Confirmed broken: `useNetPremiumCumulative` (Flow Butterfly).
+- Suspected same pattern: `useFlowPulse`, `useMacroSparklines`, possibly other market-hours-gated hooks.
+- Fix (Saturday): one `useMarketHoursTrigger` at app root that polls every 30s and calls `queryClient.invalidateQueries({ predicate: q => q.queryKey[0]?.toString().startsWith('ct_') })` on the bell transition.
+- Workaround until then: hard refresh post-bell.
+- See `~/.claude/projects/-Users-jameschellis/memory/feedback_market_hours_refetch_invalidation.md`.
+
+### Cron health — staggered-minute schedule false alarm (caught 9:00 ET)
+- 7 RTH-only crons fired stale alerts at 13:00 UTC because their first scheduled fire of the day is NOT at minute 0 (e.g., `1,6,11,...`). Tuesday's `ba3938b` step-interval fix doesn't catch staggered-minute schedules.
+- Affected: ct-curiosity, ct-detector-{small-cap-inverted-put,weekly-atm-voi,zerodte-opening-call,zerodte-put-voi}-rth, ct-flow-pulse-capture, ct-trade-advisories.
+- Auto-resolved at 13:20 UTC once first fires landed. Same false-alarm class as Tuesday's ct-self-grader.
+- Fix (Saturday): extend `ct-cron-health-check` schedule parser to compute `nextFireAfter(now)` for staggered-minute lists (1,6,11,16,...) — alert only when `now > nextFireAfter + threshold`.
+
+### 13:30 UTC ingester silent fire (one-off, may not recur)
+- ct-flow-ingester-perticker-rth's 13:30 UTC fire at the open did NOT write any rows. 13:35 UTC fire was healthy.
+- Could be: pg_cron skipped, UW returned empty at the open second, or function timed out before write.
+- Single-day occurrence. If it happens again Thursday's open, escalate to root-cause investigation.
+
+### VIX consumer cleanups (caught during VIX precision fix 2026-04-29)
+
+- **`supabase/functions/ct-custom-rule-eval/index.ts:226`** selects `'date, close'` from `ct_vix_history` but the column is `level`. Returns NULL VIX in custom rule evaluation. One-line fix.
+- **`build_ticker_quant_card` RPC** (4 migrations) — uses `WHERE date <= v_today ORDER BY date DESC LIMIT 1` for VIX. With intraday rows now stored, ties on `date` resolve to an arbitrary row. Should be `ORDER BY date DESC, created_at DESC`. Risk of touching 565-line RPC for one tweak — defer until next quant-card change.
+
+### ContractDrillSheet — print_count indicator not rendering (caught live 2026-04-29 ~14:00 ET)
+
+- DB has clean dedup: AMZN260605C00265000 has 1 ct_contract_tracks row with print_count=21 + 21 ct_contract_track_alerts ledger rows.
+- /tape Stacking Patterns table column correctly shows "21 prints".
+- `ContractDrillSheet.tsx:180-182` JSX renders `{track.print_count} prints · last {timestamp}` in amber when `track.print_count > 1`.
+- **The amber indicator is NOT rendering** when drill sheet opened from Stacking Patterns row click. Page-text search confirmed absent.
+- Likely cause: drill sheet `track` prop is undefined / loaded from wrong shape / stale React Query, so `track.print_count > 1` guard fails.
+- Fix priority: medium. The actual dedup is structurally working — this is a UX-only gap that prevents James from visually confirming dedup at a glance.
