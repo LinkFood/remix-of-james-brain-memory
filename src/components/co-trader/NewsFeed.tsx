@@ -11,14 +11,25 @@
  *   teal   = unusual_oi_v1  (open interest mention)
  *   gray   = no detector match
  *
- * Filter chips: All · Macro · Per-ticker · High-severity (>=3).
+ * Filter chips:
+ *   Group A (mode):    All · Macro · High
+ *   Group B (ticker):  NVDA · AAPL · MSFT · GOOGL · AMZN · META · TSLA · QQQ · SPY · IWM
  *
- * Read-only — no write operations, no edge-function calls. Pure window into
- * news state. Sticky positioning is handled by the parent layout.
+ * Single-select. Picking a ticker overrides Macro/High. Picking Macro/High
+ * clears the active ticker. Per-ticker matching uses ONLY structured columns
+ * (tickers_affected[] / instrument) — never headline regex.
+ *
+ * Read-only — no write operations, no edge-function calls.
  */
 
 import { useMemo, useState } from 'react';
-import { useBreakingNews, type NewsFeedItem, type NewsColor } from '@/hooks/useBreakingNews';
+import {
+  useBreakingNews,
+  WATCHLIST,
+  type NewsFeedItem,
+  type NewsColor,
+  type WatchlistTicker,
+} from '@/hooks/useBreakingNews';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -34,12 +45,22 @@ import {
   ArrowUp,
 } from 'lucide-react';
 
-type FilterMode = 'all' | 'macro' | 'ticker' | 'high';
+/**
+ * Filter state. Exactly one of these is active at a time.
+ *   - { kind: 'all' }                          default
+ *   - { kind: 'macro' }                        Tavily macro_wide rows only
+ *   - { kind: 'high' }                         severity >= 3
+ *   - { kind: 'ticker', ticker: <symbol> }     rows whose tickers[] contains symbol
+ */
+type FilterState =
+  | { kind: 'all' }
+  | { kind: 'macro' }
+  | { kind: 'high' }
+  | { kind: 'ticker'; ticker: WatchlistTicker };
 
-const FILTER_LABELS: Record<FilterMode, string> = {
+const MODE_LABEL: Record<'all' | 'macro' | 'high', string> = {
   all: 'All',
   macro: 'Macro',
-  ticker: 'Per-ticker',
   high: 'High',
 };
 
@@ -166,23 +187,110 @@ function FeedRow({ item }: { item: NewsFeedItem }) {
   );
 }
 
+// --- Filter chip primitives --------------------------------------------------
+
+function ModeChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      size="sm"
+      variant={active ? 'default' : 'outline'}
+      className="h-6 px-2 text-[10px]"
+      onClick={onClick}
+    >
+      {label}
+    </Button>
+  );
+}
+
+function TickerChip({
+  ticker,
+  active,
+  onClick,
+}: {
+  ticker: WatchlistTicker;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      size="sm"
+      variant={active ? 'default' : 'outline'}
+      className={cn(
+        'h-5 px-1.5 text-[9px] font-mono tabular-nums tracking-tight',
+        !active && 'text-muted-foreground hover:text-foreground',
+      )}
+      onClick={onClick}
+    >
+      {ticker}
+    </Button>
+  );
+}
+
+// --- Filter predicates -------------------------------------------------------
+
+function matchesFilter(item: NewsFeedItem, f: FilterState): boolean {
+  switch (f.kind) {
+    case 'all':
+      return true;
+    case 'macro':
+      // Structured: only Tavily breaking-news rows with macro_wide=true.
+      // Analysis rows (always per-ticker) never match.
+      return item.source === 'breaking' && item.macroWide === true;
+    case 'high':
+      return item.severity >= 3;
+    case 'ticker':
+      return item.tickers.includes(f.ticker);
+  }
+}
+
+function filterDescription(f: FilterState, count: number): string {
+  switch (f.kind) {
+    case 'all':
+      return `${count} item${count === 1 ? '' : 's'}`;
+    case 'macro':
+      return `Macro — ${count} item${count === 1 ? '' : 's'}`;
+    case 'high':
+      return `High severity — ${count} item${count === 1 ? '' : 's'}`;
+    case 'ticker':
+      return `${f.ticker} — ${count} item${count === 1 ? '' : 's'}`;
+  }
+}
+
+function emptyHint(f: FilterState): string {
+  switch (f.kind) {
+    case 'all':
+      return 'No headlines yet.';
+    case 'macro':
+      return 'No macro headlines — try All or a ticker.';
+    case 'high':
+      return 'No high-severity headlines — try All or a ticker.';
+    case 'ticker':
+      return `No ${f.ticker} headlines — try All or another ticker.`;
+  }
+}
+
+// --- Main component ----------------------------------------------------------
+
 export function NewsFeed() {
   const { items, isLoading, error, newSinceMount, resetNewCount } = useBreakingNews();
-  const [filter, setFilter] = useState<FilterMode>('all');
+  const [filter, setFilter] = useState<FilterState>({ kind: 'all' });
 
-  const filtered = useMemo(() => {
-    switch (filter) {
-      case 'macro':
-        return items.filter((it) => it.tickers.length === 0);
-      case 'ticker':
-        return items.filter((it) => it.tickers.length > 0);
-      case 'high':
-        return items.filter((it) => it.severity >= 3);
-      case 'all':
-      default:
-        return items;
-    }
-  }, [items, filter]);
+  const filtered = useMemo(
+    () => items.filter((it) => matchesFilter(it, filter)),
+    [items, filter],
+  );
+
+  const isModeActive = (m: 'all' | 'macro' | 'high') => filter.kind === m;
+  const isTickerActive = (t: WatchlistTicker) =>
+    filter.kind === 'ticker' && filter.ticker === t;
 
   return (
     <Card className="flex flex-col h-[calc(100vh-2rem)] overflow-hidden">
@@ -206,20 +314,36 @@ export function NewsFeed() {
         </span>
       </div>
 
-      {/* Filter chips */}
-      <div className="px-2 py-1.5 border-b flex items-center gap-1 flex-wrap">
-        {(Object.keys(FILTER_LABELS) as FilterMode[]).map((m) => (
-          <Button
+      {/* Filter chips — Row A: mode (All/Macro/High) */}
+      <div className="px-2 pt-1.5 pb-1 border-b border-b-transparent flex items-center gap-1">
+        {(Object.keys(MODE_LABEL) as Array<'all' | 'macro' | 'high'>).map((m) => (
+          <ModeChip
             key={m}
-            size="sm"
-            variant={filter === m ? 'default' : 'outline'}
-            className="h-6 px-2 text-[10px]"
-            onClick={() => setFilter(m)}
-          >
-            {FILTER_LABELS[m]}
-          </Button>
+            label={MODE_LABEL[m]}
+            active={isModeActive(m)}
+            onClick={() => setFilter({ kind: m })}
+          />
         ))}
       </div>
+
+      {/* Filter chips — Row B: per-ticker (10 chips, wraps to 2 rows in 320px) */}
+      <div className="px-2 pb-1.5 border-b flex items-center gap-1 flex-wrap">
+        {WATCHLIST.map((t) => (
+          <TickerChip
+            key={t}
+            ticker={t}
+            active={isTickerActive(t)}
+            onClick={() => setFilter({ kind: 'ticker', ticker: t })}
+          />
+        ))}
+      </div>
+
+      {/* Active filter readout — only when filtered (i.e. not "all") */}
+      {filter.kind !== 'all' && (
+        <div className="px-3 py-1 text-[10px] text-muted-foreground border-b bg-muted/30">
+          Showing: {filterDescription(filter, filtered.length)}
+        </div>
+      )}
 
       {/* Body */}
       <ScrollArea className="flex-1">
@@ -233,9 +357,7 @@ export function NewsFeed() {
           <div className="px-3 py-3 text-[11px] text-muted-foreground">Loading news…</div>
         )}
         {!isLoading && !error && filtered.length === 0 && (
-          <div className="px-3 py-3 text-[11px] text-muted-foreground">
-            No headlines for this filter.
-          </div>
+          <div className="px-3 py-3 text-[11px] text-muted-foreground">{emptyHint(filter)}</div>
         )}
         <div className="divide-y divide-border/40">
           {filtered.map((item) => (

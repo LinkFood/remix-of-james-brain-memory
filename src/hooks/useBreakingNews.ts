@@ -26,7 +26,20 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 
 // 10-ticker watchlist (matches tenet 4 + Tape.tsx TICKERS).
-const WATCHLIST = ['NVDA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'QQQ', 'SPY', 'IWM'];
+// Exported so the NewsFeed filter chip strip stays in sync with this single source.
+export const WATCHLIST = [
+  'NVDA',
+  'AAPL',
+  'MSFT',
+  'GOOGL',
+  'AMZN',
+  'META',
+  'TSLA',
+  'QQQ',
+  'SPY',
+  'IWM',
+] as const;
+export type WatchlistTicker = (typeof WATCHLIST)[number];
 
 const BOOTSTRAP_LIMIT = 40;
 const MAX_FEED_ITEMS = 120;
@@ -46,6 +59,12 @@ export interface NewsFeedItem {
   ts: string;
   summary: string | null;
   sentiment: 'bullish' | 'bearish' | 'neutral' | 'positive' | 'negative' | null;
+  /**
+   * Watchlist tickers carried by this row, sourced ONLY from structured columns:
+   *   - ct_breaking_news.tickers_affected[]
+   *   - ct_news_analyses.instrument
+   * No headline regex — if the producer didn't tag it, we don't tag it.
+   */
   tickers: string[];
   tags: string[];
   /** 0-5 normalized urgency. ct_breaking_news.severity 1-5; ct_news_analyses.significance 1-3 doubled. */
@@ -53,6 +72,10 @@ export interface NewsFeedItem {
   color: NewsColor;
   /** Detector class this headline could trip (best-effort, gray = none). */
   detectorClass: 'signature_v1' | 'whale_v1' | 'unusual_oi_v1' | 'zerodte' | null;
+  /** True only when this row is a Tavily macro_wide breaking-news row. Always false for analysis rows. */
+  macroWide: boolean;
+  /** Raw producer string ('tavily', 'tavily_sweep', etc). Null for analysis rows. */
+  rawSource: string | null;
 }
 
 interface BreakingNewsRow {
@@ -106,16 +129,12 @@ function tagsForHeadline(headline: string, summary: string | null): string[] {
   return tags;
 }
 
-function tickersFromText(text: string): string[] {
-  const found = new Set<string>();
-  for (const t of WATCHLIST) {
-    // Word boundary match so "META" doesn't match "metadata".
-    // Also catch "$NVDA" style tickers.
-    const re = new RegExp(`(?:^|[^A-Z])\\$?${t}(?:[^A-Z]|$)`);
-    if (re.test(text)) found.add(t);
-  }
-  return [...found];
-}
+// NOTE: There is intentionally NO headline-regex ticker extractor here.
+// Per-ticker filtering uses ONLY the producer-supplied structured columns
+// (tickers_affected[] for breaking_news, instrument for news_analyses).
+// Headline regex matching mis-tagged macro/peripheral mentions and made the
+// "Per-ticker" filter equal "All". WATCHLIST is still imported because the
+// renderer + filter chips need the canonical 10-ticker list.
 
 /**
  * Color resolution per the plan:
@@ -145,9 +164,11 @@ function resolveColor(item: {
 // --- Row → FeedItem normalization --------------------------------------------
 
 function fromBreaking(row: BreakingNewsRow): NewsFeedItem {
-  const tickers = (row.tickers_affected ?? []).filter((t) => WATCHLIST.includes(t));
-  const headlineTickers = tickersFromText(row.headline);
-  const merged = [...new Set([...tickers, ...headlineTickers])];
+  // STRUCTURED ONLY — never enrich tickers from headline text. Producers tag
+  // tickers_affected[] explicitly; if they didn't tag it, this row has no ticker.
+  const tickers = (row.tickers_affected ?? []).filter((t): t is WatchlistTicker =>
+    (WATCHLIST as readonly string[]).includes(t),
+  );
   const tags = tagsForHeadline(row.headline, row.summary);
   const severity = row.severity ?? 1;
   const ts = row.published_at ?? row.ingested_at;
@@ -172,19 +193,21 @@ function fromBreaking(row: BreakingNewsRow): NewsFeedItem {
     ts,
     summary: row.summary,
     sentiment,
-    tickers: merged,
+    tickers,
     tags,
     severity,
     color,
     detectorClass,
+    macroWide: row.macro_wide === true,
+    rawSource: row.source,
   };
 }
 
 function fromAnalysis(row: NewsAnalysisRow): NewsFeedItem {
-  const tickers: string[] = [];
-  if (row.instrument && WATCHLIST.includes(row.instrument)) tickers.push(row.instrument);
-  for (const t of tickersFromText(row.news_headline)) {
-    if (!tickers.includes(t)) tickers.push(t);
+  // STRUCTURED ONLY — instrument is the producer's tag. No headline regex.
+  const tickers: WatchlistTicker[] = [];
+  if (row.instrument && (WATCHLIST as readonly string[]).includes(row.instrument)) {
+    tickers.push(row.instrument as WatchlistTicker);
   }
   const tags = tagsForHeadline(row.news_headline, row.claude_take);
   // significance is 1-3; map to 1/3/5 so a sig-3 hits the >=4 red threshold.
@@ -221,6 +244,9 @@ function fromAnalysis(row: NewsAnalysisRow): NewsFeedItem {
     severity,
     color,
     detectorClass,
+    // ct_news_analyses rows are always per-ticker — there is no macro_wide here.
+    macroWide: false,
+    rawSource: null,
   };
 }
 
