@@ -2,10 +2,10 @@
  * MacroBanner — /tape Pillar 1 enrichment.
  *
  * Two stacked sections rendered above the filter strip:
- *   1. Macro strip — SPY/QQQ/IWM/VIX spot + % change, plus market tide pill
- *      when ct_market_tide is available. VIX and tide hide gracefully if
- *      source data isn't present (ct_market_tide doesn't exist yet as of
- *      2026-04-23; guarded with try/catch in query).
+ *   1. Macro strip — VIX spot + % change plus a market-tide pill. SPY/QQQ/IWM
+ *      tiles were removed 2026-04-29 as duplicates of the watchlist row
+ *      below; they were also a frequent staleness offender (showed
+ *      ct_price_bars-derived spot beside a fresher snapshot tile).
  *   2. Watchlist tiles — 10 MacroTiles, one per specialist ticker, each
  *      with an intraday price sparkline (from useMacroSparklines), a
  *      flag-count chip, and a Lean-score footer.
@@ -26,7 +26,6 @@ import { useMacroSparklines } from '@/hooks/useMacroSparklines';
 import { MacroTile, type MacroLeanSummary } from '@/components/command/MacroTile';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'] as const;
-const MACRO_TICKERS = ['SPY','QQQ','IWM','VIX'] as const;
 
 interface PriceBarRow {
   ticker: string;
@@ -70,13 +69,6 @@ function toNum(n: number | string | null | undefined): number | null {
   if (n == null) return null;
   const v = typeof n === 'number' ? n : parseFloat(n);
   return Number.isFinite(v) ? v : null;
-}
-
-function fmtSpot(n: number | null): string {
-  if (n == null) return '--';
-  if (n >= 1000) return n.toFixed(0);
-  if (n >= 100) return n.toFixed(2);
-  return n.toFixed(2);
 }
 
 function fmtPct(n: number | null): string {
@@ -137,9 +129,8 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
     queryKey: ['ct_macro_price_bars', sinceIso.slice(0, 10)],
     refetchInterval: 30_000,
     queryFn: async () => {
-      const allTickers = Array.from(new Set<string>([...TICKERS, ...MACRO_TICKERS]));
       const results = await Promise.all(
-        allTickers.map(async (t) => {
+        TICKERS.map(async (t) => {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const { data, error } = await (supabase.from('ct_price_bars' as never) as any)
             .select('ticker,ts,close')
@@ -278,31 +269,17 @@ export function MacroBanner({ onTickerClick }: MacroBannerProps) {
 
   return (
     <div className="space-y-2">
-      {/* Section 1 — skinny macro strip */}
+      {/* Section 1 — skinny macro strip (VIX + Tide only — SPY/QQQ/IWM live in watchlist row below) */}
       <Card className="px-3 py-1.5 flex items-center gap-4 flex-wrap text-[11px] font-mono tabular-nums">
-        {MACRO_TICKERS.map((t) => {
-          // VIX draws from ct_vix_history, not ct_price_bars.
-          if (t === 'VIX') {
-            if (!vixRow || vixRow.level == null) return null;
-            return (
-              <div key={t} className="flex items-center gap-1.5">
-                <span className="text-muted-foreground font-semibold">VIX</span>
-                <span className="text-foreground">{vixRow.level.toFixed(2)}</span>
-                {vixRow.change_pct != null && (
-                  <span className={pctColor(vixRow.change_pct)}>{fmtPct(vixRow.change_pct)}</span>
-                )}
-              </div>
-            );
-          }
-          const s = priceSummary.get(t);
-          return (
-            <div key={t} className="flex items-center gap-1.5">
-              <span className="text-muted-foreground font-semibold">{t}</span>
-              <span className="text-foreground">{fmtSpot(s?.spot ?? null)}</span>
-              <span className={pctColor(s?.pct ?? null)}>{fmtPct(s?.pct ?? null)}</span>
-            </div>
-          );
-        })}
+        {vixRow && vixRow.level != null && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-muted-foreground font-semibold">VIX</span>
+            <span className="text-foreground">{vixRow.level.toFixed(2)}</span>
+            {vixRow.change_pct != null && (
+              <span className={pctColor(vixRow.change_pct)}>{fmtPct(vixRow.change_pct)}</span>
+            )}
+          </div>
+        )}
         {tideLabel && (
           <div className="flex items-center gap-1.5">
             <span className="text-muted-foreground">Tide</span>
