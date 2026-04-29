@@ -77,8 +77,33 @@ Use the watch script: `bash scripts/morning_watch.sh` from the repo root (5-min 
 - [ ] `ct_flow_alerts` watchlist-purity 100%
 
 **By 4:31 ET (after EOD)**:
-- [ ] EOD Slack push lands with NON-ZERO `tracks realized` count
+- [ ] EOD Slack push lands with NON-ZERO `tracks realized` count + populated `regime_tag` and `snapshot_hit_rate` (NOT "regime untagged · n/a hit rate") — fix shipped 2026-04-28 commit `920071e`
 - [ ] Sonnet narrative references contract-axis WIN/LOSS
+
+---
+
+## Wednesday 2026-04-29 — verify last night's structural fixes
+
+Critical to confirm tomorrow morning. Each maps to a commit shipped 2026-04-28 evening.
+
+**Per-symbol track dedup verification (commit `31e1cea` + `428569c`):**
+- [ ] Click into a flag for a high-volume contract (e.g., one in the Stacking Patterns top 5). ContractDrillSheet should render a **"X prints"** indicator near the contract header when print_count > 1. If missing → frontend bug, check `src/components/co-trader/ContractDrillSheet.tsx` for print_count rendering
+- [ ] Run: `curl -s "$URL/rest/v1/ct_contract_tracks?select=count&track_status=eq.WORKING" -H "Authorization: Bearer $KEY" -H "apikey: $KEY" -H "Prefer: count=estimated"` — should be ≤ 2,800 (post-dedup floor was 2,496; some growth from new contracts is expected, but should NOT be back near 6,800)
+- [ ] Run: `curl -s "$URL/rest/v1/ct_contract_track_alerts?select=count" -H "Authorization: Bearer $KEY" -H "apikey: $KEY" -H "Prefer: count=estimated"` — should be GROWING (was 7,680 at 00:00 UTC 04-29). Each new flow alert that triggers print-grader = +1 ledger row
+- [ ] Spot-check organic increment: pick a contract that's getting hit during RTH (e.g., from /tape Stacking Patterns top row) and watch its `print_count` in `ct_contract_tracks` climb over the morning. Confirms UPSERT path is incrementing, not inserting new rows
+- [ ] Sanity check: `print_count > 1` rows should accumulate. Run `curl ".../ct_contract_tracks?select=count&print_count=gt.1"` periodically — should grow with prints volume
+
+**Cluster Slack dedup verification (commit `e5c5f11`):**
+- [ ] After RTH starts, query `ct_slack_log WHERE skip_reason='cluster_dedup_lower_score' AND created_at::date = today` — should accumulate as multi-detector clusters fire
+- [ ] No duplicate Slack pings in your phone for the same contract+direction+minute
+
+**Cron-health step-interval verification (commit `ba3938b`):**
+- [ ] Zero "ct-self-grader stale" Slack alerts since last night's deploy. Should stay zero through tomorrow morning until first scheduled fire at 13:00 UTC
+- [ ] Same for any other `*/N` step-interval cron (audit if other false alarms surface)
+
+**gamma_flip drop global-min (commit `d0973cc`):**
+- [ ] Quant card / quant view for any ticker — gamma_flip values within ±10% of spot, OR null. Never far-OTM tail values like NVDA 1.5 with spot 213
+- [ ] Monitor through morning — if any ticker shows gamma_flip = NULL (returning honest "no flip detected"), that's correct behavior, not a regression
 
 ---
 
