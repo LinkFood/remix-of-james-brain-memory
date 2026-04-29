@@ -658,8 +658,10 @@ export default function Flags() {
   });
 
   // Contract-price map: latest current_contract_price per option_symbol from
-  // ct_contract_tracks. Multiple tracks per symbol exist (one per print);
-  // take the freshest non-null. Polled by ct-contract-poller every 3min RTH.
+  // ct_contract_tracks. Post-2026-04-28 dedup: one WORKING row per
+  // option_symbol (UNIQUE INDEX enforces it). Closed/expired lifetimes may
+  // also share the symbol — the order-by-last_quoted_at picks the freshest.
+  // Polled by ct-contract-poller every 3min RTH.
   const { data: contractPriceMap } = useQuery<Map<string, number>>({
     queryKey: ['ct_flags_contract_price_map', optionsNeedingContractPrice],
     enabled: optionsNeedingContractPrice.length > 0,

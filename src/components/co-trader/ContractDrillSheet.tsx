@@ -177,6 +177,14 @@ function PnLCard({ track }: { track: ContractTrackRow }) {
               )}
             </Badge>
           )}
+          {track.print_count > 1 && (
+            <span className="text-[10px] text-amber-300 font-mono font-semibold">
+              {track.print_count} prints
+              {track.last_print_at && (
+                <span className="opacity-70 ml-1">· last {fmtClock(track.last_print_at)}</span>
+              )}
+            </span>
+          )}
           {track.sweep_count > 0 && (
             <span className="text-[10px] text-muted-foreground font-mono">
               {track.sweep_count} sweep{track.sweep_count === 1 ? '' : 's'} · last quote {fmtClock(track.last_quoted_at)}

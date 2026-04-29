@@ -63,6 +63,10 @@ export interface ContractTrackRow {
   first_tracked_at: string;
   last_tracked_at: string;
   grading_method: string;
+  // Per-symbol identity additions (2026-04-28 dedup migration).
+  print_count: number;
+  last_print_at: string | null;
+  first_alert_id: string | null;
 }
 
 const SELECT_COLS =
@@ -73,9 +77,16 @@ const SELECT_COLS =
   'trough_contract_price, trough_contract_at, max_drawdown_pct, ' +
   'time_to_50pct, time_to_100pct, time_to_200pct, ' +
   'track_status, tracking_until, last_quoted_at, sweep_count, ' +
-  'first_tracked_at, last_tracked_at, grading_method';
+  'first_tracked_at, last_tracked_at, grading_method, ' +
+  'print_count, last_print_at, first_alert_id';
 
 // ---------- single-row lookup (drill sheet) ----------
+//
+// Post-2026-04-28 per-symbol identity migration: ct_contract_tracks no longer
+// has a UNIQUE on alert_id. The append-only ct_contract_track_alerts ledger
+// maps alert_id → track_id. We chain through it: alert_id → ledger → track.
+// One row per option_symbol (WORKING) means callers see the canonical track
+// even when re-prints have been folded in via print_count increment.
 
 export function useContractTrack(
   alertId: string | null,
@@ -88,10 +99,23 @@ export function useContractTrack(
     retry: false,
     queryFn: async () => {
       if (!alertId) return null;
+      // Step 1: alert_id → track_id via ledger.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: ledger, error: ledgerErr } = await (supabase.from as any)('ct_contract_track_alerts')
+        .select('track_id')
+        .eq('alert_id', alertId)
+        .limit(1);
+      if (ledgerErr) {
+        console.warn('[useContractTrack ledger]', ledgerErr.message);
+        return null;
+      }
+      const trackId = (ledger?.[0] as { track_id?: string } | undefined)?.track_id;
+      if (!trackId) return null;
+      // Step 2: track_id → full track row.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase.from as any)('ct_contract_tracks')
         .select(SELECT_COLS)
-        .eq('alert_id', alertId)
+        .eq('id', trackId)
         .limit(1);
       if (error) {
         console.warn('[useContractTrack]', error.message);
@@ -104,6 +128,13 @@ export function useContractTrack(
 }
 
 // ---------- batch lookup (chip column on /tape) ----------
+//
+// Same chain as useContractTrack but batched. Returns Map<alert_id,
+// ContractTrackRow> so callers don't have to re-key. Multiple alert_ids can
+// resolve to the SAME track (re-prints of the same contract) — the Map will
+// have multiple entries pointing at the same row, which is exactly what the
+// chip column wants (one chip per row, all chips for the same contract show
+// the canonical state).
 
 export function useContractTracksByAlerts(
   alertIds: string[],
@@ -121,21 +152,47 @@ export function useContractTracksByAlerts(
     queryFn: async () => {
       const out = new Map<string, ContractTrackRow>();
       if (sorted.length === 0) return out;
-      // PostgREST .in() works for thousands; chunk defensively at 500 anyway.
       const CHUNK = 500;
+      // Step 1: alert_id → track_id (and option_symbol) via ledger.
+      const alertToTrackId = new Map<string, string>();
+      const trackIdSet = new Set<string>();
       for (let i = 0; i < sorted.length; i += CHUNK) {
         const chunk = sorted.slice(i, i + CHUNK);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const { data, error } = await (supabase.from as any)('ct_contract_tracks')
-          .select(SELECT_COLS)
+        const { data, error } = await (supabase.from as any)('ct_contract_track_alerts')
+          .select('alert_id, track_id')
           .in('alert_id', chunk);
         if (error) {
-          console.warn('[useContractTracksByAlerts]', error.message);
+          console.warn('[useContractTracksByAlerts ledger]', error.message);
+          return out;
+        }
+        for (const row of (data ?? []) as { alert_id: string; track_id: string }[]) {
+          alertToTrackId.set(row.alert_id, row.track_id);
+          trackIdSet.add(row.track_id);
+        }
+      }
+      if (trackIdSet.size === 0) return out;
+      // Step 2: track_ids → full rows.
+      const trackById = new Map<string, ContractTrackRow>();
+      const trackIds = Array.from(trackIdSet);
+      for (let i = 0; i < trackIds.length; i += CHUNK) {
+        const chunk = trackIds.slice(i, i + CHUNK);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data, error } = await (supabase.from as any)('ct_contract_tracks')
+          .select(SELECT_COLS)
+          .in('id', chunk);
+        if (error) {
+          console.warn('[useContractTracksByAlerts tracks]', error.message);
           return out;
         }
         for (const row of (data ?? []) as ContractTrackRow[]) {
-          out.set(row.alert_id, row);
+          trackById.set(row.id, row);
         }
+      }
+      // Step 3: re-key Map by alert_id so callers can do `map.get(alert_id)`.
+      for (const [alertId, trackId] of alertToTrackId.entries()) {
+        const t = trackById.get(trackId);
+        if (t) out.set(alertId, t);
       }
       return out;
     },
