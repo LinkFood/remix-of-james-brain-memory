@@ -46,6 +46,7 @@ import { TapeReaderBanner } from '@/components/command/TapeReaderBanner';
 import { OvernightPositioning } from '@/components/command/OvernightPositioning';
 import { StackingPatterns } from '@/components/command/StackingPatterns';
 import { FlowPulse } from '@/components/command/FlowPulse';
+import { NewsFeed } from '@/components/co-trader/NewsFeed';
 import { RegimeChip } from '@/hooks/useTickerIntradayContext';
 import {
   useContractStacking,
@@ -1017,7 +1018,9 @@ export default function Tape() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="max-w-[1800px] mx-auto p-4 space-y-4">
+      <div className="max-w-[1800px] mx-auto p-4">
+        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-4">
+          <div className="min-w-0 space-y-4">
         <TapeReaderBanner />
         <MacroBanner onTickerClick={(t) => setActiveTicker(t)} />
         <FlowPulse onTickerClick={(t) => setActiveTicker(t)} />
@@ -1641,6 +1644,15 @@ export default function Tape() {
         <div className="text-[10px] text-muted-foreground leading-relaxed">
           Tape reads ct_scored_flow as primary source; toggle "Show unscored" to union raw ct_flow_alerts rows that
           haven't been scored yet. Refreshes every 20s. Limit 500 rows per source.
+        </div>
+          </div>
+
+          {/* Right gutter: live news feed (Tavily macro + UW per-ticker analyses) */}
+          <aside className="hidden lg:block">
+            <div className="sticky top-4">
+              <NewsFeed />
+            </div>
+          </aside>
         </div>
       </div>
 
