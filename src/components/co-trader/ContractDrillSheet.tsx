@@ -29,6 +29,7 @@ import {
 } from 'recharts';
 import {
   useContractTrack,
+  useContractTrackBySymbol,
   fmtPctFromFraction, fmtPctMagnitude, fmtInterval, addInterval,
   type ContractTrackRow, type ContractTrackStatus,
 } from '@/hooks/useContractTracks';
@@ -37,7 +38,15 @@ import { useContractQuotes } from '@/hooks/useContractQuotes';
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  alertId: string | null;
+  /**
+   * Preferred — resolves the canonical track directly by symbol so re-prints
+   * (which all share an option_symbol but differ on alert_id) surface the
+   * aggregated print_count / last_print_at without depending on the
+   * alert_id → ledger chain.
+   */
+  optionSymbol?: string | null;
+  /** Fallback — used when the caller only has the alert_id (e.g. legacy chip clicks). */
+  alertId?: string | null;
 }
 
 // ---------- helpers ----------
@@ -381,8 +390,17 @@ function TimeToTable({ track }: { track: ContractTrackRow }) {
 
 // ---------- main ----------
 
-export function ContractDrillSheet({ open, onOpenChange, alertId }: Props) {
-  const { data: track, isLoading, isError } = useContractTrack(alertId);
+export function ContractDrillSheet({ open, onOpenChange, optionSymbol = null, alertId = null }: Props) {
+  // Prefer symbol-keyed lookup (canonical). Fall back to alert_id ledger
+  // chain only when the caller didn't supply a symbol. Either lookup
+  // returns the same ContractTrackRow shape, so the rest of the sheet
+  // doesn't care which path resolved.
+  const symbolQuery = useContractTrackBySymbol(optionSymbol);
+  const alertQuery = useContractTrack(optionSymbol ? null : alertId);
+  const isSymbolPath = optionSymbol !== null && optionSymbol !== '';
+  const track = isSymbolPath ? symbolQuery.data : alertQuery.data;
+  const isLoading = isSymbolPath ? symbolQuery.isLoading : alertQuery.isLoading;
+  const isError = isSymbolPath ? symbolQuery.isError : alertQuery.isError;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

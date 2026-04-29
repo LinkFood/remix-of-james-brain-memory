@@ -127,6 +127,50 @@ export function useContractTrack(
   });
 }
 
+// ---------- by-symbol lookup (drill sheet, canonical track) ----------
+//
+// Queries ct_contract_tracks directly by option_symbol. After the 2026-04-28
+// per-symbol identity migration there is one canonical track per
+// option_symbol (UNIQUE INDEX on the WORKING tier, latest for non-WORKING).
+// This is the load-bearing read for the drill sheet — it sidesteps the
+// alert_id → ledger → track_id chain so re-prints surface the aggregated
+// `print_count` / `last_print_at` immediately, even before the ledger row
+// for the latest alert lands.
+//
+// Strategy: pull all rows for the symbol, prefer WORKING (live/active),
+// otherwise the most recently updated. Empty / error returns null so the
+// drill sheet can fall back to its empty-state card.
+
+export function useContractTrackBySymbol(
+  optionSymbol: string | null,
+): UseQueryResult<ContractTrackRow | null> {
+  return useQuery<ContractTrackRow | null>({
+    queryKey: ['ct_contract_tracks', 'by_symbol', optionSymbol],
+    enabled: optionSymbol !== null && optionSymbol !== '',
+    staleTime: 15_000,
+    refetchInterval: 30_000,
+    retry: false,
+    queryFn: async () => {
+      if (!optionSymbol) return null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase.from as any)('ct_contract_tracks')
+        .select(SELECT_COLS)
+        .eq('option_symbol', optionSymbol)
+        .order('last_tracked_at', { ascending: false })
+        .limit(8);
+      if (error) {
+        console.warn('[useContractTrackBySymbol]', error.message);
+        return null;
+      }
+      const rows = (data ?? []) as ContractTrackRow[];
+      if (rows.length === 0) return null;
+      // Prefer WORKING (the canonical live row, guaranteed unique post-migration).
+      const working = rows.find((r) => r.track_status === 'WORKING');
+      return working ?? rows[0];
+    },
+  });
+}
+
 // ---------- batch lookup (chip column on /tape) ----------
 //
 // Same chain as useContractTrack but batched. Returns Map<alert_id,

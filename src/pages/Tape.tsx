@@ -530,7 +530,9 @@ export default function Tape() {
   }, [dayFilter]);
   const [activeSymbol, setActiveSymbol] = useState<string | null>(null);
   const [activeTicker, setActiveTicker] = useState<string | null>(null);
-  const [drillAlertId, setDrillAlertId] = useState<string | null>(null);
+  // Drill sheet target — prefer option_symbol (canonical track lookup),
+  // keep alert_id around for the empty-state fallback path.
+  const [drillTarget, setDrillTarget] = useState<{ optionSymbol: string | null; alertId: string | null } | null>(null);
   const [markDialog, setMarkDialog] = useState<MarkDialogState>({
     open: false, row: null, note: '', direction_view: null, saving: false,
   });
@@ -1018,8 +1020,13 @@ export default function Tape() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="max-w-[1800px] mx-auto p-4">
-        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_320px] lg:gap-4">
+      {/* Page-level 2-col grid: content fills available width, news rail
+          fixed 340px on the right at lg+. AuthLayout owns the left chat
+          column, so this grid spans the rest of the viewport. The 1800px
+          max-width cap was removed 2026-04-29 — it left a dead gutter on
+          wide monitors and forced ticker cards to overflow on 1280-1500px
+          windows. Now: cards row uses every pixel between chat and news. */}
+      <div className="p-4 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-4">
           <div className="min-w-0 space-y-4">
         <TapeReaderBanner />
         <MacroBanner onTickerClick={(t) => setActiveTicker(t)} />
@@ -1589,14 +1596,16 @@ export default function Tape() {
                       <TableCell
                         className="py-2 px-2 text-right whitespace-nowrap"
                         onClick={(e) => {
-                          if (!r.alert_id) return;
+                          if (!r.option_symbol && !r.alert_id) return;
                           e.stopPropagation();
-                          setDrillAlertId(r.alert_id);
+                          setDrillTarget({ optionSymbol: r.option_symbol ?? null, alertId: r.alert_id ?? null });
                         }}
                       >
                         <ContractPnLChip
                           track={r.alert_id ? contractTracks?.get(r.alert_id) ?? null : null}
-                          onClick={r.alert_id ? () => setDrillAlertId(r.alert_id) : undefined}
+                          onClick={(r.option_symbol || r.alert_id)
+                            ? () => setDrillTarget({ optionSymbol: r.option_symbol ?? null, alertId: r.alert_id ?? null })
+                            : undefined}
                         />
                       </TableCell>
                       <TableCell className="py-2 px-2 text-center whitespace-nowrap">
@@ -1653,7 +1662,6 @@ export default function Tape() {
               <NewsFeed />
             </div>
           </aside>
-        </div>
       </div>
 
       {/* Contract drill-down sheet */}
@@ -1671,11 +1679,13 @@ export default function Tape() {
         onOpenChange={(o) => { if (!o) setActiveTicker(null); }}
       />
 
-      {/* Contract-axis P&L drill sheet (Phase D) */}
+      {/* Contract-axis P&L drill sheet (Phase D) — keyed by option_symbol so re-prints
+          surface the canonical aggregated track (print_count, last_print_at). */}
       <ContractDrillSheet
-        alertId={drillAlertId}
-        open={drillAlertId !== null}
-        onOpenChange={(o) => { if (!o) setDrillAlertId(null); }}
+        optionSymbol={drillTarget?.optionSymbol ?? null}
+        alertId={drillTarget?.alertId ?? null}
+        open={drillTarget !== null}
+        onOpenChange={(o) => { if (!o) setDrillTarget(null); }}
       />
 
       {/* Mark-as-interesting dialog */}
