@@ -49,6 +49,7 @@ import {
   claudeSystemPromptPreamble,
 } from '../_shared/claudeReadSurface.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import { now as clockNow, dayNameInTz, relativeDayTag, dateInTz } from '../_shared/clock.ts';
 
 type Triggered = 'scheduled' | 'breaking_news' | 'manual' | 'regime_shift';
 
@@ -213,15 +214,17 @@ async function pullBreakingNews(supabase: SupabaseClient) {
   return data ?? [];
 }
 
-async function pullUpcomingEvents(supabase: SupabaseClient) {
-  const today = new Date().toISOString().slice(0, 10);
-  const horizonIso = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+async function pullUpcomingEvents(supabase: SupabaseClient, todayYmd: string) {
+  // Horizon = today + 7 calendar days, anchored in ET (matches todayYmd).
+  const horizonDate = new Date(`${todayYmd}T12:00:00Z`);
+  horizonDate.setUTCDate(horizonDate.getUTCDate() + 7);
+  const horizonYmd = horizonDate.toISOString().slice(0, 10);
   // ct_events schema varies slightly by release; select a wide superset via *
   const { data, error } = await supabase
     .from('ct_events')
     .select('*')
-    .gte('event_date', today)
-    .lte('event_date', horizonIso)
+    .gte('event_date', todayYmd)
+    .lte('event_date', horizonYmd)
     .order('event_date', { ascending: true })
     .limit(50);
   if (error) {
@@ -300,6 +303,16 @@ serve(async (req) => {
   const startedAt = Date.now();
 
   try {
+    // Anchor today in ET FIRST — every downstream date computation (event window,
+    // relative-time tagging, persisted session_date) keys off this. UTC slice
+    // rolls over hours before midnight ET and off-by-ones the session date late
+    // afternoon. The brief fires at 7 AM ET; ET is the unambiguous frame.
+    const etNow = clockNow('America/New_York');
+    const sessionDate = etNow.date;             // YYYY-MM-DD in ET
+    const sessionDayName = dayNameInTz(sessionDate);
+    const etTimeStr = etNow.time;               // HH:MM in ET
+    const utcTimeStr = etNow.iso.slice(11, 16); // HH:MM in UTC
+
     // ------- CONTEXT -------
     const watchlist = await getWatchlist(supabase);
     const ttlHours = Number(await getConfig<number>('claude_brief_ttl_hours', 8));
@@ -313,12 +326,10 @@ serve(async (req) => {
         gradeLimit: 15,
       }),
       pullBreakingNews(supabase),
-      pullUpcomingEvents(supabase),
+      pullUpcomingEvents(supabase, sessionDate),
       pullTickerSnapshots(supabase, watchlist),
       pullYesterdayClosedTrades(supabase),
     ]);
-
-    const sessionDate = new Date().toISOString().slice(0, 10);
 
     // Figure out versioning + urgency before calling Claude.
     let supersedesId: string | null = supersedesIdHint ?? null;
@@ -336,10 +347,99 @@ serve(async (req) => {
       urgency = maxSev >= 5 ? 'acute' : 'high';
     }
 
+    // ------- PRE-RESOLVE EVENT DATES TO RELATIVE-TIME TAGS -------
+    // The model must NEVER receive a raw `event_date` again — it sees a pre-baked
+    // relative-time descriptor. This makes "tomorrow vs today" hallucination
+    // structurally impossible: there's nothing for the model to compute.
+    type RawEvent = {
+      event_type?: string | null;
+      ticker?: string | null;
+      event_date?: string | null;
+      event_time?: string | null;       // 'HH:MM:SS+TZ' or null
+      title?: string | null;
+      importance?: number | null;
+      report_time?: string | null;      // 'bmo' | 'amc' | 'intraday' | null
+    };
+    const formatEventTime = (e: RawEvent): string => {
+      // Earnings: prefer report_time bucket label.
+      if (e.event_type === 'earnings') {
+        if (e.report_time === 'bmo')      return 'pre-open';
+        if (e.report_time === 'amc')      return 'post-close';
+        if (e.report_time === 'intraday') return 'intraday';
+      }
+      // Otherwise: extract HH:MM from event_time if present and label as ET
+      // (UW/econ calendar publishes in ET).
+      if (e.event_time) {
+        const m = /^(\d{2}):(\d{2})/.exec(e.event_time);
+        if (m) return `${m[1]}:${m[2]} ET`;
+      }
+      return '';
+    };
+    const taggedUpcomingEvents = (upcomingEvents as RawEvent[]).map((e) => {
+      const ymd = (e.event_date ?? '').slice(0, 10);
+      const dayTag = ymd ? relativeDayTag(ymd, sessionDate) : 'UNKNOWN_DATE';
+      const timeTag = formatEventTime(e);
+      const when = timeTag ? `**${dayTag} ${timeTag}**` : `**${dayTag}**`;
+      return {
+        when,                          // pre-tagged: the only date the model should reason from
+        day_tag: dayTag,               // 'TODAY' | 'TOMORROW' | '+5 days' | etc
+        time_tag: timeTag || null,     // 'pre-open' | 'post-close' | '14:00 ET' | null
+        event_type: e.event_type ?? null,
+        ticker: e.ticker ?? null,
+        title: e.title ?? null,
+        importance: e.importance ?? null,
+      };
+    });
+
+    // Pre-resolve breaking-news timestamps too. published_at can be hours-old or
+    // days-old; ingested_at is the floor. We tag both with relative-day labels so
+    // the LLM never has to reason "is this published_at today?".
+    type RawNews = {
+      id?: string;
+      headline?: string | null;
+      url?: string | null;
+      source?: string | null;
+      severity?: number | null;
+      sentiment?: string | null;
+      tickers_affected?: string[] | null;
+      macro_wide?: boolean | null;
+      category?: string | null;
+      summary?: string | null;
+      ingested_at?: string | null;
+      published_at?: string | null;
+    };
+    const tagIso = (iso: string | null | undefined): string => {
+      if (!iso) return 'UNKNOWN_TIME';
+      const ymd = dateInTz(iso, 'America/New_York');
+      const dayTag = relativeDayTag(ymd, sessionDate);
+      const hhmm = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/New_York',
+        hour: '2-digit', minute: '2-digit', hour12: false,
+      }).format(new Date(iso));
+      return `**${dayTag} ${hhmm} ET**`;
+    };
+    const taggedBreakingNews = (breakingNews as RawNews[]).slice(0, 25).map((n) => ({
+      when: tagIso(n.published_at ?? n.ingested_at ?? null),
+      headline: n.headline ?? null,
+      severity: n.severity ?? null,
+      source: n.source ?? null,
+      sentiment: n.sentiment ?? null,
+      tickers_affected: n.tickers_affected ?? null,
+      macro_wide: n.macro_wide ?? null,
+      category: n.category ?? null,
+      summary: n.summary ?? null,
+      url: n.url ?? null,
+    }));
+
     // ------- PROMPT -------
     const preamble = claudeSystemPromptPreamble(ctx);
     const system = [
       preamble,
+      '',
+      `**Today is ${sessionDate} (${sessionDayName}).** Current time: ${etTimeStr} ET (${utcTimeStr} UTC).`,
+      'All event dates that match today are TODAY. Tomorrow = today + 1 day. Yesterday = today - 1 day.',
+      'Every event in `upcoming_events_7d` and `breaking_news_24h` already carries a pre-resolved `when` field tagged **TODAY** / **TOMORROW** / **YESTERDAY** / **+N days** / **-N days**. Use that tag verbatim in your prose. Do NOT compute relative dates from raw timestamps — the tag is authoritative.',
+      'Per-ticker `catalysts` strings MUST also reference these tags (e.g. "**TODAY** earnings post-close", not "Earnings tomorrow").',
       '',
       'ROLE: You are the Morning PM. Produce today\'s world-view, per-ticker cards, and a convergent view with 0-3 high-conviction ideas.',
       '',
@@ -360,6 +460,9 @@ serve(async (req) => {
       reason: reason ?? null,
       urgency,
       session_date: sessionDate,
+      session_day_name: sessionDayName,
+      now_et: etTimeStr,
+      now_utc: utcTimeStr,
       watchlist,
       // Wave J: quote the most recent CIO weekly review into brief context.
       // Claude should weave tactical_notes into macro_narrative and lean
@@ -377,8 +480,11 @@ serve(async (req) => {
       })),
       recent_claude_grades: (ctx as unknown as { recentGrades?: unknown }).recentGrades ?? null,
       claude_closed_trades_48h: recentClosed,
-      breaking_news_24h: breakingNews.slice(0, 25),
-      upcoming_events_7d: upcomingEvents,
+      // PRE-TAGGED — every entry carries a `when` field anchored against today.
+      // Raw event_date / published_at deliberately NOT included; the LLM should
+      // never see them and never have to compute relative time.
+      breaking_news_24h: taggedBreakingNews,
+      upcoming_events_7d: taggedUpcomingEvents,
       ticker_snapshots: snapshots,
       supersedes_id: supersedesId,
       prior_brief_version: briefVersion - 1,
