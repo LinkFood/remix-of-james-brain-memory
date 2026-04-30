@@ -12,7 +12,6 @@
  * Sources:
  *   - get_cron_status RPC       → ct-* cron liveness
  *   - ct_reports                → latest morning_brief
- *   - ct_book                   → today's session_date row
  *   - ct_uw_usage_latest view   → today's UW %
  *   - ct_heartbeats             → latest pipeline heartbeat
  *   - ct_biases                 → active bias count
@@ -53,7 +52,6 @@ export type CheckKey =
   | 'crons'
   | 'cron_failures_6h'
   | 'morning_brief'
-  | 'book'
   | 'uw_usage'
   | 'heartbeat'
   | 'biases'
@@ -519,68 +517,6 @@ async function runMorningBriefCheck(now: Date): Promise<PreflightCheck> {
       name: 'Morning brief fresh',
       status: 'red',
       explanation: 'Failed to query ct_reports',
-      lastCheckedAt: startedIso,
-      details: [],
-      error: message,
-    };
-  }
-}
-
-async function runBookCheck(): Promise<PreflightCheck> {
-  const startedIso = new Date().toISOString();
-  try {
-    const today = todayIso();
-    const { data, error } = await supabase
-      .from('ct_book')
-      .select('session_date, starting_balance, ending_balance, realized_pnl, unrealized_pnl')
-      .eq('session_date', today)
-      .maybeSingle();
-
-    if (error) throw error;
-
-    if (!data) {
-      return {
-        key: 'book',
-        name: 'Book seeded',
-        status: 'red',
-        explanation: `No ct_book row for ${today}`,
-        lastCheckedAt: startedIso,
-        details: [],
-      };
-    }
-
-    if (data.starting_balance == null) {
-      return {
-        key: 'book',
-        name: 'Book seeded',
-        status: 'red',
-        explanation: `ct_book row exists but starting_balance is null`,
-        lastCheckedAt: startedIso,
-        details: [
-          { label: 'session_date', status: 'green', note: String(data.session_date) },
-          { label: 'starting_balance', status: 'red', note: 'null' },
-        ],
-      };
-    }
-
-    return {
-      key: 'book',
-      name: 'Book seeded',
-      status: 'green',
-      explanation: `Book seeded with $${Number(data.starting_balance).toLocaleString()}`,
-      lastCheckedAt: startedIso,
-      details: [
-        { label: 'session_date', status: 'green', note: String(data.session_date) },
-        { label: 'starting_balance', status: 'green', note: `$${Number(data.starting_balance).toLocaleString()}` },
-      ],
-    };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      key: 'book',
-      name: 'Book seeded',
-      status: 'red',
-      explanation: 'Failed to query ct_book',
       lastCheckedAt: startedIso,
       details: [],
       error: message,
@@ -1056,7 +992,6 @@ export function usePreflightChecks(options?: { refreshMs?: number }): PreflightR
       runCronCheck(now),
       runCronFailuresCheck(),
       runMorningBriefCheck(now),
-      runBookCheck(),
       runUwUsageCheck(),
       runHeartbeatCheck(now),
       runBiasesCheck(),
