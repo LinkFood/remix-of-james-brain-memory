@@ -6,6 +6,43 @@ Tracking what surfaced today during live ops + what's outstanding for after clos
 
 ---
 
+## Latent UI / health bugs surfaced 2026-04-30 (during heatmap build site audit)
+
+Captured during `/health` audit at ~12:00 ET while heatmap polish was shipping. Not blockers, not fixing today — investigate and triage tonight or this weekend.
+
+### LB1) `/health` preflight reads "NOT READY (5 green, 2 yellow, 3 red)"
+
+The preflight pill in the topbar is showing 3 red items. We didn't drill into which checks are failing. Could be: stale data feeds, missing env vars, RPC permission gaps, or other static assertions the preflight evaluates. Investigation: visit `/health`, scroll to preflight section, identify the 3 red checks by name, root-cause each.
+
+**Why not now:** unknown blast radius — could be cosmetic or could be a real signal of something stale. None of them have caused an outage; the site has been operating fine all session. Tonight's investigation, fixes likely Saturday.
+
+### LB2) UI crashes — 2 unresolved (besides today's `/heatmap` toFixed which is now fixed)
+
+From `/health` "Recent UI crashes" panel:
+
+- **TypeError: Cannot read properties of null (reading 'length')** — fired ~1d ago on an unknown route (panel didn't show the route). Same null-handling bug class as today's `toFixed` crash. Likely a different component.
+- **Error: Minified React error #310** — fired 12d ago. Code 310 = "Rendered fewer hooks than expected" or similar React warning. 12 days old — probably resolved organically or only reproduces in a specific corner case. Low priority, but should be diagnosed at some point.
+
+**Why not now:** today's crash (the `/heatmap` toFixed) was the load-bearing one — that's now fixed (commit `a80b2fd`). The other two are older and not currently impacting the live session. Investigation tonight by reading the underlying error log entries (likely `ct_ui_errors` or similar table); fixes if applicable Saturday.
+
+### LB3) "9 overdue" notification in topbar
+
+Topbar persistent badge says "9 overdue". Source unknown — could be JAC reminders (calendar entries past their reminder time without being marked done), agent tasks stuck in `running`, watch templates that should have fired and didn't, or something else entirely. Need to drill into the badge target.
+
+**Why not now:** persistent badge has been there all session, no acute breakage observed. Tonight's investigation: click the badge, identify what surface it routes to, classify what's overdue, decide whether to clear or fix the source.
+
+### LB4) Bundle size warning (cosmetic)
+
+`npm run build` warns: "Some chunks are larger than 500 kB after minification" — bundle is 2,280 KB minified / 611 KB gzipped. Vite recommends code-splitting via dynamic `import()` or `manualChunks`. Not a bug, just a startup-perf opportunity. Saturday afternoon when nothing else is queued.
+
+---
+
+## Already resolved by 2026-04-30 commits (don't re-investigate)
+
+- ✅ `/heatmap` TypeError "Cannot read properties of null (reading 'toFixed')" — was a heatmap rendering bug from the earlier afternoon's first deploy; fixed in `a80b2fd` via 27-site null hardening across Grid, PerTicker, Drill components.
+
+---
+
 ## P0 — pg_net timeout_milliseconds class kill — 2026-04-30 (TONIGHT POST-CLOSE OR SATURDAY)
 
 ### What the bug is
