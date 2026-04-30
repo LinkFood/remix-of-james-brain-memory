@@ -37,6 +37,8 @@ import { buildClaudeContext, claudeSystemPromptPreamble } from '../_shared/claud
 import { recordDecision } from '../_shared/decisionJournal.ts';
 import { validateHypothesisClaims } from '../_shared/hallucinationGuard.ts';
 import { getTickerQuantCard, TickerQuantCard } from '../_shared/tickerQuantCard.ts';
+import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
+import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
 
 const VALID_HORIZONS = new Set(['session', 'week', 'month', 'open']);
 
@@ -277,6 +279,13 @@ serve(async (req) => {
   );
   const startedAt = Date.now();
 
+  // Temporal anchor — every Claude-narrative consumer must prepend the
+  // preamble + pre-tag every date field. The 2026-04-30 morning-brief
+  // hallucination ("today is April 29") originated from a hypothesis claim
+  // that baked "today (Apr 29)" into prose. Anchoring the proposer's input
+  // and validating its output is the structural fix for this class.
+  const tctx = getTemporalContext();
+
   // Tenet 4 — respect the circuit breaker at every writer, not just trade
   // execution. Yesterday's Slack timeline showed the hallucination detector
   // firing 8+ times while this proposer kept generating conv-flipping
@@ -344,7 +353,39 @@ serve(async (req) => {
     (c): c is TickerQuantCard => c !== null,
   );
 
+  // Pre-tag every date-bearing field with its relative-day tag so Claude
+  // sees "**YESTERDAY 16:14 ET**" instead of a raw ISO. Without this Sonnet
+  // pattern-completes on prior-day timestamps as if they were today's reality.
+  const taggedObservations = tape.observations.map((o) => ({
+    ...o,
+    created_at_tag: tagIsoTimestamp(o.created_at, tctx.session_date),
+  }));
+  const taggedAlerts = tape.alerts.map((a) => ({
+    ...a,
+    created_at_tag: tagIsoTimestamp(a.created_at, tctx.session_date),
+  }));
+  const taggedWobblyGrades = tape.wobbly_grades.map((g) => ({
+    ...g,
+    graded_at_tag: tagIsoTimestamp(
+      typeof (g as { graded_at?: unknown }).graded_at === 'string'
+        ? (g as { graded_at: string }).graded_at
+        : null,
+      tctx.session_date,
+    ),
+  }));
+  const taggedExistingHypotheses = claudeCtx.openHypotheses.map((h) => ({
+    id: h.id,
+    claim: h.claim,
+    tickers: h.tickers,
+    horizon: h.horizon,
+    created_at: h.created_at,
+    created_at_tag: tagIsoTimestamp(h.created_at, tctx.session_date),
+  }));
+
   const userPayload = {
+    session_date: tctx.session_date,
+    session_day_name: tctx.session_day_name,
+    now_et: tctx.now_et,
     max_new_hypotheses: maxPerDay,
     // Wave N: generational stakes — Claude must see what generation he is in,
     // how many days remain, and what happened to the generations before him.
@@ -357,14 +398,8 @@ serve(async (req) => {
     latest_weekly_review: claudeCtx.latestWeeklyReview,
     active_principles: claudeCtx.activePrinciples,
     active_biases: claudeCtx.activeBiases,
-    wobbly_grades: tape.wobbly_grades,
-    existing_open_hypotheses: claudeCtx.openHypotheses.map((h) => ({
-      id: h.id,
-      claim: h.claim,
-      tickers: h.tickers,
-      horizon: h.horizon,
-      created_at: h.created_at,
-    })),
+    wobbly_grades: taggedWobblyGrades,
+    existing_open_hypotheses: taggedExistingHypotheses,
     claude_own_open_trades: claudeCtx.claudeOpenTrades.map((t) => ({
       id: t.id,
       instrument: t.instrument,
@@ -394,13 +429,13 @@ serve(async (req) => {
     // Supplementary narrative context — gives Claude ideas, doesn't supply
     // numbers. Per SYSTEM rules: any numeric citation must be from quant_cards.
     supplementary_narrative: {
-      observations: tape.observations,
-      alerts: tape.alerts,
+      observations: taggedObservations,
+      alerts: taggedAlerts,
     },
     blocked_from_reading: claudeCtx.blockedFromReading,
   };
 
-  const systemPrompt = `${claudeSystemPromptPreamble(claudeCtx)}\n\n${SYSTEM}`;
+  const systemPrompt = `${tctx.temporalAnchorPreamble}\n\n${claudeSystemPromptPreamble(claudeCtx)}\n\n${SYSTEM}`;
 
   let proposals: Proposal[] = [];
   let tokensIn = 0;
@@ -518,6 +553,32 @@ serve(async (req) => {
 
     if (hallucinationFlag) singleFlagCount += 1;
 
+    // Temporal-coherence validation. Best-effort, never blocks insert. The
+    // 2026-04-30 morning-brief bug rooted in a hypothesis claim that baked
+    // "today (Apr 29)" into prose. Haiku reads the proposed claim + bullets
+    // against the session date and flags any contradictions. Critical hits
+    // are surfaced into console.warn + decision_journal context_snapshot;
+    // the proposal itself still inserts because the lifecycle (health-check,
+    // grader) has its own verdict path.
+    let temporalContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
+    let temporalOk = true;
+    try {
+      const claimText = `${p.claim}\n\n${p.because.map((b) => `- ${b}`).join('\n')}\n\nInvalidate if: ${p.invalidate_if}`;
+      const tval = await validateTemporalCoherence(claimText, tctx.session_date, {
+        tickerContext: tickers.join(', ') || undefined,
+      });
+      temporalOk = tval.ok;
+      temporalContradictions = tval.contradictions;
+      const critical = temporalContradictions.filter((c) => c.severity === 'critical');
+      if (critical.length > 0) {
+        console.warn(
+          `[ct-hypothesis-proposer] temporal_critical claim="${p.claim.slice(0, 120)}" contradictions=${JSON.stringify(critical).slice(0, 600)}`,
+        );
+      }
+    } catch (e) {
+      console.warn(`[ct-hypothesis-proposer] temporal validator threw (non-blocking): ${e instanceof Error ? e.message : String(e)}`);
+    }
+
     const { data, error } = await supabase
       .from('ct_hypotheses')
       .insert({
@@ -573,6 +634,14 @@ serve(async (req) => {
           observations: tape.observations.length,
           alerts: tape.alerts.length,
           wobbly_grades: tape.wobbly_grades.length,
+        },
+        // Temporal coherence — Haiku-validated against session_date. Empty
+        // contradictions array on a coherent proposal. Persisted to the
+        // decision journal because ct_hypotheses has no metadata column.
+        temporal_validation: {
+          session_date: tctx.session_date,
+          ok: temporalOk,
+          contradictions: temporalContradictions,
         },
       },
       narrative_signal: {

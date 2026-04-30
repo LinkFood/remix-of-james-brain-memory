@@ -1,0 +1,228 @@
+/**
+ * Shared temporal-anchor utility for Claude consumers.
+ *
+ * Every "model writes narrative" consumer (morning brief, EOD report,
+ * tape reader, specialists, hypothesis proposer, etc.) MUST prepend
+ * `temporalAnchorPreamble` to its system prompt AND pre-tag every date
+ * field in its context payload with `tagRelativeDay()` or
+ * `tagIsoTimestamp()`. Without this anchor Claude pattern-completes on
+ * yesterday's news/data as if it were today's reality. See
+ * project_co_trader_morning_brief_temporal_bug_2026_04_30.md.
+ *
+ * Pure module — no DB calls, no side effects, safe to import anywhere.
+ * Date math runs in America/New_York via Intl.DateTimeFormat parts;
+ * never `.slice(0,10)` on UTC ISO strings (that off-by-ones every
+ * afternoon entry, since UTC midnight = 8pm ET previous day).
+ */
+
+const NY_TIMEZONE = 'America/New_York';
+
+const DAY_NAMES = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+];
+
+export interface TemporalContext {
+  /** YYYY-MM-DD in America/New_York (the operational session date). */
+  session_date: string;
+  /** Full English day name for session_date, e.g. 'Thursday'. */
+  session_day_name: string;
+  /** Current ISO 8601 timestamp in UTC. */
+  now_utc: string;
+  /** Current wall-clock time in New York, formatted 'HH:MM ET'. */
+  now_et: string;
+  /**
+   * Drop-in preamble. Prepend to every system prompt before any other
+   * instructions. The text is intentionally repetitive — Claude reads it
+   * three times and still pattern-completes if you only say it once.
+   */
+  temporalAnchorPreamble: string;
+}
+
+/**
+ * Format an absolute Date as YYYY-MM-DD in America/New_York.
+ */
+function formatNyDate(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: NY_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+/**
+ * Format an absolute Date as HH:MM in America/New_York (24h).
+ */
+function formatNyTime(date: Date): string {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: NY_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+  const hour = parts.find((p) => p.type === 'hour')?.value ?? '00';
+  const minute = parts.find((p) => p.type === 'minute')?.value ?? '00';
+  return `${hour}:${minute}`;
+}
+
+/**
+ * Day-of-week index (0=Sun .. 6=Sat) for a given Date in America/New_York.
+ */
+function nyDayIndex(date: Date): number {
+  const weekday = new Intl.DateTimeFormat('en-US', {
+    timeZone: NY_TIMEZONE,
+    weekday: 'short',
+  }).format(date);
+  // 'Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'
+  switch (weekday) {
+    case 'Sun': return 0;
+    case 'Mon': return 1;
+    case 'Tue': return 2;
+    case 'Wed': return 3;
+    case 'Thu': return 4;
+    case 'Fri': return 5;
+    case 'Sat': return 6;
+    default: return 0;
+  }
+}
+
+/**
+ * Convert a YYYY-MM-DD string to an absolute Date anchored at NY noon
+ * (avoids DST + UTC-midnight edge cases).
+ */
+function dateStringToNyNoon(yyyymmdd: string): Date | null {
+  const m = yyyymmdd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const [, y, mo, d] = m;
+  // NY noon ≈ 16:00 or 17:00 UTC depending on DST. We use 17:00 UTC which
+  // is always the same calendar day in NY year-round (12pm or 1pm ET).
+  const iso = `${y}-${mo}-${d}T17:00:00Z`;
+  const date = new Date(iso);
+  return isNaN(date.getTime()) ? null : date;
+}
+
+/**
+ * Pull a YYYY-MM-DD calendar day from any input — accepts either a
+ * date-only string or a full ISO timestamp. Always resolves in
+ * America/New_York to avoid UTC off-by-one.
+ */
+function inputToNyDate(dateOrIso: string): string | null {
+  const trimmed = dateOrIso.trim();
+  if (!trimmed) return null;
+  // Pure date form: YYYY-MM-DD — already calendar-day, return as-is.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  // ISO timestamp — parse and reformat in NY tz.
+  const date = new Date(trimmed);
+  if (isNaN(date.getTime())) return null;
+  return formatNyDate(date);
+}
+
+/**
+ * Day difference between two YYYY-MM-DD strings in NY calendar terms.
+ * Positive = `later` is after `earlier`. Returns null on parse failure.
+ */
+function nyDayDelta(earlier: string, later: string): number | null {
+  const a = dateStringToNyNoon(earlier);
+  const b = dateStringToNyNoon(later);
+  if (!a || !b) return null;
+  const ms = b.getTime() - a.getTime();
+  return Math.round(ms / 86400000);
+}
+
+/**
+ * Build the temporal anchor context for "right now". Use at the top of
+ * every Claude-narrative consumer — both for the preamble and for
+ * passing `session_date` into `tagRelativeDay()`/`tagIsoTimestamp()`.
+ */
+export function getTemporalContext(): TemporalContext {
+  const now = new Date();
+  const session_date = formatNyDate(now);
+  const session_day_name = DAY_NAMES[nyDayIndex(now)];
+  const now_utc = now.toISOString();
+  const now_et = `${formatNyTime(now)} ET`;
+
+  const temporalAnchorPreamble =
+    `**Today is ${session_date} (${session_day_name}).** ` +
+    `Current time: ${now_et} (${now_utc} UTC).\n\n` +
+    `CRITICAL TEMPORAL FRAME — read carefully:\n` +
+    `- ALL "today" / "tomorrow" / "yesterday" / day-name references in YOUR OUTPUT must anchor to ${session_date}. ` +
+    `Tomorrow = ${session_date} + 1 day. Yesterday = ${session_date} - 1 day.\n` +
+    `- ANY date-relative language in input data (hypothesis claims, trade theses, news headlines, prior model output, ` +
+    `grade rationales) was written on a PRIOR day or in a different context. Treat that text as HISTORICAL, not as a ` +
+    `description of today. NEVER repeat its "today" framing.\n` +
+    `- Where input data carries pre-resolved tags **TODAY** / **YESTERDAY** / **TOMORROW** / **+N days** / **-N days**, ` +
+    `those tags are AUTHORITATIVE — use them verbatim in your prose.\n` +
+    `- Do NOT compute relative dates from raw timestamps. Use the tags or anchor to ${session_date}.\n` +
+    `- If you find yourself referencing "Friday gap-down" / "Monday rally" / "yesterday's earnings" without explicit ` +
+    `grounding from a pre-tagged input field, STOP and re-read the temporal frame. The frame is non-negotiable.`;
+
+  return {
+    session_date,
+    session_day_name,
+    now_utc,
+    now_et,
+    temporalAnchorPreamble,
+  };
+}
+
+/**
+ * Map an ISO timestamp or YYYY-MM-DD date to a relative-day tag against
+ * sessionDate. Returns one of:
+ *   '**TODAY**' | '**YESTERDAY**' | '**TOMORROW**' | '**+N days**' |
+ *   '**-N days**' | '**UNKNOWN_DATE**'
+ *
+ * Resolves date in America/New_York timezone — UTC midnight is 8pm ET
+ * previous day, so naive UTC.slice(0,10) off-by-ones afternoon entries.
+ */
+export function tagRelativeDay(
+  dateOrIso: string | null | undefined,
+  sessionDate: string,
+): string {
+  if (!dateOrIso) return '**UNKNOWN_DATE**';
+  const inputDate = inputToNyDate(dateOrIso);
+  if (!inputDate) return '**UNKNOWN_DATE**';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) return '**UNKNOWN_DATE**';
+
+  const delta = nyDayDelta(sessionDate, inputDate);
+  if (delta === null) return '**UNKNOWN_DATE**';
+
+  if (delta === 0) return '**TODAY**';
+  if (delta === 1) return '**TOMORROW**';
+  if (delta === -1) return '**YESTERDAY**';
+  if (delta > 1) return `**+${delta} days**`;
+  return `**${delta} days**`; // delta is already negative, e.g. '-3 days'
+}
+
+/**
+ * Combine relative day tag with HH:MM ET. Returns e.g.
+ * '**YESTERDAY 16:14 ET**' or '**TODAY 09:30 ET**' or
+ * '**+3 days 14:00 ET**'. Returns '**UNKNOWN_TIME**' on null/invalid.
+ */
+export function tagIsoTimestamp(
+  iso: string | null | undefined,
+  sessionDate: string,
+): string {
+  if (!iso) return '**UNKNOWN_TIME**';
+  const trimmed = iso.trim();
+  if (!trimmed) return '**UNKNOWN_TIME**';
+  // Must be a full timestamp — not a bare date.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return '**UNKNOWN_TIME**';
+  const date = new Date(trimmed);
+  if (isNaN(date.getTime())) return '**UNKNOWN_TIME**';
+
+  const dayTag = tagRelativeDay(trimmed, sessionDate);
+  if (dayTag === '**UNKNOWN_DATE**') return '**UNKNOWN_TIME**';
+
+  const hhmm = formatNyTime(date);
+  // Strip trailing '**' from dayTag, append ' HH:MM ET**'.
+  const inner = dayTag.replace(/^\*\*/, '').replace(/\*\*$/, '');
+  return `**${inner} ${hhmm} ET**`;
+}

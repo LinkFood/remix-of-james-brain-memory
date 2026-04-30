@@ -28,6 +28,8 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, CLAUDE_RATES, ClaudeError } from '../_shared/anthropic.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
+import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
+import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
 
@@ -246,6 +248,11 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_URL')!,
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
+
+  // Temporal anchor — pre-tag every date in the prompt + prepend preamble.
+  // See _shared/temporalContext.ts. Resolves session_date in NY tz; matches
+  // the locally-computed sessionDate below.
+  const tctx = getTemporalContext();
 
   // ----- Date bounds in NY tz -------------------------------------------------
   const now = new Date();
@@ -937,7 +944,8 @@ serve(async (req) => {
 
   // ----- Build Sonnet prompt --------------------------------------------------
   const promptLines: string[] = [];
-  promptLines.push(`Session date: ${sessionDate}`);
+  promptLines.push(`Session date: ${sessionDate} (${tctx.session_day_name})`);
+  promptLines.push(`Generated at: ${tctx.now_et} (${tctx.now_utc} UTC)`);
   promptLines.push('');
   promptLines.push('=== MARKET-WIDE ===');
   promptLines.push(`Total flags written today: ${flags.length} (${marketStats.grade_breakdown.win} win, ${marketStats.grade_breakdown.loss} loss, ${marketStats.grade_breakdown.partial} partial, ${marketStats.grade_breakdown.invalidated_early} invalidated_early, ${flags.length - grades.length} ungraded so far)`);
@@ -1072,8 +1080,8 @@ serve(async (req) => {
     for (const s of slowBurnList.slice(0, 12)) {
       const tk = s.ticker ?? '?';
       const sig = s.signature_key ?? '?';
-      const printT = String(s.print_time ?? '').slice(0, 16).replace('T', ' ');
-      const realT = String(s.realized_at ?? '').slice(0, 16).replace('T', ' ');
+      const printT = tagIsoTimestamp(String(s.print_time ?? ''), tctx.session_date);
+      const realT = tagIsoTimestamp(String(s.realized_at ?? ''), tctx.session_date);
       const days = s.days_to_realization ?? '?';
       const peak = s.peak_favorable_pct;
       const peakStr = peak != null && Number.isFinite(Number(peak))
@@ -1090,7 +1098,7 @@ serve(async (req) => {
     promptLines.push('[no graded prints today — check ct-print-grader cron]');
   } else {
     for (const g of topPrintGrades) {
-      const printT = String(g.print_time ?? '').slice(0, 16).replace('T', ' ');
+      const printT = tagIsoTimestamp(String(g.print_time ?? ''), tctx.session_date);
       const sig = g.signature_key ?? '?';
       const sym = g.option_symbol ?? '?';
       const move = g.actual_move_pct != null
@@ -1107,8 +1115,10 @@ serve(async (req) => {
     promptLines.push('[no realized tracks today — track-status hasn\'t flipped]');
   } else {
     for (const t of topRealizedTracks) {
-      const printT = String(t.print_time ?? '').slice(0, 16).replace('T', ' ');
-      const peakAtT = t.peak_favorable_at ? String(t.peak_favorable_at).slice(0, 16).replace('T', ' ') : '—';
+      const printT = tagIsoTimestamp(String(t.print_time ?? ''), tctx.session_date);
+      const peakAtT = t.peak_favorable_at
+        ? tagIsoTimestamp(String(t.peak_favorable_at), tctx.session_date)
+        : '—';
       const peak = t.peak_favorable_pct;
       const peakStr = peak != null && Number.isFinite(Number(peak))
         ? `${(Number(peak) * (Math.abs(Number(peak)) <= 1 ? 100 : 1)).toFixed(2)}%`
@@ -1165,7 +1175,7 @@ serve(async (req) => {
 
   const userMsg = promptLines.join('\n');
 
-  const system = `You are the head of risk attribution at a quantitative options-flow hedge fund. Co-Trader is the autonomous trader; you write the daily P&L attribution report that the partners read at 5pm. Target 900-1200 words.
+  const systemBody = `You are the head of risk attribution at a quantitative options-flow hedge fund. Co-Trader is the autonomous trader; you write the daily P&L attribution report that the partners read at 5pm. Target 900-1200 words.
 
 Style: institutional. Concrete numbers, no hedging language ("seems", "appears", "may"), no disclaimers. Reference signature_keys verbatim (\`QQQ:call:0-7:ATM:ask:open:2h\` style). Reference tickers by symbol. Cite specific prints with timestamps when possible. If a section's data is empty, say so in one sentence and move on — don't pad.
 
@@ -1188,6 +1198,8 @@ Structure exactly:
 **Section 7: Tomorrow's Watchlist** — call out (a) signatures with high edge_score that FAILED today (potential mean-revert setup tomorrow) and (b) signatures on a hot streak from today's winners. List 3-5 candidates with one-line "why".
 
 End with a single closing sentence on the day's regime → tomorrow's setup.`;
+
+  const system = tctx.temporalAnchorPreamble + '\n\n' + systemBody;
 
   // ----- Call Sonnet ----------------------------------------------------------
   let summaryText = '';
@@ -1216,6 +1228,45 @@ End with a single closing sentence on the day's regime → tomorrow's setup.`;
 
   const rates = CLAUDE_RATES[modelUsed as keyof typeof CLAUDE_RATES] ?? CLAUDE_RATES[CLAUDE_MODELS.sonnet_46];
   const costUsd = (inputTokens * rates.input + outputTokens * rates.output) / 1_000_000;
+
+  // ----- Temporal-coherence validator (best-effort) --------------------------
+  // Validates summaryText against session_date. Critical contradictions log
+  // a warning and ride along on the upsert under
+  // market_stats.temporal_validator_warnings (JSONB catch-all).
+  let validatorOk = true;
+  let validatorContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
+  if (summaryText && !apiError) {
+    try {
+      const validation = await validateTemporalCoherence(summaryText, tctx.session_date);
+      validatorOk = validation.ok;
+      validatorContradictions = validation.contradictions;
+      const critical = validation.contradictions.filter(c => c.severity === 'critical');
+      if (critical.length > 0) {
+        console.warn(
+          `[ct-eod-summary] temporal validator flagged ${critical.length} CRITICAL contradiction(s) for session ${tctx.session_date}:`,
+          JSON.stringify(critical),
+        );
+      } else if (!validation.ok && validation.contradictions.length > 0) {
+        console.warn(
+          `[ct-eod-summary] temporal validator flagged ${validation.contradictions.length} warning(s) for session ${tctx.session_date}:`,
+          JSON.stringify(validation.contradictions),
+        );
+      }
+    } catch (e) {
+      console.warn('[ct-eod-summary] temporal validator threw (non-blocking):', String(e));
+    }
+  }
+
+  // Stamp validator warnings into market_stats so they ride the upsert.
+  // No new column needed — market_stats is the JSONB catch-all per the
+  // existing flow_heatmap_per_ticker precedent.
+  (marketStats as Record<string, unknown>).temporal_validator_warnings = {
+    ok: validatorOk,
+    session_date: tctx.session_date,
+    contradiction_count: validatorContradictions.length,
+    critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
+    contradictions: validatorContradictions,
+  };
 
   // ----- Upsert into ct_eod_summaries ----------------------------------------
   // Includes new attribution columns from migration 20260425000012. Older
@@ -1363,5 +1414,10 @@ End with a single closing sentence on the day's regime → tomorrow's setup.`;
     slack: { outcome: slackOutcome, error: slackError },
     api_error: apiError,
     upsert_error: upsertErr?.message ?? null,
+    temporal_validator: {
+      ok: validatorOk,
+      contradiction_count: validatorContradictions.length,
+      critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
+    },
   }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 });

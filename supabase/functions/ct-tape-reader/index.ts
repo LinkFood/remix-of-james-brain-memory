@@ -17,6 +17,8 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, CLAUDE_RATES, ClaudeError } from '../_shared/anthropic.ts';
+import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
+import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
 
 const WATCHLIST = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 const DEFAULT_WINDOW_MIN = 10;
@@ -175,6 +177,13 @@ serve(async (req) => {
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
+  // Temporal anchor — prevents Claude from carrying yesterday's news / day-name
+  // framing into today's commentary. Pre-tag every timestamp shown to the
+  // model with a relative-day tag (**TODAY HH:MM ET**, etc.) and prepend
+  // `temporalAnchorPreamble` to the system prompt below. See
+  // _shared/temporalContext.ts.
+  const tctx = getTemporalContext();
+
   const now = new Date();
   const windowStart = new Date(now.getTime() - windowMin * 60_000);
 
@@ -326,7 +335,8 @@ serve(async (req) => {
   // --- Build prompt ------------------------------------------------------
 
   const lines: string[] = [];
-  lines.push(`Window: ${windowMin} min ending ${now.toISOString()}`);
+  lines.push(`Session: ${tctx.session_date} (${tctx.session_day_name}) — now ${tctx.now_et}`);
+  lines.push(`Window: ${windowMin} min ending ${tagIsoTimestamp(now.toISOString(), tctx.session_date)}`);
   lines.push(`VIX: ${vixLevel != null ? vixLevel.toFixed(2) : 'n/a'}${vixChange != null ? ` (${vixChange >= 0 ? '+' : ''}${vixChange.toFixed(2)}%)` : ''} | Tide: ${marketTide} (net ${fmtPremium(netPrem)})`);
   lines.push('');
   lines.push(`SPOT (latest close): ${WATCHLIST.map((t) => `${t} ${spotMap.get(t)?.toFixed(2) ?? '?'}`).join('  ')}`);
@@ -415,7 +425,8 @@ serve(async (req) => {
       const dir = r.direction ? ` ${r.direction}` : '';
       const ask = r.ask_side_perc != null ? ` ask${Math.round(r.ask_side_perc)}%` : '';
       const vOi = (r.volume && r.open_interest) ? ` V/OI ${(r.volume / r.open_interest).toFixed(1)}x` : '';
-      lines.push(`  ${fmtContract(r)} | score ${r.score ?? '?'}${dir}${cls} | ${fmtPremium(r.premium)}${vOi}${ask}`);
+      const when = tagIsoTimestamp(r.event_ts, tctx.session_date);
+      lines.push(`  ${when} ${fmtContract(r)} | score ${r.score ?? '?'}${dir}${cls} | ${fmtPremium(r.premium)}${vOi}${ask}`);
     }
   } else {
     lines.push('TOP SCORED FLOW: (nothing in window)');
@@ -425,7 +436,8 @@ serve(async (req) => {
     lines.push('');
     lines.push('ACTIVE SPECIALIST FLAGS (last 30 min):');
     for (const f of flags) {
-      lines.push(`  ${f.specialist_ticker} ${f.direction} score ${Math.round(f.score)} [${f.status}]: ${f.thesis.slice(0, 160)}`);
+      const when = tagIsoTimestamp(f.created_at, tctx.session_date);
+      lines.push(`  ${when} ${f.specialist_ticker} ${f.direction} score ${Math.round(f.score)} [${f.status}]: ${f.thesis.slice(0, 160)}`);
     }
   }
 
@@ -434,7 +446,12 @@ serve(async (req) => {
     lines.push('BREAKING NEWS (last 30min, severity >=2):');
     for (const n of news) {
       const tickers = ((n.tickers_affected as string[] | null) ?? []).join(',');
-      lines.push(`  [sev ${n.severity} ${n.sentiment}] ${tickers ? `(${tickers}) ` : ''}${(n.headline as string)?.slice(0, 140) ?? ''}`);
+      const ingestedAt = (n.ingested_at as string | null) ?? null;
+      const publishedAt = (n.published_at as string | null) ?? null;
+      const ingestedTag = ingestedAt ? tagIsoTimestamp(ingestedAt, tctx.session_date) : '**UNKNOWN_TIME**';
+      const publishedTag = publishedAt ? tagIsoTimestamp(publishedAt, tctx.session_date) : null;
+      const whenStr = publishedTag ? `${ingestedTag} (published ${publishedTag})` : ingestedTag;
+      lines.push(`  ${whenStr} [sev ${n.severity} ${n.sentiment}] ${tickers ? `(${tickers}) ` : ''}${(n.headline as string)?.slice(0, 140) ?? ''}`);
       if (n.summary) lines.push(`    ${(n.summary as string).slice(0, 200)}`);
     }
   }
@@ -444,17 +461,18 @@ serve(async (req) => {
     lines.push('[YOUR PRIOR OBSERVATIONS TODAY — chronological, oldest first]');
     const chronological = [...priorRows].reverse();
     for (const p of chronological) {
-      const t = new Date(p.created_at);
-      const hhmm = t.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false });
+      const when = tagIsoTimestamp(p.created_at, tctx.session_date);
       const oneLine = (p.commentary || '').replace(/\s+/g, ' ').trim();
-      lines.push(`  ${hhmm} ET: "${oneLine}"`);
+      lines.push(`  ${when}: "${oneLine}"`);
     }
     lines.push('(When your current read builds on, confirms, or contradicts these, reference them explicitly.)');
   }
 
-  const system = `You are a senior options flow reader looking over a day trader's shoulder. You read the tape for the Mag-7 + major indexes. Write 2-3 sentences describing what's happening right now. No hedging, no disclaimers, no "this is not financial advice." If the tape is quiet, say "Quiet tape." and note what would change that. If something is unusual, name it specifically — ticker, contract, pattern. Every sentence must say something.
+  const systemBody = `You are a senior options flow reader looking over a day trader's shoulder. You read the tape for the Mag-7 + major indexes. Write 2-3 sentences describing what's happening right now. No hedging, no disclaimers, no "this is not financial advice." If the tape is quiet, say "Quiet tape." and note what would change that. If something is unusual, name it specifically — ticker, contract, pattern. Every sentence must say something.
 
 You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTERNS], and [MARKET REGIME] — at the top of each prompt. These are the macro anchor: use them directly, don't re-derive them from the candidate rows below. Reference them explicitly ("flow pulse shows NVDA 6.75x unusual, matches what I'm seeing on the tape..."). The stacking labels (call accumulation / put writing / distribution) are already interpreted — read them as directional signal, not raw buy/sell counts. The regime line tells you where the tape is sitting before you read individual prints.`;
+
+  const system = tctx.temporalAnchorPreamble + '\n\n' + systemBody;
 
   const userMsg = lines.join('\n');
 
@@ -487,6 +505,35 @@ You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTE
   // Cost
   const rate = CLAUDE_RATES[modelUsed as keyof typeof CLAUDE_RATES] ?? CLAUDE_RATES[CLAUDE_MODELS.haiku];
   const costUsd = (inputTokens * rate.input + outputTokens * rate.output) / 1_000_000;
+
+  // Temporal-coherence validator (best-effort). Catches commentary that
+  // pattern-completed on yesterday's news as today's framing. Critical
+  // contradictions log to console; ct_tape_commentary has no
+  // validator_warnings column today (Saturday work — see spec).
+  let validatorOk = true;
+  let validatorContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
+  if (commentary && !apiError) {
+    try {
+      const validation = await validateTemporalCoherence(commentary, tctx.session_date);
+      validatorOk = validation.ok;
+      validatorContradictions = validation.contradictions;
+      const critical = validation.contradictions.filter(c => c.severity === 'critical');
+      if (critical.length > 0) {
+        console.warn(
+          `[ct-tape-reader] temporal validator flagged ${critical.length} CRITICAL contradiction(s) for session ${tctx.session_date}:`,
+          JSON.stringify(critical),
+        );
+      } else if (!validation.ok && validation.contradictions.length > 0) {
+        console.warn(
+          `[ct-tape-reader] temporal validator flagged ${validation.contradictions.length} warning(s) for session ${tctx.session_date}:`,
+          JSON.stringify(validation.contradictions),
+        );
+      }
+    } catch (e) {
+      // Best-effort — never block the run.
+      console.warn('[ct-tape-reader] temporal validator threw (non-blocking):', String(e));
+    }
+  }
 
   // --- Persist -----------------------------------------------------------
 
@@ -527,5 +574,11 @@ You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTE
     model: modelUsed,
     api_error: apiError,
     insert_error: insertErr?.message ?? null,
+    session_date: tctx.session_date,
+    temporal_validator: {
+      ok: validatorOk,
+      contradiction_count: validatorContradictions.length,
+      critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
+    },
   }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 });

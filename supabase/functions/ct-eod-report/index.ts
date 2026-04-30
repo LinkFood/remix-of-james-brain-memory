@@ -38,6 +38,8 @@ import { getWatchlist } from '../_shared/watchlist.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { EOD_REPORT_SYSTEM, EOD_REPORT_REQUIRED_KEYS, PROMPT_VERSION } from '../_shared/eodReportPrompt.ts';
 import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
+import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
+import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
 
 // ---------------------------------------------------------------------------
 // Types — every read is best-effort; missing rows do NOT block the report.
@@ -372,6 +374,14 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
 
+  // Temporal anchor — pre-tag every date in the user-message JSON + prepend
+  // preamble. See _shared/temporalContext.ts. For typical scheduled runs
+  // tctx.session_date === sessionDate (5pm ET cron). For reruns of older
+  // session_dates, the preamble still anchors Claude on "now" but
+  // tagIsoTimestamp() is called with the target sessionDate so per-row tags
+  // resolve correctly.
+  const tctx = getTemporalContext();
+
   const now = new Date();
   const sessionDate = (typeof bodyParsed.session_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(bodyParsed.session_date))
     ? bodyParsed.session_date
@@ -705,6 +715,8 @@ serve(async (req) => {
 
   // Overnight catalysts — events between today and tomorrow (skip today's
   // events whose time has passed, but err on the side of including).
+  // event_date_tag pins the calendar day relative to sessionDate so Sonnet
+  // doesn't drift on day-name framing for cross-day catalysts.
   const overnightCatalystsRaw = events
     .filter(e => e.event_date >= sessionDate && e.event_date <= tomorrowYmd)
     .map(e => {
@@ -714,6 +726,8 @@ serve(async (req) => {
       const tickers: string[] = e.ticker ? [e.ticker.toUpperCase()] : [];
       return {
         when,
+        event_date: e.event_date,
+        event_date_tag: tagIsoTimestamp(`${e.event_date}T17:00:00Z`, sessionDate),
         event: e.title ?? `${e.event_type ?? 'event'} ${e.ticker ?? ''}`.trim(),
         tickers,
         event_type: e.event_type,
@@ -728,12 +742,29 @@ serve(async (req) => {
     sentiment: b.sentiment,
     category: b.category,
     summary: (b.summary ?? '').slice(0, 320),
+    when: tagIsoTimestamp(b.ingested_at, sessionDate),
   }));
+
+  // Pre-tag every timestamp in the journal payload so Sonnet anchors prints
+  // to today/yesterday/N-days-ago instead of pattern-completing on raw ISO.
+  // Rows are spread + tag-injected; original ISO retained for downstream
+  // consumers that haven't been wired yet.
+  const tagPrintGradeRow = (r: Record<string, unknown>): Record<string, unknown> => ({
+    ...r,
+    print_time_tag: typeof r.print_time === 'string' ? tagIsoTimestamp(r.print_time, sessionDate) : null,
+    graded_at_tag: typeof r.graded_at === 'string' ? tagIsoTimestamp(r.graded_at, sessionDate) : null,
+  });
+  const tagRealizedTrackRow = (r: Record<string, unknown>): Record<string, unknown> => ({
+    ...r,
+    print_time_tag: typeof r.print_time === 'string' ? tagIsoTimestamp(r.print_time, sessionDate) : null,
+    peak_favorable_at_tag: typeof r.peak_favorable_at === 'string' ? tagIsoTimestamp(r.peak_favorable_at, sessionDate) : null,
+    realized_at_tag: typeof r.realized_at === 'string' ? tagIsoTimestamp(r.realized_at, sessionDate) : null,
+  });
 
   const journalAttribution = journal
     ? {
-        top_print_grades: (journal.top_print_grades ?? []).slice(0, 5),
-        top_realized_tracks: (journal.top_realized_tracks ?? []).slice(0, 3),
+        top_print_grades: (journal.top_print_grades ?? []).slice(0, 5).map(tagPrintGradeRow),
+        top_realized_tracks: (journal.top_realized_tracks ?? []).slice(0, 3).map(tagRealizedTrackRow),
         grade_breakdown: (journal.market_stats as Record<string, unknown> | null)?.grade_breakdown ?? null,
         specialist_scorecard: journal.specialist_scorecard ?? null,
         snapshot_hit_rate: journal.snapshot_hit_rate ?? null,
@@ -746,6 +777,16 @@ serve(async (req) => {
     session_date: sessionDate,
     session_day_name: dayNameFromYmd(sessionDate),
     triggered_by: triggeredBy,
+
+    // Temporal anchor — relative-day reference for the model. Authoritative
+    // tags on every per-row timestamp below resolve against session_date.
+    temporal_anchor: {
+      session_date: sessionDate,
+      session_day_name: dayNameFromYmd(sessionDate),
+      generated_at_utc: tctx.now_utc,
+      generated_at_et: tctx.now_et,
+      tomorrow_date: tomorrowYmd,
+    },
 
     regime_close: regimeClose,
     regime_shift_open_to_close: {
@@ -822,7 +863,7 @@ serve(async (req) => {
   try {
     claudeResp = await callClaude({
       model: CLAUDE_MODELS.sonnet,
-      system: EOD_REPORT_SYSTEM,
+      system: tctx.temporalAnchorPreamble + '\n\n' + EOD_REPORT_SYSTEM,
       messages: [{ role: 'user', content: JSON.stringify(userMessage) }],
       max_tokens: 6000,
       temperature: 0.3,
@@ -995,6 +1036,36 @@ serve(async (req) => {
     triggered_by: triggeredBy,
   };
 
+  // ----- Temporal-coherence validator (best-effort) -------------------------
+  // Validate session_summary + script. Critical contradictions log + ride
+  // along on ct_claude_decisions.context_snapshot.temporal_validator_warnings.
+  let validatorOk = true;
+  let validatorContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
+  const sessionSummaryText = typeof sonnetOut.session_summary === 'string' ? sonnetOut.session_summary : '';
+  const scriptText = typeof sonnetOut.script === 'string' ? sonnetOut.script : '';
+  const validatorTarget = [sessionSummaryText, scriptText].filter(Boolean).join('\n\n---\n\n');
+  if (validatorTarget) {
+    try {
+      const validation = await validateTemporalCoherence(validatorTarget, sessionDate);
+      validatorOk = validation.ok;
+      validatorContradictions = validation.contradictions;
+      const critical = validation.contradictions.filter(c => c.severity === 'critical');
+      if (critical.length > 0) {
+        console.warn(
+          `[ct-eod-report] temporal validator flagged ${critical.length} CRITICAL contradiction(s) for session ${sessionDate}:`,
+          JSON.stringify(critical),
+        );
+      } else if (!validation.ok && validation.contradictions.length > 0) {
+        console.warn(
+          `[ct-eod-report] temporal validator flagged ${validation.contradictions.length} warning(s) for session ${sessionDate}:`,
+          JSON.stringify(validation.contradictions),
+        );
+      }
+    } catch (e) {
+      console.warn('[ct-eod-report] temporal validator threw (non-blocking):', String(e));
+    }
+  }
+
   const { data: upserted, error: upsertErr } = await sb
     .from('ct_eod_reports')
     .upsert(reportRow, { onConflict: 'session_date' })
@@ -1028,6 +1099,13 @@ serve(async (req) => {
           generated_at: flowHeatmapContext.generated_at,
           lookback_hours: flowHeatmapContext.lookback_hours,
           math_mode: flowHeatmapContext.math_mode,
+        },
+        temporal_validator_warnings: {
+          ok: validatorOk,
+          session_date: sessionDate,
+          contradiction_count: validatorContradictions.length,
+          critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
+          contradictions: validatorContradictions,
         },
       },
       reasoning: `EOD report v${PROMPT_VERSION} for ${sessionDate} (triggered_by=${triggeredBy}). `
@@ -1159,6 +1237,11 @@ serve(async (req) => {
     slack_error: slackError,
     fetch_warnings: fetchWarnings,
     prompt_version: PROMPT_VERSION,
+    temporal_validator: {
+      ok: validatorOk,
+      contradiction_count: validatorContradictions.length,
+      critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
+    },
   }), {
     status: 200,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
