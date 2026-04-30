@@ -162,6 +162,55 @@ Source identified: `useUpcomingReminders` hook reading JAC-side reminders (entri
 
 **Why not touching:** cross-facet data, James's personal items. He can clear them when he wants. The badge being persistent is informational, not a bug. **Saturday consideration:** add a "snooze older than N days" auto-action to the reminder pipeline so the badge naturally degrades instead of accumulating forever.
 
+### LB8) UW budget reduction plan — Saturday (target -5,000 calls/day)
+
+James doesn't want to pay UW for the +10k extension. Daily 20k limit hits 85-95% on busy days; need ~5k/day structural savings to get comfortable headroom (75-80% close).
+
+**Audit baseline (2026-04-30 ~14:00 ET, 77.9% at that point):**
+- ct-contract-poller: ~50% of daily budget (~9-10k calls/day)
+- ct-flow-ingester (perticker + marketwide): ~18% (~3.5k)
+- `unknown` callers (missing setUwCaller): ~13% (~2.5k) — visibility gap
+- News, snapshots, sector-tide, etc: ~15% (~3k)
+
+**Saturday cuts (target -5,000):**
+
+1. **Contract poller throttle (-2,000 to -3,000)**
+   - Option A: `*/4` → `*/5` (drop 21 fires/day × ~95 calls)
+   - Option B: keep `*/4` but skip 0DTE-expired contracts after 2pm ET
+   - Option C: tier-aware step-down — when UW > 70%, drop to `*/5`; > 85%, drop to `*/7`
+   - Recommend C — auto-adapts to budget pressure without hurting freshness on light days
+
+2. **Move heavy non-RTH-essential to weekends (-1,500)**
+   - ct-attribute-signals-nightly → ct-attribute-signals-weekly (Saturday only)
+   - ct-correlation-compute → weekly
+   - Any backfill / canonical re-poll work → strict weekend-only enforcement (already partially scoped per `feedback_weekend_for_uw_heavy_work`)
+   - Weekends use 1-3% of budget; basically free compute window
+
+3. **De-dup overlapping endpoints (-500 to -1,000)**
+   - ct-snapshot-refresh + ct-flow-ingester both pull NOPE per-ticker
+   - Multiple ingesters call `get_options_chain` for overlapping expiries
+   - Solution: shared 5-min TTL cache layer in `_shared/uwClient.ts` keyed on (endpoint, params). Identical calls within window return cached. Specific to high-frequency call categories.
+
+4. **Stop polling expired 0DTE contracts (-500 to -1,000 on M/W/F)**
+   - Filter contract poller queries: skip if `expiry < now()`
+   - Currently re-polls expired contracts that have nothing left to track
+   - Heaviest impact on 0DTE-eligible single names (Mag7 Mon/Wed/Fri) and indexes (every day)
+
+5. **Tag the unknown callers (-0 direct; enables future cuts)**
+   - Audit which functions hit UW without `setUwCaller()` — check `_shared/uwClient.ts` callers + grep for raw `mcpCallToolAsData` invocations missing the tag
+   - 2.5k calls/day are unattributed; tagging makes optimization possible
+   - Today's existing setUwCaller() pass tagged 38 functions per memory — there are still gaps
+
+**Combined target: -5,000 to -6,500 calls/day. Heavy-day close: 75-80% instead of 88-92%. Comfortable.**
+
+**What NOT to cut** (signal-quality core):
+- ct-flow-ingester perticker (live tape feeder)
+- ct-pulse-tick / ct-flow-pulse-capture (drives /tape page)
+- ct-snapshot-refresh (too foundational)
+- Any RTH cron firing every */5 min on watchlist (the live signal layer)
+
+**Estimated effort:** 2-3h Saturday across all 5 cuts. Land Monday morning with budget comfortably under 80% on heavy days.
+
 ### LB7) Tape reader "tide" formula audit — Saturday
 
 Surfaced 2026-04-30 ~14:45 ET. James saw "bearish tide" in tape reader on a price-up day. Investigation showed total today = **-220M** across watchlist via the existing formula:
