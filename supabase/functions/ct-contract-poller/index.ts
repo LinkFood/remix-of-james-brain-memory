@@ -121,6 +121,8 @@ interface Stats {
   budget_tier: UwBudgetTier;
   budget_pct_used: number | null;
   uw_calls: number;
+  /** When tier-modulo throttle skips this run, this records the reason. */
+  skipped_reason: string | null;
   errors: string[];
 }
 
@@ -341,6 +343,27 @@ async function fetchEligibleTracks(
   tierFilter: TierFilter = { dteMax: null, staleMin: null },
 ): Promise<ContractTrack[]> {
   const nowIso = new Date().toISOString();
+  // CUT 2 — skip dead 0DTE contracts. After the underlying close the contract
+  // is worthless or 100% intrinsic; either way the price stops moving. We
+  // exclude:
+  //   - expiry < today (always — those are post-expiry, value is locked)
+  //   - expiry == today AND now ET >= 16:00 (RTH closed; same logic)
+  // Today's expiry pre-close stays in the pool because that's where the
+  // theta-pop lottery tickets live.
+  const todayUtc = new Date();
+  const todayDateStr = todayUtc.toISOString().slice(0, 10); // YYYY-MM-DD UTC
+  // ET hour: UTC - 4 (EDT) is good enough for 4 PM gating (DST window). The
+  // poller only fires `13-20 UTC` weekdays per cron, so we just need the
+  // boundary right during RTH hours.
+  const utcHour = todayUtc.getUTCHours();
+  // 16:00 ET = 20:00 UTC (EDT) / 21:00 UTC (EST). Use 20:00 UTC as the cutoff
+  // since cron stops at 20 UTC anyway — past that point we're post-close.
+  const isPastEtClose = utcHour >= 20;
+  const expiryFloor = isPastEtClose
+    // After 4 PM ET — exclude today's expiry too, so floor is tomorrow.
+    ? new Date(todayUtc.getTime() + 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
+    // Pre-close — today's expiry still polls.
+    : todayDateStr;
   // Primary order: nulls-first on last_quoted_at (unpolled get priority).
   // Tiebreaker on print_time: DESC by default (newest unpolled first — steady
   // state wants fresh prints visible fast). With oldestFirst=true (backfill
@@ -357,7 +380,8 @@ async function fetchEligibleTracks(
     )
     .in('track_status', ['WORKING', 'STALE'])
     .in('ticker', Array.from(watchlist))
-    .gt('tracking_until', nowIso);
+    .gt('tracking_until', nowIso)
+    .gte('expiry', expiryFloor);
   if (printTimeGte) q = q.gte('print_time', printTimeGte);
   // Tiered budget restriction — applied at SQL level so off-tier tracks
   // never enter the symbol-dedup pool and never compete for cfg.maxPerRun slots.
@@ -653,6 +677,7 @@ serve(async (req) => {
     budget_tier: 'unrestricted',
     budget_pct_used: null,
     uw_calls: 0,
+    skipped_reason: null,
     errors: [],
   };
 
@@ -691,9 +716,37 @@ serve(async (req) => {
       catch (e) { stats.errors.push(`alarm: ${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}`); }
     }
 
+    // CUT 1 — Tier-aware cadence throttle (LB8 UW budget reduction).
+    // Cron fires every 4 min RTH. When the budget tier tightens, we keep the
+    // cron schedule but skip work on most invocations:
+    //   tightened (>=70% used) → effective */5 (skip if min % 5 !== 0)
+    //   critical  (>=85% used) → effective */7 (skip if min % 7 !== 0)
+    //   exhausted (>=95% used) → handled below (full short-circuit)
+    // The minute-modulo gate is intentionally simple — the cron's */4 spacing
+    // means most modulo values land on a fire window; we lose ~70-80% of
+    // invocations under tightened/critical, which is the goal.
+    const minuteOfHour = new Date().getMinutes();
+    if (tierResult.tier === 'tightened' && minuteOfHour % 5 !== 0) {
+      stats.skipped_reason = `tightened_throttle_min_${minuteOfHour}_mod5`;
+      stats.elapsed_ms = Date.now() - startedAt;
+      return new Response(JSON.stringify(stats), {
+        status: 200,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+    if (tierResult.tier === 'critical' && minuteOfHour % 7 !== 0) {
+      stats.skipped_reason = `critical_throttle_min_${minuteOfHour}_mod7`;
+      stats.elapsed_ms = Date.now() - startedAt;
+      return new Response(JSON.stringify(stats), {
+        status: 200,
+        headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
+      });
+    }
+
     // Exhausted tier — short-circuit before doing any UW-spending work.
     if (tierResult.tier === 'exhausted') {
       stats.budget_exhausted = true;
+      stats.skipped_reason = 'exhausted_full_halt';
       stats.elapsed_ms = Date.now() - startedAt;
       return new Response(JSON.stringify(stats), {
         status: 200,
