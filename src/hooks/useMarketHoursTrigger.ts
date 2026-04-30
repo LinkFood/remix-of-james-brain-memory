@@ -1,19 +1,24 @@
 /**
  * useMarketHoursTrigger — single global watcher that invalidates every
- * Co-Trader query when the NY market crosses 09:30 or 16:00 ET.
+ * query when the NY market crosses 09:30 or 16:00 ET.
  *
- * Why this exists: many CT hooks gate `refetchInterval` on
+ * Why this exists: many hooks gate `refetchInterval` on
  * `isMarketHoursET()`. React Query reads that callback only when a refetch
  * is initiated — pre-bell it returns `false`, so polling never starts. After
  * the bell, the new `30_000` value never gets re-read until window-focus or
- * a hard refresh. James saw this 2026-04-29 morning: loaded /tape pre-bell,
- * Flow Butterfly stayed empty after 9:30 even though backend was healthy.
+ * a hard refresh. James saw this 2026-04-29 + 2026-04-30 mornings: loaded
+ * /tape pre-bell, Flow Butterfly stayed empty after 9:30 even though backend
+ * was healthy.
  *
- * Structural fix per CO-TRADER THESIS tenet 15 — "does this class of
- * failure become impossible going forward?". Mounting this hook once at
- * app root forces every `ct_*` query to refetch on the bell crossing,
- * picking up the live `refetchInterval`. Every gated hook now upgrades
- * for free without remembering to wire up listeners individually.
+ * Original v1 (2026-04-29) only invalidated `queryKey[0]` starting with
+ * `ct_`, but actual query keys use prefixes like `flow-pulse`, `net-premium`,
+ * `tape-reader` — zero matches, hook dead-on-arrival. Caught 2026-04-30
+ * 09:35 ET (Flow Butterfly stuck on yesterday despite hook firing).
+ *
+ * v2 fix: invalidate ALL queries on bell crossing. Single-user app, twice
+ * per day, zero downside. No coupling to query-key naming convention —
+ * adding new hooks won't silently bypass the bell trigger. Tenet 15: this
+ * class of failure becomes impossible going forward.
  *
  * Mounted once in App.tsx inside the QueryClientProvider.
  */
@@ -33,13 +38,7 @@ export function useMarketHoursTrigger(): void {
       const isOpen = isMarketHoursET();
       if (isOpen !== wasOpen.current) {
         wasOpen.current = isOpen;
-        // Invalidate every CT query so refetchInterval gets re-read.
-        queryClient.invalidateQueries({
-          predicate: (q) => {
-            const k = q.queryKey[0];
-            return typeof k === 'string' && k.startsWith('ct_');
-          },
-        });
+        queryClient.invalidateQueries();
       }
     };
     const id = setInterval(tick, CHECK_INTERVAL_MS);
