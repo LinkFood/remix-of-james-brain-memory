@@ -6,6 +6,98 @@ Tracking what surfaced today during live ops + what's outstanding for after clos
 
 ---
 
+## Morning Brief Temporal Contamination — 2026-04-30 (CRITICAL, partial fix today)
+
+### The bug
+
+Today's morning brief (v1 at 11:01 UTC) was **internally self-contradicting**:
+- Macro narrative claimed "MSFT/GOOGL/AMZN/META reporting **TODAY** post-close" AND "**YESTERDAY 20:20 ET** Microsoft beats Q3 estimates" — same earnings event, two dates.
+- Claimed "Powell's final FOMC presser at 18:30 ET" today — but FOMC was 2026-04-29.
+- `skip_today: [SPY, MSFT, AMZN, META]` based on a pre-FOMC framing that doesn't exist anymore.
+
+Downstream effects (untriaged but real): detector pulse-context, EOD scorecard, specialist `current_reads` all read brief output. Garbage temporal frame poisons the day.
+
+### Root cause
+
+NOT the events table (clean — all 4/29 dates correct). NOT the news pre-tagging (correctly tagged YESTERDAY). The contamination came from one stale **open hypothesis** still status=open:
+
+```
+created=2026-04-29 11:01 UTC, updated=2026-04-30 06:00 UTC
+claim: "AMZN reports earnings today (Apr 29) with insider sells..."
+horizon: week, status: open
+```
+
+`buildClaudeContext` strips `created_at` from the hypothesis payload (line 473 of ct-daily-brief), so Sonnet has no way to know "today (Apr 29)" was written yesterday. Plus the system prompt says "Today is 2026-04-30." Sonnet pattern-completes the contradiction by generalizing "earnings cluster TODAY" across all 4 mega-caps.
+
+The pre-tagging fix that exists for events + news was incomplete — it never extended to hypotheses, trade theses, or grade rationales.
+
+### Done today (5-min neutralize, throwaway-safe)
+
+- ✅ Stale AMZN hypothesis `0aff3d1e-f28c-4f68-a78b-9145fe62dd40` marked `status=refuted`, `invalidated_at=2026-04-30T11:30Z`, `invalidated_reason` documents the contamination.
+- ✅ Re-fired ct-daily-brief via `trigger_ct_daily_brief('regime_shift', ...)` → produced **v2** at 2026-04-30T11:33 UTC.
+- ✅ v2 macro_narrative correctly tags MSFT/GOOGL/AMZN/META as **YESTERDAY**. AAPL TODAY post-close is real (in ct_events). Core PCE 12:30 UTC TODAY is real.
+- ⚠️ **One residual hallucination in v2**: "Powell's final Fed speech TODAY 18:30 ET" — there is NO Powell speech in `ct_events` for 2026-04-30. Sonnet invented it from yesterday's FOMC echo. Proof point that even with cleaner inputs, model coherence is the bottleneck — exactly the bug a validator pass would catch.
+
+### NOT done today (deliberately deferred to Saturday)
+
+- ❌ **Option D temporal-annotation patch** to ct-daily-brief — `[written YYYY-MM-DD]` prefix on hypothesis claims, trade theses, grade rationales. Skipped because the Saturday rebuild replaces it entirely. Patching now = wasted hour + wasted code review.
+- ❌ **Auto-expire session-horizon hypotheses overnight** — partial fix; the rebuild handles this structurally.
+- ❌ **Same temporal-contamination audit on EOD report, tape-reader, specialist `current_reads`** — same class of bug almost certainly exists in those generators. Saturday work, treated together.
+
+### Saturday rebuild — full architectural fix
+
+The decision-ritual answer per Tenet 13 + 15 ("does this class of failure become impossible?"):
+
+**A) Deterministic fact pack** — new shared module `_shared/todayFacts.ts`:
+```
+{
+  today_scheduled_events: [...],     // ct_events where event_date = sessionDate
+  yesterday_completed_events: [...], // ct_events where event_date = sessionDate - 1
+  yesterday_earnings_results: [...], // pre-extracted from ct_breaking_news headlines
+  overnight_gaps: { ticker: gap_pct }, // pre-market by ticker
+  key_level_breaks: [...],           // structural levels crossed overnight
+}
+```
+Pre-computed, all dates absolute, model receives clean facts. Synthesis only — no temporal reasoning required.
+
+**B) Validator pass** — new function `ct-brief-validator` (Haiku, ~$0.005/call):
+- Scans brief output for TODAY/TOMORROW/YESTERDAY claims in macro_narrative + breaking_events + per_ticker.catalysts
+- Verifies each against the fact pack
+- Contradictions → return diff to caller; caller regenerates with explicit "your previous output had these contradictions: [...]" feedback
+- Hard cap at 2 retries; on third failure, persist with `validator_warnings` field set + Slack alarm
+- Exactly the bug v2 still has ("Powell speech TODAY") would be caught
+
+**C) Model upgrade** — Opus 4.7 for `ct-daily-brief` + `ct-eod-report`:
+- ~5x cost increase: $80/yr → $400/yr
+- Strategic anchors of the day deserve the strongest reasoning
+- Lower (not zero) coherence-failure rate; defense-in-depth with B
+
+**D) Pattern propagation (Sunday)** — same fact-pack + validator pattern to:
+- `ct-eod-report` (already on tool-use; needs fact pack + validator)
+- `ct-tape-reader` (currently truncates, no temporal anchoring)
+- 10 specialist `current_reads`
+- Any future "model writes narrative" surface
+
+### Build budget
+
+| Day | Work | Est |
+|---|---|---|
+| Sat AM | `_shared/todayFacts.ts` module + tests against ct_events/ct_breaking_news | 2-3h |
+| Sat AM | Migrate ct-daily-brief to consume fact pack; remove model-side temporal reasoning | 1-2h |
+| Sat PM | `ct-brief-validator` function + RPC + integration into ct-daily-brief regen loop | 2-3h |
+| Sat PM | Switch ct-daily-brief + ct-eod-report to Opus 4.7; cost tracking adjusted | 30min |
+| Sat eve | Test fire on today's data (replay 2026-04-30 corpus) | 1h |
+| Sun | Propagate to ct-eod-report, ct-tape-reader, specialists | 4-5h |
+| Mon open | New architecture in production; locked anchor for the week | — |
+
+### The real principle being tested
+
+**Tenet 13 — hallucination is inevitable; structural prevention is the answer.** Today proved Sonnet can self-contradict in adjacent sentences. Better prompts won't fix that; taking the temporal frame out of the model's hands will. The fact pack + validator pattern applies to every "model writes narrative" surface — morning brief is just the first instance.
+
+**Tenet 15 — does this class of failure become impossible going forward, or am I patching this instance?** Today's 5-min neutralize patches the instance (one stale AMZN hyp). Saturday's rebuild kills the class.
+
+---
+
 ## UW Budget Audit — 2026-04-29 21:00 UTC (91.7% close)
 
 Crossed `critical` tier (≥90%) at 16:56 ET. Slack alarm fired (one-shot per day per tier). Audit traced the budget across categorized callers:
