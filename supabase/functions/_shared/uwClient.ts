@@ -272,13 +272,189 @@ export async function uwBudgetTier(): Promise<UwBudgetTierResult> {
   }
 }
 
+// ============================================================================
+// LB8 Cut 4 — 5-min TTL in-memory cache for duplicate UW calls
+// ============================================================================
+//
+// Multiple ingesters call the same UW endpoints with identical params within
+// minutes (e.g. 3 ingesters all hit `option-contracts` for SPY in a 2-min
+// window). Pure dedup, no signal loss — same inputs return same outputs for
+// computed structural data (option chains, OI snapshots, indicators, news,
+// sector tide, max pain, gamma exposure).
+//
+// Live tape data (flow_alerts, net_premium_ticks, pulse_tick, anything whose
+// path matches /live|latest|realtime|current/) is denied — must be fresh.
+//
+// Edge function isolates are short-lived but reused — cache survives across
+// same-isolate invocations, not across cold starts. That's exactly the dedup
+// window we want for fast-firing crons.
+//
+// Kill-switch: ct_config.uw_cache_enabled (default true). If row missing, cache
+// is on. If set to false, the cache layer is bypassed entirely.
+
+interface CacheEntry { value: unknown; expiresAt: number; }
+const uwCache = new Map<string, CacheEntry>();
+const CACHE_TTL_MS = 5 * 60 * 1000;       // 5 min
+const MAX_CACHE_ENTRIES = 200;            // bound memory
+let _cacheHits = 0;
+let _cacheMisses = 0;
+let _cacheEnabledOverride: boolean | null = null;
+let _cacheConfigCheckedAtMs = 0;
+const CACHE_CONFIG_REFRESH_MS = 60 * 1000;  // re-read ct_config flag every 60s
+
+/** Endpoints that must NEVER be cached — live tape data. */
+const CACHE_DENY_PATHS: ReadonlyArray<string> = [
+  '/api/option-trades/flow-alerts',         // live tape
+  '/api/stock/{ticker}/net-prem-ticks',     // live tape (pattern below)
+  '/api/stock/{ticker}/flow-recent',        // live tape
+  '/api/option-contract/{symbol}/flow',     // live per-print
+  '/api/market/top-net-impact',             // live market-wide
+];
+const CACHE_DENY_PATH_FRAGMENTS: ReadonlyArray<string> = [
+  '/net-prem-ticks',
+  '/flow-recent',
+  '/flow-alerts',
+];
+/** Any path containing one of these tokens is treated as live data. */
+const LIVE_KEYWORD_RE = /(live|latest|realtime|current)/i;
+
+function isCacheable(path: string): boolean {
+  // Explicit fragment match (handles per-ticker paths like /api/stock/SPY/net-prem-ticks).
+  for (const frag of CACHE_DENY_PATH_FRAGMENTS) {
+    if (path.includes(frag)) return false;
+  }
+  // Keyword regex (live | latest | realtime | current).
+  if (LIVE_KEYWORD_RE.test(path)) return false;
+  // Belt-and-suspenders: explicit deny-list paths.
+  for (const denied of CACHE_DENY_PATHS) {
+    if (path === denied) return false;
+  }
+  return true;
+}
+
+/** Compute deterministic cache key from path + params (sorted). */
+function buildCacheKey(
+  path: string,
+  params?: Record<string, string | number | boolean | Array<string | number> | undefined>,
+): string {
+  if (!params) return `${path}|{}`;
+  const sortedKeys = Object.keys(params).sort();
+  const sortedArgs: Record<string, unknown> = {};
+  for (const k of sortedKeys) {
+    const v = params[k];
+    if (v === undefined) continue;
+    sortedArgs[k] = v;
+  }
+  return `${path}|${JSON.stringify(sortedArgs)}`;
+}
+
+/** Drop expired entries first, then oldest entries until under cap. */
+function evictIfNeeded(): void {
+  if (uwCache.size <= MAX_CACHE_ENTRIES) return;
+  const now = Date.now();
+  // First pass: remove expired entries.
+  for (const [k, entry] of uwCache.entries()) {
+    if (entry.expiresAt <= now) uwCache.delete(k);
+  }
+  // Still over cap? Drop oldest (Map preserves insertion order).
+  while (uwCache.size > MAX_CACHE_ENTRIES) {
+    const oldestKey = uwCache.keys().next().value;
+    if (oldestKey === undefined) break;
+    uwCache.delete(oldestKey);
+  }
+}
+
 /**
- * GET with retry on 5xx only.
+ * Check `ct_config.uw_cache_enabled` flag. Cached for 60s to avoid hammering
+ * the config table on every UW call. Default = true if row missing or fetch
+ * fails (fail-open: cache stays on).
+ */
+async function isCacheEnabled(): Promise<boolean> {
+  const now = Date.now();
+  if (_cacheEnabledOverride !== null && (now - _cacheConfigCheckedAtMs) < CACHE_CONFIG_REFRESH_MS) {
+    return _cacheEnabledOverride;
+  }
+  try {
+    const url = Deno.env.get('SUPABASE_URL');
+    const key = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    if (!url || !key) {
+      _cacheEnabledOverride = true;
+      _cacheConfigCheckedAtMs = now;
+      return true;
+    }
+    const res = await fetch(
+      `${url}/rest/v1/ct_config?select=key,value&key=eq.uw_cache_enabled&limit=1`,
+      { headers: { 'apikey': key, 'Authorization': `Bearer ${key}` } },
+    );
+    if (!res.ok) {
+      _cacheEnabledOverride = true;
+      _cacheConfigCheckedAtMs = now;
+      return true;
+    }
+    const rows = await res.json() as Array<{ key: string; value: unknown }>;
+    if (!Array.isArray(rows) || rows.length === 0) {
+      // Row doesn't exist yet (Saturday adds the migration). Default = on.
+      _cacheEnabledOverride = true;
+      _cacheConfigCheckedAtMs = now;
+      return true;
+    }
+    const v = rows[0].value;
+    const enabled = v === true || v === 'true' || v === 1 || v === '1';
+    const disabled = v === false || v === 'false' || v === 0 || v === '0';
+    _cacheEnabledOverride = disabled ? false : (enabled ? true : true);
+    _cacheConfigCheckedAtMs = now;
+    return _cacheEnabledOverride;
+  } catch {
+    _cacheEnabledOverride = true;
+    _cacheConfigCheckedAtMs = now;
+    return true;
+  }
+}
+
+/**
+ * Sanity-check cache stats. Exported for diagnostic logging.
+ */
+export function getUwCacheStats(): { entries: number; hits: number; misses: number } {
+  return {
+    entries: uwCache.size,
+    hits: _cacheHits,
+    misses: _cacheMisses,
+  };
+}
+
+/**
+ * GET with retry on 5xx only. Wraps a 5-min TTL cache layer (LB8 cut 4) in
+ * front of the network call for cacheable paths. Cache is invisible to callers
+ * — same input returns same output, just faster on hit.
  */
 async function uwGet<T = unknown>(
   path: string,
   params?: Record<string, string | number | boolean | Array<string | number> | undefined>
 ): Promise<T> {
+  // ---- Cache lookup (LB8 cut 4) ------------------------------------------
+  // Only attempt cache for paths that aren't live-tape. Kill switch via
+  // ct_config.uw_cache_enabled bypasses cache entirely.
+  let cacheKey: string | null = null;
+  if (isCacheable(path) && await isCacheEnabled()) {
+    cacheKey = buildCacheKey(path, params);
+    const hit = uwCache.get(cacheKey);
+    const now = Date.now();
+    if (hit && now < hit.expiresAt) {
+      _cacheHits++;
+      // Breadcrumb for diagnostics — does NOT touch ct_uw_usage so cache hits
+      // don't count toward the budget.
+      const callerLabel = _callerTag ?? 'unknown';
+      console.log(`[uwClient][cache-hit] ${path} caller=${callerLabel} entries=${uwCache.size} hits=${_cacheHits} misses=${_cacheMisses}`);
+      return hit.value as T;
+    }
+    if (hit) {
+      // Expired — drop it before refetch.
+      uwCache.delete(cacheKey);
+    }
+    _cacheMisses++;
+  }
+  // ------------------------------------------------------------------------
+
   const url = new URL(UW_BASE_URL + path);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -298,7 +474,14 @@ async function uwGet<T = unknown>(
     try { recordUwUsage(path, res, Date.now() - startMs); } catch { /* ignore */ }
 
     if (res.ok) {
-      return (await res.json()) as T;
+      const value = (await res.json()) as T;
+      // ---- Cache store -------------------------------------------------
+      if (cacheKey !== null) {
+        uwCache.set(cacheKey, { value, expiresAt: Date.now() + CACHE_TTL_MS });
+        evictIfNeeded();
+      }
+      // ------------------------------------------------------------------
+      return value;
     }
 
     const errorText = await res.text().catch(() => '');
