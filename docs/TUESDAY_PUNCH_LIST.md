@@ -139,6 +139,21 @@ Source identified: `useUpcomingReminders` hook reading JAC-side reminders (entri
 
 **Why not touching:** cross-facet data, James's personal items. He can clear them when he wants. The badge being persistent is informational, not a bug. **Saturday consideration:** add a "snooze older than N days" auto-action to the reminder pipeline so the badge naturally degrades instead of accumulating forever.
 
+### LB6) OvernightPositioning historical gap — Saturday backfill + delta-RPC fix
+
+Surfaced 2026-04-30 ~14:30 ET. UW rate-limited the OI snapshot fn for 12+ days, leaving these tickers with stale `ct_oi_snapshots`:
+- MSFT, GOOGL, META — last good snap 2026-04-28
+- AMZN — last good snap 2026-04-24
+
+Today's commit `762876c` shipped the rate-limit retry fix so future fires capture all 10 tickers. But the historical gap is structurally unfilled because `ct_compute_oi_deltas` requires strict 1-day-prior baseline. With 2-6 day gaps, no `oi_delta_1d` can be computed → `ct_top_oi_shifts` filters those rows out → panel still missing 4 tickers until gap is closed.
+
+Saturday actions:
+1. **Modify `ct_compute_oi_deltas`** to fall back to most-recent-prior snapshot when strict 1-day match fails. Store actual gap-days alongside the delta (new column `oi_delta_days int`). UI can show "+12K contracts (3-day delta)" instead of hiding the row.
+2. **Backfill the gap days** — write a one-shot script that fires `ct-oi-snapshot` against historical dates (~12 fires for MSFT/GOOGL/META, ~6 for AMZN). UW-heavy but only run once. Saturday is the right window (UW unconstrained).
+3. **Audit remaining ticker positions** — NVDA partial (16 calls vs 21) and TSLA's rate-limit history shows it inherits the gap on different runs depending on order. Consider shuffling ticker order each fire so no single position is consistently disadvantaged.
+
+After Saturday: all 10 tickers in panel, all 10 with current deltas, structurally protected against rate-limit gaps recurring (today's retry fix + Saturday's order shuffling + Saturday's gap-day backfill).
+
 ### LB4) Bundle size warning (cosmetic)
 
 `npm run build` warns: "Some chunks are larger than 500 kB after minification" — bundle is 2,280 KB minified / 611 KB gzipped. Vite recommends code-splitting via dynamic `import()` or `manualChunks`. Not a bug, just a startup-perf opportunity. Saturday afternoon when nothing else is queued.
