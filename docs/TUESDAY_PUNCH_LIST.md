@@ -6,6 +6,156 @@ Tracking what surfaced today during live ops + what's outstanding for after clos
 
 ---
 
+## P0 — pg_net timeout_milliseconds class kill — 2026-04-30 (TONIGHT POST-CLOSE OR SATURDAY)
+
+### What the bug is
+
+Every cron that calls an edge function via `net.http_post(...)` and does NOT explicitly pass `timeout_milliseconds` inherits pg_net's default timeout (1-5 seconds depending on Postgres version). When the edge function takes longer than that timeout to return, pg_net silently **cancels the in-flight HTTP request**. The function gets killed mid-execution and writes nothing.
+
+The cron itself sees `last_run_status = succeeded` because `net.http_post` is fire-and-forget at the cron level — it returns a `request_id` as soon as the HTTP call is queued, BEFORE the actual response comes back. So cron-monitoring shows "all green" while the function pipeline is dead.
+
+The poisoned trail looks like this:
+1. Cron fires every N min during RTH
+2. `cron.job_run_details.last_run_status` = `succeeded`, duration ~50-200ms (just queue time)
+3. The async HTTP call gets killed by pg_net at 1-5s
+4. Function never finishes; no INSERTs land
+5. ct_flow_alerts (or whatever target table) shows zero rows from cron fires
+6. Detector portfolio runs on stale data; scoreboard goes dark; specialist `current_reads` go silent
+7. Site looks broken pre-bell, "comes back" only when something forces a manual fire
+
+### Why it needs to be fixed (downstream impact)
+
+This is not cosmetic. This was the root cause of:
+- **2026-04-30 morning** — ct_flow_alerts had ZERO rows from cron fires from open through 9:50 ET. Detector portfolio was dark. Tape was empty. Caught live, fixed in flight (commit `b22a3ff`) — but only for the 3 flow-ingester crons known broken at that moment.
+- **Likely class-wide silent failures** going back days/weeks. The "first voodoo money" finding (memory `project_co_trader_first_voodoo_money_2026_04_24.md`) and the detector-portfolio `signature_magnitude_stats` corpus may both have been built against a partially-poisoned dataset where cron-fired ingestion silently dropped chunks. Worth re-checking Saturday.
+- **EOD report scorecard accuracy** — if `ct-eod-report` (Sonnet, ~10-30s expected) hits the same bug, today's first scheduled 5pm ET fire writes nothing to `ct_eod_reports` and the morning-brief grading loop dies on the floor.
+- **Daily brief** — if `ct-daily-brief` (Sonnet 30-60s with tool use) inherits the default, every morning brief fire is a coinflip on whether the function completes before pg_net kills it. Could explain why we sometimes get duplicate brief versions on race conditions.
+
+**Trust-per-alarm gold (Tenet 3):** False healthy-status from cron monitoring is worse than a missed alert — it makes us *believe* the system is working when it isn't. Every cron in the codebase that doesn't pass an explicit timeout is a latent ticking failure.
+
+### Why fix tonight post-close OR Saturday (not now)
+
+- **Touches every cron migration** — could be 30-50+ schedules across 60+ migration files
+- **Each schedule needs unschedule + reschedule with new timeout** — cron drops out of the schedule briefly during the migration
+- **No safety net during the fix window** — if a migration fails halfway, some crons might end up unscheduled
+- **Live-trading session** — flow-ingester is now working, EOD/specialist/detector pipelines all firing on today's known-broken-but-now-fixed schedule pattern. Don't disturb during RTH.
+- **Best window:** post-close tonight (after 4pm ET / 20:00 UTC) when no production crons need to fire OR Saturday when nothing is running.
+
+### Scope — every cron using `net.http_post` to invoke an edge function
+
+Likely candidates to audit (from cron schedule list earlier today):
+- `ct-eod-summary` (Sonnet narrative, 10-30s)
+- `ct-eod-report` (Sonnet tool-use, 10-30s) ← **first scheduled fire today 21:00 UTC**
+- `ct-daily-brief` (Sonnet tool-use, 30-60s, sometimes longer with re-briefs)
+- `ct-tavily-news-watcher` (Tavily call + classification, can be slow)
+- `ct-news-ingester` (UW news headlines, 1-3s typically but variable)
+- `ct-news-sweep` (Tavily + Claude, multi-second)
+- `ct-tape-reader` (Sonnet, 5-15s with truncation)
+- All 10 specialist crons (`ct-specialist-{TICKER}`, Claude calls, multi-second)
+- All detector RTH crons (variable)
+- `ct-snapshot-refresh` (UW per-ticker, ~1-2s)
+- `ct-contract-poller` (UW heavy, 2-5s)
+- `ct-print-grader` (UW + DB, 2-10s)
+- `ct-contract-grader` (UW + DB, multi-second)
+- `ct-cron-health-check` (DB scan, 1-2s)
+- Any other `*-ingester`, `*-watcher`, `*-grader`, `*-curator`
+
+**Already fixed (commit `b22a3ff`):**
+- `ct-flow-ingester-perticker-rth`
+- `ct-flow-ingester-perticker-offrth`
+- `ct-flow-ingester-marketwide`
+
+### The fix — class kill via shared helper
+
+**Wrong way (instance patching):** find every cron migration and add `timeout_milliseconds := 60000` to each. Brittle — next time someone schedules a new cron they'll forget.
+
+**Right way (structural):** introduce `_ct_schedule_post(name, schedule, fn, body, timeout_ms)` SECURITY DEFINER helper that wraps `cron.schedule` + `net.http_post` with mandatory timeout. Migrate every existing schedule to use it. New crons go through it by convention.
+
+Helper signature:
+```sql
+CREATE OR REPLACE FUNCTION public._ct_schedule_post(
+  job_name text,
+  schedule text,
+  fn_name text,
+  body jsonb DEFAULT '{}'::jsonb,
+  timeout_ms integer DEFAULT 60000
+) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, extensions
+AS $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = job_name) THEN
+    PERFORM cron.unschedule(job_name);
+  END IF;
+  PERFORM cron.schedule(
+    job_name,
+    schedule,
+    format($body$
+      SELECT net.http_post(
+        url     := (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'project_url') || '/functions/v1/%s',
+        headers := jsonb_build_object(
+          'Content-Type',  'application/json',
+          'Authorization', 'Bearer ' || (SELECT decrypted_secret FROM vault.decrypted_secrets WHERE name = 'service_role_key')
+        ),
+        body    := %L::jsonb,
+        timeout_milliseconds := %s
+      )
+    $body$, fn_name, body::text, timeout_ms)
+  );
+END
+$$;
+```
+
+Then a single sweep migration `20260430210000_cron_timeout_class_kill.sql` that calls `_ct_schedule_post(...)` for every existing cron, with sensible per-function timeout defaults (most: 60s; long Sonnet calls: 120s).
+
+### Verification — how to confirm a cron is broken before fixing
+
+Per cron, fire it once and capture both the cron's `last_run_duration` and the actual `net._http_response.status_code` via `_get_http_body(_request_id)`:
+- If cron duration <500ms AND `_http_response.status_code` is null/error → BROKEN (timeout-killed)
+- If cron duration <500ms AND status_code = 200 with empty/zero body → BROKEN (function didn't actually do work)
+- If cron duration matches function duration AND status_code = 200 with real data → HEALTHY
+
+Diagnostic snippet:
+```bash
+SR_KEY=$(npx supabase projects api-keys --project-ref rvhyotvklfowklzjahdd | grep service_role | awk '{print $NF}')
+curl -s -X POST "$SUPA/rest/v1/rpc/get_cron_status" -H "Authorization: Bearer $SR_KEY" -H "apikey: $SR_KEY" -H "Content-Type: application/json" -d '{}' | python3 -c "
+import sys,json,re
+d=json.load(sys.stdin)
+for r in d:
+    cmd=r.get('command') or ''
+    if 'net.http_post' in cmd and 'timeout_milliseconds' not in cmd:
+        print(f\"AT-RISK: {r['jobname']}  schedule={r['schedule']}\")
+"
+```
+
+That single query lists every at-risk cron in the system.
+
+### Acceptance criteria
+
+- [ ] One-shot diagnostic script that lists every `net.http_post` cron without explicit timeout (run before + after to verify)
+- [ ] `_ct_schedule_post` helper migration deployed
+- [ ] Sweep migration that re-creates every existing schedule via the helper, with appropriate timeouts
+- [ ] Re-run diagnostic — zero at-risk crons returned
+- [ ] Verify ct_flow_alerts, ct_breaking_news, ct_eod_reports, ct_daily_briefs all continued to ingest during the migration window
+- [ ] Add a `ct-cron-health-check` rule that flags any future cron lacking `timeout_milliseconds` (so this can never silently regress)
+
+### Estimated effort
+
+- ~30 min to write the helper + diagnostic
+- ~1-2h to write the sweep migration (audit + per-cron timeout decisions)
+- ~15 min to push + verify
+- **Total: ~2-3h, post-close tonight or Saturday morning**
+
+### Tenet check
+
+**Tenet 15** — does this class of failure become impossible going forward?
+
+- Patching three flow-ingester crons today (commit `b22a3ff`): patches THIS instance.
+- Sweep migration via `_ct_schedule_post` helper + cron-health-check rule: kills the CLASS. Every future cron must pass timeout, or the schedule helper rejects, or the health checker flags. Bug becomes structurally impossible.
+
+This is the discipline test. Patch today, kill the class tonight or Saturday.
+
+---
+
 ## Morning Brief Temporal Contamination — 2026-04-30 (CRITICAL, partial fix today)
 
 ### The bug
@@ -80,7 +230,7 @@ Pre-computed, all dates absolute, model receives clean facts. Synthesis only —
 
 **F) ct-cron-health-check RTH-window awareness** — surfaced 2026-04-30 ~07:35 ET via Slack alert "7 crons degraded (stale 16h)". All 7 (`ct-curiosity`, `ct-detector-small-cap-inverted-put-rth`, `ct-detector-weekly-atm-voi-rth`, `ct-detector-zerodte-opening-call-rth`, `ct-detector-zerodte-put-voi-rth`, `ct-flow-pulse-capture`, `ct-trade-advisories`) are scheduled `* 13-20 * * 1-5` (weekday RTH only, 9 AM-4 PM ET). Last fire was Wed 4/29 ~20:00 UTC; alert fired pre-bell Thursday — by definition stale, by design correctly idle. Health checker measures time-since-last-fire without parsing the cron's hour-of-day window. Different bug class from the Tuesday step-interval false-alarm fix (`ba3938b`). Fix: parse cron schedule, compute next-expected-fire-time given hour-of-day + day-of-week restrictions, alarm only if now() > next_expected + grace. ~1h work. Tenet 3 violation — false alarms erode trust faster than missed signals.
 
-**G) Audit ALL crons for missing `timeout_milliseconds`** — surfaced 2026-04-30 9:35 ET live triage. ct-flow-ingester-* crons silently produced ZERO rows today despite `last_run_status=succeeded` in cron.job_run_details. Root cause: pg_net's `net.http_post` default `timeout_milliseconds` (1-5s) cancelled mid-flight HTTP calls to functions taking 4-5s+ (ct-flow-ingester serial-loops 30+ UW calls across 10 tickers). Cron sees "queued successfully" → marks succeeded; the actual HTTP call gets killed by pg_net before the function inserts data. Fix shipped today (`20260430134500_flow_ingester_timeout_fix.sql`, commit `b22a3ff`) covers 3 known-broken crons with explicit `timeout_milliseconds := 60000`. **Saturday: grep all migrations for `net.http_post` and add explicit 60s timeout to every cron schedule that calls a function known to run >1s** — likely candidates: `ct-eod-summary`, `ct-eod-report`, `ct-daily-brief`, all detector RTH crons, `ct-news-ingester`, `ct-tape-reader`, specialist crons. Class kill: standardize on `_ct_post_long(fn, body, timeout_ms)` helper that always passes timeout. ~2h Saturday work. **Without this audit, any function that drifts past pg_net's timeout silently goes dark** — same bug class waiting elsewhere.
+**G) timeout_milliseconds class kill** — see top P0 section. Original G inline summary superseded by full writeup at top of document.
 
 **E) Rebrief hygiene** — surfaced 2026-04-30 morning audit. Two bugs:
 - **Version-numbering race**: today's 11:01:19 scheduled fire and 11:01:46 Tavily-triggered rebrief BOTH inserted as `brief_version=1` (the rebrief's `findPriorBriefToday()` ran before the scheduled brief had inserted). Wed 4/29 fired 4x; today fired 3x; site picks one row arbitrarily when versions collide. Fix: add `UNIQUE(session_date, brief_version)` constraint + retry-on-conflict in the insert path. OR move version assignment + insert into a single SECURITY DEFINER RPC that serializes via row lock. Migration + ~20 lines.
