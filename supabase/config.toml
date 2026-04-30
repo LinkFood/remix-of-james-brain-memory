@@ -449,3 +449,9 @@ verify_jwt = false
 
 [functions.ct-prediction-backfill]
 verify_jwt = false
+
+[functions.ct-heatmap-snapshot]
+verify_jwt = false
+
+[functions.ct-detector-flow-stack-v1]
+verify_jwt = false

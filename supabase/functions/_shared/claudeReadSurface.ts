@@ -507,6 +507,10 @@ export interface ClaudeContext {
   // Claude's graded feedback
   claudeRecentGrades: Grade[];
 
+  // Flow positioning heatmap — top expiry-week stacks per watchlist ticker
+  // (aggressive_directional_decay math, default 7d lookback, min $100K)
+  flowHeatmapPerTicker: Array<{ ticker: string; stacks: Array<{ expiry_bucket_week: string; value: number; source_alert_count: number }> }>;
+
   // Extended tape — market-wide flow + dark pool + sentiment
   recentFlowAlerts: FlowAlertCompact[];
   recentDarkPool: DarkPoolCompact[];
@@ -1724,6 +1728,42 @@ export async function buildClaudeContext(
     }
   } catch (_e) { /* table may not exist yet */ }
 
+  // --- flow heatmap top stacks per watchlist ticker ---
+  // Compact "where positioning is stacking by future expiry" view per ticker.
+  // Specialists, morning brief, and EOD report all consume this as positioning context.
+  let flowHeatmapPerTicker: Array<{ ticker: string; stacks: Array<{ expiry_bucket_week: string; value: number; source_alert_count: number }> }> = [];
+  try {
+    const { data, error } = await supabase.rpc('ct_flow_heatmap_live', {
+      p_tickers: watchlist,
+      p_math_mode: 'aggressive_directional_decay',
+      p_min_premium: 100000,
+      p_include_0dte: false,
+      p_max_expiry_days: 180,
+    });
+    if (error) {
+      if (!/does not exist|404|not found/i.test(error.message)) {
+        console.warn('[claudeReadSurface] ct_flow_heatmap_live:', error.message);
+      }
+    } else if (Array.isArray(data)) {
+      const byTicker = new Map<string, Array<{ expiry_bucket_week: string; value: number; source_alert_count: number }>>();
+      for (const row of data as Array<{ ticker: string; expiry_bucket_week: string; value: number; source_alert_count: number }>) {
+        if (!byTicker.has(row.ticker)) byTicker.set(row.ticker, []);
+        byTicker.get(row.ticker)!.push({
+          expiry_bucket_week: row.expiry_bucket_week,
+          value: Number(row.value),
+          source_alert_count: row.source_alert_count,
+        });
+      }
+      // Top 3 stacks per ticker by abs(value)
+      flowHeatmapPerTicker = Array.from(byTicker.entries()).map(([ticker, stacks]) => ({
+        ticker,
+        stacks: stacks
+          .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
+          .slice(0, 3),
+      }));
+    }
+  } catch (_e) { /* RPC may not exist yet */ }
+
   return {
     latestHeartbeat,
     recentHeartbeats,
@@ -1769,6 +1809,7 @@ export async function buildClaudeContext(
     institutionalLast90d,
     centralBankState,
     indicatorEventsLast7d,
+    flowHeatmapPerTicker,
     watchlist,
     advisoryChatContext,
     chatIsAdvisory,
