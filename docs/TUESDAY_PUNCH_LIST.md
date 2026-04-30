@@ -6,6 +6,49 @@ Tracking what surfaced today during live ops + what's outstanding for after clos
 
 ---
 
+## Temporal contamination class kill — 2026-04-30 (PARTIAL today, finish Saturday)
+
+The morning brief bug at 7am ET and the tape reader bug at 1pm ET were the same class: Claude consumers without a hard date anchor pattern-completing yesterday's narrative as today's. Class kill shipped today via shared helpers + 5 consumer wires + Haiku validator. Saturday extends to remaining consumers.
+
+### Shipped today (commit `1314a57` + `87d9783`)
+
+- `_shared/temporalContext.ts` — `getTemporalContext()` returns `session_date` (NY-tz), day name, ET clock, `temporalAnchorPreamble` for narrative consumers, `temporalAnchorShort` for JSON/tool-use consumers
+- `_shared/temporalValidator.ts` — Haiku-powered post-generation safety net. Returns `{ok, contradictions[]}`. Defensive (returns ok=true on Haiku errors)
+- Wired into: `ct-tape-reader`, `ct-eod-summary`, `ct-eod-report`, `ct-hypothesis-proposer`, `ct-hypothesis-health-check`
+- Validator caught a real critical contradiction on EOD summary regenerate at 18:01 UTC ("Friday gap-down unwind executing in real-time" on a Thursday session) and persisted it to `market_stats.temporal_validator_warnings`. Defense-in-depth confirmed working.
+
+### Bonus capability shipped
+
+- `ct-hypothesis-health-check` now scans every open hypothesis claim for past-dated text (regex: YYYY-MM-DD, "Apr 29", etc). Returns `stale_temporal_count` + `stale_temporal_hypothesis_ids[]` in response. Optional `auto_refute_stale_dated` body param (default false) one-shots retire on next fire. Would have caught today's AMZN-Apr-29 hyp before it polluted the morning brief.
+
+### NOT wired yet — Saturday work
+
+These consumers still build their own context and prompt without the temporal anchor or validator:
+
+| Consumer | Cadence | Output style | Use which anchor |
+|---|---|---|---|
+| `ct-daily-brief` | 7am ET cron + breaking-news rebriefs | Sonnet narrative + tool-use | preamble (Saturday rebuild handles it) |
+| 10 specialists via `_shared/specialistRunner.ts` | per-ticker rotation | Claude prose | preamble |
+| `ct-trade-idea-generator` | every 5 min RTH | tool-use | short |
+| `ct-watcher` | every 15 min | mixed | preamble |
+| `ct-self-grader` | every 2h RTH | Sonnet prose | preamble |
+
+Wiring is identical to today's pattern (~10-15 lines each). Saturday agent fans out, all get same treatment.
+
+### Pattern lesson learned today
+
+Initial deploy of Agent O's `ct-hypothesis-health-check` wire caused 6/6 Haiku JSON parses to fail because the full narrative-style preamble has "your prose / your output" instructions that contradict "return strictly JSON". Required a short-anchor variant. Future wires must check: **is the consumer asking the model for JSON or prose?** If JSON: use `temporalAnchorShort`. If prose: use `temporalAnchorPreamble`. Documented in the helper file.
+
+### Validator-warnings telemetry — Saturday addition
+
+Each consumer currently persists `temporal_validator_warnings` to whatever JSONB field is convenient (`market_stats`, `context_snapshot`). Saturday: standardize on a queryable `ct_temporal_validator_log` table or a consistent column name across all consumers, so we can dashboard "how often is each consumer producing temporally-incoherent output?" and grade accordingly.
+
+### Tenet check
+
+**Tenet 13** (hallucination is inevitable; structural prevention is the answer) — proven by today's validator catching real contradictions in production. **Tenet 15** (kill the class) — partial today (5 consumers), full by Saturday close (10+ consumers).
+
+---
+
 ## Heatmap consumer propagation — 2026-04-30 (PARTIAL today, finish Saturday)
 
 Heatmap data is now LIVE in `ct_flow_heatmap_snapshots` and queryable via 4 RPCs (live, history, diff, strikes). The `_shared/flowHeatmapContext.ts` helper exposes the standard "top 3 stacks per ticker" shape for any Claude consumer.
