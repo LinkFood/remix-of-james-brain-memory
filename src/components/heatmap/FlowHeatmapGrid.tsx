@@ -266,13 +266,16 @@ export function FlowHeatmapGrid({
                     );
                     const hasDelta = row.delta_value != null && Number.isFinite(row.delta_value);
                     const deltaVal = hasDelta ? (row.delta_value as number) : 0;
+                    // Subtle, consistent strip bg per direction. The chip lives in
+                    // its own dedicated bottom-right zone (rounded-sm) so it never
+                    // overlaps the main value.
                     const deltaChipClass = !hasDelta
                       ? ''
                       : deltaVal > 0
-                        ? 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
                         : deltaVal < 0
-                          ? 'bg-rose-500/20 text-rose-700 dark:text-rose-300'
-                          : 'bg-muted/50 text-muted-foreground';
+                          ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
+                          : 'bg-slate-500/10 text-muted-foreground';
                     const cell: HeatmapCell = {
                       ticker: row.ticker,
                       expiryBucketWeek: row.expiry_bucket_week,
@@ -292,17 +295,23 @@ export function FlowHeatmapGrid({
                             type="button"
                             onClick={() => onCellClick(cell)}
                             className={cn(
-                              'relative h-8 mx-0.5 rounded-sm flex items-center justify-center text-[10px] font-mono tabular-nums leading-none transition-transform hover:scale-[1.04] hover:ring-1 hover:ring-primary/60 focus:outline-none focus:ring-1 focus:ring-primary',
+                              // When a delta chip is present, give the cell extra
+                              // vertical room and bottom padding so the main value
+                              // can stay centered above its dedicated strip without
+                              // overlap. When no delta, behave identically to the
+                              // pre-baseline cell (h-8, centered).
+                              'relative mx-0.5 rounded-sm flex flex-col items-center justify-center text-[10px] font-mono tabular-nums leading-none transition-transform hover:scale-[1.04] hover:ring-1 hover:ring-primary/60 focus:outline-none focus:ring-1 focus:ring-primary',
+                              hasDelta ? 'h-9 pb-2.5' : 'h-8',
                               bg,
                               text,
                             )}
                             aria-label={`${ticker} ${wk} ${formatTooltipValue(value, mathMode)}`}
                           >
-                            {formatCellValue(value, mathMode)}
+                            <span className="leading-none">{formatCellValue(value, mathMode)}</span>
                             {hasDelta && (
                               <span
                                 className={cn(
-                                  'pointer-events-none absolute bottom-0 right-0 px-1 rounded-sm text-[10px] font-semibold leading-tight',
+                                  'pointer-events-none absolute bottom-0 right-0 px-1 py-0.5 rounded-sm text-[9px] font-semibold leading-none',
                                   deltaChipClass,
                                 )}
                               >

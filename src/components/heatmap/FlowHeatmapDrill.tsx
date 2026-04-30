@@ -156,13 +156,26 @@ export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode, baselineL
   });
   const historySeries = useMemo(() => {
     if (!cell) return [];
+    // The history RPC (ct_flow_heatmap_history) returns the per-snapshot
+    // timestamp as `snapshot_at`, while the live RPC (ct_flow_heatmap_live)
+    // returns it as `latest_snapshot_at` after MAX-aggregation. The shared
+    // HeatmapRow type only declares `latest_snapshot_at`, so reading that
+    // field on history rows yields `undefined` → Date.parse(undefined) = NaN
+    // → all points get x=NaN → recharts draws axes but no line. Read both
+    // field names defensively until the RPC contract is unified.
+    type HistoryRowLoose = typeof historyRows[number] & { snapshot_at?: string };
     return historyRows
       .filter((r) => r.ticker === cell.ticker && r.expiry_bucket_week === cell.expiryBucketWeek)
-      .map((r) => ({
-        t: Date.parse(r.latest_snapshot_at),
-        ts: r.latest_snapshot_at,
-        value: r.value,
-      }))
+      .map((r) => {
+        const rl = r as HistoryRowLoose;
+        const ts = rl.snapshot_at ?? rl.latest_snapshot_at;
+        return {
+          t: ts ? Date.parse(ts) : NaN,
+          ts,
+          value: r.value,
+        };
+      })
+      .filter((p) => Number.isFinite(p.t))
       .sort((a, b) => a.t - b.t);
   }, [historyRows, cell]);
 

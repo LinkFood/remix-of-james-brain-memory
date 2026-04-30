@@ -20,6 +20,7 @@ import {
   type HeatmapToolbarValue,
   type BaselineMode,
   lookbackToExpiryDays,
+  lookbackToHours,
 } from '@/components/heatmap/HeatmapToolbar';
 import { FlowHeatmapGrid, type HeatmapCell } from '@/components/heatmap/FlowHeatmapGrid';
 import { FlowHeatmapPerTicker } from '@/components/heatmap/FlowHeatmapPerTicker';
@@ -85,6 +86,7 @@ export default function Heatmap() {
   const [drillOpen, setDrillOpen] = useState(false);
 
   const maxExpiryDays = lookbackToExpiryDays(toolbar.lookback);
+  const lookbackHours = lookbackToHours(toolbar.lookback);
 
   const baselineAt = useMemo(
     () => resolveBaselineAt(toolbar.baselineMode, toolbar.baselineCustomAt),
@@ -96,6 +98,7 @@ export default function Heatmap() {
     minPremium: toolbar.minPremium,
     include0DTE: toolbar.include0DTE,
     maxExpiryDays,
+    lookbackHours,
   });
 
   const liveWithDelta = useFlowHeatmapLiveWithDelta({
@@ -103,6 +106,7 @@ export default function Heatmap() {
     minPremium: toolbar.minPremium,
     include0DTE: toolbar.include0DTE,
     maxExpiryDays,
+    lookbackHours,
     baselineAt,
   });
 
@@ -203,6 +207,7 @@ export default function Heatmap() {
             mathMode={toolbar.mathMode}
             colorAnchor={toolbar.colorAnchor}
             onCellClick={handleCellClick}
+            include0DTE={toolbar.include0DTE}
           />
         )}
 

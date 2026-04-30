@@ -68,6 +68,8 @@ export interface UseFlowHeatmapLiveArgs {
   minPremium?: number;
   include0DTE?: boolean;
   maxExpiryDays?: number;
+  /** Actual flow window scanned by the RPC. Default 168 (7d). */
+  lookbackHours?: number;
 }
 
 export interface UseFlowHeatmapHistoryArgs {
@@ -77,6 +79,8 @@ export interface UseFlowHeatmapHistoryArgs {
   /** ISO timestamp upper bound. */
   until: string;
   mathMode?: HeatmapMathMode;
+  /** Pass-through to RPC — query key participates so chip changes invalidate. */
+  lookbackHours?: number;
 }
 
 export interface UseFlowHeatmapDiffArgs {
@@ -84,6 +88,8 @@ export interface UseFlowHeatmapDiffArgs {
   baselineAt: string;
   currentAt: string;
   mathMode?: HeatmapMathMode;
+  /** Window width for both baseline and current ends. Default 168 (7d). */
+  lookbackHours?: number;
 }
 
 const DEFAULT_TICKERS = [
@@ -253,11 +259,12 @@ export function useFlowHeatmapLive(args: UseFlowHeatmapLiveArgs = {}) {
   const minPremium = args.minPremium ?? 100_000;
   const include0DTE = args.include0DTE ?? false;
   const maxExpiryDays = args.maxExpiryDays ?? 365;
+  const lookbackHours = args.lookbackHours ?? 168;
 
   return useQuery<HeatmapRow[]>({
     queryKey: [
       'flow-heatmap-live',
-      { tickers: [...tickers].sort(), mathMode, minPremium, include0DTE, maxExpiryDays },
+      { tickers: [...tickers].sort(), mathMode, minPremium, include0DTE, maxExpiryDays, lookbackHours },
     ],
     refetchInterval: 30_000,
     staleTime: 25_000,
@@ -269,6 +276,7 @@ export function useFlowHeatmapLive(args: UseFlowHeatmapLiveArgs = {}) {
         p_min_premium: minPremium,
         p_include_0dte: include0DTE,
         p_max_expiry_days: maxExpiryDays,
+        p_lookback_hours: lookbackHours,
       },
       { tickers, mathMode, minPremium, include0DTE, maxExpiryDays },
     ),
@@ -278,11 +286,12 @@ export function useFlowHeatmapLive(args: UseFlowHeatmapLiveArgs = {}) {
 export function useFlowHeatmapHistory(args: UseFlowHeatmapHistoryArgs) {
   const tickers = args.tickers ?? DEFAULT_TICKERS;
   const mathMode = args.mathMode ?? 'aggressive_directional_decay';
+  const lookbackHours = args.lookbackHours ?? 168;
 
   return useQuery<HeatmapRow[]>({
     queryKey: [
       'flow-heatmap-history',
-      { tickers: [...tickers].sort(), since: args.since, until: args.until, mathMode },
+      { tickers: [...tickers].sort(), since: args.since, until: args.until, mathMode, lookbackHours },
     ],
     enabled: !!(args.since && args.until),
     queryFn: () => callOrMock(
@@ -292,6 +301,7 @@ export function useFlowHeatmapHistory(args: UseFlowHeatmapHistoryArgs) {
         p_since: args.since,
         p_until: args.until,
         p_math_mode: mathMode,
+        p_lookback_hours: lookbackHours,
       },
       {
         tickers, mathMode,
@@ -305,11 +315,12 @@ export function useFlowHeatmapHistory(args: UseFlowHeatmapHistoryArgs) {
 export function useFlowHeatmapDiff(args: UseFlowHeatmapDiffArgs) {
   const tickers = args.tickers ?? DEFAULT_TICKERS;
   const mathMode = args.mathMode ?? 'aggressive_directional_decay';
+  const lookbackHours = args.lookbackHours ?? 168;
 
   return useQuery<HeatmapRow[]>({
     queryKey: [
       'flow-heatmap-diff',
-      { tickers: [...tickers].sort(), baselineAt: args.baselineAt, currentAt: args.currentAt, mathMode },
+      { tickers: [...tickers].sort(), baselineAt: args.baselineAt, currentAt: args.currentAt, mathMode, lookbackHours },
     ],
     enabled: !!(args.baselineAt && args.currentAt),
     queryFn: () => callOrMock(
@@ -319,6 +330,7 @@ export function useFlowHeatmapDiff(args: UseFlowHeatmapDiffArgs) {
         p_baseline_at: args.baselineAt,
         p_current_at: args.currentAt,
         p_math_mode: mathMode,
+        p_lookback_hours: lookbackHours,
       },
       {
         tickers, mathMode,
@@ -337,6 +349,8 @@ export interface UseFlowHeatmapLiveWithDeltaArgs {
   minPremium?: number;
   include0DTE?: boolean;
   maxExpiryDays?: number;
+  /** Actual flow window (passed to both live and diff RPCs). Default 168 (7d). */
+  lookbackHours?: number;
   /** When non-null, also fetches ct_flow_heatmap_diff with this baseline and
    *  merges (baseline_value, delta_value, delta_pct) onto each cell. */
   baselineAt: Date | null;
@@ -349,6 +363,7 @@ async function fetchDiffSilent(params: {
   baselineAt: string;
   currentAt: string;
   mathMode: HeatmapMathMode;
+  lookbackHours: number;
 }): Promise<HeatmapDiffRow[]> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -357,6 +372,7 @@ async function fetchDiffSilent(params: {
       p_baseline_at: params.baselineAt,
       p_current_at: params.currentAt,
       p_math_mode: params.mathMode,
+      p_lookback_hours: params.lookbackHours,
     });
     if (error) {
       const code = (error as { code?: string }).code;
@@ -386,9 +402,10 @@ export function useFlowHeatmapLiveWithDelta(args: UseFlowHeatmapLiveWithDeltaArg
   const minPremium = args.minPremium ?? 100_000;
   const include0DTE = args.include0DTE ?? false;
   const maxExpiryDays = args.maxExpiryDays ?? 365;
+  const lookbackHours = args.lookbackHours ?? 168;
   const baselineAt = args.baselineAt;
 
-  const live = useFlowHeatmapLive({ tickers, mathMode, minPremium, include0DTE, maxExpiryDays });
+  const live = useFlowHeatmapLive({ tickers, mathMode, minPremium, include0DTE, maxExpiryDays, lookbackHours });
 
   // Quantize baseline timestamp to the minute so the query key doesn't churn
   // on every keystroke / sub-minute re-render.
@@ -399,7 +416,7 @@ export function useFlowHeatmapLiveWithDelta(args: UseFlowHeatmapLiveWithDeltaArg
   const diff = useQuery<HeatmapDiffRow[]>({
     queryKey: [
       'flow-heatmap-diff-live',
-      { tickers: [...tickers].sort(), baselineKey, mathMode },
+      { tickers: [...tickers].sort(), baselineKey, mathMode, lookbackHours },
     ],
     enabled: !!baselineKey,
     refetchInterval: 30_000,
@@ -409,6 +426,7 @@ export function useFlowHeatmapLiveWithDelta(args: UseFlowHeatmapLiveWithDeltaArg
       baselineAt: baselineKey!,
       currentAt: new Date().toISOString(),
       mathMode,
+      lookbackHours,
     }),
   });
 
@@ -470,6 +488,8 @@ export interface UseFlowHeatmapStrikesArgs {
   minPremium?: number;
   /** Cap on rows returned. Default 30. */
   strikeCount?: number;
+  /** Include today's expiry (0DTE). Default false — symmetry with combined view. */
+  include0DTE?: boolean;
 }
 
 export function useFlowHeatmapStrikes(args: UseFlowHeatmapStrikesArgs) {
@@ -478,11 +498,12 @@ export function useFlowHeatmapStrikes(args: UseFlowHeatmapStrikesArgs) {
   const mathMode = args.mathMode ?? 'aggressive_directional_decay';
   const minPremium = args.minPremium ?? 50_000;
   const strikeCount = args.strikeCount ?? 30;
+  const include0DTE = args.include0DTE ?? false;
 
   return useQuery<HeatmapStrikeRow[]>({
     queryKey: [
       'flow-heatmap-strikes',
-      { ticker, lookbackHours, mathMode, minPremium, strikeCount },
+      { ticker, lookbackHours, mathMode, minPremium, strikeCount, include0DTE },
     ],
     enabled: !!ticker,
     refetchInterval: 30_000,
@@ -496,6 +517,7 @@ export function useFlowHeatmapStrikes(args: UseFlowHeatmapStrikesArgs) {
         p_math_mode: mathMode,
         p_min_premium: minPremium,
         p_strike_count: strikeCount,
+        p_include_0dte: include0DTE,
       });
       if (error) throw error;
       return (data ?? []) as HeatmapStrikeRow[];

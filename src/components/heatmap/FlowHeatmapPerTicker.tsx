@@ -46,6 +46,8 @@ interface FlowHeatmapPerTickerProps {
   lookbackHours?: number;
   /** Floor passed to RPC. Default 50,000. */
   minPremium?: number;
+  /** Toolbar 0DTE toggle. Default false — when false, today's expiry is hidden. */
+  include0DTE?: boolean;
 }
 
 function formatCellValue(value: number | null | undefined, mode: HeatmapMathMode): string {
@@ -127,6 +129,7 @@ export function FlowHeatmapPerTicker({
   defaultTicker = 'SPY',
   lookbackHours = 168,
   minPremium = 50_000,
+  include0DTE = false,
 }: FlowHeatmapPerTickerProps) {
   const [selectedTicker, setSelectedTicker] = useState<string>(defaultTicker);
 
@@ -136,6 +139,7 @@ export function FlowHeatmapPerTicker({
     mathMode,
     minPremium,
     strikeCount: 30,
+    include0DTE,
   });
 
   const matrix = useMemo<BuiltMatrix>(
@@ -239,6 +243,11 @@ export function FlowHeatmapPerTicker({
                           const { bg, text } = getCellColorClasses(
                             value, colorAnchor, mathMode, strikeValues, matrix.allValues,
                           );
+                          // TODO(B6): per-strike delta chip not rendered here — combined view's
+                          // delta chip relies on ct_flow_heatmap_diff (per ticker × week). A new
+                          // strike-level diff RPC (per ticker × strike × expiry_date × side) is
+                          // required to surface change-vs-baseline at this granularity. Out of
+                          // scope for the current bug-fix pass.
                           return (
                             <Tooltip key={exp}>
                               <TooltipTrigger asChild>

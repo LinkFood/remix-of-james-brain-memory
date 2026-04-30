@@ -263,12 +263,25 @@ export function HeatmapToolbar({ value, onChange }: HeatmapToolbarProps) {
   );
 }
 
-/** Map lookback chip to maxExpiryDays passed to the live RPC. */
+/** Map lookback chip to maxExpiryDays passed to the live RPC.
+ *  Display range — how far into the future expiry calendar to show. */
 export function lookbackToExpiryDays(l: HeatmapLookback): number {
   switch (l) {
     case '24h': return 7;
     case '3d':  return 14;
     case '7d':  return 35;
     case '30d': return 120;
+  }
+}
+
+/** Map lookback chip to actual flow-window hours passed to the live RPC.
+ *  This is the window the RPC scans ct_flow_alerts over — different chips
+ *  must produce different numbers, otherwise the chip is cosmetic. */
+export function lookbackToHours(l: HeatmapLookback): number {
+  switch (l) {
+    case '24h': return 24;
+    case '3d':  return 72;
+    case '7d':  return 168;
+    case '30d': return 720;
   }
 }
