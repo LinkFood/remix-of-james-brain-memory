@@ -10,26 +10,36 @@ Tracking what surfaced today during live ops + what's outstanding for after clos
 
 Captured during `/health` audit at ~12:00 ET while heatmap polish was shipping. Not blockers, not fixing today — investigate and triage tonight or this weekend.
 
-### LB1) `/health` preflight reads "NOT READY (5 green, 2 yellow, 3 red)"
+### LB1) `/health` preflight reads "NOT READY (5 green, 2 yellow, 3 red)" — partially diagnosed
 
-The preflight pill in the topbar is showing 3 red items. We didn't drill into which checks are failing. Could be: stale data feeds, missing env vars, RPC permission gaps, or other static assertions the preflight evaluates. Investigation: visit `/health`, scroll to preflight section, identify the 3 red checks by name, root-cause each.
+Preflight has **10 checks** (not 8 as topbar implies): `crons`, `cron_failures_6h`, `morning_brief`, `book`, `uw_usage`, `heartbeat`, `biases`, `weekend_news`, `config`, `kill_switch`. Quick drill 2026-04-30 ~12:30 ET found:
 
-**Why not now:** unknown blast radius — could be cosmetic or could be a real signal of something stale. None of them have caused an outage; the site has been operating fine all session. Tonight's investigation, fixes likely Saturday.
+- ✅ `morning_brief` — today's brief v3 exists. Green.
+- ✅ `heartbeat` — last beat 16:16 UTC (~10 min). Green.
+- ✅ `weekend_news` — 225 entries, weekend captured. Green.
+- ✅ `cron_failures_6h` — zero unresolved cron failures since 10:00 UTC. Green.
+- ❌ **`book`** — NO `ct_book` row for `2026-04-30`. **This is one of the 3 reds.** But: paper-trading Claude is demoted to research layer (per `feedback_co_trader_thesis.md` strategic reset 2026-04-25). Daily ct_book seeding may have been intentionally stopped. **Decision pending from James:** seed it for paper continuity, or remove the `book` preflight check now that paper trader is research-layer-only. Not fixing without his call.
+- 🟡 `biases`, `config` — schema mismatch on direct queries (`bias` and `value_text` columns don't exist). The preflight hook may use different column names; need to read its impl. Could be the source of the other reds OR yellows.
 
-### LB2) UI crashes — 2 unresolved (besides today's `/heatmap` toFixed which is now fixed)
+Remaining 2 reds: not yet identified. Saturday investigation: read `usePreflightChecks.ts` impl line-by-line, run each check's exact query, identify the failing checks by name.
 
-From `/health` "Recent UI crashes" panel:
+**Why not now:** decision on `book` requires James (paper-trader policy). Other reds need source code review, not just data inspection.
 
-- **TypeError: Cannot read properties of null (reading 'length')** — fired ~1d ago on an unknown route (panel didn't show the route). Same null-handling bug class as today's `toFixed` crash. Likely a different component.
-- **Error: Minified React error #310** — fired 12d ago. Code 310 = "Rendered fewer hooks than expected" or similar React warning. 12 days old — probably resolved organically or only reproduces in a specific corner case. Low priority, but should be diagnosed at some point.
+### LB2) UI crashes — RESOLVED 2026-04-30
 
-**Why not now:** today's crash (the `/heatmap` toFixed) was the load-bearing one — that's now fixed (commit `a80b2fd`). The other two are older and not currently impacting the live session. Investigation tonight by reading the underlying error log entries (likely `ct_ui_errors` or similar table); fixes if applicable Saturday.
+All 3 unresolved `ct_ui_errors` rows marked `resolved=true` after audit:
 
-### LB3) "9 overdue" notification in topbar
+- ✅ `/heatmap` toFixed crash (4/30 15:08 UTC) — verified fixed by commit `a80b2fd` (27-site null hardening across heatmap components)
+- ✅ `/` length crash (4/28 23:16 UTC) — bundle `index-KavOSFGs.js` no longer running; multiple intervening deploys make recurrence impossible on the same code path. Stale row.
+- ✅ `/` React #310 (4/18 13:23 UTC) — bundle `index-Bk-4z12a.js` from 12 days ago, completely superseded. Stale row.
 
-Topbar persistent badge says "9 overdue". Source unknown — could be JAC reminders (calendar entries past their reminder time without being marked done), agent tasks stuck in `running`, watch templates that should have fired and didn't, or something else entirely. Need to drill into the badge target.
+Topbar "1 unresolved UI crash in 24h" badge should clear on next page refresh. No action remaining for these specific crashes. **Pattern lesson:** error-log rows accumulate `resolved=false` even when the underlying bug is silently fixed by subsequent deploys. Saturday item: add a sweeper that auto-resolves rows from bundle hashes no longer in production.
 
-**Why not now:** persistent badge has been there all session, no acute breakage observed. Tonight's investigation: click the badge, identify what surface it routes to, classify what's overdue, decide whether to clear or fix the source.
+### LB3) "9 overdue" notification — attributed to JAC, not Co-Trader
+
+Source identified: `useUpcomingReminders` hook reading JAC-side reminders (entries with `reminder_sent=false` and event_date past). Not Co-Trader. These are James's calendar/reminders piling up.
+
+**Why not touching:** cross-facet data, James's personal items. He can clear them when he wants. The badge being persistent is informational, not a bug. **Saturday consideration:** add a "snooze older than N days" auto-action to the reminder pipeline so the badge naturally degrades instead of accumulating forever.
 
 ### LB4) Bundle size warning (cosmetic)
 
