@@ -139,6 +139,24 @@ Source identified: `useUpcomingReminders` hook reading JAC-side reminders (entri
 
 **Why not touching:** cross-facet data, James's personal items. He can clear them when he wants. The badge being persistent is informational, not a bug. **Saturday consideration:** add a "snooze older than N days" auto-action to the reminder pipeline so the badge naturally degrades instead of accumulating forever.
 
+### LB7) Tape reader "tide" formula audit — Saturday
+
+Surfaced 2026-04-30 ~14:45 ET. James saw "bearish tide" in tape reader on a price-up day. Investigation showed total today = **-220M** across watchlist via the existing formula:
+
+```
+netPrem += (t.net_call_premium ?? 0) + (t.net_put_premium ?? 0);
+```
+
+**The `+` is suspicious.** Standard convention has `net_put_premium` positive = aggressive put buying = bearish. If that holds, the correct directional metric is `net_call - net_put`, not `+`. Adding them mixes a bullish signal with a bearish one. AMZN today: net_call=-84M (call selling), net_put=+3.5M (put buying). Both bearish-leaning — sum = -80.5M. But the formula structure doesn't differentiate "calls being sold" from "puts being bought" — both register as the same signed bucket.
+
+Saturday actions:
+1. **Verify column semantics** — check `_shared/uwClient.ts` (where `net_premium_ticks` is ingested) or UW docs to confirm what positive/negative `net_put_premium` actually means.
+2. **Cross-reference against heatmap math** — `aggressive_directional_decay` uses `inferDirection()` (canonical truth post-2026-04-28 symmetry fix) and computes `aggressive_ask_call_premium - aggressive_ask_put_premium`. The heatmap is the ground truth; the tape-reader tide should agree (after sign convention is settled).
+3. **If formula is wrong**, change to `net_call - net_put`. Re-run today's row through both formulas and compare.
+4. **If formula is right**, the tide IS legitimately bearish today (real institutional unwinding into strength) — surface that nuance in the tape commentary instead of just labeling "bearish".
+
+Heatmap data layer (shipped today) gives us a trustworthy reference. Without it, this audit would have been guesswork. With it, Saturday can definitively decide.
+
 ### LB6) OvernightPositioning historical gap — Saturday backfill + delta-RPC fix
 
 Surfaced 2026-04-30 ~14:30 ET. UW rate-limited the OI snapshot fn for 12+ days, leaving these tickers with stale `ct_oi_snapshots`:
