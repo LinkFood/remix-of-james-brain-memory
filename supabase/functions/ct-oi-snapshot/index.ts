@@ -440,10 +440,34 @@ serve(async (req) => {
   let totalInserted = 0;
   let totalMcpCalls = 0;
 
-  // Sequential per-ticker to be polite to UW (20 MCP calls total per run is fine)
-  for (const ticker of tickers) {
+  // Sequential per-ticker. UW has both a primary rate limit and a flow rate
+  // limit; ~21 MCP calls per ticker × 10 tickers blew past the primary limit
+  // in production for 12+ days (caught 2026-04-30) — the 5th-8th tickers
+  // (MSFT/GOOGL/AMZN/META) consistently got `rate_limit_primary` while the
+  // 9th-10th (NVDA/TSLA) recovered after the limiter cooled.
+  //
+  // Fix: 1.5s sleep between tickers + one retry-after-10s on rate_limit_primary.
+  // Adds ~15s to total run time. Stays well under the 60s pg_net budget.
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  const isRateLimited = (errs: string[]) =>
+    errs.some((e) => /rate_limit_primary/i.test(e));
+
+  for (let i = 0; i < tickers.length; i++) {
+    const ticker = tickers[i];
+    if (i > 0) await sleep(1500);   // pace requests
     try {
-      const r = await snapshotTicker(supabase, ticker, snapDate, snapSlot);
+      let r = await snapshotTicker(supabase, ticker, snapDate, snapSlot);
+      if (r.inserted === 0 && isRateLimited(r.errors)) {
+        // One retry after a 10s cooldown — UW rate limit usually resets faster.
+        await sleep(10_000);
+        const retry = await snapshotTicker(supabase, ticker, snapDate, snapSlot);
+        if (retry.inserted > 0) {
+          retry.errors = [...r.errors, 'rate_limit_recovered_on_retry', ...retry.errors];
+          r = retry;
+        } else {
+          r = { ...retry, errors: [...r.errors, 'retry_also_rate_limited', ...retry.errors] };
+        }
+      }
       results.push(r);
       totalInserted += r.inserted;
       totalMcpCalls += r.mcpCalls;

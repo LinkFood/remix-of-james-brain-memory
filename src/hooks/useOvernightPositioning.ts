@@ -18,9 +18,9 @@ export interface OiShiftRow {
   snap_slot: string | null;
 }
 
-export function useOvernightPositioning(ticker?: string, limit = 20) {
+export function useOvernightPositioning(ticker?: string, limit = 50, perTickerLimit: number | null = 5) {
   return useQuery<OiShiftRow[]>({
-    queryKey: ['overnight-positioning', ticker ?? 'all', limit],
+    queryKey: ['overnight-positioning', ticker ?? 'all', limit, perTickerLimit ?? 'global'],
     staleTime: 300_000,
     refetchInterval: 300_000,
     queryFn: async () => {
@@ -28,6 +28,7 @@ export function useOvernightPositioning(ticker?: string, limit = 20) {
       const { data, error } = await (supabase.rpc as any)('ct_top_oi_shifts', {
         p_limit: limit,
         p_ticker: ticker ?? null,
+        p_per_ticker_limit: perTickerLimit,
       });
       if (error) throw error;
       return (Array.isArray(data) ? data : []) as OiShiftRow[];
