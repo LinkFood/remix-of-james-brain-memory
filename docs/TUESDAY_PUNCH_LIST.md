@@ -37,7 +37,21 @@ Wiring is identical to today's pattern (~10-15 lines each). Saturday agent fans 
 
 ### Pattern lesson learned today
 
-Initial deploy of Agent O's `ct-hypothesis-health-check` wire caused 6/6 Haiku JSON parses to fail because the full narrative-style preamble has "your prose / your output" instructions that contradict "return strictly JSON". Required a short-anchor variant. Future wires must check: **is the consumer asking the model for JSON or prose?** If JSON: use `temporalAnchorShort`. If prose: use `temporalAnchorPreamble`. Documented in the helper file.
+Initial deploy of Agent O's `ct-hypothesis-health-check` wire ALSO returned 6/6 Haiku JSON parses failed. **Investigation correction:** the Haiku judgment in `judgeHypothesis` has been failing since **2026-04-18 (12 days ago) — 1,588 total `haiku_failed` rows in `ct_claude_decisions`**. NOT a regression from today's temporal preamble. Pre-existing bug Agent O misattributed.
+
+The `temporalAnchorShort` variant shipped today is still good preventive medicine for any FUTURE Haiku JSON consumer. Documented in helper: **JSON output → use `temporalAnchorShort`. Prose output → use `temporalAnchorPreamble`.**
+
+### LB5) `judgeHypothesis` Haiku call broken since 2026-04-18 — Saturday investigation
+
+The Haiku call in `ct-hypothesis-health-check.judgeHypothesis()` has been returning unparseable output for ~2 weeks. Symptom: zero rows with `outcome IN ('intact', 'invalidated', 'ambiguous')` in `ct_claude_decisions` despite 1,588+ `haiku_failed` rows. Result: **the hypothesis lifecycle has had no Haiku-graded refutation for 12 days** — open hypotheses pile up without auto-judgment.
+
+Possible root causes (Saturday triage):
+- Haiku model behavior shift (Claude 3.5 Haiku vs Haiku 4.5 — check `CLAUDE_MODELS.haiku` value)
+- Prompt asks for strict JSON but Haiku now wraps with backticks or commentary; the regex strip in `judgeHypothesis` (lines 200) may need updating
+- `max_tokens: 250` may now be too tight; bump to 500
+- Move to forced tool-use pattern (matches what `ct-eod-report` and `ct-daily-brief` already do successfully)
+
+Workaround in place: the new `detectPastDatesInText()` scan in `ct-hypothesis-health-check` works regardless of Haiku — stale-dated hypotheses can still be auto-flagged via the regex pass without depending on the broken judge.
 
 ### Validator-warnings telemetry — Saturday addition
 
