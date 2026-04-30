@@ -37,11 +37,22 @@ export interface TemporalContext {
   /** Current wall-clock time in New York, formatted 'HH:MM ET'. */
   now_et: string;
   /**
-   * Drop-in preamble. Prepend to every system prompt before any other
-   * instructions. The text is intentionally repetitive — Claude reads it
-   * three times and still pattern-completes if you only say it once.
+   * Drop-in preamble for NARRATIVE-OUTPUT consumers (morning brief, EOD
+   * report, tape reader, etc.). Prepend to system prompt before any
+   * other instructions. Intentionally repetitive — Claude reads it three
+   * times and still pattern-completes if you only say it once.
    */
   temporalAnchorPreamble: string;
+  /**
+   * Tight one-line anchor for STRUCTURED/JSON-OUTPUT consumers (Haiku
+   * judges, tool-use callers). The full narrative-style preamble has
+   * "your prose" / "your output" instructions that confuse small models
+   * asked for strict JSON. Use this short variant when the model is
+   * being asked to return JSON or call a tool. Confirmed regression on
+   * ct-hypothesis-health-check 2026-04-30: full preamble caused 6/6
+   * Haiku JSON parses to fail.
+   */
+  temporalAnchorShort: string;
 }
 
 /**
@@ -164,12 +175,19 @@ export function getTemporalContext(): TemporalContext {
     `- If you find yourself referencing "Friday gap-down" / "Monday rally" / "yesterday's earnings" without explicit ` +
     `grounding from a pre-tagged input field, STOP and re-read the temporal frame. The frame is non-negotiable.`;
 
+  // Short variant for JSON / tool-use consumers — no narrative-style
+  // instructions, just the date anchor.
+  const temporalAnchorShort =
+    `Reference date: ${session_date} (${session_day_name}). ` +
+    `Any "today/tomorrow/yesterday" or day-name references anchor to this date.`;
+
   return {
     session_date,
     session_day_name,
     now_utc,
     now_et,
     temporalAnchorPreamble,
+    temporalAnchorShort,
   };
 }
 

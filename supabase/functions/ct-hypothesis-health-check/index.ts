@@ -267,7 +267,11 @@ serve(async (req) => {
   // Claude-own ct_hypotheses table — still inside the contract.
   const claudeCtx = await buildClaudeContext(supabase, { heartbeatLimit: 1 });
   const marketState = marketStateFromContext(claudeCtx);
-  const systemPrompt = `${tctx.temporalAnchorPreamble}\n\n${claudeSystemPromptPreamble(claudeCtx)}\n\n${HAIKU_SYSTEM}`;
+  // Use SHORT temporal anchor — judgeHypothesis is a strict-JSON Haiku
+  // call. The full narrative-style preamble caused 6/6 parse failures on
+  // 2026-04-30 first deploy because its "your prose / your output"
+  // instructions confused Haiku into producing prose instead of JSON.
+  const systemPrompt = `${tctx.temporalAnchorShort}\n\n${claudeSystemPromptPreamble(claudeCtx)}\n\n${HAIKU_SYSTEM}`;
 
   const { data: open, error } = await supabase
     .from('ct_hypotheses')
