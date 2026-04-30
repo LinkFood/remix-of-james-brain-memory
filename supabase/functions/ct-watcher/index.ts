@@ -29,6 +29,9 @@ import { now as clockNow } from '../_shared/clock.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { CT_SYSTEM_PROMPT_V1, CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
+import { getTemporalContext } from '../_shared/temporalContext.ts';
+import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
+import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
 import { fetchFormattedMixedEdgePriors } from '../_shared/edgePriors.ts';
 import { buildMemoryBundle, getRecentSelfCorrections, getActiveBiases } from '../_shared/memoryRecall.ts';
 import { embedCtItem, buildCtRichText } from '../_shared/ctEmbed.ts';
@@ -1307,6 +1310,17 @@ serve(async (req) => {
     // zeroed map on query error — never crashes the cycle.
     const newsSentiment24h = await getNewsSentimentNet(supabase, watchlist, 24);
 
+    // 3b3. Temporal anchor + flow heatmap. Watcher emits JSON-in-prose, so
+    // use the SHORT temporal anchor — the full preamble breaks JSON parsing
+    // (proven on hypothesis-health-check). See _shared/temporalContext.ts.
+    const tctx = getTemporalContext();
+    const flowHeatmapContext = await getFlowHeatmapContext(supabase, watchlist);
+    const flowHeatmapMeta = {
+      generated_at: flowHeatmapContext.generated_at,
+      lookback_hours: flowHeatmapContext.lookback_hours,
+      math_mode: flowHeatmapContext.math_mode,
+    };
+
     // 3c. CONVERGENCE DETECTOR — count independent signals pointing same
     // direction in the last 15min. ≥3 converging signals forces ALERT even
     // if Claude's conviction is low. Bypasses gun-shyness on clear setups.
@@ -1348,6 +1362,9 @@ serve(async (req) => {
 
     // 4. Assemble Claude user message — condensed, under ~6K tokens
     const userMessage = JSON.stringify({
+      session_date: tctx.session_date,
+      session_day_name: tctx.session_day_name,
+      now_et: tctx.now_et,
       timestamp_utc: clock.iso,
       timestamp_et: clock.datetime,
       market_state: condensed,
@@ -1366,6 +1383,10 @@ serve(async (req) => {
       greek_flow_latest: greekFlowLatest,
       iv_rank_per_ticker: ivRankPerTicker,
       news_sentiment_24h_per_ticker: newsSentiment24h,
+      // Flow heatmap — POSITIONING REGIME (168h decay, top 3 expiry-week
+      // stacks per watchlist ticker). Mirrors EOD-summary / EOD-report wires.
+      flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+      flow_heatmap_meta: flowHeatmapMeta,
       proxy_mapping: {
         GLD: 'gold ETF — used as proxy for gold futures (GC) flow and positioning',
         USO: 'oil ETF — used as proxy for oil futures (CL) flow and positioning',
@@ -1450,7 +1471,7 @@ ${m.macro_label} in ~${m.hours_remaining.toFixed(1)}h (${m.event_date}${m.event_
     try {
       const response = await callClaude({
         model: CLAUDE_MODELS.haiku,
-        system: promptAddendum ? CT_SYSTEM_PROMPT_V1 + promptAddendum : CT_SYSTEM_PROMPT_V1,
+        system: tctx.temporalAnchorShort + '\n\n' + (promptAddendum ? CT_SYSTEM_PROMPT_V1 + promptAddendum : CT_SYSTEM_PROMPT_V1),
         messages: [{ role: 'user', content: userMessage }],
         max_tokens: 3000,
         temperature: 0.2,
@@ -1490,6 +1511,52 @@ ${m.macro_label} in ~${m.hours_remaining.toFixed(1)}h (${m.event_date}${m.event_
 
     // 6. Parse Claude response
     const parsed = claudeText ? parseClaudeJson(claudeText) : null;
+
+    // 6b. Temporal-coherence validator (best-effort). Validates the narrative
+    // strings the watcher emitted (observation/glance/up_case/down_case +
+    // status_line). Persisted into the heartbeat row's current_reads JSONB
+    // after the writeHeartbeat call returns the id. See _shared/temporalValidator.ts.
+    let validatorOk = true;
+    let validatorContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
+    if (parsed) {
+      const narrativeForValidation = [
+        asString(parsed.observation) ?? '',
+        toArray(parsed.glance).filter((g): g is string => typeof g === 'string').join(' | '),
+        asString(parsed.up_case) ?? '',
+        asString(parsed.down_case) ?? '',
+        asString(parsed.status_line) ?? '',
+      ].filter(s => typeof s === 'string' && s.trim().length > 0).join('\n\n---\n\n');
+      if (narrativeForValidation) {
+        try {
+          const validation = await validateTemporalCoherence(narrativeForValidation, tctx.session_date, {
+            tickerContext: toArray(parsed.instruments).filter((s): s is string => typeof s === 'string').join(', ') || undefined,
+          });
+          validatorOk = validation.ok;
+          validatorContradictions = validation.contradictions;
+          const critical = validation.contradictions.filter(c => c.severity === 'critical');
+          if (critical.length > 0) {
+            console.warn(
+              `[ct-watcher] temporal validator flagged ${critical.length} CRITICAL contradiction(s) for session ${tctx.session_date}:`,
+              JSON.stringify(critical),
+            );
+          } else if (!validation.ok && validation.contradictions.length > 0) {
+            console.warn(
+              `[ct-watcher] temporal validator flagged ${validation.contradictions.length} warning(s):`,
+              JSON.stringify(validation.contradictions),
+            );
+          }
+        } catch (e) {
+          console.warn('[ct-watcher] temporal validator threw (non-blocking):', String(e));
+        }
+      }
+    }
+    const temporalValidatorWarnings = {
+      ok: validatorOk,
+      session_date: tctx.session_date,
+      contradiction_count: validatorContradictions.length,
+      critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
+      contradictions: validatorContradictions,
+    };
 
     // 7. Dispatch by state — ALWAYS end with at least a heartbeat row
     let heartbeatId: string | null = null;
@@ -1554,6 +1621,34 @@ ${m.macro_label} in ~${m.hours_remaining.toFixed(1)}h (${m.event_date}${m.event_
         }
         default:
           heartbeatId = await writeHeartbeat(supabase, condensed, { state: 'HEARTBEAT', watching: condensedWatching(condensed) } as ClaudeJson, `unknown state: ${parsed.state}`, triggerInfo);
+      }
+    }
+
+    // Backfill the heartbeat row's current_reads with the temporal validator
+    // warnings + flow heatmap context. current_reads is the JSONB catch-all
+    // on ct_heartbeats — we re-read, merge, and write back so existing keys
+    // (current_reads, _snapshot, _event_trigger) are preserved.
+    if (heartbeatId) {
+      try {
+        const { data: hbRow } = await supabase
+          .from('ct_heartbeats')
+          .select('current_reads')
+          .eq('id', heartbeatId)
+          .maybeSingle();
+        const existing = (hbRow?.current_reads as Record<string, unknown> | null) ?? {};
+        await supabase
+          .from('ct_heartbeats')
+          .update({
+            current_reads: {
+              ...existing,
+              flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+              flow_heatmap_meta: flowHeatmapMeta,
+              temporal_validator_warnings: temporalValidatorWarnings,
+            },
+          })
+          .eq('id', heartbeatId);
+      } catch (e) {
+        console.warn('[ct-watcher] heartbeat current_reads backfill failed:', String(e));
       }
     }
 

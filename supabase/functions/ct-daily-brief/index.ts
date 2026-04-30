@@ -50,6 +50,9 @@ import {
 } from '../_shared/claudeReadSurface.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { now as clockNow, dayNameInTz, relativeDayTag, dateInTz } from '../_shared/clock.ts';
+import { getTemporalContext } from '../_shared/temporalContext.ts';
+import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
+import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
 
 type Triggered = 'scheduled' | 'breaking_news' | 'manual' | 'regime_shift';
 
@@ -317,7 +320,7 @@ serve(async (req) => {
     const watchlist = await getWatchlist(supabase);
     const ttlHours = Number(await getConfig<number>('claude_brief_ttl_hours', 8));
 
-    const [ctx, breakingNews, upcomingEvents, snapshots, recentClosed] = await Promise.all([
+    const [ctx, breakingNews, upcomingEvents, snapshots, recentClosed, flowHeatmapContext] = await Promise.all([
       buildClaudeContext(supabase, {
         heartbeatLimit: 3,
         openHypothesisLimit: 25,
@@ -329,7 +332,14 @@ serve(async (req) => {
       pullUpcomingEvents(supabase, sessionDate),
       pullTickerSnapshots(supabase, watchlist),
       pullYesterdayClosedTrades(supabase),
+      getFlowHeatmapContext(supabase, watchlist),
     ]);
+
+    // Temporal anchor — tool-use JSON consumer, so use the SHORT variant.
+    // The full preamble has narrative-style instructions that confuse models
+    // asked for strict tool-use JSON (proven on hypothesis-health-check).
+    // See _shared/temporalContext.ts.
+    const tctx = getTemporalContext();
 
     // Figure out versioning + urgency before calling Claude.
     let supersedesId: string | null = supersedesIdHint ?? null;
@@ -434,6 +444,8 @@ serve(async (req) => {
     // ------- PROMPT -------
     const preamble = claudeSystemPromptPreamble(ctx);
     const system = [
+      tctx.temporalAnchorShort,
+      '',
       preamble,
       '',
       `**Today is ${sessionDate} (${sessionDayName}).** Current time: ${etTimeStr} ET (${utcTimeStr} UTC).`,
@@ -486,6 +498,15 @@ serve(async (req) => {
       breaking_news_24h: taggedBreakingNews,
       upcoming_events_7d: taggedUpcomingEvents,
       ticker_snapshots: snapshots,
+      // Flow heatmap — POSITIONING REGIME (168h, aggressive-directional decay).
+      // Top 3 expiry-week stacks per watchlist ticker by abs(value). Mirrors
+      // ct-eod-summary / ct-eod-report wires.
+      flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+      flow_heatmap_meta: {
+        generated_at: flowHeatmapContext.generated_at,
+        lookback_hours: flowHeatmapContext.lookback_hours,
+        math_mode: flowHeatmapContext.math_mode,
+      },
       supersedes_id: supersedesId,
       prior_brief_version: briefVersion - 1,
     };
@@ -543,6 +564,47 @@ serve(async (req) => {
     });
     const perTicker = (payload.per_ticker ?? []).map(scrubTickerCard);
     const ideas = (payload.high_conviction_ideas ?? []).slice(0, 5);
+
+    // ------- TEMPORAL VALIDATOR (best-effort) -------
+    // Validate the narrative strings (macro_narrative + convergent_view +
+    // per_ticker rationales) against session_date. Critical contradictions log
+    // a warning and ride along on ct_claude_decisions.context_snapshot.
+    let validatorOk = true;
+    let validatorContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
+    const narrativeForValidation = [
+      payload.macro_narrative ?? '',
+      payload.convergent_view ?? '',
+      payload.overnight_action ?? '',
+      ...perTicker.map(c => `${c.ticker}: ${c.narrative_view ?? ''} ${c.tape_view ?? ''} ${c.rationale ?? ''}`),
+    ].filter(s => typeof s === 'string' && s.trim().length > 0).join('\n\n---\n\n');
+    if (narrativeForValidation) {
+      try {
+        const validation = await validateTemporalCoherence(narrativeForValidation, tctx.session_date);
+        validatorOk = validation.ok;
+        validatorContradictions = validation.contradictions;
+        const critical = validation.contradictions.filter(c => c.severity === 'critical');
+        if (critical.length > 0) {
+          console.warn(
+            `[ct-daily-brief] temporal validator flagged ${critical.length} CRITICAL contradiction(s) for session ${tctx.session_date}:`,
+            JSON.stringify(critical),
+          );
+        } else if (!validation.ok && validation.contradictions.length > 0) {
+          console.warn(
+            `[ct-daily-brief] temporal validator flagged ${validation.contradictions.length} warning(s):`,
+            JSON.stringify(validation.contradictions),
+          );
+        }
+      } catch (e) {
+        console.warn('[ct-daily-brief] temporal validator threw (non-blocking):', String(e));
+      }
+    }
+    const temporalValidatorWarnings = {
+      ok: validatorOk,
+      session_date: tctx.session_date,
+      contradiction_count: validatorContradictions.length,
+      critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
+      contradictions: validatorContradictions,
+    };
 
     // ------- PERSIST -------
     const expiresAt = new Date(Date.now() + ttlHours * 3600 * 1000).toISOString();
@@ -612,6 +674,13 @@ serve(async (req) => {
           upcoming_events_count: upcomingEvents.length,
           snapshots_count: snapshots.length,
           closed_trades_48h: recentClosed.length,
+          flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+          flow_heatmap_meta: {
+            generated_at: flowHeatmapContext.generated_at,
+            lookback_hours: flowHeatmapContext.lookback_hours,
+            math_mode: flowHeatmapContext.math_mode,
+          },
+          temporal_validator_warnings: temporalValidatorWarnings,
         },
         reasoning: `Generated ${urgency} brief v${briefVersion} for ${sessionDate} (triggered_by=${triggeredBy})${reason ? ` — ${reason}` : ''}. per_ticker=${perTicker.length} ideas=${ideas.length}`,
         outcome: `brief_id=${inserted.id} version=${briefVersion} ideas=${ideas.length}`,

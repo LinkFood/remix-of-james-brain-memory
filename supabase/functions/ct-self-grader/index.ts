@@ -21,6 +21,10 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { CT_SELF_GRADER_SYSTEM_PROMPT, CT_SELF_GRADER_PROMPT_VERSION } from '../_shared/selfGraderPrompt.ts';
+import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
+import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
+import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
 
 type SubjectType = 'observation' | 'flag' | 'alert';
 
@@ -274,32 +278,46 @@ async function buildContext(supabase: SupabaseClient, subject: Subject) {
   };
 }
 
-async function regradeSubject(supabase: SupabaseClient, subject: Subject): Promise<{ ok: boolean; error?: string }> {
+async function regradeSubject(
+  supabase: SupabaseClient,
+  subject: Subject,
+  tctx: ReturnType<typeof getTemporalContext>,
+  flowHeatmapPerTicker: Array<{ ticker: string; stacks: Array<{ expiry_bucket_week: string; value: number; source_alert_count: number }> }>,
+  flowHeatmapMeta: { generated_at: string; lookback_hours: number; math_mode: string },
+): Promise<{ ok: boolean; error?: string }> {
   const ctx = await buildContext(supabase, subject);
-  const userMessage = JSON.stringify(ctx);
+
+  // Pre-tag the subject's timestamps + the original observation timestamp.
+  // The subject was created hours ago — without anchoring, Sonnet can frame
+  // it as "today" and produce yesterday-as-today retrospectives.
+  const ctxWithAnchors = {
+    ...ctx,
+    session_date: tctx.session_date,
+    session_day_name: tctx.session_day_name,
+    now_et: tctx.now_et,
+    original: {
+      ...ctx.original,
+      created_at_tag: tagIsoTimestamp(ctx.original.created_at, tctx.session_date),
+    },
+    flow_heatmap_per_ticker: flowHeatmapPerTicker,
+    flow_heatmap_meta: flowHeatmapMeta,
+  };
+  const userMessage = JSON.stringify(ctxWithAnchors);
 
   let claudeText = '';
   const claudeCallStart = Date.now();
+  let response: Awaited<ReturnType<typeof callClaude>> | null = null;
   try {
-    const response = await callClaude({
+    response = await callClaude({
       model: CLAUDE_MODELS.sonnet,
-      system: CT_SELF_GRADER_SYSTEM_PROMPT,
+      // Self-grader emits prose narrative critique (Sonnet) — full preamble
+      // applies. See _shared/temporalContext.ts.
+      system: tctx.temporalAnchorPreamble + '\n\n' + CT_SELF_GRADER_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMessage }],
       max_tokens: 1500,
       temperature: 0.3,
     });
     claudeText = parseTextContent(response);
-    logClaudeUsage(supabase, {
-      source: 'ct-self-grader',
-      model: CLAUDE_MODELS.sonnet,
-      usage: response.usage,
-      duration_ms: Date.now() - claudeCallStart,
-      metadata: {
-        subject_id: subject.subject_id,
-        subject_type: subject.subject_type,
-        prompt_version: CT_SELF_GRADER_PROMPT_VERSION,
-      },
-    });
   } catch (e) {
     const msg = e instanceof ClaudeError ? `Claude ${e.status}: ${e.message}` : String(e);
     return { ok: false, error: msg };
@@ -307,8 +325,82 @@ async function regradeSubject(supabase: SupabaseClient, subject: Subject): Promi
 
   const parsed = parseJson(claudeText);
   if (!parsed) {
+    // Log the failed call with the (empty) validator warnings before bailing.
+    if (response) {
+      logClaudeUsage(supabase, {
+        source: 'ct-self-grader',
+        model: CLAUDE_MODELS.sonnet,
+        usage: response.usage,
+        duration_ms: Date.now() - claudeCallStart,
+        metadata: {
+          subject_id: subject.subject_id,
+          subject_type: subject.subject_type,
+          prompt_version: CT_SELF_GRADER_PROMPT_VERSION,
+          parse_failed: true,
+        },
+      });
+    }
     return { ok: false, error: `unparsable response (${claudeText.length} chars)` };
   }
+
+  // Temporal-coherence validator (best-effort). Validate the critique strings.
+  // ct_self_regrades has no JSONB catch-all column — persist warnings into
+  // ct_claude_usage.metadata instead (existing JSONB on the usage log row).
+  let validatorOk = true;
+  let validatorContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
+  const narrativeForValidation = [
+    parsed.what_i_got_right ?? '',
+    parsed.what_i_got_wrong ?? '',
+    parsed.how_id_rewrite ?? '',
+  ].filter(s => typeof s === 'string' && s.trim().length > 0).join('\n\n---\n\n');
+  if (narrativeForValidation) {
+    try {
+      const validation = await validateTemporalCoherence(narrativeForValidation, tctx.session_date, {
+        tickerContext: subject.instruments.join(', ') || undefined,
+      });
+      validatorOk = validation.ok;
+      validatorContradictions = validation.contradictions;
+      const critical = validation.contradictions.filter(c => c.severity === 'critical');
+      if (critical.length > 0) {
+        console.warn(
+          `[ct-self-grader] temporal validator flagged ${critical.length} CRITICAL contradiction(s) on ${subject.subject_type}:${subject.subject_id} for session ${tctx.session_date}:`,
+          JSON.stringify(critical),
+        );
+      } else if (!validation.ok && validation.contradictions.length > 0) {
+        console.warn(
+          `[ct-self-grader] temporal validator flagged ${validation.contradictions.length} warning(s):`,
+          JSON.stringify(validation.contradictions),
+        );
+      }
+    } catch (e) {
+      console.warn('[ct-self-grader] temporal validator threw (non-blocking):', String(e));
+    }
+  }
+  const temporalValidatorWarnings = {
+    ok: validatorOk,
+    session_date: tctx.session_date,
+    contradiction_count: validatorContradictions.length,
+    critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
+    contradictions: validatorContradictions,
+  };
+
+  // Now log the successful Claude call with validator warnings stuffed into
+  // metadata (JSONB) — the row in ct_claude_usage gives operators a join key
+  // back to the regrade.
+  logClaudeUsage(supabase, {
+    source: 'ct-self-grader',
+    model: CLAUDE_MODELS.sonnet,
+    usage: response!.usage,
+    duration_ms: Date.now() - claudeCallStart,
+    metadata: {
+      subject_id: subject.subject_id,
+      subject_type: subject.subject_type,
+      prompt_version: CT_SELF_GRADER_PROMPT_VERSION,
+      flow_heatmap_per_ticker: flowHeatmapPerTicker,
+      flow_heatmap_meta: flowHeatmapMeta,
+      temporal_validator_warnings: temporalValidatorWarnings,
+    },
+  });
 
   const originalSa = (subject.self_assessment ?? {}) as Record<string, unknown>;
   const row = {
@@ -353,6 +445,18 @@ serve(async (req) => {
   const startedAt = Date.now();
 
   try {
+    // Temporal anchor + flow heatmap — pulled once per run, reused across
+    // every subject. Self-grader writes prose critique (Sonnet) so the FULL
+    // temporalAnchorPreamble applies. See _shared/temporalContext.ts.
+    const tctx = getTemporalContext();
+    const watchlistForHeatmap = await getWatchlist(supabase);
+    const flowHeatmapContext = await getFlowHeatmapContext(supabase, watchlistForHeatmap);
+    const flowHeatmapMeta = {
+      generated_at: flowHeatmapContext.generated_at,
+      lookback_hours: flowHeatmapContext.lookback_hours,
+      math_mode: flowHeatmapContext.math_mode,
+    };
+
     const candidates = await fetchCandidates(supabase);
     const batch = candidates.slice(0, 5);
 
@@ -360,7 +464,7 @@ serve(async (req) => {
     const errors: string[] = [];
 
     for (const subject of batch) {
-      const { ok, error } = await regradeSubject(supabase, subject);
+      const { ok, error } = await regradeSubject(supabase, subject, tctx, flowHeatmapContext.per_ticker, flowHeatmapMeta);
       if (ok) regraded++;
       else if (error) errors.push(`${subject.subject_type}:${subject.subject_id.slice(0, 8)} — ${error}`);
     }

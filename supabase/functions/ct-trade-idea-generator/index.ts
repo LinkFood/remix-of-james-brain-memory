@@ -28,6 +28,10 @@ import {
   TickerQuantCard,
 } from '../_shared/tickerQuantCard.ts';
 import { fetchFormattedMixedEdgePriors } from '../_shared/edgePriors.ts';
+import { getWatchlist } from '../_shared/watchlist.ts';
+import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
+import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
+import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
 
 const VALID_HORIZONS = new Set(['intraday', 'session', 'swing', 'multi_day']);
 const VALID_TRIGGER_TYPES = new Set(['price_cross', 'break_above', 'break_below', 'touch_level', 'time_gate']);
@@ -238,6 +242,8 @@ async function runSonnetSizeReview(
   proposed: ProposedIdea,
   hyp: HypothesisRow,
   quantCards: Record<string, TickerQuantCard | null>,
+  temporalAnchorShort: string,
+  flowHeatmapPerTicker: Array<{ ticker: string; stacks: Array<{ expiry_bucket_week: string; value: number; source_alert_count: number }> }>,
 ): Promise<SonnetReviewOutcome | null> {
   const payload = {
     proposed_idea: proposed,
@@ -251,13 +257,14 @@ async function runSonnetSizeReview(
     },
     quant_card_for_instrument: quantCards[proposed.instrument] ?? null,
     all_quant_cards: quantCards,
+    flow_heatmap_per_ticker: flowHeatmapPerTicker,
   };
 
   const callStart = Date.now();
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.sonnet,
-      system: SONNET_REVIEW_SYSTEM,
+      system: temporalAnchorShort + '\n\n' + SONNET_REVIEW_SYSTEM,
       messages: [{ role: 'user', content: JSON.stringify(payload) }],
       tools: SONNET_REVIEW_TOOLS,
       tool_choice: { type: 'any' },
@@ -621,10 +628,23 @@ serve(async (req) => {
   const results: Array<{ hypothesis_id: string; outcome: string; reason?: string; idea_id?: string }> = [];
   const cooldownIso = new Date(Date.now() - cooldownMinutes * 60_000).toISOString();
 
+  // Temporal anchor — tool-use forced JSON consumer (Haiku + Sonnet review),
+  // so use the SHORT variant. Full preamble breaks tool-use JSON parsing
+  // (proven on hypothesis-health-check). See _shared/temporalContext.ts.
+  const tctx = getTemporalContext();
+
+  // Flow heatmap — POSITIONING REGIME (168h, aggressive-directional decay).
+  // Pulled once per run, reused across every hypothesis. Defensive: returns
+  // empty per_ticker on RPC failure, never throws.
+  const watchlistForHeatmap = await getWatchlist(supabase);
+  const flowHeatmapContext = await getFlowHeatmapContext(supabase, watchlistForHeatmap);
+
   // Empirical priors from /edge attribution — aggregate + per-ticker.
   // Fetched once per run, reused across every hypothesis.
   const edgePriorsBlock = await fetchFormattedMixedEdgePriors(supabase);
-  const systemWithPriors = edgePriorsBlock ? SYSTEM + edgePriorsBlock : SYSTEM;
+  const systemWithPriors =
+    tctx.temporalAnchorShort + '\n\n' +
+    (edgePriorsBlock ? SYSTEM + edgePriorsBlock : SYSTEM);
 
   for (const hyp of hyps as HypothesisRow[]) {
     // Cooldown — skip if we already armed something for this hypothesis recently.
@@ -744,7 +764,23 @@ serve(async (req) => {
 
     // Build user payload for Claude.
     const latest = (heartbeats?.[0] ?? null) as HeartbeatRow | null;
+
+    // Pre-tag timestamp-bearing fields so the model never has to compute
+    // "is this today?". See _shared/temporalContext.ts.
+    const taggedTradeHistory = hypothesisTradeHistory.map(h => ({
+      ...h,
+      opened_at_tag: typeof h.opened_at === 'string' ? tagIsoTimestamp(h.opened_at, tctx.session_date) : null,
+      closed_at_tag: typeof h.closed_at === 'string' ? tagIsoTimestamp(h.closed_at, tctx.session_date) : null,
+    }));
+    const taggedGrades = (grades ?? []).map(g => ({
+      ...g,
+      graded_at_tag: typeof g.graded_at === 'string' ? tagIsoTimestamp(g.graded_at, tctx.session_date) : null,
+    }));
+
     const userPayload = {
+      session_date: tctx.session_date,
+      session_day_name: tctx.session_day_name,
+      now_et: tctx.now_et,
       hypothesis: {
         id: hyp.id,
         claim: hyp.claim,
@@ -762,9 +798,17 @@ serve(async (req) => {
       },
       latest_heartbeat: latest,
       recent_heartbeats: (heartbeats ?? []).slice(1),
-      recent_grades_on_hypothesis: grades ?? [],
-      hypothesis_trade_history: hypothesisTradeHistory,
+      recent_grades_on_hypothesis: taggedGrades,
+      hypothesis_trade_history: taggedTradeHistory,
       quant_cards: quantCards,
+      // Flow heatmap — POSITIONING REGIME (168h decay, top 3 expiry-week
+      // stacks per watchlist ticker). Mirrors EOD-summary / EOD-report wires.
+      flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+      flow_heatmap_meta: {
+        generated_at: flowHeatmapContext.generated_at,
+        lookback_hours: flowHeatmapContext.lookback_hours,
+        math_mode: flowHeatmapContext.math_mode,
+      },
     };
 
     let toolUse: { name: string; input: Record<string, unknown> } | null = null;
@@ -918,7 +962,7 @@ serve(async (req) => {
     let finalSizePct = idea.size_pct;
     let sonnetOutcome: SonnetReviewOutcome | null = null;
     if (idea.size_pct >= sizeEscalationPct) {
-      sonnetOutcome = await runSonnetSizeReview(supabase, idea, hyp, quantCards);
+      sonnetOutcome = await runSonnetSizeReview(supabase, idea, hyp, quantCards, tctx.temporalAnchorShort, flowHeatmapContext.per_ticker);
       if (sonnetOutcome) {
         if (sonnetOutcome.decision === 'reject') {
           results.push({ hypothesis_id: hyp.id, outcome: 'size_override_reject', reason: sonnetOutcome.reasoning.slice(0, 200) });
@@ -1051,6 +1095,44 @@ serve(async (req) => {
 
     results.push({ hypothesis_id: hyp.id, outcome: 'armed', idea_id: inserted.id });
 
+    // Temporal-coherence validator (best-effort). Validates the human-facing
+    // rationale + Sonnet reasoning against session_date. Critical contradictions
+    // log + ride along on ct_claude_decisions.context_snapshot below.
+    let armValidatorOk = true;
+    let armValidatorContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
+    const narrativeForValidation = [
+      idea.rationale ?? '',
+      sonnetOutcome?.reasoning ?? '',
+    ].filter(s => typeof s === 'string' && s.trim().length > 0).join('\n\n---\n\n');
+    if (narrativeForValidation) {
+      try {
+        const validation = await validateTemporalCoherence(narrativeForValidation, tctx.session_date, { tickerContext: idea.instrument });
+        armValidatorOk = validation.ok;
+        armValidatorContradictions = validation.contradictions;
+        const critical = validation.contradictions.filter(c => c.severity === 'critical');
+        if (critical.length > 0) {
+          console.warn(
+            `[ct-trade-idea-generator] temporal validator flagged ${critical.length} CRITICAL contradiction(s) on idea ${inserted.id}:`,
+            JSON.stringify(critical),
+          );
+        } else if (!validation.ok && validation.contradictions.length > 0) {
+          console.warn(
+            `[ct-trade-idea-generator] temporal validator flagged ${validation.contradictions.length} warning(s) on idea ${inserted.id}:`,
+            JSON.stringify(validation.contradictions),
+          );
+        }
+      } catch (e) {
+        console.warn('[ct-trade-idea-generator] temporal validator threw (non-blocking):', String(e));
+      }
+    }
+    const armTemporalValidatorWarnings = {
+      ok: armValidatorOk,
+      session_date: tctx.session_date,
+      contradiction_count: armValidatorContradictions.length,
+      critical_count: armValidatorContradictions.filter(c => c.severity === 'critical').length,
+      contradictions: armValidatorContradictions,
+    };
+
     // Decision journal — armed trade idea. Include abbreviated quant card
     // (instrument only) and Sonnet outcome if escalation fired.
     const abbreviatedQuantCard = quantCards[idea.instrument]
@@ -1095,6 +1177,13 @@ serve(async (req) => {
         sonnet_decision: sonnetOutcome?.decision ?? null,
         entry_trigger: idea.entry_trigger,
         quant_card: abbreviatedQuantCard,
+        flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+        flow_heatmap_meta: {
+          generated_at: flowHeatmapContext.generated_at,
+          lookback_hours: flowHeatmapContext.lookback_hours,
+          math_mode: flowHeatmapContext.math_mode,
+        },
+        temporal_validator_warnings: armTemporalValidatorWarnings,
       },
       tool_calls_summary: { tool: 'propose_trade_idea', input: toolUse.input, sonnet: sonnetOutcome?.decision ?? null },
       tokens_in: thisCallTokensIn + (sonnetOutcome?.tokens_in ?? 0),

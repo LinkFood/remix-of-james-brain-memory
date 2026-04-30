@@ -31,6 +31,9 @@ import {
   nextFridayOn,
 } from './dteEligibility.ts';
 import { readPulseContext } from './pulseContext.ts';
+import { getTemporalContext, tagIsoTimestamp } from './temporalContext.ts';
+import { validateTemporalCoherence } from './temporalValidator.ts';
+import { getFlowHeatmapContext } from './flowHeatmapContext.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1016,12 +1019,18 @@ export async function runSpecialistWakeup(
     };
   }
 
+  // Temporal anchor — every Claude consumer gets a session-date frame so
+  // yesterday's news / day-name framing can't bleed into today's reasoning.
+  // See _shared/temporalContext.ts. Specialists output narrative prose, so
+  // the full temporalAnchorPreamble applies here.
+  const tctx = getTemporalContext();
+
   // 8-12. Context for Claude.
   // signatureEdgeBlock is the accumulated-edge anchor — pulls promoted
   // signatures, snapshot stats, working tracks, today's attribution. Fully
   // defensive (returns a stub when none of the downstream tables are
   // populated yet — see _shared/signatureMemory.ts).
-  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse, tapeReads, peerFlags, leanScore, last5FlagsBlock, signatureEdgeBlock, signatureAlarms] = await Promise.all([
+  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse, tapeReads, peerFlags, leanScore, last5FlagsBlock, signatureEdgeBlock, signatureAlarms, flowHeatmapContext] = await Promise.all([
     loadTickerSnapshot(supabase, ticker),
     loadNextEarnings(supabase, ticker),
     loadRecentOiBuilds(supabase, ticker),
@@ -1036,6 +1045,7 @@ export async function runSpecialistWakeup(
     loadLast5FlagsContext(supabase, ticker),
     fetchSignatureEdgeForTicker(supabase, ticker),
     loadRecentSignatureAlarms(supabase, ticker),
+    getFlowHeatmapContext(supabase, [ticker]),
   ]);
 
   const overnightBlock = formatOvernightPositioningBlock(ticker, overnight);
@@ -1044,6 +1054,16 @@ export async function runSpecialistWakeup(
   const peerFlagsBlock = formatPeerFlagsBlock(peerFlags);
   const leanScoreBlock = formatLeanScoreBlock(ticker, leanScore);
   const signatureAlarmsBlock = formatSignatureAlarmsBlock(ticker, signatureAlarms);
+
+  // Flow heatmap — positioning regime block (168h decay, top 3 expiry-week
+  // stacks for this ticker). Mirrors the pattern in ct-eod-summary.
+  const heatmapRow = flowHeatmapContext.per_ticker.find(p => p.ticker === ticker);
+  const flowHeatmapBlock = (heatmapRow && heatmapRow.stacks.length > 0)
+    ? [
+        `[FLOW HEATMAP — POSITIONING REGIME (168h, aggressive-directional decay)]`,
+        ...heatmapRow.stacks.map(s => `  - week ${s.expiry_bucket_week}: ${s.value >= 0 ? '+' : ''}${s.value.toFixed(0)} (n=${s.source_alert_count})`),
+      ].join('\n')
+    : `[FLOW HEATMAP — POSITIONING REGIME] no significant stacks for ${ticker} in 168h window`;
 
   const tickerContext = {
     ticker,
@@ -1058,7 +1078,28 @@ export async function runSpecialistWakeup(
     earnings_title: nextEarnings?.title ?? null,
   };
 
-  const userPayload = `${signatureAlarmsBlock}
+  // Pre-tag timestamp-bearing fields with relative-day labels so the model
+  // never has to compute "is this today?". See _shared/temporalContext.ts.
+  const taggedNews = (news ?? []).map(n => ({
+    ...n,
+    when: typeof n.ingested_at === 'string' ? tagIsoTimestamp(n.ingested_at, tctx.session_date) : '**UNKNOWN_TIME**',
+  }));
+  const taggedMemory = (memory ?? []).map(m => ({
+    ...m,
+    graded_at_tag: typeof m.graded_at === 'string' ? tagIsoTimestamp(m.graded_at, tctx.session_date) : null,
+  }));
+  const taggedOiBuilds = (oiBuilds ?? []).map(o => ({
+    ...o,
+    snap_date_tag: typeof o.snap_date === 'string' ? tagIsoTimestamp(`${o.snap_date}T17:00:00Z`, tctx.session_date) : null,
+  }));
+  const taggedEvents = (events ?? []).map(e => ({
+    ...e,
+    event_ts_tag: typeof e.event_ts === 'string' ? tagIsoTimestamp(e.event_ts, tctx.session_date) : null,
+  }));
+
+  const userPayload = `Session: ${tctx.session_date} (${tctx.session_day_name}) — now ${tctx.now_et}
+
+${signatureAlarmsBlock}
 
 ${signatureEdgeBlock}
 
@@ -1071,6 +1112,8 @@ ${leanScoreBlock}
 
 ${flowPulseBlock}
 
+${flowHeatmapBlock}
+
 ${overnightBlock}
 
 ${peerFlagsBlock}
@@ -1078,19 +1121,19 @@ ${peerFlagsBlock}
 ${last5FlagsBlock}
 
 [RECENT NEWS — last 6h affecting ${ticker} or macro-wide, Tavily + UW]
-${JSON.stringify(news, null, 2)}
+${JSON.stringify(taggedNews, null, 2)}
 
 [YOUR LAST 10 GRADED FLAGS]
-${JSON.stringify(memory, null, 2)}
+${JSON.stringify(taggedMemory, null, 2)}
 
 [YOUR HIT RATE BY PATTERN SIGNATURE]
 ${JSON.stringify(hitRate, null, 2)}
 
 [RECENT OI BUILDS — last 2 days, delta_1d > 10k]
-${JSON.stringify(oiBuilds, null, 2)}
+${JSON.stringify(taggedOiBuilds, null, 2)}
 
 [CANDIDATE FLOW EVENTS — last ${CANDIDATE_WINDOW_MIN}min, score >= ${wakeupThreshold}]
-${JSON.stringify(events, null, 2)}
+${JSON.stringify(taggedEvents, null, 2)}
 
 [WAKEUP REASON] ${reason}
 [FLAGS WRITTEN TODAY] ${flagsToday} / cap ${maxFlagsPerDay}
@@ -1123,7 +1166,7 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
   try {
     claudeRes = await callClaude({
       model,
-      system: `${systemContextHeader}\n\n${prompt}${CROSS_FACET_PROMPT_SUFFIX}`,
+      system: `${tctx.temporalAnchorPreamble}\n\n${systemContextHeader}\n\n${prompt}${CROSS_FACET_PROMPT_SUFFIX}`,
       messages: [{ role: 'user', content: userPayload }],
       max_tokens: 2000,
       temperature: 0.2,
@@ -1169,6 +1212,46 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
     };
   }
 
+  // 15b. Temporal-coherence validator (best-effort). Validates the narrative
+  // strings (current_read + each flag's thesis/invalidation) against the
+  // session date. Critical contradictions log + persist on every downstream
+  // ct_claude_decisions.context_snapshot.temporal_validator_warnings via the
+  // recordDecision call sites below. See _shared/temporalValidator.ts.
+  const narrativeForValidation = [
+    parsed.current_read?.read_text ?? '',
+    ...parsed.flags.map(f => `${f.thesis}\n${f.invalidation}`),
+  ].filter(Boolean).join('\n\n---\n\n');
+  let validatorOk = true;
+  let validatorContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
+  if (narrativeForValidation) {
+    try {
+      const validation = await validateTemporalCoherence(narrativeForValidation, tctx.session_date, { tickerContext: ticker });
+      validatorOk = validation.ok;
+      validatorContradictions = validation.contradictions;
+      const critical = validation.contradictions.filter(c => c.severity === 'critical');
+      if (critical.length > 0) {
+        console.warn(
+          `[specialistRunner] ${ticker} temporal validator flagged ${critical.length} CRITICAL contradiction(s) for session ${tctx.session_date}:`,
+          JSON.stringify(critical),
+        );
+      } else if (!validation.ok && validation.contradictions.length > 0) {
+        console.warn(
+          `[specialistRunner] ${ticker} temporal validator flagged ${validation.contradictions.length} warning(s):`,
+          JSON.stringify(validation.contradictions),
+        );
+      }
+    } catch (e) {
+      console.warn(`[specialistRunner] ${ticker} temporal validator threw (non-blocking):`, String(e));
+    }
+  }
+  const temporalValidatorWarnings = {
+    ok: validatorOk,
+    session_date: tctx.session_date,
+    contradiction_count: validatorContradictions.length,
+    critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
+    contradictions: validatorContradictions,
+  };
+
   // 16. Insert flags.
   // ct_scored_flow.id is bigint; ct_flags.source_flow_ids is BIGINT[] (retyped
   // in migration 20260423000035). Keep numeric — don't coerce to string.
@@ -1192,6 +1275,13 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
         reason,
         events_considered: events.length,
         wakeup_threshold: wakeupThreshold,
+        flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+        flow_heatmap_meta: {
+          generated_at: flowHeatmapContext.generated_at,
+          lookback_hours: flowHeatmapContext.lookback_hours,
+          math_mode: flowHeatmapContext.math_mode,
+        },
+        temporal_validator_warnings: temporalValidatorWarnings,
       },
       tokens_in: tokensIn,
       tokens_out: tokensOut,
@@ -1314,6 +1404,13 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
         direction: decision.direction,
         tags: decision.tags,
         horizon_hours: decision.horizon_hours,
+        flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+        flow_heatmap_meta: {
+          generated_at: flowHeatmapContext.generated_at,
+          lookback_hours: flowHeatmapContext.lookback_hours,
+          math_mode: flowHeatmapContext.math_mode,
+        },
+        temporal_validator_warnings: temporalValidatorWarnings,
       },
       tokens_in: tokensIn,
       tokens_out: tokensOut,
