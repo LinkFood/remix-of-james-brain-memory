@@ -21,7 +21,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseToolUse, ClaudeError } from '../_shared/anthropic.ts';
 import { buildClaudeContext, claudeSystemPromptPreamble, type ClaudeContext } from '../_shared/claudeReadSurface.ts';
 import { recordDecision } from '../_shared/decisionJournal.ts';
 import { getTemporalContext } from '../_shared/temporalContext.ts';
@@ -162,10 +162,9 @@ Given:
   - invalidate_if: the concrete trigger that would refute the claim
   - current_market_state: the latest per-instrument reads
 
-Your ONLY job is to judge whether invalidate_if has fired RIGHT NOW.
-
-Return strictly JSON:
-  { "verdict": "intact" | "invalidated" | "ambiguous", "reasoning": "one sentence citing specific evidence" }
+Your ONLY job is to judge whether invalidate_if has fired RIGHT NOW. Call the
+emit_verdict tool with your verdict and a single-sentence reasoning citing
+specific evidence from current_market_state.
 
 Rules:
   - "intact"      = the trigger has clearly NOT fired
@@ -174,6 +173,31 @@ Rules:
   - Grade against the literal trigger, not vibes. If invalidate_if says
     "SPY breaks 550" and SPY is 552, the answer is intact — not "close call."
   - Single sentence reasoning. Cite the specific read.`;
+
+// Forced tool-use schema. Replaces prose-mode JSON which was failing
+// 100% of calls since 2026-04-18 (1,588 haiku_failed rows in
+// ct_claude_decisions). Haiku 4.5 emits commentary/markdown around prose
+// JSON; tool-use guarantees structured output regardless of model behavior.
+// Pattern parity with ct-eod-report, ct-daily-brief, calculate-importance.
+const VERDICT_TOOL = {
+  name: 'emit_verdict',
+  description: 'Emit the verdict for whether invalidate_if has fired against current market state.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      verdict: {
+        type: 'string',
+        enum: ['intact', 'invalidated', 'ambiguous'],
+        description: 'intact = trigger clearly NOT fired; invalidated = trigger clearly fired; ambiguous = cannot tell from snapshot',
+      },
+      reasoning: {
+        type: 'string',
+        description: 'One sentence citing specific evidence from current_market_state.',
+      },
+    },
+    required: ['verdict', 'reasoning'],
+  },
+} as const;
 
 async function judgeHypothesis(
   h: HypothesisRow,
@@ -193,17 +217,19 @@ async function judgeHypothesis(
       model: CLAUDE_MODELS.haiku,
       system: systemPrompt,
       messages: [{ role: 'user', content: JSON.stringify(payload) }],
-      max_tokens: 250,
+      tools: [VERDICT_TOOL],
+      tool_choice: { type: 'tool', name: 'emit_verdict' },
+      max_tokens: 500,
       temperature: 0.1,
     });
-    const raw = parseTextContent(res).trim();
-    const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    const parsed = JSON.parse(stripped) as Record<string, unknown>;
-    const verdict = parsed.verdict;
+    const tool = parseToolUse(res);
+    if (!tool || tool.name !== 'emit_verdict') return null;
+    const input = tool.input as Record<string, unknown>;
+    const verdict = input.verdict;
     if (verdict !== 'intact' && verdict !== 'invalidated' && verdict !== 'ambiguous') return null;
     return {
       verdict,
-      reasoning: typeof parsed.reasoning === 'string' ? parsed.reasoning : '',
+      reasoning: typeof input.reasoning === 'string' ? input.reasoning : '',
     };
   } catch (e) {
     const detail = e instanceof ClaudeError ? `Claude ${e.status}` : String(e);
