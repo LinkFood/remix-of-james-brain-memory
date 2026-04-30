@@ -6,6 +6,29 @@ Tracking what surfaced today during live ops + what's outstanding for after clos
 
 ---
 
+## ⚠ MUST DO SATURDAY — RE-ENABLE ct-oi-snapshot-close
+
+**Action**: re-add the cron schedule that was unscheduled 2026-04-30 18:55 UTC for budget reasons (commit `d0d6b9a`).
+
+**Why it's off**: today's manual fire at 18:37 UTC already captured today's mid+close window for all 10 tickers via the rate-limit retry. Scheduled 20:05 UTC fire would have been redundant burn while UW was at 77.9%.
+
+**The cost of forgetting**: every weekday's post-close OI snapshot drops permanently. The `oi_delta_1d` baseline for next day's open snapshot uses close-of-prior-day — without that snapshot, deltas degrade to mid-day vs mid-day comparison instead of the canonical end-of-session snapshot.
+
+**The fix Saturday**: write a one-line migration that re-adds the schedule:
+```sql
+SELECT cron.schedule(
+  'ct-oi-snapshot-close',
+  '5 20 * * 1-5',
+  $cron$ SELECT public.trigger_ct_oi_snapshot_with_slot('close'); $cron$
+);
+```
+
+Push it. Done. ~30 seconds of work.
+
+**Verify**: query `cron.job` for `jobname='ct-oi-snapshot-close'` returns one row with `active=true`.
+
+---
+
 ## Temporal contamination class kill — 2026-04-30 (PARTIAL today, finish Saturday)
 
 The morning brief bug at 7am ET and the tape reader bug at 1pm ET were the same class: Claude consumers without a hard date anchor pattern-completing yesterday's narrative as today's. Class kill shipped today via shared helpers + 5 consumer wires + Haiku validator. Saturday extends to remaining consumers.
