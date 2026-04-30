@@ -27,6 +27,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, CLAUDE_RATES, ClaudeError } from '../_shared/anthropic.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
 
@@ -330,6 +331,11 @@ serve(async (req) => {
   const pulseSeries = (flowPulseSeriesRes.data ?? []) as FlowPulseTickRow[];
   const tape = (tapeRes.data ?? []) as TapeCommentaryRow[];
   const bars = (barsRes.data ?? []) as PriceBarRow[];
+
+  // Flow-heatmap regime context — top 3 expiry-week stacks per watchlist ticker
+  // (168h lookback, aggressive_directional_decay math). Best-effort; helper
+  // returns empty per_ticker on any failure so the EOD report never blocks.
+  const flowHeatmapContext = await getFlowHeatmapContext(supabase, WATCHLIST);
 
   // -------------------------------------------------------------------------
   // Hedge-fund attribution pulls — all defensive. Empty fallback on any error
@@ -690,6 +696,15 @@ serve(async (req) => {
       partial: grades.filter(g => g.outcome === 'partial').length,
       invalidated_early: grades.filter(g => g.outcome === 'invalidated_early').length,
     },
+    // Positioning regime snapshot used to inform the EOD narrative — persisted
+    // for grading provenance (no dedicated context_snapshot column on the
+    // ct_eod_summaries table; market_stats is the JSONB catch-all).
+    flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+    flow_heatmap_meta: {
+      generated_at: flowHeatmapContext.generated_at,
+      lookback_hours: flowHeatmapContext.lookback_hours,
+      math_mode: flowHeatmapContext.math_mode,
+    },
   };
 
   // -------------------------------------------------------------------------
@@ -1029,6 +1044,22 @@ serve(async (req) => {
     }
     if (edgeDaily.by_time_bucket && typeof edgeDaily.by_time_bucket === 'object') {
       promptLines.push(`Time bucket performance: ${JSON.stringify(edgeDaily.by_time_bucket).slice(0, 600)}`);
+    }
+  }
+  promptLines.push('');
+
+  // === FLOW HEATMAP — POSITIONING REGIME (168h decay) =======================
+  promptLines.push('=== FLOW HEATMAP — POSITIONING REGIME (168h, aggressive-directional decay) ===');
+  if (flowHeatmapContext.per_ticker.length === 0) {
+    promptLines.push('[no heatmap data — RPC returned empty]');
+  } else {
+    for (const t of WATCHLIST) {
+      const row = flowHeatmapContext.per_ticker.find(p => p.ticker === t);
+      if (!row || row.stacks.length === 0) continue;
+      const stackStr = row.stacks
+        .map(s => `${s.expiry_bucket_week} ${fmtUsd(s.value)} (n=${s.source_alert_count})`)
+        .join(' · ');
+      promptLines.push(`  ${t}: ${stackStr}`);
     }
   }
   promptLines.push('');

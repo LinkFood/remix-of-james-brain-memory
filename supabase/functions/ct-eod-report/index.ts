@@ -37,6 +37,7 @@ import { getConfig } from '../_shared/configCache.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { EOD_REPORT_SYSTEM, EOD_REPORT_REQUIRED_KEYS, PROMPT_VERSION } from '../_shared/eodReportPrompt.ts';
+import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
 
 // ---------------------------------------------------------------------------
 // Types — every read is best-effort; missing rows do NOT block the report.
@@ -409,6 +410,10 @@ serve(async (req) => {
 
   // ----- Watchlist + cutoffs --------------------------------------------------
   const watchlist = await getWatchlist(supabase);
+  // Flow-heatmap regime context — top 3 expiry-week stacks per ticker (168h
+  // lookback, aggressive_directional_decay). Best-effort; helper returns empty
+  // per_ticker on failure so the report never blocks.
+  const flowHeatmapContext = await getFlowHeatmapContext(supabase, watchlist);
   const carryoverSinceIso = new Date(
     now.getTime() - Math.max(0.25, Number(carryoverLookbackHours) || 1) * 3600_000,
   ).toISOString();
@@ -787,6 +792,17 @@ serve(async (req) => {
       snapshots_per_ticker: snapshotsByTicker,
     },
 
+    // Positioning regime — top 3 expiry-week stacks per ticker. Used as
+    // forward-looking context for tomorrow's setup (carryover_themes,
+    // tomorrow_watchlist). No typed schema field on the tool — Sonnet
+    // consumes via free-text reasoning.
+    flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+    flow_heatmap_meta: {
+      generated_at: flowHeatmapContext.generated_at,
+      lookback_hours: flowHeatmapContext.lookback_hours,
+      math_mode: flowHeatmapContext.math_mode,
+    },
+
     overnight_catalysts_raw: overnightCatalystsRaw,
     breaking_events_today: breakingEventsToday,
 
@@ -1007,6 +1023,12 @@ serve(async (req) => {
         prompt_version: PROMPT_VERSION,
         upsert_error: upsertErr?.message ?? null,
         fetch_warnings: fetchWarnings,
+        flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
+        flow_heatmap_meta: {
+          generated_at: flowHeatmapContext.generated_at,
+          lookback_hours: flowHeatmapContext.lookback_hours,
+          math_mode: flowHeatmapContext.math_mode,
+        },
       },
       reasoning: `EOD report v${PROMPT_VERSION} for ${sessionDate} (triggered_by=${triggeredBy}). `
         + `morning_brief=${morningBrief ? 'yes' : 'no'} journal=${journal ? 'yes' : 'no'} `
