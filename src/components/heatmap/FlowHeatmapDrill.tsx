@@ -34,6 +34,9 @@ interface FlowHeatmapDrillProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mathMode: HeatmapMathMode;
+  /** Human-readable label for the active baseline (e.g. "session open", "1h ago").
+   *  When undefined the baseline section is hidden. */
+  baselineLabel?: string;
 }
 
 interface FlowAlertRow {
@@ -62,7 +65,8 @@ function formatUsd(n: number | null | undefined): string {
   return `$${n.toFixed(0)}`;
 }
 
-function formatSignedUsd(n: number, mode: HeatmapMathMode): string {
+function formatSignedUsd(n: number | null | undefined, mode: HeatmapMathMode): string {
+  if (n == null || !Number.isFinite(n)) return '—';
   if (mode === 'voi_unusual') return `${n.toFixed(2)}× volume / OI`;
   const sign = n < 0 ? '-' : n > 0 ? '+' : '';
   const abs = Math.abs(n);
@@ -90,14 +94,14 @@ function MATH_MODE_LABEL(m: HeatmapMathMode): string {
   }
 }
 
-export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode }: FlowHeatmapDrillProps) {
+export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode, baselineLabel }: FlowHeatmapDrillProps) {
   /** Hydrate the contributing alerts. Sort top 20 by premium DESC. */
   const { data: alerts = [], isLoading: alertsLoading } = useQuery<FlowAlertRow[]>({
     queryKey: ['flow-heatmap-drill-alerts', cell?.contributingAlertIds ?? [], cell?.ticker],
-    enabled: open && !!cell && cell.contributingAlertIds.length > 0,
+    enabled: open && !!cell && (cell.contributingAlertIds?.length ?? 0) > 0,
     queryFn: async () => {
       if (!cell) return [];
-      const ids = cell.contributingAlertIds.slice(0, 200); // cap for query size
+      const ids = (cell.contributingAlertIds ?? []).slice(0, 200); // cap for query size
       // Try alert_id first (text column from UW). If empty, fall back to id.
       // Both query paths return the same column shape so the rest of the panel
       // doesn't care which key matched.
@@ -181,9 +185,9 @@ export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode }: FlowHea
             <span className="text-xs text-muted-foreground">{MATH_MODE_LABEL(mathMode)}</span>
             <span className="text-xs text-muted-foreground">·</span>
             <span className="text-xs text-muted-foreground">
-              {cell.sourceAlertCount} alert{cell.sourceAlertCount > 1 ? 's' : ''}
+              {cell.sourceAlertCount ?? 0} alert{(cell.sourceAlertCount ?? 0) === 1 ? '' : 's'}
             </span>
-            {cell.expiryCountInBucket > 1 && (
+            {(cell.expiryCountInBucket ?? 0) > 1 && (
               <>
                 <span className="text-xs text-muted-foreground">·</span>
                 <span className="text-xs text-muted-foreground">
@@ -199,6 +203,55 @@ export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode }: FlowHea
         </SheetHeader>
 
         <div className="mt-4 space-y-5">
+          {/* Change since baseline (only when delta data is on the cell) */}
+          {cell.deltaValue != null && Number.isFinite(cell.deltaValue) && (
+            <section>
+              <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
+                Change since baseline
+              </h3>
+              <div className="rounded-md border border-border/40 bg-muted/20 px-3 py-2 text-sm">
+                {(() => {
+                  const dv = cell.deltaValue as number;
+                  const verb = dv > 0 ? 'Up' : dv < 0 ? 'Down' : 'Flat';
+                  const window = baselineLabel ?? 'baseline';
+                  const sign = dv > 0 ? '+' : dv < 0 ? '-' : '';
+                  const abs = Math.abs(dv);
+                  const body = abs >= 1_000_000_000
+                    ? `${(abs / 1_000_000_000).toFixed(1)}B`
+                    : abs >= 1_000_000
+                      ? `${(abs / 1_000_000).toFixed(abs >= 10_000_000 ? 0 : 1)}M`
+                      : abs >= 1_000
+                        ? `${Math.round(abs / 1_000)}K`
+                        : abs.toFixed(0);
+                  const colorClass = dv > 0
+                    ? 'text-emerald-500'
+                    : dv < 0
+                      ? 'text-rose-500'
+                      : 'text-muted-foreground';
+                  return (
+                    <div>
+                      <span className="text-muted-foreground">{verb}</span>{' '}
+                      <span className={cn('font-mono font-semibold', colorClass)}>{sign}${body}</span>{' '}
+                      <span className="text-muted-foreground">
+                        {window === '1h ago' ? 'in last 1h' : `since ${window}`}
+                      </span>
+                      {cell.deltaPct != null && Number.isFinite(cell.deltaPct) && (
+                        <span className="text-muted-foreground ml-1">
+                          ({cell.deltaPct > 0 ? '+' : ''}{cell.deltaPct.toFixed(1)}%)
+                        </span>
+                      )}
+                    </div>
+                  );
+                })()}
+                {cell.baselineValue != null && Number.isFinite(cell.baselineValue) && (
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    Baseline value: {formatSignedUsd(cell.baselineValue, mathMode)}
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
           {/* Strike breakdown bar */}
           <section>
             <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
@@ -284,11 +337,11 @@ export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode }: FlowHea
           {/* Alert list */}
           <section>
             <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
-              Top contributing alerts ({alerts.length}/{cell.sourceAlertCount})
+              Top contributing alerts ({alerts?.length ?? 0}/{cell.sourceAlertCount ?? 0})
             </h3>
             {alertsLoading ? (
               <div className="text-xs text-muted-foreground italic py-4 text-center">Loading alerts…</div>
-            ) : alerts.length === 0 ? (
+            ) : (alerts?.length ?? 0) === 0 ? (
               <div className="text-xs text-muted-foreground italic py-4 text-center">
                 No alert detail available for this cell yet.
               </div>

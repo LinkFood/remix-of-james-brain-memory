@@ -24,6 +24,7 @@ import type { HeatmapMathMode } from '@/hooks/useFlowHeatmap';
 export type HeatmapLookback = '24h' | '3d' | '7d' | '30d';
 export type HeatmapView = 'combined' | 'per_ticker';
 export type HeatmapColorAnchor = 'per_row' | 'global';
+export type BaselineMode = 'off' | '1h' | 'session_open' | 'yesterday_close' | 'custom';
 
 export interface HeatmapToolbarValue {
   mathMode: HeatmapMathMode;
@@ -32,6 +33,8 @@ export interface HeatmapToolbarValue {
   minPremium: number;
   view: HeatmapView;
   colorAnchor: HeatmapColorAnchor;
+  baselineMode: BaselineMode;
+  baselineCustomAt?: Date;
 }
 
 interface HeatmapToolbarProps {
@@ -60,6 +63,20 @@ const PREMIUM_PRESETS: { value: number; label: string }[] = [
   { value: 500_000, label: '$500K' },
   { value: 1_000_000, label: '$1M' },
 ];
+
+const BASELINE_OPTIONS: { value: BaselineMode; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: '1h', label: '1h ago' },
+  { value: 'session_open', label: 'Session open' },
+  { value: 'yesterday_close', label: 'Yesterday close' },
+  { value: 'custom', label: 'Custom' },
+];
+
+/** Format a Date for an `<input type="datetime-local">` value (local TZ, no seconds). */
+function toLocalInputValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
 
 /** Format a min-premium number into an input-friendly short string. */
 export function formatPremium(n: number): string {
@@ -204,6 +221,43 @@ export function HeatmapToolbar({ value, onChange }: HeatmapToolbarProps) {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* Row 3: Change vs (baseline) */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Label className="text-xs text-muted-foreground shrink-0 mr-1">Change vs:</Label>
+        {BASELINE_OPTIONS.map((o) => (
+          <button
+            key={o.value}
+            onClick={() => set('baselineMode', o.value)}
+            className={cn(
+              'text-[11px] font-mono px-2 py-1 rounded border transition-colors',
+              value.baselineMode === o.value
+                ? 'border-primary/40 bg-primary/10 text-primary'
+                : 'border-muted bg-muted/20 text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {o.label}
+          </button>
+        ))}
+        {value.baselineMode === 'custom' && (
+          <input
+            type="datetime-local"
+            value={value.baselineCustomAt ? toLocalInputValue(value.baselineCustomAt) : ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) {
+                set('baselineCustomAt', undefined);
+                return;
+              }
+              const d = new Date(v);
+              if (Number.isFinite(d.getTime())) {
+                set('baselineCustomAt', d);
+              }
+            }}
+            className="h-7 text-[11px] font-mono px-2 rounded border border-muted bg-muted/20 text-foreground focus:outline-none focus:border-primary/40"
+          />
+        )}
       </div>
     </div>
   );

@@ -45,6 +45,21 @@ export interface HeatmapRow {
   /** UUIDs/ids of the contributing flow alerts — used by the drill panel. */
   contributing_alert_ids: string[] | number[];
   latest_snapshot_at: string;
+  /** Optional delta enrichment from ct_flow_heatmap_diff. Present only when
+   *  the consumer is `useFlowHeatmapLiveWithDelta` and a baselineAt was set. */
+  baseline_value?: number;
+  delta_value?: number;
+  delta_pct?: number | null;
+}
+
+/** Row shape returned by the ct_flow_heatmap_diff RPC. */
+export interface HeatmapDiffRow {
+  ticker: string;
+  expiry_bucket_week: string;
+  baseline_value: number;
+  current_value: number;
+  delta_value: number;
+  delta_pct: number | null;
 }
 
 export interface UseFlowHeatmapLiveArgs {
@@ -315,3 +330,175 @@ export function useFlowHeatmapDiff(args: UseFlowHeatmapDiffArgs) {
 }
 
 export const HEATMAP_DEFAULT_TICKERS = DEFAULT_TICKERS;
+
+export interface UseFlowHeatmapLiveWithDeltaArgs {
+  tickers?: string[] | null;
+  mathMode?: HeatmapMathMode;
+  minPremium?: number;
+  include0DTE?: boolean;
+  maxExpiryDays?: number;
+  /** When non-null, also fetches ct_flow_heatmap_diff with this baseline and
+   *  merges (baseline_value, delta_value, delta_pct) onto each cell. */
+  baselineAt: Date | null;
+}
+
+/** Try ct_flow_heatmap_diff. On failure (PGRST202, network, anything) returns
+ *  an empty array — caller sees no-delta and the page renders normally. */
+async function fetchDiffSilent(params: {
+  tickers: string[];
+  baselineAt: string;
+  currentAt: string;
+  mathMode: HeatmapMathMode;
+}): Promise<HeatmapDiffRow[]> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (supabase as any).rpc('ct_flow_heatmap_diff', {
+      p_tickers: params.tickers,
+      p_baseline_at: params.baselineAt,
+      p_current_at: params.currentAt,
+      p_math_mode: params.mathMode,
+    });
+    if (error) {
+      const code = (error as { code?: string }).code;
+      const msg = (error as { message?: string }).message ?? '';
+      if (code === 'PGRST202' || /could not find the function|does not exist/i.test(msg)) {
+        return [];
+      }
+      console.warn('[useFlowHeatmapLiveWithDelta] ct_flow_heatmap_diff error:', error);
+      return [];
+    }
+    return (data ?? []) as HeatmapDiffRow[];
+  } catch (err) {
+    console.warn('[useFlowHeatmapLiveWithDelta] ct_flow_heatmap_diff unavailable:', err);
+    return [];
+  }
+}
+
+/** Combined hook: live heatmap + (optional) diff vs baseline merged per-cell.
+ *
+ * When baselineAt is null → behaves like useFlowHeatmapLive (no diff fetch).
+ * When baselineAt is set → fans out both, merges by (ticker, expiry_bucket_week).
+ *
+ * Diff failures are silent — page falls back to no-delta rendering. */
+export function useFlowHeatmapLiveWithDelta(args: UseFlowHeatmapLiveWithDeltaArgs) {
+  const tickers = args.tickers ?? DEFAULT_TICKERS;
+  const mathMode = args.mathMode ?? 'aggressive_directional_decay';
+  const minPremium = args.minPremium ?? 100_000;
+  const include0DTE = args.include0DTE ?? false;
+  const maxExpiryDays = args.maxExpiryDays ?? 365;
+  const baselineAt = args.baselineAt;
+
+  const live = useFlowHeatmapLive({ tickers, mathMode, minPremium, include0DTE, maxExpiryDays });
+
+  // Quantize baseline timestamp to the minute so the query key doesn't churn
+  // on every keystroke / sub-minute re-render.
+  const baselineKey = baselineAt
+    ? new Date(Math.floor(baselineAt.getTime() / 60_000) * 60_000).toISOString()
+    : null;
+
+  const diff = useQuery<HeatmapDiffRow[]>({
+    queryKey: [
+      'flow-heatmap-diff-live',
+      { tickers: [...tickers].sort(), baselineKey, mathMode },
+    ],
+    enabled: !!baselineKey,
+    refetchInterval: 30_000,
+    staleTime: 25_000,
+    queryFn: () => fetchDiffSilent({
+      tickers,
+      baselineAt: baselineKey!,
+      currentAt: new Date().toISOString(),
+      mathMode,
+    }),
+  });
+
+  const cells: HeatmapRow[] | undefined = (() => {
+    if (!live.data) return undefined;
+    if (!baselineAt) return live.data;
+    const diffMap = new Map<string, HeatmapDiffRow>();
+    for (const d of diff.data ?? []) {
+      diffMap.set(`${d.ticker}::${d.expiry_bucket_week}`, d);
+    }
+    return live.data.map((r) => {
+      const d = diffMap.get(`${r.ticker}::${r.expiry_bucket_week}`);
+      if (!d) return r;
+      return {
+        ...r,
+        baseline_value: d.baseline_value,
+        delta_value: d.delta_value,
+        delta_pct: d.delta_pct,
+      };
+    });
+  })();
+
+  return {
+    cells,
+    isLoading: live.isLoading || (!!baselineAt && diff.isLoading),
+    isFetching: live.isFetching || diff.isFetching,
+    dataUpdatedAt: live.dataUpdatedAt,
+    isError: live.isError,
+    error: live.error,
+  };
+}
+
+// ============================================================================
+// Per-strike hook for the per-ticker heatmap view.
+//
+// Different shape from HeatmapRow — keyed by (ticker, strike, expiry_date,
+// side) instead of (ticker, expiry_bucket_week). Real strike granularity
+// from ct_flow_heatmap_strikes RPC, NOT mocked.
+// ============================================================================
+
+export interface HeatmapStrikeRow {
+  ticker: string;
+  strike: number;
+  /** ISO date YYYY-MM-DD — actual expiry date, NOT the week bucket. */
+  expiry_date: string;
+  /** 'C' / 'P' / 'mixed' (both sides contributed). */
+  side: 'C' | 'P' | 'mixed';
+  value: number;
+  source_alert_count: number;
+  contributing_alert_ids: (string | number)[];
+}
+
+export interface UseFlowHeatmapStrikesArgs {
+  ticker: string | null;
+  /** Hours back from now. Default 168 (7d). */
+  lookbackHours?: number;
+  mathMode?: HeatmapMathMode;
+  /** $ floor. Default 50,000 (lower than the combined view because per-strike cells are smaller). */
+  minPremium?: number;
+  /** Cap on rows returned. Default 30. */
+  strikeCount?: number;
+}
+
+export function useFlowHeatmapStrikes(args: UseFlowHeatmapStrikesArgs) {
+  const ticker = args.ticker;
+  const lookbackHours = args.lookbackHours ?? 168;
+  const mathMode = args.mathMode ?? 'aggressive_directional_decay';
+  const minPremium = args.minPremium ?? 50_000;
+  const strikeCount = args.strikeCount ?? 30;
+
+  return useQuery<HeatmapStrikeRow[]>({
+    queryKey: [
+      'flow-heatmap-strikes',
+      { ticker, lookbackHours, mathMode, minPremium, strikeCount },
+    ],
+    enabled: !!ticker,
+    refetchInterval: 30_000,
+    staleTime: 25_000,
+    queryFn: async () => {
+      if (!ticker) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any).rpc('ct_flow_heatmap_strikes', {
+        p_ticker: ticker,
+        p_lookback_hours: lookbackHours,
+        p_math_mode: mathMode,
+        p_min_premium: minPremium,
+        p_strike_count: strikeCount,
+      });
+      if (error) throw error;
+      return (data ?? []) as HeatmapStrikeRow[];
+    },
+  });
+}
