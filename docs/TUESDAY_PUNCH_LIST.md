@@ -6,6 +6,47 @@ Tracking what surfaced today during live ops + what's outstanding for after clos
 
 ---
 
+## Heatmap consumer propagation — 2026-04-30 (PARTIAL today, finish Saturday)
+
+Heatmap data is now LIVE in `ct_flow_heatmap_snapshots` and queryable via 4 RPCs (live, history, diff, strikes). The `_shared/flowHeatmapContext.ts` helper exposes the standard "top 3 stacks per ticker" shape for any Claude consumer.
+
+### Wired today (in production)
+
+- `ct-daily-brief` — already wired via `buildClaudeContext()` in `_shared/claudeReadSurface.ts` (commit `87bebd6`). Picks up on next deploy (Saturday's brief rebuild redeploys it anyway).
+- `ct-hypothesis-proposer` + `ct-hypothesis-health-check` — same path.
+- `ct-eod-summary` — wired via `getFlowHeatmapContext()` 2026-04-30 afternoon (commit pending). First scheduled fire today 4:30 PM ET will consume.
+- `ct-eod-report` — wired via `getFlowHeatmapContext()` 2026-04-30 afternoon (commit pending). First scheduled fire today 5 PM ET will consume.
+- `flow_stack_v1` detector — reads snapshots directly. Already firing flags.
+- `/heatmap` page — Combined view + Per-Ticker view + drill panel + delta toggle.
+
+### NOT wired yet — Saturday/Sunday work
+
+These consumers build their own context inline and don't import either `buildClaudeContext()` or `getFlowHeatmapContext()` yet. Each fire is currently blind to where positioning is stacking on its target tickers.
+
+| Consumer | Cadence | Notes |
+|---|---|---|
+| `ct-tape-reader` | every 10 min RTH | Top priority — narrative reader of the live tape, should know stacking context. ALSO needs temporal anchoring fix (truncates, no relative-day baseline). |
+| 10 specialists via `_shared/specialistRunner.ts` | per-ticker rotation, ~every 6 min on each | Each specialist should see ITS ticker's heatmap state. Single shared runner means one wire reaches all 10. |
+| `ct-trade-idea-generator` | every 5 min RTH | Already burns ~$1/day in Claude calls; adding heatmap context is high-leverage for trade quality. |
+| `ct-watcher` | every 15 min | Lower priority — already heavy on its own context. |
+| `ct-self-grader` | every 2h RTH | Could grade against "did the heatmap predict the move?" — but current grader doesn't read heatmap. Saturday work. |
+
+### Scope of Saturday's heatmap propagation
+
+- One pass per consumer: import `getFlowHeatmapContext`, call it during context build, inject result into the user-message payload. Pattern is identical across all consumers — copy/paste from ct-eod-summary/ct-eod-report wires.
+- Estimated: ~4-6h via parallel agents (one per consumer, or two bigger agents handling 3 each).
+- Lands together with morning brief rebuild (Saturday's bigger structural fix). Specialists redeploy is part of that bundle.
+
+### Why this is partial-not-complete today
+
+Today shipped: storage + RPCs + UI + detector + EOD wires (the most critical ones for today's first scheduled fires). Saturday's plan already scoped tape-reader/specialists/idea-gen/watcher/self-grader as Sunday propagation work — that's still the right shape, just made explicit here.
+
+### Tenet check
+
+**Tenet 24** — "all systems talk to each other, no silos." Today's partial wire is the START of compliance, not the end. Until Saturday's pass, tape-reader and specialists are still siloed from the heatmap. Class kill = every Claude consumer reads heatmap. Saturday closes it.
+
+---
+
 ## Latent UI / health bugs surfaced 2026-04-30 (during heatmap build site audit)
 
 Captured during `/health` audit at ~12:00 ET while heatmap polish was shipping. Not blockers, not fixing today — investigate and triage tonight or this weekend.
@@ -270,9 +311,12 @@ Pre-computed, all dates absolute, model receives clean facts. Synthesis only —
 - Lower (not zero) coherence-failure rate; defense-in-depth with B
 
 **D) Pattern propagation (Sunday)** — same fact-pack + validator pattern to:
-- `ct-eod-report` (already on tool-use; needs fact pack + validator)
-- `ct-tape-reader` (currently truncates, no temporal anchoring)
-- 10 specialist `current_reads`
+- ~~`ct-eod-report`~~ (heatmap context wired 2026-04-30 afternoon — Saturday adds fact-pack + validator on top)
+- `ct-tape-reader` (currently truncates, no temporal anchoring; ALSO needs heatmap context wire)
+- 10 specialist `current_reads` via `_shared/specialistRunner.ts` (heatmap context wire ALSO pending)
+- `ct-trade-idea-generator` (every 5 min RTH, big Claude consumer; heatmap context wire pending)
+- `ct-watcher` (every 15 min; heatmap context wire pending)
+- `ct-self-grader` (every 2h RTH; heatmap context wire pending)
 - Any future "model writes narrative" surface
 
 **F) ct-cron-health-check RTH-window awareness** — surfaced 2026-04-30 ~07:35 ET via Slack alert "7 crons degraded (stale 16h)". All 7 (`ct-curiosity`, `ct-detector-small-cap-inverted-put-rth`, `ct-detector-weekly-atm-voi-rth`, `ct-detector-zerodte-opening-call-rth`, `ct-detector-zerodte-put-voi-rth`, `ct-flow-pulse-capture`, `ct-trade-advisories`) are scheduled `* 13-20 * * 1-5` (weekday RTH only, 9 AM-4 PM ET). Last fire was Wed 4/29 ~20:00 UTC; alert fired pre-bell Thursday — by definition stale, by design correctly idle. Health checker measures time-since-last-fire without parsing the cron's hour-of-day window. Different bug class from the Tuesday step-interval false-alarm fix (`ba3938b`). Fix: parse cron schedule, compute next-expected-fire-time given hour-of-day + day-of-week restrictions, alarm only if now() > next_expected + grace. ~1h work. Tenet 3 violation — false alarms erode trust faster than missed signals.
