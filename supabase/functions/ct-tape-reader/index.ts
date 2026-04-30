@@ -249,7 +249,21 @@ serve(async (req) => {
     return r.macro_wide === true || tickers.some((t) => WATCHLIST.includes(t));
   }).slice(0, 8);
 
-  // Market tide: sum of today's net_call_premium - net_put_premium across watchlist
+  // Market tide: sum of today's net_call_premium - net_put_premium across watchlist.
+  //
+  // Sign convention (per _shared/systemPromptV1.ts:29 and _shared/uwClient.ts:765
+  // where these columns are documented):
+  //   net_call_premium > 0 = aggressive call BUYING (bullish)
+  //   net_call_premium < 0 = aggressive call SELLING / writing (bearish)
+  //   net_put_premium  > 0 = aggressive put BUYING (bearish)
+  //   net_put_premium  < 0 = aggressive put SELLING / writing (bullish)
+  //
+  // Bullishness therefore stacks as net_call - net_put. Pre-fix the formula
+  // was `+`, which cancelled bullish call-buying against bullish put-writing
+  // (TSLA on 2026-04-30: net_call +14M, net_put -7.7M -> buggy=+6M, fixed=+22M)
+  // and conflated bearish call-writing with bearish put-buying for bearish
+  // tickers. Caught 2026-04-30 cross-checking against ct_flow_heatmap_snapshots
+  // (canonical aggressive_directional_premium_decay).
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -259,7 +273,7 @@ serve(async (req) => {
     .in('ticker', WATCHLIST);
   let netPrem = 0;
   for (const t of ((tideRaw ?? []) as Array<{ net_call_premium: number | null; net_put_premium: number | null }>)) {
-    netPrem += (t.net_call_premium ?? 0) + (t.net_put_premium ?? 0);
+    netPrem += (t.net_call_premium ?? 0) - (t.net_put_premium ?? 0);
   }
   const marketTide = netPrem > 5_000_000 ? 'bullish' : netPrem < -5_000_000 ? 'bearish' : 'flat';
 
