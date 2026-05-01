@@ -37,9 +37,19 @@ import { getConfig } from '../_shared/configCache.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { EOD_REPORT_SYSTEM, EOD_REPORT_REQUIRED_KEYS, PROMPT_VERSION } from '../_shared/eodReportPrompt.ts';
-import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
 import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
 import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+import type { FlowHeatmapResult } from '../_shared/flowHeatmapContext.ts';
+import type {
+  NewsCausalityResult,
+  NewsItem,
+} from '../_shared/newsCausalityContext.ts';
+import type {
+  EventRecencyResult,
+  RecencyEvent,
+} from '../_shared/eventRecencyContext.ts';
+import type { HelperResult } from '../_shared/contextHelper.ts';
 
 // ---------------------------------------------------------------------------
 // Types — every read is best-effort; missing rows do NOT block the report.
@@ -420,10 +430,33 @@ serve(async (req) => {
 
   // ----- Watchlist + cutoffs --------------------------------------------------
   const watchlist = await getWatchlist(supabase);
-  // Flow-heatmap regime context — top 3 expiry-week stacks per ticker (168h
-  // lookback, aggressive_directional_decay). Best-effort; helper returns empty
-  // per_ticker on failure so the report never blocks.
-  const flowHeatmapContext = await getFlowHeatmapContext(supabase, watchlist);
+
+  // Brain (synthesis layer Phase 4) — single composed read replaces inline
+  // getFlowHeatmapContext + ct_breaking_news + ct_events direct queries.
+  // flow_heatmap organ feeds positioning regime; news_causality + event_recency
+  // organs replace the prior inline severity>=3 / next-day calendar pulls;
+  // ctx.preamble.whatJustHappened guards Sonnet against day-name framing on
+  // prior-day events.
+  const ctx = await buildClaudeContext(supabase, {
+    audience: 'cotrader',
+    consumerName: 'ct-eod-report',
+  });
+  const flowHeatmapOrgan = ctx.organs.flow_heatmap as
+    | HelperResult<FlowHeatmapResult>
+    | undefined;
+  const flowHeatmapContext: FlowHeatmapResult = flowHeatmapOrgan?.data ?? {
+    per_ticker: [],
+    generated_at: new Date().toISOString(),
+    lookback_hours: 168,
+    math_mode: 'aggressive_directional_decay',
+  };
+  const newsOrgan = ctx.organs.news_causality as
+    | HelperResult<NewsCausalityResult>
+    | undefined;
+  const eventRecencyOrgan = ctx.organs.event_recency as
+    | HelperResult<EventRecencyResult>
+    | undefined;
+
   const carryoverSinceIso = new Date(
     now.getTime() - Math.max(0.25, Number(carryoverLookbackHours) || 1) * 3600_000,
   ).toISOString();
@@ -446,8 +479,6 @@ serve(async (req) => {
     barsRes,
     pulseRes,
     readsRes,
-    breakingRes,
-    eventsRes,
     snapshotsRes,
   ] = await Promise.all([
     sb.from('ct_eod_summaries')
@@ -481,20 +512,6 @@ serve(async (req) => {
       .in('ticker', watchlist)
       .order('updated_at', { ascending: false })
       .limit(500),
-    sb.from('ct_breaking_news')
-      .select('id, headline, source, severity, sentiment, category, summary, ingested_at')
-      .gte('ingested_at', dayStartIso)
-      .lte('ingested_at', dayEndIso)
-      .gte('severity', 3)
-      .order('severity', { ascending: false })
-      .order('ingested_at', { ascending: false })
-      .limit(40),
-    sb.from('ct_events')
-      .select('event_type, ticker, event_date, event_time, title, importance, raw')
-      .gte('event_date', sessionDate)
-      .lte('event_date', tomorrowYmd)
-      .order('event_date', { ascending: true })
-      .limit(60),
     sb.from('ct_ticker_snapshots')
       .select('ticker, spot, gamma_flip, call_wall, put_wall, iv_rank, regime')
       .in('ticker', watchlist),
@@ -506,8 +523,6 @@ serve(async (req) => {
   if (barsRes.error) fetchWarnings.push(`price_bars: ${barsRes.error.message}`);
   if (pulseRes.error) fetchWarnings.push(`pulse: ${pulseRes.error.message}`);
   if (readsRes.error) fetchWarnings.push(`specialist_reads: ${readsRes.error.message}`);
-  if (breakingRes.error) fetchWarnings.push(`breaking_news: ${breakingRes.error.message}`);
-  if (eventsRes.error) fetchWarnings.push(`events: ${eventsRes.error.message}`);
   if (snapshotsRes.error) fetchWarnings.push(`ticker_snapshots: ${snapshotsRes.error.message}`);
 
   const journal = (journalRes.data ?? null) as EodSummaryRow | null;
@@ -515,9 +530,69 @@ serve(async (req) => {
   const bars = (barsRes.data ?? []) as PriceBarRow[];
   const pulse = (pulseRes.data ?? []) as FlowPulseTickRow[];
   const reads = (readsRes.data ?? []) as SpecialistReadRow[];
-  const breakingAll = (breakingRes.data ?? []) as BreakingNewsRow[];
-  const events = (eventsRes.data ?? []) as EventRow[];
   const snapshots = (snapshotsRes.data ?? []) as TickerSnapshotRow[];
+
+  // Breaking news (severity >= 3) + upcoming/today events from brain organs.
+  // The news_causality helper applies a default 6h lookback; for an EOD report
+  // we want everything since session start, so post-filter by ingested_at.
+  // The event_recency helper already buckets by happening_today / upcoming /
+  // just_happened (last 72h) — we map those into the legacy schema below.
+  const breakingAll: BreakingNewsRow[] = (newsOrgan?.data.items ?? [])
+    .filter((n: NewsItem) => {
+      if (n.source_table !== 'ct_breaking_news') return false;
+      if (n.severity < 3) return false;
+      const ts = Date.parse(n.ingested_at);
+      if (!Number.isFinite(ts)) return false;
+      const start = Date.parse(dayStartIso);
+      const end = Date.parse(dayEndIso);
+      return ts >= start && ts <= end;
+    })
+    .slice(0, 40)
+    .map((n: NewsItem) => ({
+      id: n.id,
+      headline: n.headline,
+      source: n.news_source,
+      severity: n.severity,
+      sentiment: n.sentiment,
+      category: n.category,
+      summary: n.summary,
+      ingested_at: n.ingested_at,
+    }));
+
+  // ct_events used to be queried for [today, tomorrow]. event_recency exposes
+  // happening_today + upcoming (next 14d) for both market_wide + per-ticker.
+  // Merge them and clip to [sessionDate, tomorrowYmd] to preserve prior shape.
+  const recencyEventsMerged: RecencyEvent[] = (() => {
+    if (!eventRecencyOrgan) return [];
+    const out: RecencyEvent[] = [];
+    out.push(...eventRecencyOrgan.data.market_wide.happening_today);
+    out.push(...eventRecencyOrgan.data.market_wide.upcoming);
+    for (const t of eventRecencyOrgan.data.per_ticker) {
+      out.push(...t.happening_today);
+      out.push(...t.upcoming);
+    }
+    // Dedup by id
+    const seen = new Set<string>();
+    return out.filter((e) => {
+      if (seen.has(e.id)) return false;
+      seen.add(e.id);
+      return true;
+    });
+  })();
+  const events: EventRow[] = recencyEventsMerged
+    .filter((e) => e.event_date >= sessionDate && e.event_date <= tomorrowYmd)
+    .slice(0, 60)
+    .map((e) => ({
+      event_type: e.category === 'other' ? null : e.category,
+      ticker: e.ticker,
+      event_date: e.event_date,
+      event_time: e.event_iso,
+      title: e.title,
+      importance: e.importance,
+      // event_recency normalizes report_time into outcome.* sometimes; pass
+      // through as raw so formatEventTime() can still pick up bmo/amc/intraday.
+      raw: (e.outcome as Record<string, unknown> | null) ?? null,
+    }));
 
   // ===========================================================================
   // STEP 4 — Per-ticker close data + verdict computation.
@@ -848,6 +923,23 @@ serve(async (req) => {
     breaking_events_today: breakingEventsToday,
 
     journal_attribution: journalAttribution,
+
+    // Brain organs (synthesis layer Phase 4) — sibling sense-organ JSON for
+    // Sonnet to weave into per_ticker_close, carryover_themes, lessons_today.
+    // Missing organs degrade silently. event_recency.just_happened is the
+    // structural shield against day-name framing on prior-day events.
+    brain_organs: {
+      flow_heatmap: ctx.organs.flow_heatmap?.data ?? null,
+      pulse: ctx.organs.pulse?.data ?? null,
+      specialist: ctx.organs.specialist?.data ?? null,
+      detector: ctx.organs.detector?.data ?? null,
+      tape: ctx.organs.tape?.data ?? null,
+      james_flags: ctx.organs.james_flags?.data ?? null,
+      news_causality: ctx.organs.news_causality?.data ?? null,
+      event_recency: ctx.organs.event_recency?.data ?? null,
+    },
+    helpers_invoked: Object.keys(ctx.organs),
+    what_just_happened: ctx.preamble.whatJustHappened || null,
 
     config_thresholds: thresholds,
     prompt_version: PROMPT_VERSION,
