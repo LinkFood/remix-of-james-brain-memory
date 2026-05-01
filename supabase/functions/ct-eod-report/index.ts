@@ -1007,6 +1007,43 @@ serve(async (req) => {
     return [sideTag, exp].filter(Boolean).join(' ');
   }
 
+  // peak_contract_pct + current_contract_pct are stored as decimal fractions
+  // (1.0 = +100%). Convert to percentage units for UI/Sonnet consumption.
+  const decToPct = (v: number | string | null | undefined): number | null => {
+    if (v == null) return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return n * 100;
+  };
+
+  // time_to_50pct / 100pct / 200pct are postgres INTERVAL columns. PostgREST
+  // serializes them as 'HH:MM:SS[.fff]'. The UI wants integer minutes.
+  const intervalToMinutes = (v: unknown): number | null => {
+    if (v == null) return null;
+    if (typeof v === 'number' && Number.isFinite(v)) return Math.round(v);
+    if (typeof v === 'string') {
+      const m = /^(\d+):(\d{2}):(\d{2})(?:\.\d+)?$/.exec(v);
+      if (m) {
+        const h = Number(m[1]);
+        const mm = Number(m[2]);
+        const ss = Number(m[3]);
+        return Math.round(h * 60 + mm + ss / 60);
+      }
+      const n = Number(v);
+      if (Number.isFinite(n)) return Math.round(n);
+    }
+    return null;
+  };
+
+  // Recap-section time tag: tagIsoTimestamp returns markdown-formatted strings
+  // (e.g. '**TODAY 09:50 ET**') for prompt-anchoring purposes. UI consumers
+  // render plain text — strip the markdown bold markers for the recap fields.
+  const cleanTimeTag = (iso: string | null | undefined): string | null => {
+    if (!iso) return null;
+    const tag = tagIsoTimestamp(iso, sessionDate);
+    return typeof tag === 'string' ? tag.replace(/\*\*/g, '') : null;
+  };
+
   // FLOW RECAP — biggest scored prints today.
   const flowRecapInput = topFlows.slice(0, 7).map(f => {
     const prem = f.premium != null ? Number(f.premium) : null;
@@ -1023,18 +1060,9 @@ serve(async (req) => {
       stacking_signal: f.stacking_signal ?? null,
       ticker_unusual: !!f.ticker_is_unusual,
       dte: f.dte ?? null,
-      event_time_tag: tagIsoTimestamp(f.event_ts, sessionDate),
+      event_time_tag: cleanTimeTag(f.event_ts),
     };
   });
-
-  // peak_contract_pct + current_contract_pct are stored as decimal fractions
-  // (1.0 = +100%). Convert to percentage units for UI/Sonnet consumption.
-  const decToPct = (v: number | string | null | undefined): number | null => {
-    if (v == null) return null;
-    const n = Number(v);
-    if (!Number.isFinite(n)) return null;
-    return n * 100;
-  };
 
   // STACK RECAP — contracts that stacked most aggressively today.
   // Dedup on option_symbol (multiple track rows can exist if dedup index slipped).
@@ -1057,7 +1085,7 @@ serve(async (req) => {
       peak_pct: decToPct(t.peak_contract_pct),       // % units (decimal × 100)
       current_pct: decToPct(t.current_contract_pct), // % units
       track_status: t.track_status,
-      first_print_tag: t.print_time ? tagIsoTimestamp(t.print_time, sessionDate) : null,
+      first_print_tag: cleanTimeTag(t.print_time),
     }));
 
   // REALIZED RECAP — top peak% on tracks first-printed today.
@@ -1081,10 +1109,14 @@ serve(async (req) => {
       const peakPx = t.peak_contract_price != null ? Number(t.peak_contract_price) : null;
       // Prefer the most aggressive realization milestone available — compare
       // in % units against the time_to_*pct columns (50, 100, 200).
+      // The columns are postgres INTERVAL — coerce to integer minutes for UI.
+      const ttg200 = intervalToMinutes(t.time_to_200pct);
+      const ttg100 = intervalToMinutes(t.time_to_100pct);
+      const ttg50 = intervalToMinutes(t.time_to_50pct);
       const ttg =
-        (t.time_to_200pct != null && peakPctUi >= 200) ? { pct: 200, minutes: t.time_to_200pct }
-        : (t.time_to_100pct != null && peakPctUi >= 100) ? { pct: 100, minutes: t.time_to_100pct }
-        : (t.time_to_50pct != null && peakPctUi >= 50) ? { pct: 50, minutes: t.time_to_50pct }
+        (ttg200 != null && peakPctUi >= 200) ? { pct: 200, minutes: ttg200 }
+        : (ttg100 != null && peakPctUi >= 100) ? { pct: 100, minutes: ttg100 }
+        : (ttg50 != null && peakPctUi >= 50) ? { pct: 50, minutes: ttg50 }
         : null;
       return {
         ticker: t.ticker,
@@ -1096,8 +1128,8 @@ serve(async (req) => {
         entry_price: entry,
         peak_price: peakPx,
         prints: t.print_count ?? null,
-        first_print_tag: t.print_time ? tagIsoTimestamp(t.print_time, sessionDate) : null,
-        peak_at_tag: t.peak_contract_at ? tagIsoTimestamp(t.peak_contract_at, sessionDate) : null,
+        first_print_tag: cleanTimeTag(t.print_time),
+        peak_at_tag: cleanTimeTag(t.peak_contract_at),
         time_to_milestone: ttg,
       };
     });
