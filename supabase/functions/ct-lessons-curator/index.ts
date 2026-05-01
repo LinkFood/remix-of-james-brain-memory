@@ -16,6 +16,25 @@ import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { LESSONS_CURATOR_SYSTEM } from '../_shared/ctPrompts.ts';
 import { embedCtItem } from '../_shared/ctEmbed.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+
+// ---------------------------------------------------------------------------
+// Brain integration (Phase 4 — synthesis layer migration).
+// Audience: 'cotrader'. Organ subset (curator-focused):
+//   - principles + biases + hypotheses (flat fields on ClaudeContext —
+//     activePrinciples/activeBiases/openHypotheses; not yet helper-backed)
+//   - event_recency (organ — last-72h material events)
+// The orchestrator runs all 8 helpers; we only surface the curator-focused
+// subset to the lessons prompt to keep token weight on what matters for
+// ADD/SUPERSEDE/SKIP reasoning.
+// ---------------------------------------------------------------------------
+function pickEventRecencyOrgan(organs: Record<string, unknown>): unknown {
+  const o = organs.event_recency;
+  if (o && typeof o === 'object' && 'data' in (o as Record<string, unknown>)) {
+    return (o as { data: unknown }).data;
+  }
+  return null;
+}
 
 function weekBounds(): { start: string; end: string } {
   const end = new Date();
@@ -53,7 +72,16 @@ serve(async (req) => {
     const userId = (users?.[0]?.id as string | undefined) ?? null;
 
     const { start, end } = weekBounds();
-    const data = await gatherWeekData(supabase, start, end);
+    const [data, brain] = await Promise.all([
+      gatherWeekData(supabase, start, end),
+      buildClaudeContext(supabase, {
+        audience: 'cotrader',
+        consumerName: 'ct-lessons-curator',
+      }).catch((e) => {
+        console.warn('[ct-lessons] brain build failed:', e instanceof Error ? e.message : String(e));
+        return null;
+      }),
+    ]);
 
     const corpusThin = data.observations.length + data.flags.length < 5;
     if (corpusThin) {
@@ -66,7 +94,20 @@ serve(async (req) => {
       }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    const userMessage = JSON.stringify({ window: { start, end }, ...data });
+    const brainContext = brain ? {
+      session_date: brain.preamble.temporalAnchor,
+      what_just_happened: brain.preamble.whatJustHappened,
+      principles: brain.activePrinciples,
+      biases: brain.activeBiases,
+      open_hypotheses: brain.openHypotheses,
+      event_recency: pickEventRecencyOrgan(brain.organs as Record<string, unknown>),
+    } : null;
+
+    const userMessage = JSON.stringify({
+      window: { start, end },
+      brain_context: brainContext,
+      ...data,
+    });
 
     let claudeText = '';
     const claudeCallStart = Date.now();
