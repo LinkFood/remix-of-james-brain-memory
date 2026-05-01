@@ -158,6 +158,26 @@ function expectedCadenceMinutes(schedule: string): number {
   // `N * * * *` → once an hour
   if (/^\d+$/.test(minute) && hour === '*') return 60;
 
+  // `M1,M2,...,Mn * * * *` → comma-list of minutes within each hour.
+  // Cadence = 60 / count (e.g. `7,22,37,52` = 4 fires/hour = 15m).
+  // Hit by ct-trade-advisories (`7,22,37,52 13-20 * * 1-5`) and the
+  // detector family with offset minute lists. Hour field can be `*` or
+  // restricted — intraday cadence is the same.
+  if (/^\d+(,\d+)+$/.test(minute)) {
+    const fires = minute.split(',').length;
+    return Math.max(1, Math.floor(60 / fires));
+  }
+
+  // `Lo-Hi/N * * * *` → range-with-step in the minute field. Cadence is
+  // the step (e.g. `2-58/5` = every 5min). Hit by ct-flow-pulse-capture
+  // (`1-58/5 13-20 * * 1-5`) and ct-detector-flow-stack-v1 (`2-58/5 ...`).
+  // Without this fix both fall through to 60min default and threshold
+  // becomes 120min instead of 90min floor.
+  const minRangeStepMatch = minute.match(/^(\d+)-(\d+)\/(\d+)$/);
+  if (minRangeStepMatch) {
+    return Math.max(1, parseInt(minRangeStepMatch[3], 10));
+  }
+
   // Specific hour set — daily-ish cadence. Use expandHourField so
   // step-interval ranges (`13-20/2` = 13,15,17,19) are counted correctly.
   if (
@@ -391,6 +411,35 @@ function isScheduleWindowOpen(schedule: string, d: Date = new Date()): boolean {
   return false;
 }
 
+/** For a schedule whose hour field is a single `lo-hi` range AND whose dow
+ *  is restricted to weekdays, returns minutes elapsed since today's window
+ *  opened (UTC). Returns null when:
+ *   - today is not in the dow set (window doesn't open today)
+ *   - we're before today's window opens
+ *   - the hour field isn't a single `lo-hi` range (don't try to be clever)
+ *   - the schedule is unparseable
+ *
+ *  Used to suppress stale alerts during the grace period right after the
+ *  window opens — the cron's last fire is from yesterday's window close,
+ *  and it hasn't yet had a chance to fire today's first tick.
+ */
+function minutesSinceTodayWindowOpen(schedule: string, now: Date = new Date()): number | null {
+  const parts = (schedule ?? '').trim().split(/\s+/);
+  if (parts.length !== 5) return null;
+  const hour = parts[1];
+  const rangeMatch = hour.match(/^(\d+)-(\d+)$/);
+  if (!rangeMatch) return null;
+  const lo = parseInt(rangeMatch[1], 10);
+  if (lo < 0 || lo > 23) return null;
+  if (!isCronDayActive(schedule, now)) return null;
+  const todayOpen = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), lo, 0, 0, 0,
+  ));
+  const diffMs = now.getTime() - todayOpen.getTime();
+  if (diffMs < 0) return null;
+  return Math.floor(diffMs / 60_000);
+}
+
 // ---------------------------------------------------------------------------
 // Classification
 // ---------------------------------------------------------------------------
@@ -485,6 +534,30 @@ function classify(row: CronRow, now: Date): Classification {
   // threshold. Any off-hours state for this cron suppresses the alert —
   // the silence is expected.
   if (ageMin > threshold) {
+    // Boundary-aware grace: if today's window just opened and the last_run_at
+    // is from before the window opened (i.e. yesterday's window-close), give
+    // the cron a grace period equal to max(cadence * 2, 30min) before declaring
+    // stale. Otherwise the morning fire of cron-health-check at 13:00 UTC
+    // catches every RTH-only cron in a "stale 17h" state when in reality
+    // they just haven't fired their first tick of the new window yet.
+    const sinceOpen = minutesSinceTodayWindowOpen(row.schedule, now);
+    if (
+      windowOpen &&
+      sinceOpen != null &&
+      sinceOpen < Math.max(cadenceMin * 2, 30) &&
+      row.last_run_at &&
+      (new Date(row.last_run_at).getTime() < (now.getTime() - sinceOpen * 60_000))
+    ) {
+      return {
+        jobname: row.jobname,
+        status: 'skipped_off_hours',
+        last_run_at: row.last_run_at,
+        last_run_status: row.last_run_status,
+        ageMin,
+        cadenceMin,
+        note: `window opened ${sinceOpen}m ago — first tick pending (suppressed)`,
+      };
+    }
     if (offHoursForCron) {
       const reason = weekdayOnly && weekendNow ? 'weekday-only cron, weekend'
         : weekendOnly && !weekendNow ? 'weekend-only cron, weekday'
