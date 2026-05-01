@@ -30,6 +30,25 @@ import { callClaude, CLAUDE_MODELS, parseTextContent } from '../_shared/anthropi
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { TRADE_ADVISORY_SYSTEM } from '../_shared/ctPrompts.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+
+// ---------------------------------------------------------------------------
+// Brain integration (Phase 4 — synthesis layer migration).
+// Audience: 'cotrader'. Organs: full set (the advisory has to read trade
+// lifecycle against the current world view — Pulse regime, specialist reads,
+// detector flags, tape, news causality, event recency are all relevant when
+// deciding hold vs cut vs trail). Single Claude call per tick → one brain
+// build, surfaced in the user payload.
+// ---------------------------------------------------------------------------
+function summarizeOrgansForPrompt(organs: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, organ] of Object.entries(organs)) {
+    if (organ && typeof organ === 'object' && 'data' in (organ as Record<string, unknown>)) {
+      out[name] = (organ as { data: unknown }).data;
+    }
+  }
+  return out;
+}
 
 type AdvisoryType =
   | 'hold'
@@ -277,6 +296,23 @@ serve(async (req) => {
     .maybeSingle();
   const heartbeat = hb as HeartbeatRow | null;
 
+  // Brain (synthesis layer Phase 4). Best-effort — falls through if it throws.
+  let brainContext: Record<string, unknown> | null = null;
+  try {
+    const brain = await buildClaudeContext(supabase, {
+      audience: 'cotrader',
+      consumerName: 'ct-trade-advisories',
+    });
+    brainContext = {
+      session_date: brain.preamble.temporalAnchor,
+      what_just_happened: brain.preamble.whatJustHappened,
+      organs: summarizeOrgansForPrompt(brain.organs),
+    };
+  } catch (e) {
+    console.warn('[ct-trade-advisories] brain build failed (advisory runs without brain):',
+      e instanceof Error ? e.message : String(e));
+  }
+
   // Per-trade context fan-out.
   const contexts = await Promise.all(open.map(async (t) => {
     const [lastAction, attention, expectedMove] = await Promise.all([
@@ -289,6 +325,7 @@ serve(async (req) => {
 
   // Build the user payload for Claude.
   const payload = {
+    brain_context: brainContext,
     open_trades: contexts.map(c => ({
       trade_id: c.trade.id,
       instrument: c.trade.instrument,
