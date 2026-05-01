@@ -92,15 +92,21 @@ AS $func$
     FROM public.ct_brain_telemetry
     WHERE created_at >= now() - make_interval(hours => GREATEST(window_hours, 1))
   ),
+  -- Bucketing rule:
+  --   error IS NULL                 → success
+  --   error LIKE 'warning:%'        → success-with-warning (no-rows, etc; not a failure)
+  --   error LIKE 'skipped:%'        → skipped (audience filter, organ filter, helper threw)
+  --   else                          → real error (helper crashed mid-fetch in the orchestrator)
   per_helper AS (
     SELECT
       helper_name,
       COUNT(*) AS invocations,
       COUNT(*) FILTER (WHERE error IS NULL) AS successes,
-      COUNT(*) FILTER (WHERE error IS NOT NULL AND error NOT LIKE 'skipped:%') AS errors,
+      COUNT(*) FILTER (WHERE error LIKE 'warning:%') AS warnings,
+      COUNT(*) FILTER (WHERE error IS NOT NULL AND error NOT LIKE 'skipped:%' AND error NOT LIKE 'warning:%') AS errors,
       COUNT(*) FILTER (WHERE error LIKE 'skipped:%') AS skipped,
       COUNT(*) FILTER (WHERE cache_hit) AS cache_hits,
-      -- p50 / p95 over latency_ms for non-skipped rows only (skipped = 0 noise).
+      -- p50 / p95 over latency_ms for executed rows (success or warning); skipped = 0 noise.
       COALESCE(
         percentile_cont(0.5) WITHIN GROUP (
           ORDER BY latency_ms
@@ -121,7 +127,8 @@ AS $func$
     SELECT
       consumer_name,
       COUNT(*) AS invocations,
-      COUNT(*) FILTER (WHERE error IS NOT NULL AND error NOT LIKE 'skipped:%') AS errors
+      COUNT(*) FILTER (WHERE error IS NOT NULL AND error NOT LIKE 'skipped:%' AND error NOT LIKE 'warning:%') AS errors,
+      COUNT(*) FILTER (WHERE error LIKE 'warning:%') AS warnings
     FROM window_rows
     WHERE consumer_name IS NOT NULL
     GROUP BY consumer_name
@@ -129,7 +136,8 @@ AS $func$
   totals AS (
     SELECT
       COUNT(*) AS total_invocations,
-      COUNT(*) FILTER (WHERE error IS NOT NULL AND error NOT LIKE 'skipped:%') AS total_errors,
+      COUNT(*) FILTER (WHERE error IS NOT NULL AND error NOT LIKE 'skipped:%' AND error NOT LIKE 'warning:%') AS total_errors,
+      COUNT(*) FILTER (WHERE error LIKE 'warning:%') AS total_warnings,
       COUNT(*) FILTER (WHERE cache_hit) AS total_cache_hits,
       COUNT(DISTINCT consumer_name) FILTER (WHERE consumer_name IS NOT NULL) AS distinct_consumers,
       COUNT(DISTINCT helper_name) AS distinct_helpers
@@ -145,6 +153,7 @@ AS $func$
           'helper_name', helper_name,
           'invocations', invocations,
           'successes', successes,
+          'warnings', warnings,
           'errors', errors,
           'skipped', skipped,
           'error_rate', CASE WHEN invocations - skipped > 0
@@ -167,7 +176,8 @@ AS $func$
         jsonb_build_object(
           'consumer_name', consumer_name,
           'invocations', invocations,
-          'errors', errors
+          'errors', errors,
+          'warnings', warnings
         )
         ORDER BY invocations DESC
       ) FROM per_consumer),
