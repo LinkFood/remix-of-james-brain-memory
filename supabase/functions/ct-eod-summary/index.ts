@@ -27,9 +27,11 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, CLAUDE_RATES, ClaudeError } from '../_shared/anthropic.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
-import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
 import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
 import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+import type { FlowHeatmapResult } from '../_shared/flowHeatmapContext.ts';
+import type { HelperResult } from '../_shared/contextHelper.ts';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
 
@@ -339,10 +341,25 @@ serve(async (req) => {
   const tape = (tapeRes.data ?? []) as TapeCommentaryRow[];
   const bars = (barsRes.data ?? []) as PriceBarRow[];
 
-  // Flow-heatmap regime context — top 3 expiry-week stacks per watchlist ticker
-  // (168h lookback, aggressive_directional_decay math). Best-effort; helper
-  // returns empty per_ticker on any failure so the EOD report never blocks.
-  const flowHeatmapContext = await getFlowHeatmapContext(supabase, WATCHLIST);
+  // Brain (synthesis layer Phase 4) — single composed read that replaces the
+  // prior inline getFlowHeatmapContext call. flow_heatmap organ provides the
+  // 168h aggressive_directional_decay positioning regime; specialist /
+  // detector / pulse / tape / james_flags / news_causality / event_recency
+  // organs add sibling context, and ctx.preamble.whatJustHappened is the
+  // structural shield against day-name framing on prior-day events.
+  const ctx = await buildClaudeContext(supabase, {
+    audience: 'cotrader',
+    consumerName: 'ct-eod-summary',
+  });
+  const flowHeatmapOrgan = ctx.organs.flow_heatmap as
+    | HelperResult<FlowHeatmapResult>
+    | undefined;
+  const flowHeatmapContext: FlowHeatmapResult = flowHeatmapOrgan?.data ?? {
+    per_ticker: [],
+    generated_at: new Date().toISOString(),
+    lookback_hours: 168,
+    math_mode: 'aggressive_directional_decay',
+  };
 
   // -------------------------------------------------------------------------
   // Hedge-fund attribution pulls — all defensive. Empty fallback on any error
@@ -1172,6 +1189,30 @@ serve(async (req) => {
     for (const note of dataQualityNotes) promptLines.push(`  - ${note}`);
     promptLines.push('');
   }
+
+  // Brain organs — drop sibling sense-organ JSON as a single block. Sonnet
+  // weaves these into the narrative if relevant; missing organs (e.g.,
+  // event_recency empty mid-week) degrade silently.
+  promptLines.push('=== BRAIN ORGANS (synthesis layer) ===');
+  promptLines.push(JSON.stringify({
+    organs: {
+      flow_heatmap: ctx.organs.flow_heatmap?.data ?? null,
+      pulse: ctx.organs.pulse?.data ?? null,
+      specialist: ctx.organs.specialist?.data ?? null,
+      detector: ctx.organs.detector?.data ?? null,
+      tape: ctx.organs.tape?.data ?? null,
+      james_flags: ctx.organs.james_flags?.data ?? null,
+      news_causality: ctx.organs.news_causality?.data ?? null,
+      event_recency: ctx.organs.event_recency?.data ?? null,
+    },
+    helpers_invoked: Object.keys(ctx.organs),
+  }));
+  if (ctx.preamble.whatJustHappened && ctx.preamble.whatJustHappened.trim()) {
+    promptLines.push('');
+    promptLines.push('=== WHAT JUST HAPPENED (last 72h material events with outcomes) ===');
+    promptLines.push(ctx.preamble.whatJustHappened);
+  }
+  promptLines.push('');
 
   const userMsg = promptLines.join('\n');
 
