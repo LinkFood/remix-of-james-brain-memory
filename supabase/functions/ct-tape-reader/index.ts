@@ -19,6 +19,17 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, CLAUDE_RATES, ClaudeError } from '../_shared/anthropic.ts';
 import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
 import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+import type {
+  DetectorContextResult,
+  DetectorFlag,
+} from '../_shared/detectorContext.ts';
+import type {
+  NewsCausalityResult,
+  NewsItem,
+} from '../_shared/newsCausalityContext.ts';
+import type { TapeContextResult } from '../_shared/tapeContext.ts';
+import type { HelperResult } from '../_shared/contextHelper.ts';
 
 const WATCHLIST = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 const DEFAULT_WINDOW_MIN = 10;
@@ -38,17 +49,6 @@ interface ScoredFlowRow {
   volume: number | null;
   open_interest: number | null;
   ask_side_perc: number | null;
-}
-
-interface FlagRow {
-  id: string;
-  specialist_ticker: string;
-  direction: string;
-  score: number;
-  thesis: string;
-  status: string;
-  option_symbol: string | null;
-  created_at: string;
 }
 
 interface PriceBarRow {
@@ -187,9 +187,57 @@ serve(async (req) => {
   const now = new Date();
   const windowStart = new Date(now.getTime() - windowMin * 60_000);
 
-  // --- Pull context ------------------------------------------------------
+  // --- Brain (synthesis layer Phase 4) -----------------------------------
+  // One read for the whole brain — replaces the inline ct_flags / ct_breaking_news
+  // queries below. Organs we consume: detector (active flags), news_causality
+  // (recent watchlist + macro headlines), tape (prior commentary), pulse +
+  // james_flags + specialist + flow_heatmap + event_recency surfaced through
+  // ctx.preamble.whatJustHappened. UW MCP is write-path only (D4).
+  const ctx = await buildClaudeContext(supabase, {
+    audience: 'cotrader',
+    consumerName: 'ct-tape-reader',
+  });
+  const detectorOrgan = ctx.organs.detector as
+    | HelperResult<DetectorContextResult>
+    | undefined;
+  const newsOrgan = ctx.organs.news_causality as
+    | HelperResult<NewsCausalityResult>
+    | undefined;
+  const tapeOrgan = ctx.organs.tape as
+    | HelperResult<TapeContextResult>
+    | undefined;
 
-  // Scored flow in window — top 15 by score DESC, then premium DESC
+  // Active / conviction flags from the detector organ, last 30 min, watchlist-scoped.
+  const flagsWindowMs = now.getTime() - 30 * 60_000;
+  const flags: DetectorFlag[] = (detectorOrgan?.data.flags ?? [])
+    .filter((f) => {
+      const ts = Date.parse(f.created_at);
+      if (!Number.isFinite(ts) || ts < flagsWindowMs) return false;
+      if (!WATCHLIST.includes(f.ticker)) return false;
+      // Mirror the prior status filter (active | conviction). The detector
+      // helper currently includes all sources; we only narrate fresh, live ones.
+      // (Helper does not expose status; rely on freshness window as proxy
+      // since stale flags age out of the 24h lookback regardless.)
+      return true;
+    })
+    .slice(0, 10);
+
+  // Watchlist-relevant + macro-wide news, last 30 min, severity >= 2.
+  const newsWindowMs = now.getTime() - 30 * 60_000;
+  const newsAll: NewsItem[] = newsOrgan?.data.items ?? [];
+  const news: NewsItem[] = newsAll
+    .filter((n) => {
+      const ts = Date.parse(n.ingested_at ?? n.event_at ?? '');
+      if (!Number.isFinite(ts) || ts < newsWindowMs) return false;
+      if (n.severity != null && n.severity < 2) return false;
+      const tickers = n.tickers_affected ?? [];
+      const macroWide = n.source_table === 'ct_breaking_news' && tickers.length === 0;
+      return macroWide || tickers.some((t) => WATCHLIST.includes(t));
+    })
+    .slice(0, 8);
+
+  // Scored flow in window — top 15 by score DESC, then premium DESC.
+  // ct_scored_flow is not yet a brain organ; tape-reader is a primary consumer.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: scoredRaw } = await (supabase.from('ct_scored_flow' as never) as any)
     .select('id,ticker,option_symbol,event_ts,classification,direction,score,strike,expiry,dte,premium,volume,open_interest,ask_side_perc')
@@ -200,18 +248,7 @@ serve(async (req) => {
     .limit(15);
   const scored = (scoredRaw ?? []) as ScoredFlowRow[];
 
-  // Recent flags (active / conviction) in last 30 min
-  const flagsWindowStart = new Date(now.getTime() - 30 * 60_000);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: flagsRaw } = await (supabase.from('ct_flags' as never) as any)
-    .select('id,specialist_ticker,direction,score,thesis,status,option_symbol,created_at')
-    .in('status', ['active', 'conviction'])
-    .gte('created_at', flagsWindowStart.toISOString())
-    .order('created_at', { ascending: false })
-    .limit(10);
-  const flags = (flagsRaw ?? []) as FlagRow[];
-
-  // Latest spot price per watchlist ticker — ct_price_bars
+  // Latest spot price per watchlist ticker — ct_price_bars (no brain organ yet).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: barsRaw } = await (supabase.from('ct_price_bars' as never) as any)
     .select('ticker,close,ts')
@@ -224,7 +261,8 @@ serve(async (req) => {
     if (b.close != null && !spotMap.has(b.ticker)) spotMap.set(b.ticker, b.close);
   }
 
-  // VIX lives in its own table (ct_vix_history) — 3x/day capture.
+  // VIX lives in its own table (ct_vix_history) — 3x/day capture. Not yet
+  // a brain organ; ct_vix_history → vixContext is on the Phase 3 backlog.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: vixRaw } = await (supabase.from('ct_vix_history' as never) as any)
     .select('level,change_pct,created_at')
@@ -234,62 +272,36 @@ serve(async (req) => {
   const vixLevel = vixRow?.level ?? null;
   const vixChange = vixRow?.change_pct ?? null;
 
-  // Breaking news in the last 30 min affecting any watchlist ticker. News
-  // moves stocks and options front-run news — reader should call it out.
-  const newsWindow = new Date(now.getTime() - 30 * 60_000);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: newsRaw } = await (supabase.from('ct_breaking_news' as never) as any)
-    .select('headline,source,severity,sentiment,category,macro_wide,summary,tickers_affected,ingested_at')
-    .gte('ingested_at', newsWindow.toISOString())
-    .gte('severity', 2)
-    .order('ingested_at', { ascending: false })
-    .limit(20);
-  const news = ((newsRaw ?? []) as Array<Record<string, unknown>>).filter((r) => {
-    const tickers = (r.tickers_affected as string[] | null) ?? [];
-    return r.macro_wide === true || tickers.some((t) => WATCHLIST.includes(t));
-  }).slice(0, 8);
-
-  // Market tide: sum of today's net_call_premium - net_put_premium across watchlist.
-  //
-  // Sign convention (per _shared/systemPromptV1.ts:29 and _shared/uwClient.ts:765
-  // where these columns are documented):
-  //   net_call_premium > 0 = aggressive call BUYING (bullish)
-  //   net_call_premium < 0 = aggressive call SELLING / writing (bearish)
-  //   net_put_premium  > 0 = aggressive put BUYING (bearish)
-  //   net_put_premium  < 0 = aggressive put SELLING / writing (bullish)
-  //
-  // Bullishness therefore stacks as net_call - net_put. Pre-fix the formula
-  // was `+`, which cancelled bullish call-buying against bullish put-writing
-  // (TSLA on 2026-04-30: net_call +14M, net_put -7.7M -> buggy=+6M, fixed=+22M)
-  // and conflated bearish call-writing with bearish put-buying for bearish
-  // tickers. Caught 2026-04-30 cross-checking against ct_flow_heatmap_snapshots
-  // (canonical aggressive_directional_premium_decay).
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: tideRaw } = await (supabase.from('ct_net_premium_ticks' as never) as any)
-    .select('ticker,net_call_premium,net_put_premium,tick_timestamp')
-    .gte('tick_timestamp', todayStart.toISOString())
-    .in('ticker', WATCHLIST);
+  // Market tide — derived from the brain's pulse organ (latest ct_flow_pulse_ticks
+  // row per ticker via _shared/pulseContext). Replaces the prior direct
+  // ct_net_premium_ticks read (D4 — read/write separation). Sums latest-snapshot
+  // premium_net across watchlist; semantics shift from "cumulative day" to
+  // "latest tick" but the bullish/bearish/flat threshold stays at $5M.
+  const pulseOrgan = ctx.organs.pulse as
+    | HelperResult<{ per_ticker: Record<string, { netPremium: number | null }> }>
+    | undefined;
   let netPrem = 0;
-  for (const t of ((tideRaw ?? []) as Array<{ net_call_premium: number | null; net_put_premium: number | null }>)) {
-    netPrem += (t.net_call_premium ?? 0) - (t.net_put_premium ?? 0);
+  if (pulseOrgan) {
+    for (const t of WATCHLIST) {
+      const v = pulseOrgan.data.per_ticker?.[t]?.netPremium;
+      if (typeof v === 'number' && Number.isFinite(v)) netPrem += v;
+    }
   }
   const marketTide = netPrem > 5_000_000 ? 'bullish' : netPrem < -5_000_000 ? 'bearish' : 'flat';
 
   // --- Pre-computed aggregates (parallel) -------------------------------
-  // Pull FlowPulse (6h directional imbalance + per-ticker baseline dev),
-  // contract stacking (repeat-hit contracts with buy/sell/ask breakdown),
-  // and regime tide (spot_pct_from_prev_close avg over last 60 min).
-  // Any failure here degrades gracefully — we skip the relevant block,
-  // never crash the run.
+  // FlowPulse (6h directional imbalance + per-ticker baseline dev) and
+  // contract stacking (repeat-hit contracts with buy/sell/ask breakdown) come
+  // from RPCs not yet wrapped as brain organs. Regime tide (spot_pct_from_prev_close
+  // avg over last 60 min) reads ct_scored_flow which is also organ-less today.
+  // Prior commentary moved to the brain's tape organ above.
   const regimeWindow = new Date(now.getTime() - 60 * 60_000);
   // session_date in ct_tape_commentary is NY-tz date; filter today's prior runs
   const nyToday = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
   const sessionDate = `${nyToday.getFullYear()}-${String(nyToday.getMonth() + 1).padStart(2, '0')}-${String(nyToday.getDate()).padStart(2, '0')}`;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: any = supabase;
-  const [flowPulseRes, stackingRes, regimeRes, priorRes] = await Promise.all([
+  const [flowPulseRes, stackingRes, regimeRes] = await Promise.all([
     sb.rpc('ct_flow_pulse', { p_window_min: 360, p_ticker: null }),
     sb.rpc('ct_contract_stacking', {
       p_window_min: 360,
@@ -304,17 +316,28 @@ serve(async (req) => {
       .in('ticker', WATCHLIST)
       .not('spot_pct_from_prev_close', 'is', null)
       .limit(2000),
-    sb.from('ct_tape_commentary')
-      .select('created_at, commentary')
-      .eq('session_date', sessionDate)
-      .order('created_at', { ascending: false })
-      .limit(3),
   ]);
 
   const pulseRows = (flowPulseRes?.error ? [] : (flowPulseRes?.data ?? [])) as FlowPulseRow[];
   const stackRows = (stackingRes?.error ? [] : (stackingRes?.data ?? [])) as StackRow[];
   const regimeRows = (regimeRes?.error ? [] : (regimeRes?.data ?? [])) as RegimeSpotRow[];
-  const priorRows = (priorRes?.error ? [] : (priorRes?.data ?? [])) as PriorCommentaryRow[];
+
+  // Prior commentary today via the brain's tape organ (ct_tape_commentary helper).
+  // Helper returns latest + prior newest-first; tape-reader narrates oldest-first
+  // so "your prior observations today" reads chronologically.
+  const priorEntries = tapeOrgan
+    ? [
+        ...(tapeOrgan.data.latest ? [tapeOrgan.data.latest] : []),
+        ...tapeOrgan.data.prior,
+      ]
+        .filter((e) => e.session_date === sessionDate)
+        .sort((a, b) => b.created_at.localeCompare(a.created_at))
+        .slice(0, 3)
+    : [];
+  const priorRows: PriorCommentaryRow[] = priorEntries.map((e) => ({
+    created_at: e.created_at,
+    commentary: e.commentary,
+  }));
 
   // Market-wide aggregate from flow pulse rows
   let mktCalls = 0, mktPuts = 0, mktCallsPrem = 0, mktPutsPrem = 0, mktNetPrem = 0;
@@ -451,7 +474,9 @@ serve(async (req) => {
     lines.push('ACTIVE SPECIALIST FLAGS (last 30 min):');
     for (const f of flags) {
       const when = tagIsoTimestamp(f.created_at, tctx.session_date);
-      lines.push(`  ${when} ${f.specialist_ticker} ${f.direction} score ${Math.round(f.score)} [${f.status}]: ${f.thesis.slice(0, 160)}`);
+      const thesis = (f.thesis ?? '').slice(0, 160);
+      const detector = f.detector_name ? ` <${f.detector_name}>` : '';
+      lines.push(`  ${when} ${f.ticker} ${f.direction} score ${Math.round(f.score)}${detector}: ${thesis}`);
     }
   }
 
@@ -459,15 +484,28 @@ serve(async (req) => {
     lines.push('');
     lines.push('BREAKING NEWS (last 30min, severity >=2):');
     for (const n of news) {
-      const tickers = ((n.tickers_affected as string[] | null) ?? []).join(',');
-      const ingestedAt = (n.ingested_at as string | null) ?? null;
-      const publishedAt = (n.published_at as string | null) ?? null;
-      const ingestedTag = ingestedAt ? tagIsoTimestamp(ingestedAt, tctx.session_date) : '**UNKNOWN_TIME**';
-      const publishedTag = publishedAt ? tagIsoTimestamp(publishedAt, tctx.session_date) : null;
+      const tickers = (n.tickers_affected ?? []).join(',');
+      const ingestedTag = n.ingested_at
+        ? tagIsoTimestamp(n.ingested_at, tctx.session_date)
+        : '**UNKNOWN_TIME**';
+      const publishedTag = n.event_at && n.event_at !== n.ingested_at
+        ? tagIsoTimestamp(n.event_at, tctx.session_date)
+        : null;
       const whenStr = publishedTag ? `${ingestedTag} (published ${publishedTag})` : ingestedTag;
-      lines.push(`  ${whenStr} [sev ${n.severity} ${n.sentiment}] ${tickers ? `(${tickers}) ` : ''}${(n.headline as string)?.slice(0, 140) ?? ''}`);
-      if (n.summary) lines.push(`    ${(n.summary as string).slice(0, 200)}`);
+      const sentiment = n.sentiment ?? '—';
+      const headline = (n.headline ?? '').slice(0, 140);
+      lines.push(`  ${whenStr} [sev ${n.severity} ${sentiment}] ${tickers ? `(${tickers}) ` : ''}${headline}`);
+      if (n.summary) lines.push(`    ${n.summary.slice(0, 200)}`);
     }
+  }
+
+  // What just happened — preamble from event_recency organ. Bullet list of
+  // last-72h material events with outcomes (FOMC, earnings, macro prints) so
+  // the reader doesn't pattern-complete on yesterday's news as today's setup.
+  if (ctx.preamble.whatJustHappened && ctx.preamble.whatJustHappened.trim()) {
+    lines.push('');
+    lines.push('[WHAT JUST HAPPENED — last 72h material events with outcomes]');
+    lines.push(ctx.preamble.whatJustHappened);
   }
 
   if (priorRows.length > 0) {
@@ -555,7 +593,7 @@ You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTE
     trigger_kind,
     commentary,
     flow_ids: scored.map((r) => r.id),
-    flag_ids: flags.map((f) => f.id),
+    flag_ids: flags.map((f) => f.flag_id),
     vix_level: vixLevel,
     market_tide: marketTide,
     window_start: windowStart.toISOString(),
