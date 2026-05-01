@@ -28,6 +28,14 @@ import { cn } from '@/lib/utils';
 import type { HeatmapCell } from './FlowHeatmapGrid';
 import type { HeatmapMathMode } from '@/hooks/useFlowHeatmap';
 import { useFlowHeatmapHistory } from '@/hooks/useFlowHeatmap';
+// Phase 5 — System State organ mirrors. Cell drill shows the same brain
+// state Claude consumers see when reasoning about this cell.
+import { useSpecialistReads } from '@/hooks/useSpecialistReads';
+import { useFlowPulse } from '@/hooks/useFlowPulse';
+import { useDetectorFlags, filterFlagsByExpiryBucket } from '@/hooks/useDetectorFlags';
+import { useJamesFlags, jamesFlagMatchesCell } from '@/hooks/useJamesFlags';
+import { useNewsCausality } from '@/hooks/useNewsCausality';
+import { useCellAnalogs } from '@/hooks/useCellAnalogs';
 
 interface FlowHeatmapDrillProps {
   cell: HeatmapCell | null;
@@ -145,7 +153,9 @@ export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode, baselineL
     return Array.from(map.values()).sort((a, b) => a.strike - b.strike);
   }, [alerts]);
 
-  /** Historical evolution — last 24h of this ticker × expiry combo. */
+  /** Historical evolution — last 24h of this ticker × expiry combo.
+   *  Pass lookbackHours: 24 explicitly (matches the displayed window — the
+   *  hook default is 168h, which over-fetched and didn't match the header). */
   const sinceIso = useMemo(() => new Date(Date.now() - 24 * 3600_000).toISOString(), [open]);
   const untilIso = useMemo(() => new Date().toISOString(), [open]);
   const { data: historyRows = [] } = useFlowHeatmapHistory({
@@ -153,7 +163,28 @@ export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode, baselineL
     since: sinceIso,
     until: untilIso,
     mathMode,
+    lookbackHours: 24,
   });
+  /**
+   * Filter history rows that belong to this cell.
+   *
+   * The combined grid stores Friday-of-week as `cell.expiryBucketWeek`. The
+   * per-strike grid (FlowHeatmapPerTicker) stuffs the actual `expiry_date`
+   * into the same field for drill compatibility. The history RPC always
+   * returns Friday-of-week. So we normalize the cell key to a Friday and
+   * compare both forms — gives correct filtering regardless of source.
+   */
+  const cellFriday = useMemo(() => {
+    if (!cell?.expiryBucketWeek) return null;
+    const d = new Date(cell.expiryBucketWeek + 'T00:00:00Z');
+    if (Number.isNaN(d.getTime())) return null;
+    const js = d.getUTCDay();
+    const iso = js === 0 ? 7 : js; // Mon=1..Sun=7
+    const diff = 5 - iso; // Friday-of-week shift
+    const fri = new Date(d);
+    fri.setUTCDate(d.getUTCDate() + diff);
+    return fri.toISOString().slice(0, 10);
+  }, [cell]);
   const historySeries = useMemo(() => {
     if (!cell) return [];
     // The history RPC (ct_flow_heatmap_history) returns the per-snapshot
@@ -165,7 +196,10 @@ export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode, baselineL
     // field names defensively until the RPC contract is unified.
     type HistoryRowLoose = typeof historyRows[number] & { snapshot_at?: string };
     return historyRows
-      .filter((r) => r.ticker === cell.ticker && r.expiry_bucket_week === cell.expiryBucketWeek)
+      .filter((r) => r.ticker === cell.ticker && (
+        r.expiry_bucket_week === cell.expiryBucketWeek ||
+        (cellFriday !== null && r.expiry_bucket_week === cellFriday)
+      ))
       .map((r) => {
         const rl = r as HistoryRowLoose;
         const ts = rl.snapshot_at ?? rl.latest_snapshot_at;
@@ -177,7 +211,53 @@ export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode, baselineL
       })
       .filter((p) => Number.isFinite(p.t))
       .sort((a, b) => a.t - b.t);
-  }, [historyRows, cell]);
+  }, [historyRows, cell, cellFriday]);
+
+  // ---------------------------------------------------------------------
+  // Phase 5 — System State organ reads. Each hook is defensive (empty on
+  // missing data) so the drill renders even when one organ is unavailable.
+  // ---------------------------------------------------------------------
+  const { latest: specialistLatest } = useSpecialistReads(cell?.ticker, 1);
+  const { rows: pulseRows } = useFlowPulse(60);
+  const cellPulse = useMemo(() => {
+    if (!cell) return null;
+    const tk = cell.ticker.toUpperCase();
+    return (pulseRows ?? []).find((r) => r.ticker.toUpperCase() === tk) ?? null;
+  }, [pulseRows, cell]);
+  const { flags: tickerDetectorFlags } = useDetectorFlags({
+    ticker: cell?.ticker,
+    lookbackHours: 24,
+    limit: 50,
+  });
+  const cellDetectorFlags = useMemo(() => {
+    if (!cell || !cellFriday) return [];
+    return filterFlagsByExpiryBucket(tickerDetectorFlags, cell.ticker, cellFriday);
+  }, [tickerDetectorFlags, cell, cellFriday]);
+  const { flags: tickerJamesFlags } = useJamesFlags({
+    ticker: cell?.ticker,
+    lookbackHours: 24,
+    perTicker: 20,
+  });
+  const cellJamesFlags = useMemo(() => {
+    if (!cell || !cellFriday) return [];
+    return tickerJamesFlags.filter((f) => jamesFlagMatchesCell(f, cell.ticker, cellFriday));
+  }, [tickerJamesFlags, cell, cellFriday]);
+  const { perTicker: newsByTicker } = useNewsCausality({
+    ticker: cell?.ticker,
+    lookbackHours: 6,
+    cap: 25,
+    minSeverity: 1,
+  });
+  const cellNews = useMemo(() => {
+    if (!cell) return [];
+    return newsByTicker.get(cell.ticker.toUpperCase()) ?? [];
+  }, [newsByTicker, cell]);
+  const { analogs, isPending: analogsPending } = useCellAnalogs({
+    ticker: cell?.ticker ?? null,
+    expiryBucketWeek: cellFriday ?? cell?.expiryBucketWeek ?? null,
+    mathMode,
+    cap: 5,
+  });
 
   if (!cell) return null;
 
@@ -265,6 +345,213 @@ export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode, baselineL
             </section>
           )}
 
+          {/* Phase 5 — System State at this cell.
+              Mirrors the brain organs Claude consumers read: specialist's
+              latest take, Pulse regime, recent detector flags scoped to
+              (ticker × expiry-bucket-week), James's flags in this strike
+              range, and recent news with sentiment + causality. Empty
+              sub-sections fall through silently — the goal is to surface
+              CONVERGENT signal, not exhaustive panels. */}
+          <section>
+            <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
+              System state at this cell
+            </h3>
+            <div className="rounded-md border border-border/40 bg-muted/10 px-3 py-2.5 space-y-2.5 text-sm">
+              {/* Specialist read */}
+              {specialistLatest ? (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">specialist</span>
+                    {specialistLatest.direction_lean && (
+                      <Badge
+                        variant="outline"
+                        className={cn(
+                          'text-[9px] font-mono px-1 py-0 h-4',
+                          specialistLatest.direction_lean === 'bullish' && 'text-sky-300 border-sky-500/40',
+                          specialistLatest.direction_lean === 'bearish' && 'text-orange-300 border-orange-500/40',
+                          specialistLatest.direction_lean === 'mixed' && 'text-slate-300 border-slate-500/40',
+                          specialistLatest.direction_lean === 'neutral' && 'text-muted-foreground',
+                        )}
+                      >
+                        {specialistLatest.direction_lean}
+                        {specialistLatest.conviction != null && (
+                          <span className="opacity-70 ml-0.5">{Math.round(specialistLatest.conviction)}</span>
+                        )}
+                      </Badge>
+                    )}
+                    <span className="text-[9px] text-muted-foreground/70 ml-auto">
+                      {relTime(specialistLatest.updated_at)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-foreground/85 leading-snug">
+                    {specialistLatest.read_text}
+                  </p>
+                </div>
+              ) : (
+                <div className="text-[11px] text-muted-foreground italic">
+                  No specialist read for {cell.ticker} in window.
+                </div>
+              )}
+
+              {/* Pulse regime */}
+              {cellPulse && (
+                <div className="border-t border-border/40 pt-2">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] uppercase tracking-wider text-muted-foreground">pulse</span>
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        'text-[9px] font-mono px-1 py-0 h-4',
+                        cellPulse.premium_net > 0 ? 'text-sky-300 border-sky-500/40' : 'text-orange-300 border-orange-500/40',
+                      )}
+                    >
+                      C/P {Number.isFinite(cellPulse.call_put_ratio) ? cellPulse.call_put_ratio.toFixed(2) : '—'}
+                    </Badge>
+                    <span className="text-[10px] text-foreground/80 font-mono">
+                      net {formatSignedUsd(cellPulse.premium_net, 'net_signed')}
+                    </span>
+                    {cellPulse.is_unusual && (
+                      <span className="text-[9px] text-amber-300">⚡ unusual vs 30d</span>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Detector flags on this cell */}
+              {cellDetectorFlags.length > 0 && (
+                <div className="border-t border-border/40 pt-2">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                    detectors ({cellDetectorFlags.length})
+                  </div>
+                  <div className="space-y-1.5">
+                    {cellDetectorFlags.slice(0, 5).map((f) => {
+                      const breakdownPreview = f.score_breakdown && typeof f.score_breakdown === 'object'
+                        ? Object.entries(f.score_breakdown as Record<string, unknown>)
+                            .filter(([, v]) => v !== null && v !== undefined && typeof v !== 'object')
+                            .slice(0, 4)
+                            .map(([k, v]) => `${k}=${typeof v === 'number' ? v.toFixed(2) : String(v).slice(0, 24)}`)
+                            .join(' · ')
+                        : null;
+                      return (
+                        <div key={f.flag_id} className="flex items-start gap-2 text-[11px]">
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              'text-[9px] font-mono px-1 py-0 h-4 shrink-0',
+                              f.direction === 'bullish' && 'text-sky-300 border-sky-500/40',
+                              f.direction === 'bearish' && 'text-orange-300 border-orange-500/40',
+                              f.direction === 'neutral' && 'text-slate-300 border-slate-500/40',
+                            )}
+                          >
+                            {f.direction}
+                          </Badge>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 text-foreground/85">
+                              <span className="font-mono font-semibold">{f.detector_name ?? f.detector_id ?? 'detector'}</span>
+                              <span className="font-mono text-muted-foreground">z={(f.score ?? 0).toFixed(1)}</span>
+                              <span className="text-[9px] text-muted-foreground/70 ml-auto">{relTime(f.created_at)}</span>
+                            </div>
+                            {breakdownPreview && (
+                              <div className="text-[10px] text-muted-foreground/80 font-mono truncate">
+                                {breakdownPreview}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* James's flags in this cell */}
+              {cellJamesFlags.length > 0 && (
+                <div className="border-t border-border/40 pt-2">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                    James flags ({cellJamesFlags.length})
+                  </div>
+                  <div className="space-y-1.5">
+                    {cellJamesFlags.slice(0, 5).map((f) => (
+                      <div key={f.id} className="flex items-start gap-2 text-[11px]">
+                        <span className="shrink-0 mt-0.5 text-amber-400">★</span>
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            'text-[9px] font-mono px-1 py-0 h-4 shrink-0',
+                            f.direction_view === 'bullish' && 'text-sky-300 border-sky-500/40',
+                            f.direction_view === 'bearish' && 'text-orange-300 border-orange-500/40',
+                            f.direction_view === 'neutral' && 'text-slate-300 border-slate-500/40',
+                          )}
+                        >
+                          {f.direction_view}
+                        </Badge>
+                        <div className="min-w-0 flex-1">
+                          {f.strike != null && (
+                            <span className="font-mono text-foreground/85 mr-1.5">${f.strike}</span>
+                          )}
+                          {f.note ? (
+                            <span className="text-foreground/80">{f.note}</span>
+                          ) : (
+                            <span className="text-muted-foreground italic">no note</span>
+                          )}
+                          <span className="text-[9px] text-muted-foreground/70 ml-2">{relTime(f.flagged_at)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* News (last 6h, ticker-filtered) */}
+              {cellNews.length > 0 && (
+                <div className="border-t border-border/40 pt-2">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
+                    news ({cellNews.length}) · last 6h
+                  </div>
+                  <div className="space-y-1.5">
+                    {cellNews.slice(0, 5).map((n) => (
+                      <div key={n.id} className="flex items-start gap-2 text-[11px]">
+                        <Badge
+                          variant="outline"
+                          className={cn(
+                            'text-[9px] font-mono px-1 py-0 h-4 shrink-0',
+                            n.severity >= 4 && 'text-rose-300 border-rose-500/40',
+                            n.severity === 3 && 'text-amber-300 border-amber-500/40',
+                            n.severity <= 2 && 'text-muted-foreground border-border',
+                          )}
+                        >
+                          sev {n.severity}
+                        </Badge>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-foreground/85 line-clamp-2">{n.headline}</div>
+                          <div className="text-[10px] text-muted-foreground/80 flex items-center gap-1.5">
+                            {n.sentiment && <span>· {n.sentiment}</span>}
+                            {n.causality.moved === true && (
+                              <span className="text-emerald-300">flow moved within 15m</span>
+                            )}
+                            {n.causality.moved === false && (
+                              <span className="text-muted-foreground/60">no flow follow-through</span>
+                            )}
+                            <span className="ml-auto">{relTime(n.ingested_at)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Empty-state hint when nothing converged */}
+              {!specialistLatest && !cellPulse && cellDetectorFlags.length === 0 &&
+                cellJamesFlags.length === 0 && cellNews.length === 0 && (
+                <div className="text-[11px] text-muted-foreground italic">
+                  No system signal on {cell.ticker} in this window — the cell is
+                  flow-only convergence, not multi-organ.
+                </div>
+              )}
+            </div>
+          </section>
+
           {/* Strike breakdown bar */}
           <section>
             <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
@@ -343,6 +630,41 @@ export function FlowHeatmapDrill({ cell, open, onOpenChange, mathMode, baselineL
                     />
                   </LineChart>
                 </ResponsiveContainer>
+              </div>
+            )}
+          </section>
+
+          {/* Historical analogs — Phase 6 placeholder.
+              ct_cell_analogs RPC will perform semantic similarity over
+              embedded ct_flow_alerts to find prior cells that resolved a
+              certain way ("this looks like X past situation, which became
+              Y"). Hook is wired and stubbed; the section renders even now
+              so the convergence terminus is visually complete. */}
+          <section>
+            <h3 className="text-[11px] uppercase tracking-wider text-muted-foreground mb-1.5">
+              Historical analogs
+            </h3>
+            {analogsPending && analogs.length === 0 ? (
+              <div className="rounded-md border border-dashed border-border/40 bg-muted/10 px-3 py-3 text-[11px] text-muted-foreground">
+                <span className="font-mono text-amber-300">Phase 6 pending</span>
+                {' — '}
+                semantic similarity over embedded ct_flow_alerts will surface
+                analog cells that resolved a certain way. Wire is in place;
+                fills in after the ct_cell_analogs RPC ships.
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {analogs.slice(0, 5).map((a) => (
+                  <div key={a.alert_id} className="text-[11px] flex items-center gap-2">
+                    <span className="font-mono text-foreground/85">{a.ticker}</span>
+                    <span className="text-muted-foreground">{a.expiry_bucket_week}</span>
+                    <span className="text-muted-foreground">·</span>
+                    <span className="font-mono">{(a.similarity * 100).toFixed(0)}%</span>
+                    {a.resolution?.label && (
+                      <span className="text-foreground/80">{a.resolution.label}</span>
+                    )}
+                  </div>
+                ))}
               </div>
             )}
           </section>
