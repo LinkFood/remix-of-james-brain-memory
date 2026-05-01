@@ -1,17 +1,31 @@
 #!/bin/bash
-# tuesday_watch.sh — live ops monitor for Co-Trader Tuesday open (2026-04-28).
-# Polls every 5 min: per-detector flag counts, UW headroom, cost burn,
-# cron failure count, watermark advancement, AND watchlist-purity check
-# (new for 2026-04-28 — verifies the WATCHLIST filter at insertion).
+# linkjac_cotrader_watch.sh — live ops monitor for Co-Trader RTH session.
 #
-# Usage:  bash /tmp/tuesday_watch.sh
+# Companion to docs/LINKJAC_COTRADER_PLAYBOOK.md. Run during the trading
+# session to track:
+#   - Watchlist purity (100% expected — UW filter at insertion)
+#   - UW budget % and minute remaining (tier-aware throttle should kick in
+#     at 70/85/95% if poller is auto-throttling correctly)
+#   - Per-detector flag counts (all detectors should fire today)
+#   - Claude cost burn
+#   - Unresolved cron failures (last 24h)
+#   - ct_flow_alerts ingest count
+#   - Slack push quality (no "null BULLISH..." prefix)
+#   - New detector watermarks (should advance every 5 min RTH)
+#   - Temporal validator warnings count today (post-2026-04-30 hardening)
+#   - UW cache hit rate breadcrumbs (post-2026-04-30 dedup layer)
+#
+# Usage:  bash /Users/jameschellis/jac-agent-os/scripts/linkjac_cotrader_watch.sh
 # Stop:   Ctrl-C
+# Override interval:  INTERVAL_SEC=60 bash ...
 #
-# Tuesday-specific things to watch (post the 15 fixes shipped 2026-04-27):
-#   - Watchlist purity should be 100% (was 23% Monday — off-watchlist noise)
-#   - UW should track ~30% by close (was 100% Monday at 6:42 PM ET)
-#   - All 7 new detectors should fire flags (was 0 pre-bigint-fix Monday)
-#   - Slack pushes should NOT start with "null BULLISH..."
+# What changed 2026-04-30 evening (current as-of):
+#   - Tier-aware contract poller throttle live
+#   - 5-min UW dedup cache live (28 functions redeployed)
+#   - All 15 Claude consumers anchored + heatmap-context-aware
+#   - Hypothesis-judge Haiku resumed (forced tool-use)
+#   - Tide formula fixed (net_call - net_put, not +)
+#   - OI snapshot rate-limit retry handles MSFT/GOOGL/AMZN/META gap
 
 set -uo pipefail
 
@@ -157,6 +171,49 @@ try:
         print(f\"  {r['detector_id']:32}  watermark={wm}  last_run={lr}\")
 except Exception as e: print('parse err:',e)
 "
+
+  # --- TEMPORAL VALIDATOR WARNINGS TODAY (post-2026-04-30) ---
+  echo ""
+  echo "TEMPORAL VALIDATOR WARNINGS — rows today across consumers"
+  echo "-------------------------------------------------------------------------------"
+  for src in ct_eod_summaries ct_eod_reports ct_tape_commentary; do
+    NROWS=$(curl -s "${SUPA}/rest/v1/${src}?select=id&created_at=gte.${TODAY}T00:00:00Z" \
+      -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" \
+      -H "Prefer: count=exact" -I 2>&1 | grep -i content-range | sed 's|.*/||' | tr -d '\r\n ')
+    [[ -z "$NROWS" ]] && NROWS=0
+    printf "  %-26s rows today: %s\n" "$src" "$NROWS"
+  done
+
+  # --- UW CACHE / UNKNOWN CALLER VISIBILITY ---
+  echo ""
+  echo "UW UNKNOWN-CALLER CHECK (Saturday LB8 audit target — should drop with cache)"
+  echo "-------------------------------------------------------------------------------"
+  UNK=$(curl -s "${SUPA}/rest/v1/ct_uw_usage?observed_at=gte.${TODAY}T13:00:00Z&caller=eq.unknown&select=id" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" -H "Prefer: count=exact" -I 2>&1 \
+    | grep -i content-range | sed 's|.*/||' | tr -d '\r\n ')
+  [[ -z "$UNK" ]] && UNK=0
+  printf "  unknown-caller calls today: %s\n" "$UNK"
+
+  # --- POST-CLOSE LANDED FIRES (only when past 21:00 UTC) ---
+  HOUR_NUM=$(date -u +%H)
+  if [[ $HOUR_NUM -ge 21 ]]; then
+    echo ""
+    echo "POST-CLOSE LANDED FIRES"
+    echo "-------------------------------------------------------------------------------"
+    EODSUM=$(curl -s "${SUPA}/rest/v1/ct_eod_summaries?session_date=eq.${TODAY}&select=session_date,regime_tag,snapshot_hit_rate" \
+      -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" 2>/dev/null \
+      | python3 -c "import json,sys
+d=json.load(sys.stdin);r=d[0] if d else None
+print(f'regime={r[\"regime_tag\"]} hit_rate={r[\"snapshot_hit_rate\"]}%' if r else 'NOT YET')")
+    echo "  ct-eod-summary:  $EODSUM"
+    EODREP=$(curl -s "${SUPA}/rest/v1/ct_eod_reports?session_date=eq.${TODAY}&select=session_date,scorecard_summary" \
+      -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" 2>/dev/null \
+      | python3 -c "import json,sys
+d=json.load(sys.stdin);r=d[0] if d else None
+s=r['scorecard_summary'] if r else None
+print(f'wins={s.get(\"wins\")} loss={s.get(\"losses\")} score={s.get(\"score_pct\")}%' if s else 'NOT YET')")
+    echo "  ct-eod-report:   $EODREP"
+  fi
 
   echo ""
   echo "Next refresh in ${INTERVAL_SEC}s — Ctrl-C to stop"

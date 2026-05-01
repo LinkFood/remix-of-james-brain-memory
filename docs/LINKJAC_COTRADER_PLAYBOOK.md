@@ -1,31 +1,94 @@
-# Tuesday 2026-04-28 — Punch List
+# LinkJac Co-Trader Playbook
 
-Tracking what surfaced today during live ops + what's outstanding for after close. Today shipped 10 fixes live; this captures what we found that we're NOT fixing right now.
+The single canonical operations doc. Contains:
+1. **Today's / Tomorrow's Watching Plan** (live, rolling — top of file)
+2. **Active items** (open punch list — Saturday work, latent bugs, deferred items)
+3. **Pre-open verification + bug pattern catalog** (appendix from Morning Ops)
+4. **Closed today** (achievement log)
 
-**Updated 2026-04-28 ~23:15 UTC after evening polish session.** 6 of 12 items shipped + verified live (#5, #6, #7 from P1, #11b from P2, plus EOD `regime_tag/snapshot_hit_rate` and ct-cron-health-check step-interval suppression — both new items not on original list). 2 read-only diagnostics run on remaining items — see "Tonight's diagnostic findings" below.
+Companion script: `scripts/linkjac_cotrader_watch.sh` — run during RTH to monitor.
+
+**Last major update: 2026-04-30 evening** — class kills shipped (heatmap, temporal, pg_net timeout, UW budget cuts, Haiku judge, tide formula). 40+ commits today.
 
 ---
 
-## ⚠ MUST DO SATURDAY — RE-ENABLE ct-oi-snapshot-close
+## 📍 TOMORROW'S WATCHING PLAN — Friday 2026-05-01
 
-**Action**: re-add the cron schedule that was unscheduled 2026-04-30 18:55 UTC for budget reasons (commit `d0d6b9a`).
+**What's new since this morning that affects how we watch tomorrow:**
 
-**Why it's off**: today's manual fire at 18:37 UTC already captured today's mid+close window for all 10 tickers via the rate-limit retry. Scheduled 20:05 UTC fire would have been redundant burn while UW was at 77.9%.
+### UW budget — tier-aware throttle is live, never been exercised at scale
+The `ct-contract-poller` now self-throttles at three tiers:
+- `< 70%` budget used → polls every `*/4` (current full cadence)
+- `70-85%` → polls every `*/5` (drops 21 fires/day)
+- `85-95%` → polls every `*/7` (drops further)
+- `≥ 95%` → skips entirely with `skipped_reason` recorded
 
-**The cost of forgetting**: every weekday's post-close OI snapshot drops permanently. The `oi_delta_1d` baseline for next day's open snapshot uses close-of-prior-day — without that snapshot, deltas degrade to mid-day vs mid-day comparison instead of the canonical end-of-session snapshot.
+**Watch criterion**: at 14:00 ET (~4 hours into session), check `/health` UW chip:
+- If 60-70% at 14:00 → on track for ~80-85% close ✓
+- If > 75% at 14:00 → throttle SHOULD activate around 14:30; verify ct-contract-poller's `last_run_duration` shortens or `skipped_reason` field appears
+- If > 90% by 15:00 → ping me; we ship a manual cron pause like today's 18:55 fix
 
-**The fix Saturday**: write a one-line migration that re-adds the schedule:
+### 5-min UW dedup cache — first day live
+`_shared/uwClient.ts` cache layer is live across 28 functions. Expected ~750 calls/day saved via dedup of duplicate option-chain / OI / news / sector-tide calls within 5-min windows.
+
+**Watch criterion**: query `getUwCacheStats()` if exposed, or count `[uwClient][cache-hit]` log breadcrumbs in any function's recent logs. Hit rate should be 5-15% of total calls; if 0% the cache isn't working, if > 30% something's stale-serving.
+
+### Temporal validator warnings — will produce signal
+Every Claude consumer (15 of them now) calls `validateTemporalCoherence()` post-generation. Critical contradictions persist to JSONB columns.
+
+**Watch criterion**: query midday for any `temporal_validator_warnings` with `critical_count > 0`:
 ```sql
-SELECT cron.schedule(
-  'ct-oi-snapshot-close',
-  '5 20 * * 1-5',
-  $cron$ SELECT public.trigger_ct_oi_snapshot_with_slot('close'); $cron$
-);
+SELECT 'eod-summary' AS source, count(*) FROM ct_eod_summaries 
+  WHERE market_stats->'temporal_validator_warnings'->>'critical_count' != '0'
+  AND session_date >= CURRENT_DATE
+UNION SELECT 'tape-reader', count(*) FROM ct_tape_commentary  
+  WHERE created_at >= CURRENT_DATE AND temporal_validator_warnings->>'critical_count' != '0'
+-- ... etc per consumer
+```
+If consistent contradictions on a specific consumer, that consumer needs a sharper anchor.
+
+### OI snapshot — re-enabled, watch for full ticker coverage at close
+ct-oi-snapshot-close fires Friday 20:05 UTC. With the rate-limit retry shipped today, expect all 10 watchlist tickers to land rows.
+
+**Watch criterion**: at 20:10 UTC, query:
+```sql
+SELECT ticker, count(*) FROM ct_oi_snapshots 
+  WHERE snap_date = CURRENT_DATE AND snap_slot = 'close' GROUP BY ticker;
+```
+All 10 tickers should appear with non-zero count. If MSFT/GOOGL/AMZN/META still missing → rate-limit fix isn't working post-deploy.
+
+### Tide formula — reads bullish/bearish correctly now
+The tape reader's tide label was inverted on a portion of flows (`+` instead of `-` in the math). Fixed today (commit `2f9fa69`). Tomorrow's tide should track the heatmap's `aggressive_directional_decay` per-ticker sign.
+
+**Watch criterion**: glance at `/tape` banner — if it labels "bearish" while market is up >0.5%, cross-reference against `/heatmap` Combined view. They should agree on sign per ticker now.
+
+### Hypothesis lifecycle — resumed after 12 days dark
+ct-hypothesis-health-check Haiku judge fixed via forced tool-use (commit `e8b30c3`). First fire at 23:33 UTC produced 9 ambiguous_hold outcomes (today's data was UW-poisoned; ambiguous is honest).
+
+**Watch criterion**: by midday tomorrow, expect first `intact` and `invalidated` outcomes to appear in `ct_claude_decisions`. If still 100% ambiguous after 4-5 fires of the cron, the judge prompt needs tightening.
+
+### LB6 OI historical gap — stale data acknowledged
+MSFT/GOOGL/META snap_date stuck at 2026-04-28; AMZN at 2026-04-24. OvernightPositioning panel shows only 6/10 tickers on those tickers' rows. **Saturday backfill** is the fix. Tomorrow: this gap persists; don't read missing tickers as "no overnight movement."
+
+### What you can ignore tomorrow
+
+- "9 overdue" badge — JAC-side reminders, your personal calendar
+- Bundle size warning on build — cosmetic
+- Per-strike delta in heatmap Per-Ticker view (B6) — deferred to Saturday
+
+### Run the watch script
+
+```bash
+bash /Users/jameschellis/jac-agent-os/scripts/linkjac_cotrader_watch.sh
 ```
 
-Push it. Done. ~30 seconds of work.
+5-min refresh loop; Ctrl-C to stop. Override interval: `INTERVAL_SEC=60 bash ...`.
 
-**Verify**: query `cron.job` for `jobname='ct-oi-snapshot-close'` returns one row with `active=true`.
+---
+
+## ✅ RESOLVED — ct-oi-snapshot-close re-enabled
+
+Was unscheduled 2026-04-30 18:55 UTC (commit `d0d6b9a`) for UW budget reasons. Re-enabled same evening (commit `3804183` migration `20260430232000_reenable_oi_close_tonight.sql`). Friday's 20:05 UTC close fire runs normally. Belt-and-suspenders: remote-scheduled agent `trig_01WTvsphoauozF1XoXJ2ZqXe` will idempotently re-add Friday morning if needed.
 
 ---
 
