@@ -73,6 +73,7 @@ import type {
   ContextHelper,
   HelperFetchContext,
   HelperName,
+  HelperOpts,
   HelperResult,
 } from './contextHelper.ts';
 import { getTemporalContext } from './temporalContext.ts';
@@ -727,6 +728,25 @@ export interface BuildClaudeContextOpts {
   audience?: AudienceMode;
   /** Consumer name for telemetry. Default 'unknown'. */
   consumerName?: string;
+  /**
+   * Synthesis layer Phase 4 — organ whitelist.
+   * `'all'` (default) runs every registered helper gated by audience filter.
+   * A list runs only the named helpers. Targeted consumers (chat, slash
+   * commands, per-ticker specialists) pass a list to keep prompt size bounded.
+   * Backward-compatible: omitted ⇒ 'all', existing behavior preserved.
+   */
+  organs?: readonly HelperName[] | 'all';
+  /**
+   * Single-ticker focus passed to every helper that supports it. Helpers that
+   * ignore tickerFocus (tape commentary, market-wide news) pass through. Used
+   * by per-ticker consumers (10 specialists) to scope organ output.
+   */
+  tickerFocus?: string;
+  /**
+   * Per-organ override of caps, lookbackHours, helper-specific opts. Empty
+   * default. Most callers leave this empty.
+   */
+  perOrganOpts?: Partial<Record<HelperName, HelperOpts>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1916,19 +1936,37 @@ export async function buildClaudeContext(
     eventRecencyHelper,
   ];
 
+  // Synthesis Phase 4: organ whitelist + tickerFocus + perOrganOpts plumbing.
+  // Backward-compatible — omitted opts ⇒ 'all' organs, no focus, empty opts.
+  const organWhitelist: ReadonlySet<HelperName> | null =
+    !opts.organs || opts.organs === 'all'
+      ? null
+      : new Set(opts.organs);
+  const tickerFocus = opts.tickerFocus;
+  const perOrganOpts = opts.perOrganOpts ?? {};
+
   type OrganOutcome =
     | { name: HelperName; result: HelperResult<unknown> }
-    | { name: HelperName; skipped: 'audience_filter' | 'error'; error?: string };
+    | { name: HelperName; skipped: 'audience_filter' | 'organ_filter' | 'error'; error?: string };
 
   const helperOutcomes: OrganOutcome[] = await Promise.all(
     helpers.map(async (h): Promise<OrganOutcome> => {
       const name = h.name as HelperName;
+      // Phase 4: organ whitelist gate — skip helpers not in opts.organs.
+      if (organWhitelist && !organWhitelist.has(name)) {
+        return { name, skipped: 'organ_filter' };
+      }
       // D3 audience gate: skip helpers whose audienceFilter excludes us.
       if (h.audienceFilter && !h.audienceFilter.includes(audience)) {
         return { name, skipped: 'audience_filter' };
       }
+      // Per-organ opts: tickerFocus from BrainOpts + helper-specific overrides.
+      const helperOpts: HelperOpts = {
+        ...(tickerFocus ? { tickerFocus } : {}),
+        ...(perOrganOpts[name] ?? {}),
+      };
       try {
-        const result = await h.fetch(fetchCtx, {});
+        const result = await h.fetch(fetchCtx, helperOpts);
         return { name, result };
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

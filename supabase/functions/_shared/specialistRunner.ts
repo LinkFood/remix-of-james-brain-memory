@@ -33,7 +33,13 @@ import {
 import { readPulseContext } from './pulseContext.ts';
 import { getTemporalContext, tagIsoTimestamp } from './temporalContext.ts';
 import { validateTemporalCoherence } from './temporalValidator.ts';
-import { getFlowHeatmapContext } from './flowHeatmapContext.ts';
+import { buildClaudeContext } from './claudeReadSurface.ts';
+import type {
+  FlowHeatmapResult,
+} from './flowHeatmapContext.ts';
+import type { TapeContextResult } from './tapeContext.ts';
+import type { DetectorContextResult } from './detectorContext.ts';
+import type { NewsCausalityResult, NewsItem } from './newsCausalityContext.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -604,30 +610,6 @@ function formatOvernightPositioningBlock(ticker: string, rows: Array<Record<stri
   ].join('\n');
 }
 
-/**
- * Load the last 2 tape-reader commentaries — the floor-level macro narrative
- * synthesized every 10 min during RTH. Specialists need macro anchor:
- * if the reader says "VIX spike, risk-off pivot", a specialist flagging
- * a bullish NVDA breakout should reconcile that against the tide.
- */
-async function loadTapeReaderReads(supabase: SupabaseClient) {
-  try {
-    const { data, error } = await supabase
-      .from('ct_tape_commentary')
-      .select('created_at, commentary, market_tide, vix_level')
-      .order('created_at', { ascending: false })
-      .limit(2);
-    if (error) {
-      console.warn('[specialistRunner] tape reader load failed:', error.message);
-      return [];
-    }
-    return (data ?? []) as Array<Record<string, unknown>>;
-  } catch (e) {
-    console.warn('[specialistRunner] tape reader load threw:', String(e));
-    return [];
-  }
-}
-
 function relTimeFromNow(iso: string): string {
   const then = new Date(iso).getTime();
   if (!Number.isFinite(then)) return 'unknown';
@@ -639,16 +621,25 @@ function relTimeFromNow(iso: string): string {
   return m === 0 ? `${h}h ago` : `${h}h${m}m ago`;
 }
 
-function formatTapeReaderBlock(rows: Array<Record<string, unknown>>): string {
-  if (!rows || rows.length === 0) {
+/**
+ * Format the `tape` brain organ output as the TAPE-READER block. Replaces the
+ * pre-Phase-4 inline loadTapeReaderReads + formatTapeReaderBlock pair. Reads
+ * latest + prior commentary (organ default cap = 3 prior).
+ */
+function formatTapeReaderBlock(tape: TapeContextResult | null): string {
+  if (!tape || (!tape.latest && tape.prior.length === 0)) {
     return `[TAPE-READER'S CURRENT READ — no commentary yet this session]`;
   }
   const lines: string[] = [`[TAPE-READER'S CURRENT READ — what the floor-level reader just said]`];
+  const rows = [
+    ...(tape.latest ? [tape.latest] : []),
+    ...tape.prior.slice(0, 1), // keep the same 2-row footprint as the legacy path
+  ];
   rows.forEach((r, i) => {
-    const rel = relTimeFromNow(String(r.created_at ?? ''));
+    const rel = relTimeFromNow(r.created_at);
     const tide = r.market_tide ?? 'n/a';
-    const vix = r.vix_level === null || r.vix_level === undefined ? 'n/a' : Number(r.vix_level).toFixed(1);
-    const commentary = String(r.commentary ?? '').slice(0, 600);
+    const vix = r.vix_level == null ? 'n/a' : Number(r.vix_level).toFixed(1);
+    const commentary = (r.commentary ?? '').slice(0, 600);
     const prefix = i === 0 ? rel : `${rel} earlier`;
     lines.push(`${prefix} (market_tide=${tide}, VIX ${vix}): ${commentary}`);
   });
@@ -656,42 +647,29 @@ function formatTapeReaderBlock(rows: Array<Record<string, unknown>>): string {
 }
 
 /**
- * Load flags from peer specialists (other tickers) in the last 60 min.
- * If AMZN just went bearish 3x and META once, NVDA specialist reasoning about
- * a bullish flag should either align with the cross-book or explicitly justify
- * the divergence. This is the "what are my siblings seeing" signal.
+ * Format peer specialists' flags from the `detector` brain organ. Filters to
+ * other tickers' detector-flag activity in the lookback window. Replaces the
+ * pre-Phase-4 inline loadPeerFlags + formatPeerFlagsBlock pair.
  */
-async function loadPeerFlags(supabase: SupabaseClient, ticker: string) {
-  try {
-    const cutoff = new Date(Date.now() - 60 * 60_000).toISOString();
-    const { data, error } = await supabase
-      .from('ct_flags')
-      .select('specialist_ticker, direction, score, thesis, created_at')
-      .neq('specialist_ticker', ticker)
-      .gte('created_at', cutoff)
-      .order('created_at', { ascending: false })
-      .limit(10);
-    if (error) {
-      console.warn(`[specialistRunner] ${ticker} peer flags load failed:`, error.message);
-      return [];
-    }
-    return (data ?? []) as Array<Record<string, unknown>>;
-  } catch (e) {
-    console.warn(`[specialistRunner] ${ticker} peer flags load threw:`, String(e));
-    return [];
-  }
-}
-
-function formatPeerFlagsBlock(rows: Array<Record<string, unknown>>): string {
-  if (!rows || rows.length === 0) {
+function formatPeerFlagsBlockFromDetector(
+  ticker: string,
+  detector: DetectorContextResult | null,
+): string {
+  const flags = detector?.flags ?? [];
+  // The detector organ is invoked WITHOUT tickerFocus (we want cross-book
+  // visibility) — filter out this specialist's own ticker here.
+  const peers = flags
+    .filter((f) => (f.ticker ?? '').toUpperCase() !== ticker.toUpperCase())
+    .slice(0, 10);
+  if (peers.length === 0) {
     return `[PEER SPECIALIST FLAGS — no peer flags in last 60 min]`;
   }
   const lines: string[] = [`[PEER SPECIALIST FLAGS — other tickers last 60 min]`];
-  for (const r of rows) {
-    const tk = String(r.specialist_ticker ?? '?');
-    const dir = String(r.direction ?? '?');
-    const score = r.score === null || r.score === undefined ? '?' : String(r.score);
-    const thesisShort = String(r.thesis ?? '').slice(0, 80);
+  for (const f of peers) {
+    const tk = f.ticker ?? '?';
+    const dir = f.direction ?? '?';
+    const score = f.score == null ? '?' : String(f.score);
+    const thesisShort = (f.thesis ?? '').slice(0, 80);
     lines.push(`  ${tk} ${dir} ${score}: ${thesisShort}`);
   }
   lines.push(`(If peers are heavily one-direction today, note whether your read aligns or diverges and why.)`);
@@ -813,37 +791,45 @@ function formatLeanScoreBlock(ticker: string, row: Record<string, unknown> | nul
 }
 
 /**
- * Load recent news affecting this ticker from ct_breaking_news (Tavily
- * sweep + macro watcher). Last 6 hours, severity >= 2 OR tagged for this
- * ticker. News moves stocks; options front-run news — specialists need
- * to see the catalyst backdrop when proposing flags.
+ * Reduce the `news_causality` brain organ to the same shape the legacy inline
+ * loader produced — keeps downstream prompt formatting unchanged. Combines
+ * per-ticker hits with market-wide rows, capped at 8.
  */
-async function loadRecentNews(supabase: SupabaseClient, ticker: string) {
-  const sixHoursAgo = new Date(Date.now() - 6 * 3600_000).toISOString();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data } = await (supabase.from('ct_breaking_news' as never) as any)
-    .select('headline,source,severity,sentiment,category,macro_wide,summary,tickers_affected,ingested_at,published_at')
-    .gte('ingested_at', sixHoursAgo)
-    .order('ingested_at', { ascending: false })
-    .limit(50);
-  const rows = (data ?? []) as Array<Record<string, unknown>>;
-  // Keep rows that mention this ticker OR are macro-wide (affect all watchlist).
-  return rows
-    .filter((r) => {
-      const tickers = (r.tickers_affected as string[] | null) ?? [];
-      return tickers.includes(ticker) || r.macro_wide === true;
-    })
-    .slice(0, 8)
-    .map((r) => ({
-      headline: r.headline,
-      source: r.source,
-      severity: r.severity,
-      sentiment: r.sentiment,
-      category: r.category,
-      macro_wide: r.macro_wide,
-      summary: r.summary,
-      ingested_at: r.ingested_at,
-    }));
+function newsItemsForTicker(
+  ticker: string,
+  news: NewsCausalityResult | null,
+): Array<{
+  headline: string;
+  source: string | null;
+  severity: number;
+  sentiment: string | null;
+  category: string | null;
+  macro_wide: boolean;
+  summary: string | null;
+  ingested_at: string;
+}> {
+  if (!news) return [];
+  const tickerUpper = ticker.toUpperCase();
+  const perTickerHits = news.per_ticker[tickerUpper] ?? [];
+  const macroWide = news.market_wide ?? [];
+  const seen = new Set<string>();
+  const merged: NewsItem[] = [];
+  for (const n of [...perTickerHits, ...macroWide]) {
+    if (seen.has(n.id)) continue;
+    seen.add(n.id);
+    merged.push(n);
+    if (merged.length >= 8) break;
+  }
+  return merged.map((n) => ({
+    headline: n.headline,
+    source: n.news_source,
+    severity: n.severity,
+    sentiment: n.sentiment,
+    category: n.category,
+    macro_wide: (n.tickers_affected ?? []).length === 0 || n.tickers_affected.includes('*'),
+    summary: n.summary,
+    ingested_at: n.ingested_at,
+  }));
 }
 
 async function loadSpecialistMemory(supabase: SupabaseClient, ticker: string) {
@@ -1025,43 +1011,87 @@ export async function runSpecialistWakeup(
   // the full temporalAnchorPreamble applies here.
   const tctx = getTemporalContext();
 
-  // 8-12. Context for Claude.
-  // signatureEdgeBlock is the accumulated-edge anchor — pulls promoted
-  // signatures, snapshot stats, working tracks, today's attribution. Fully
-  // defensive (returns a stub when none of the downstream tables are
-  // populated yet — see _shared/signatureMemory.ts).
-  const [snapshot, nextEarnings, oiBuilds, memory, hitRate, news, overnight, flowPulse, tapeReads, peerFlags, leanScore, last5FlagsBlock, signatureEdgeBlock, signatureAlarms, flowHeatmapContext] = await Promise.all([
+  // ---- Synthesis Phase 4 — single brain read scoped to this ticker. ------
+  // Replaces five legacy inline pulls (flow heatmap, tape reader, peer-flags
+  // detectors, news causality, event recency). The organs:
+  //   • flow_heatmap   — positioning regime block (per-ticker stacks)
+  //   • tape           — floor-level macro narrative (market-wide; tickerFocus
+  //                       is ignored by the helper)
+  //   • detector       — peer-flag visibility (NO tickerFocus so we see other
+  //                       tickers' detector flags, then filter locally)
+  //   • news_causality — recent news affecting this ticker + macro-wide
+  //   • event_recency  — what just happened / today / upcoming (drives
+  //                       ctx.preamble.whatJustHappened)
+  //   • specialist     — peer-specialist current_reads (per-ticker uses focus
+  //                       to scope to THIS ticker's last read for continuity)
+  //   • pulse          — netPremium/slope regime (focused on this ticker)
+  //   • james_flags    — gated to 'cotrader' audience inside the helper
+  //
+  // Per-ticker brain. The cross-book detector visibility uses a separate fetch
+  // without tickerFocus.
+  const [
+    ctx,
+    crossBookCtx,
+    snapshot,
+    nextEarnings,
+    oiBuilds,
+    memory,
+    hitRate,
+    overnight,
+    flowPulse,
+    leanScore,
+    last5FlagsBlock,
+    signatureEdgeBlock,
+    signatureAlarms,
+  ] = await Promise.all([
+    buildClaudeContext(supabase, {
+      audience: 'cotrader',
+      consumerName: `ct-specialist-${ticker.toLowerCase()}`,
+      tickerFocus: ticker,
+      organs: ['flow_heatmap', 'specialist', 'pulse', 'tape', 'james_flags', 'news_causality', 'event_recency'],
+    }),
+    // Cross-book detector visibility — no tickerFocus so we see PEER flags.
+    buildClaudeContext(supabase, {
+      audience: 'cotrader',
+      consumerName: `ct-specialist-${ticker.toLowerCase()}/peers`,
+      organs: ['detector'],
+      perOrganOpts: { detector: { lookbackHours: 1, cap: 30 } },
+    }),
     loadTickerSnapshot(supabase, ticker),
     loadNextEarnings(supabase, ticker),
     loadRecentOiBuilds(supabase, ticker),
     loadSpecialistMemory(supabase, ticker),
     loadHitRateByTag(supabase, ticker),
-    loadRecentNews(supabase, ticker),
     loadOvernightPositioning(supabase, ticker),
     loadFlowPulse(supabase, ticker),
-    loadTapeReaderReads(supabase),
-    loadPeerFlags(supabase, ticker),
     loadTickerLean(supabase, ticker),
     loadLast5FlagsContext(supabase, ticker),
     fetchSignatureEdgeForTicker(supabase, ticker),
     loadRecentSignatureAlarms(supabase, ticker),
-    getFlowHeatmapContext(supabase, [ticker]),
   ]);
+
+  // Pull organ payloads with safe fallbacks — helpers never throw, but a
+  // helper not in the requested set will be undefined.
+  const flowHeatmap = (ctx.organs.flow_heatmap?.data as FlowHeatmapResult | undefined) ?? null;
+  const tape = (ctx.organs.tape?.data as TapeContextResult | undefined) ?? null;
+  const peerDetector = (crossBookCtx.organs.detector?.data as DetectorContextResult | undefined) ?? null;
+  const newsCausality = (ctx.organs.news_causality?.data as NewsCausalityResult | undefined) ?? null;
+  const news = newsItemsForTicker(ticker, newsCausality);
 
   const overnightBlock = formatOvernightPositioningBlock(ticker, overnight);
   const flowPulseBlock = formatFlowPulseBlock(ticker, flowPulse);
-  const tapeReaderBlock = formatTapeReaderBlock(tapeReads);
-  const peerFlagsBlock = formatPeerFlagsBlock(peerFlags);
+  const tapeReaderBlock = formatTapeReaderBlock(tape);
+  const peerFlagsBlock = formatPeerFlagsBlockFromDetector(ticker, peerDetector);
   const leanScoreBlock = formatLeanScoreBlock(ticker, leanScore);
   const signatureAlarmsBlock = formatSignatureAlarmsBlock(ticker, signatureAlarms);
 
   // Flow heatmap — positioning regime block (168h decay, top 3 expiry-week
-  // stacks for this ticker). Mirrors the pattern in ct-eod-summary.
-  const heatmapRow = flowHeatmapContext.per_ticker.find(p => p.ticker === ticker);
+  // stacks for this ticker). Read from the brain instead of inline RPC.
+  const heatmapRow = flowHeatmap?.per_ticker.find((p) => p.ticker === ticker);
   const flowHeatmapBlock = (heatmapRow && heatmapRow.stacks.length > 0)
     ? [
         `[FLOW HEATMAP — POSITIONING REGIME (168h, aggressive-directional decay)]`,
-        ...heatmapRow.stacks.map(s => `  - week ${s.expiry_bucket_week}: ${s.value >= 0 ? '+' : ''}${s.value.toFixed(0)} (n=${s.source_alert_count})`),
+        ...heatmapRow.stacks.map((s) => `  - week ${s.expiry_bucket_week}: ${s.value >= 0 ? '+' : ''}${s.value.toFixed(0)} (n=${s.source_alert_count})`),
       ].join('\n')
     : `[FLOW HEATMAP — POSITIONING REGIME] no significant stacks for ${ticker} in 168h window`;
 
@@ -1097,7 +1127,16 @@ export async function runSpecialistWakeup(
     event_ts_tag: typeof e.event_ts === 'string' ? tagIsoTimestamp(e.event_ts, tctx.session_date) : null,
   }));
 
+  // WHAT JUST HAPPENED preamble from the event_recency brain organ.
+  // Structural complement to the temporal anchor: kills the "watching for
+  // Powell speech today" hallucination class when the event already fired.
+  const whatJustHappenedBlock = ctx.preamble.whatJustHappened?.trim()
+    ? `[WHAT JUST HAPPENED — last 72h material events with outcomes]\n${ctx.preamble.whatJustHappened}`
+    : `[WHAT JUST HAPPENED — no material events in the last 72h tracked by event_recency]`;
+
   const userPayload = `Session: ${tctx.session_date} (${tctx.session_day_name}) — now ${tctx.now_et}
+
+${whatJustHappenedBlock}
 
 ${signatureAlarmsBlock}
 
@@ -1166,7 +1205,9 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
   try {
     claudeRes = await callClaude({
       model,
-      system: `${tctx.temporalAnchorPreamble}\n\n${systemContextHeader}\n\n${prompt}${CROSS_FACET_PROMPT_SUFFIX}`,
+      // Phase 4: temporal anchor sourced from the brain preamble (same string
+      // contents, sourced through buildClaudeContext for unified provenance).
+      system: `${ctx.preamble.temporalAnchor}\n\n${systemContextHeader}\n\n${prompt}${CROSS_FACET_PROMPT_SUFFIX}`,
       messages: [{ role: 'user', content: userPayload }],
       max_tokens: 2000,
       temperature: 0.2,
@@ -1275,12 +1316,16 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
         reason,
         events_considered: events.length,
         wakeup_threshold: wakeupThreshold,
-        flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
-        flow_heatmap_meta: {
-          generated_at: flowHeatmapContext.generated_at,
-          lookback_hours: flowHeatmapContext.lookback_hours,
-          math_mode: flowHeatmapContext.math_mode,
-        },
+        flow_heatmap_per_ticker: flowHeatmap?.per_ticker ?? [],
+        flow_heatmap_meta: flowHeatmap
+          ? {
+              generated_at: flowHeatmap.generated_at,
+              lookback_hours: flowHeatmap.lookback_hours,
+              math_mode: flowHeatmap.math_mode,
+            }
+          : null,
+        brain_consumer: `ct-specialist-${ticker.toLowerCase()}`,
+        brain_organs_invoked: Object.keys(ctx.organs ?? {}),
         temporal_validator_warnings: temporalValidatorWarnings,
       },
       tokens_in: tokensIn,
@@ -1404,12 +1449,16 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
         direction: decision.direction,
         tags: decision.tags,
         horizon_hours: decision.horizon_hours,
-        flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
-        flow_heatmap_meta: {
-          generated_at: flowHeatmapContext.generated_at,
-          lookback_hours: flowHeatmapContext.lookback_hours,
-          math_mode: flowHeatmapContext.math_mode,
-        },
+        flow_heatmap_per_ticker: flowHeatmap?.per_ticker ?? [],
+        flow_heatmap_meta: flowHeatmap
+          ? {
+              generated_at: flowHeatmap.generated_at,
+              lookback_hours: flowHeatmap.lookback_hours,
+              math_mode: flowHeatmap.math_mode,
+            }
+          : null,
+        brain_consumer: `ct-specialist-${ticker.toLowerCase()}`,
+        brain_organs_invoked: Object.keys(ctx.organs ?? {}),
         temporal_validator_warnings: temporalValidatorWarnings,
       },
       tokens_in: tokensIn,
