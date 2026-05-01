@@ -14,6 +14,13 @@
  */
 
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
+import type {
+  ContextHelper,
+  HelperDescription,
+  HelperFetchContext,
+  HelperOpts,
+  HelperResult,
+} from './contextHelper.ts';
 
 export type PulseRegime = 'trending_up' | 'trending_down' | 'chop' | 'unknown';
 
@@ -21,6 +28,20 @@ export interface PulseContext {
   netPremium: number | null;   // most recent ct_flow_pulse_ticks.premium_net
   slope5min: number | null;    // delta premium_net per minute over the last gap
   regime: PulseRegime;
+}
+
+/**
+ * ContextHelper-contract result shape. Maps each requested ticker to its
+ * Pulse-at-time-of-fire reading. Single-ticker focus → one key. Watchlist
+ * mode → one key per ticker. Empty record on no input. Same defensive
+ * guarantee as `readPulseContext`: never throws.
+ */
+export interface PulseResult {
+  per_ticker: Record<string, PulseContext>;
+  /** ISO timestamp the snapshot was assembled. */
+  generated_at: string;
+  /** The `atTime` cutoff used (defaults to fetch invocation). */
+  at_time: string;
 }
 
 const DEFAULT_TREND_THRESHOLD = 100_000;
@@ -107,3 +128,107 @@ export async function readPulseContext(
 
   return { netPremium, slope5min, regime };
 }
+
+// ---------------------------------------------------------------------------
+// ContextHelper<PulseResult> default export — orchestrator-side surface
+// ---------------------------------------------------------------------------
+
+const HELPER_NAME = 'pulse';
+const HELPER_VERSION = 'v1';
+const DEFAULT_CAP = 1;
+
+/**
+ * Default export: ContextHelper<PulseResult>. Wraps `readPulseContext` over
+ * either a single ticker (when `opts.tickerFocus` is set) or the consumer's
+ * watchlist. Existing named-export consumers (ct-signature-watcher,
+ * ct-detector-scorer, specialistRunner) keep using `readPulseContext`
+ * unchanged.
+ */
+const pulseHelper: ContextHelper<PulseResult> = {
+  name: HELPER_NAME,
+  version: HELPER_VERSION,
+  defaultCap: DEFAULT_CAP,
+  isExpensive: false,
+  minRefreshSeconds: 30,
+  dependencies: [],
+  audienceFilter: undefined,
+  cacheTtlSeconds: 30,
+
+  async fetch(
+    ctx: HelperFetchContext,
+    opts: HelperOpts,
+  ): Promise<HelperResult<PulseResult>> {
+    const startedAt = Date.now();
+    const atTimeOverride = (opts.atTime instanceof Date)
+      ? opts.atTime as Date
+      : (typeof opts.atTime === 'string' ? new Date(opts.atTime as string) : undefined);
+    const atTime = atTimeOverride ?? new Date();
+
+    const tickers: string[] = opts.tickerFocus
+      ? [opts.tickerFocus]
+      : Array.from(ctx.watchlist ?? []);
+
+    const per_ticker: Record<string, PulseContext> = {};
+    let warning: string | undefined;
+
+    if (tickers.length === 0) {
+      warning = 'no_tickers';
+    } else {
+      // Parallel reads — `readPulseContext` is per-ticker, defensive, never throws.
+      const results = await Promise.all(
+        tickers.map(async (t) => ({ t, pulse: await readPulseContext(ctx.supabase, t, atTime) })),
+      );
+      for (const { t, pulse } of results) {
+        per_ticker[t.toUpperCase()] = pulse;
+      }
+    }
+
+    const data: PulseResult = {
+      per_ticker,
+      generated_at: new Date().toISOString(),
+      at_time: atTime.toISOString(),
+    };
+
+    const rowCount = Object.keys(per_ticker).length;
+
+    return {
+      data,
+      meta: {
+        helperName: HELPER_NAME,
+        helperVersion: HELPER_VERSION,
+        fetchedAt: data.generated_at,
+        rowCount,
+        cacheHit: false,
+        latencyMs: Date.now() - startedAt,
+        truncated: false,
+        warning,
+      },
+    };
+  },
+
+  describe(): HelperDescription {
+    return {
+      name: HELPER_NAME,
+      version: HELPER_VERSION,
+      defaultCap: DEFAULT_CAP,
+      expensive: false,
+      minRefreshSeconds: 30,
+      dependencies: [],
+      audienceFilter: undefined,
+      outputShape:
+        'Per-ticker Pulse state at `atTime` (default now): netPremium level, ' +
+        'slope5min derivative, regime classification (trending_up/trending_down/' +
+        'chop/unknown). Source: ct_flow_pulse_ticks. Defensive — always returns ' +
+        'a populated map; "unknown" regime when <2 ticks available.',
+      exampleResult: {
+        per_ticker: {
+          NVDA: { netPremium: 12345678, slope5min: 234567, regime: 'trending_up' },
+        },
+        generated_at: '2026-04-30T18:00:00.000Z',
+        at_time: '2026-04-30T18:00:00.000Z',
+      } satisfies PulseResult,
+    };
+  },
+};
+
+export default pulseHelper;
