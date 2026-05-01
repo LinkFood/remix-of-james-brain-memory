@@ -68,7 +68,29 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { getConfig } from './configCache.ts';
 import { getWatchlist } from './watchlist.ts';
-import type { AudienceMode } from './contextHelper.ts';
+import type {
+  AudienceMode,
+  ContextHelper,
+  HelperFetchContext,
+  HelperName,
+  HelperResult,
+} from './contextHelper.ts';
+import { getTemporalContext } from './temporalContext.ts';
+
+// ---------------------------------------------------------------------------
+// Synthesis layer Phase 3 — brain organ helpers (composed via Promise.all)
+// ---------------------------------------------------------------------------
+import flowHeatmapHelper from './flowHeatmapContext.ts';
+import pulseHelper from './pulseContext.ts';
+import specialistHelper from './specialistContext.ts';
+import detectorHelper from './detectorContext.ts';
+import tapeHelper from './tapeContext.ts';
+import jamesFlagsHelper from './jamesFlagsContext.ts';
+import newsCausalityHelper from './newsCausalityContext.ts';
+import eventRecencyHelper, {
+  formatWhatJustHappened,
+  type EventRecencyResult,
+} from './eventRecencyContext.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -603,6 +625,39 @@ export interface ClaudeContext {
    * 'cotrader' is default. Determines which blocked-list applied.
    */
   audience: AudienceMode;
+
+  // -------------------------------------------------------------------------
+  // Synthesis layer Phase 3 — composed brain organs + preamble (additive).
+  //
+  // The flat fields above are preserved for backward compat with existing
+  // wired consumers (ct-daily-brief, ct-hypothesis-proposer,
+  // ct-hypothesis-health-check). Phase 4 migrates consumers to read from
+  // `organs` and `preamble` over time, then we can sunset flat fields.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Sparse map keyed by helper name. Only helpers that ran (passed the
+   * audience filter and didn't error) appear here. Consumers guard on
+   * presence: `ctx.organs.event_recency?.data`.
+   */
+  organs: Partial<Record<HelperName, HelperResult<unknown>>>;
+
+  /**
+   * Pre-formatted preamble strings ready to drop into Claude system prompts.
+   * Sourced from temporalContext + eventRecencyContext.formatWhatJustHappened().
+   */
+  preamble: {
+    /** From `temporalContext.temporalAnchorPreamble`. The session-date anchor. */
+    temporalAnchor: string;
+    /**
+     * Sourced from `eventRecency.just_happened`. Bullet list of last-72h
+     * material events with outcomes. Structural prevention of "watching for
+     * Powell speech today" hallucinations on prior-day events.
+     */
+    whatJustHappened: string;
+    /** Optional cross-organ summary. Empty for now. */
+    convergentView?: string;
+  };
 }
 
 export interface BuildClaudeContextOpts {
@@ -1828,6 +1883,80 @@ export async function buildClaudeContext(
     }
   } catch (_e) { /* RPC may not exist yet */ }
 
+  // -------------------------------------------------------------------------
+  // Synthesis layer Phase 3 — compose 8 brain organs via Promise.all.
+  //
+  // Each helper:
+  //   • runs concurrently with the others
+  //   • is audience-gated via its own `audienceFilter`
+  //   • returns a defensive empty result on error (helpers never throw)
+  //   • populates its own `meta` (latency, rowCount, warning) for telemetry
+  //
+  // Result goes into the `organs` map keyed by helper.name. The flat fields
+  // above are preserved unchanged for backward compat with the 3 currently-
+  // wired consumers (daily-brief, hypothesis-proposer, hypothesis-health-check).
+  // Phase 4 migrates consumers to read from `organs` over time.
+  // -------------------------------------------------------------------------
+  const tctx = getTemporalContext();
+  const fetchCtx: HelperFetchContext = {
+    supabase,
+    audience,
+    sessionDate: tctx.session_date,
+    watchlist,
+    consumerName: opts.consumerName ?? 'unknown',
+  };
+
+  const helpers: ReadonlyArray<ContextHelper<unknown>> = [
+    flowHeatmapHelper,
+    pulseHelper,
+    specialistHelper,
+    detectorHelper,
+    tapeHelper,
+    jamesFlagsHelper,
+    newsCausalityHelper,
+    eventRecencyHelper,
+  ];
+
+  type OrganOutcome =
+    | { name: HelperName; result: HelperResult<unknown> }
+    | { name: HelperName; skipped: 'audience_filter' | 'error'; error?: string };
+
+  const helperOutcomes: OrganOutcome[] = await Promise.all(
+    helpers.map(async (h): Promise<OrganOutcome> => {
+      const name = h.name as HelperName;
+      // D3 audience gate: skip helpers whose audienceFilter excludes us.
+      if (h.audienceFilter && !h.audienceFilter.includes(audience)) {
+        return { name, skipped: 'audience_filter' };
+      }
+      try {
+        const result = await h.fetch(fetchCtx, {});
+        return { name, result };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[buildClaudeContext] helper ${name} threw:`, msg);
+        return { name, skipped: 'error', error: msg };
+      }
+    }),
+  );
+
+  const organs: Partial<Record<HelperName, HelperResult<unknown>>> = {};
+  for (const r of helperOutcomes) {
+    if ('result' in r) organs[r.name] = r.result;
+  }
+
+  // Build the WHAT JUST HAPPENED preamble from the event_recency organ.
+  const eventRecencyOrgan = organs.event_recency as
+    | HelperResult<EventRecencyResult>
+    | undefined;
+  const whatJustHappened = eventRecencyOrgan
+    ? formatWhatJustHappened(eventRecencyOrgan.data, tctx.session_date)
+    : '';
+
+  const preamble = {
+    temporalAnchor: tctx.temporalAnchorPreamble,
+    whatJustHappened,
+  };
+
   return {
     latestHeartbeat,
     recentHeartbeats,
@@ -1885,6 +2014,9 @@ export async function buildClaudeContext(
     minHypConfidence,
     blockedFromReading: blockedReadsForAudience(audience),
     audience,
+    // Synthesis layer Phase 3 (additive)
+    organs,
+    preamble,
   };
 }
 
