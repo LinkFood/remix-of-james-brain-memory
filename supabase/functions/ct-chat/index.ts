@@ -5,9 +5,14 @@
  * Input:
  *   { message: string, history: Array<{role: 'user'|'assistant', content: string}> }
  *
- * Pulls: latest heartbeat (condensed state), all theses, recent events
- * (last 10 obs/flags/alerts), and hands it all to Claude along with
- * chat history + new message.
+ * Read path (post-2026-04-30 synthesis layer migration, Phase 4 P0):
+ *   Reads ALL context through `buildClaudeContext` (the brain). The previous
+ *   implementation called UW MCP at runtime per turn — that violated D4
+ *   (read/write separation) in the synthesis architecture, burned UW budget
+ *   on every conversation, and added MCP roundtrip latency. UW is now write-
+ *   path only (ingester crons → DB). Chat reads only from the DB through the
+ *   8 brain organs (flow_heatmap, pulse, specialist, detector, tape,
+ *   james_flags, news_causality, event_recency).
  *
  * Output: { response: string, duration_ms: number }
  */
@@ -19,7 +24,6 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { isKillSwitchActive } from '../_shared/killSwitch.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { CT_CHAT_SYSTEM } from '../_shared/chatPromptV1.ts';
-import { logMcpCalls } from '../_shared/mcpLog.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { voyageEmbed } from '../_shared/ctEmbed.ts';
 import { queryDcdBrain, shouldQueryDcdBrain, type CrossFacetHit } from '../_shared/crossFacetMemory.ts';
@@ -30,6 +34,7 @@ import { classifyThesis } from '../_shared/thesisClassifier.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { preTradeCheck, type Check } from '../_shared/preTradeGate.ts';
 import { firePreTradeQuality } from '../_shared/tradeQuality.ts';
+import { buildClaudeContext, claudeSystemPromptPreamble } from '../_shared/claudeReadSurface.ts';
 
 // ============================================================================
 // /propose — Claude proposes 1-3 trade ideas given current state.
@@ -1002,36 +1007,84 @@ async function recentSemanticHits(
   }
 }
 
-async function buildContext(supabase: ReturnType<typeof createClient>) {
-  const flowCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
-
-  const [heartbeat, theses, obs, flags, alerts, flow, dp, news] = await Promise.all([
-    supabase.from('ct_heartbeats').select('status_line, current_reads, watching, created_at').order('created_at', { ascending: false }).limit(1).maybeSingle(),
-    supabase.from('ct_theses').select('instrument, direction, conviction, up_case, down_case, watching, rationale, updated_at'),
-    supabase.from('ct_observations').select('id, instruments, direction, glance, created_at').order('created_at', { ascending: false }).limit(6),
-    supabase.from('ct_flags').select('id, instruments, direction, conviction, horizon, glance, created_at').order('created_at', { ascending: false }).limit(6),
-    supabase.from('ct_alerts').select('id, instruments, direction, conviction, horizon, alert_trigger, glance, created_at').order('created_at', { ascending: false }).limit(3),
-    supabase.from('ct_flow_alerts').select('ticker, side, strike, expiry, is_otm, is_ask, size, premium, size_gt_oi, executed_at').gte('ingested_at', flowCutoff).order('premium', { ascending: false }).limit(25),
-    supabase.from('ct_dark_pool_prints').select('ticker, size, price, notional_value, executed_at').gte('ingested_at', flowCutoff).order('notional_value', { ascending: false }).limit(25),
-    supabase.from('ct_news_analyses').select('instrument, news_headline, impact, significance, claude_take, created_at').gte('significance', 3).order('created_at', { ascending: false }).limit(10),
-  ]);
-
+/**
+ * Shape the ClaudeContext returned by `buildClaudeContext` into the per-turn
+ * payload the chat user-message carries. Read-only — never queries UW or
+ * inline-reads tables that the brain organs already cover (D4).
+ *
+ * Replaces the prior inline `buildContext()` that did 8 direct table reads
+ * (heartbeats, theses, observations, flags, alerts, flow_alerts, dark_pool,
+ * news_analyses) plus a runtime UW MCP call. All of those are now sourced
+ * through the 8 brain organs assembled by buildClaudeContext.
+ */
+function shapeChatPayload(
+  ctx: Awaited<ReturnType<typeof buildClaudeContext>>,
+  tickerFocus: string | null,
+): Record<string, unknown> {
   // Condense heartbeat current_reads — only send the _snapshot (condensed state),
   // not the _macro blob with raw per-strike Greek vectors.
-  const hb = heartbeat.data as { status_line?: string; current_reads?: Record<string, unknown>; created_at?: string } | null;
-  const snapshot = hb?.current_reads?._snapshot ?? null;
+  const hbReads = ctx.latestHeartbeat?.current_reads as Record<string, unknown> | null | undefined;
+  const snapshot = hbReads?._snapshot ?? null;
 
   return {
-    latest_status: hb?.status_line ?? null,
-    latest_pulse_at: hb?.created_at ?? null,
+    // Anchor + recency narrative — consumed by the system prompt too, but
+    // surfaced here in the payload so Claude can reason about them inline.
+    session_audience: ctx.audience,
+    watchlist: ctx.watchlist,
+    ticker_focus: tickerFocus,
+
+    // Heartbeat (condensed) — replaces inline ct_heartbeats query.
+    latest_status: ctx.latestHeartbeat?.status_line ?? null,
+    latest_pulse_at: ctx.latestHeartbeat?.created_at ?? null,
     market_state: snapshot,
-    theses: theses.data ?? [],
-    recent_observations: obs.data ?? [],
-    recent_flags: flags.data ?? [],
-    recent_alerts: alerts.data ?? [],
-    recent_flow_alerts_30min: flow.data ?? [],
-    recent_dark_pool_prints_30min: dp.data ?? [],
-    recent_significant_news: news.data ?? [],
+
+    // Brain organs — single source of truth post-Phase-3. Sparse: only organs
+    // that ran (passed audience filter, didn't error) appear under each key.
+    organs: {
+      flow_heatmap:    ctx.organs.flow_heatmap?.data ?? null,
+      pulse:           ctx.organs.pulse?.data ?? null,
+      specialist:      ctx.organs.specialist?.data ?? null,
+      detector:        ctx.organs.detector?.data ?? null,
+      tape:            ctx.organs.tape?.data ?? null,
+      james_flags:     ctx.organs.james_flags?.data ?? null,
+      news_causality:  ctx.organs.news_causality?.data ?? null,
+      event_recency:   ctx.organs.event_recency?.data ?? null,
+    },
+    organs_invoked: Object.keys(ctx.organs),
+
+    // Flat compatibility fields — preserved while Phase 4 migrates other
+    // consumers to read from organs only. Useful for Claude when it wants
+    // a quick scan that doesn't decode the per-organ wrappers.
+    open_hypotheses: ctx.openHypotheses.slice(0, 10).map((h) => ({
+      id: h.id,
+      claim: h.claim,
+      tickers: h.tickers,
+      horizon: h.horizon,
+      confidence: h.confidence,
+      elo: h.elo,
+    })),
+    claude_open_trades: ctx.claudeOpenTrades,
+    upcoming_events_14d: ctx.upcomingEvents,
+    active_brief: ctx.activeBrief
+      ? {
+          id: ctx.activeBrief.id,
+          macro_narrative: ctx.activeBrief.macro_narrative,
+          macro_regime: ctx.activeBrief.macro_regime,
+          convergent_view: ctx.activeBrief.convergent_view,
+          watchlist_focus: ctx.activeBrief.watchlist_focus,
+          skip_today: ctx.activeBrief.skip_today,
+        }
+      : null,
+    flow_heatmap_per_ticker: ctx.flowHeatmapPerTicker,
+
+    // Synthesis-layer telemetry — surfaced so we can see at-a-glance which
+    // organs filled and which sat empty for this turn.
+    organ_meta: Object.fromEntries(
+      Object.entries(ctx.organs).map(([name, r]) => [
+        name,
+        r ? { row_count: r.meta.rowCount, latency_ms: r.meta.latencyMs, warning: r.meta.warning ?? null } : null,
+      ]),
+    ),
   };
 }
 
@@ -1299,13 +1352,47 @@ serve(async (req) => {
     // keyword match, no extra LLM call.
     const crossFacetTriggered = shouldQueryDcdBrain(message);
 
-    const [context, recall, crossFacet] = await Promise.all([
-      buildContext(supabase),
+    // Parse ticker focus from the user message — first non-stopword 1-5 char
+    // uppercase token wins. Surface in the payload so Claude can scope its
+    // answer; future buildClaudeContext upgrades will narrow organ output by
+    // tickerFocus too. For now buildClaudeContext returns the full watchlist
+    // and Claude scopes its prose response.
+    const tickersFromMsg = extractInstruments(message);
+    const tickerFocus: string | null = tickersFromMsg[0] ?? null;
+
+    // SYNTHESIS LAYER READ PATH (Phase 4 P0).
+    // Single brain call replaces:
+    //   • the prior inline buildContext() (8 direct table reads), and
+    //   • the runtime UW MCP roundtrip per turn.
+    // 8 organs run via Promise.all (flow_heatmap, pulse, specialist, detector,
+    // tape, james_flags, news_causality, event_recency), audience-gated to
+    // 'cotrader' (sees James-owned signals like ct_flags WHERE source='james_star').
+    const [ctx, recall, crossFacet] = await Promise.all([
+      buildClaudeContext(supabase, {
+        audience: 'cotrader',
+        consumerName: 'ct-chat',
+        // Chat is latency-sensitive — keep optional caps tight.
+        heartbeatLimit: 1,
+        openHypothesisLimit: 12,
+        hypothesisEventLimit: 15,
+        closedTradeLimit: 10,
+        gradeLimit: 10,
+        flowAlertLimit: 25,
+        darkPoolLimit: 15,
+        breakingNewsHours: 24,
+        newsLimit: 10,
+        principleLimit: 12,
+        biasLimit: 10,
+        playbookLimit: 8,
+        eventHorizonDays: 14,
+      }),
       recentSemanticHits(supabase, message),
       crossFacetTriggered
         ? queryDcdBrain(supabase, message, { limit: 5 })
         : Promise.resolve({ hits: [] as CrossFacetHit[], reachable: true, reason: 'not_triggered' as string | null, duration_ms: 0 }),
     ]);
+
+    const context = shapeChatPayload(ctx, tickerFocus);
     (context as Record<string, unknown>).recent_semantic_hits = recall.hits;
     // Only attach cross_facet_hits to the context when we actually have
     // something — empty arrays invite Claude to comment on their emptiness.
@@ -1314,6 +1401,7 @@ serve(async (req) => {
     }
     const recallDebug = {
       query: message.slice(0, 200),
+      ticker_focus: tickerFocus,
       semantic_hit_count: recall.hits.length,
       time_floor_applied: recall.timeFloorApplied,
       cross_facet_triggered: crossFacetTriggered,
@@ -1321,7 +1409,23 @@ serve(async (req) => {
       cross_facet_hit_count: crossFacet.hits.length,
       cross_facet_reason: crossFacet.reason,
       cross_facet_ms: crossFacet.duration_ms,
+      organs_invoked: Object.keys(ctx.organs),
     };
+
+    // System prompt — preamble first (temporal anchor + what-just-happened
+    // event recency), then the generation/identity/surface preamble, then
+    // CT_CHAT_SYSTEM. The tail override clause neutralizes the legacy UW MCP
+    // line that still appears in chatPromptV1.ts; we no longer offer Claude a
+    // live UW handle — all read context now comes through the brain.
+    const systemPrompt = [
+      ctx.preamble.temporalAnchor,
+      ctx.preamble.whatJustHappened,
+      claudeSystemPromptPreamble(ctx),
+      CT_CHAT_SYSTEM,
+      '',
+      'READ PATH — SUPERSEDES ANY PRIOR LINE ABOUT LIVE UW MCP ACCESS:',
+      'You DO NOT have a live Unusual Whales MCP handle this turn. Every read you need is already in the [LIVE STATE] payload, sourced from the brain organs (flow_heatmap, pulse, specialist, detector, tape, james_flags, news_causality, event_recency). If the answer is not in that payload, say so plainly — do not fabricate UW values, and do not promise to "pull live" anything.',
+    ].join('\n');
 
     // Prepend a context block as the first user turn so Claude sees live state
     // before any conversation history. Then real conversation, then new message.
@@ -1335,42 +1439,29 @@ serve(async (req) => {
     ];
 
     let responseText = '';
-    // Surfaced on the response payload so the chat UI can render per-message metadata
-    // (model · tokens · cost · mcp calls). Populated after the Claude call returns.
+    // Surfaced on the response payload so the chat UI can render per-message
+    // metadata (model · tokens · cost). mcp_calls is permanently 0 post-Phase-4
+    // migration — chat does not call UW MCP at runtime.
     let tokensIn = 0;
     let tokensOut = 0;
     let costUsd = 0;
-    let mcpCalls = 0;
+    const mcpCalls = 0;
     try {
-      const uwKey = Deno.env.get('UW_API_KEY');
       const res = await callClaude({
         model: CLAUDE_MODELS.sonnet,   // better conversational reasoning than Haiku
-        system: CT_CHAT_SYSTEM,
+        system: systemPrompt,
         messages,
         max_tokens: 1500,
         temperature: 0.4,
-        // Live UW MCP — Claude can query any of UW's endpoints on demand during
-        // the turn. Pairs our cached state with full-surface UW access.
-        mcp_servers: uwKey ? [{
-          type: 'url',
-          url: 'https://api.unusualwhales.com/api/mcp',
-          name: 'unusual-whales',
-          authorization_token: uwKey,
-        }] : undefined,
-        beta: uwKey ? ['mcp-client-2025-04-04'] : undefined,
+        // No mcp_servers / no beta header — read-path violation removed per
+        // synthesis architecture D4. UW is write-path only (ingester crons).
       });
       responseText = parseTextContent(res).trim();
-      // Log every MCP call Claude made during this turn — user can audit.
-      logMcpCalls(supabase, 'chat', res as unknown as { content?: unknown }, { user_id: null }).catch(() => { /* non-blocking */ });
 
       // Record cost + usage. Chat doesn't use agent_tasks, so write direct
       // to ct_chat_tokens. Fire-and-forget — never blocks the response.
       try {
         const usage = (res as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
-        const content = (res as { content?: unknown[] }).content ?? [];
-        const mcpCount = Array.isArray(content)
-          ? content.filter((b) => (b as { type?: string }).type === 'mcp_tool_use').length
-          : 0;
         const inTok = usage?.input_tokens ?? 0;
         const outTok = usage?.output_tokens ?? 0;
         // Sonnet 4: $3/M in, $15/M out.
@@ -1379,7 +1470,6 @@ serve(async (req) => {
         tokensIn = inTok;
         tokensOut = outTok;
         costUsd = Number(cost.toFixed(6));
-        mcpCalls = mcpCount;
         supabase.from('ct_chat_tokens').insert({
           user_id: userId,
           model: 'sonnet',
@@ -1387,7 +1477,7 @@ serve(async (req) => {
           tokens_out: outTok,
           cost_usd: Number(cost.toFixed(6)),
           duration_ms: Date.now() - startedAt,
-          mcp_calls: mcpCount,
+          mcp_calls: 0,
           user_message: message.slice(0, 500),
           response_chars: responseText.length,
           cross_facet_hits: crossFacet.hits.length,
@@ -1401,10 +1491,12 @@ serve(async (req) => {
           model: CLAUDE_MODELS.sonnet,
           usage: usage ?? null,
           duration_ms: Date.now() - startedAt,
-          mcp_calls: mcpCount,
+          mcp_calls: 0,
           metadata: {
             user_id: userId,
             response_chars: responseText.length,
+            ticker_focus: tickerFocus,
+            organs_invoked: Object.keys(ctx.organs),
             // Cross-facet usage so /health and cost audits can see when
             // Co-Trader reached into DCD's brain. Only set when triggered.
             cross_facet: crossFacetTriggered ? {
