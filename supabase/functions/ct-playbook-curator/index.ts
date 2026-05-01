@@ -29,6 +29,34 @@ import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { PLAYBOOK_CURATOR_SYSTEM } from '../_shared/ctPrompts.ts';
 import { voyageEmbed } from '../_shared/ctEmbed.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+
+// ---------------------------------------------------------------------------
+// Brain integration (Phase 4 — synthesis layer migration).
+// Audience: 'cotrader'. Organ subset (playbook-focused):
+//   - flow_heatmap, specialist, detector, tape, event_recency (helper organs)
+//   - principles (flat field activePrinciples — playbooks must align with
+//     established principles; cite them in the prompt for cross-reference)
+// Single Sonnet call per weekly run → one brain build, surfaced in the
+// curator payload alongside the 90-day graded corpus.
+// ---------------------------------------------------------------------------
+const ORGAN_SUBSET_FOR_PLAYBOOK: ReadonlyArray<string> = [
+  'flow_heatmap', 'specialist', 'detector', 'tape', 'event_recency',
+];
+
+function pickOrganSubset(
+  organs: Record<string, unknown>,
+  names: ReadonlyArray<string>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const name of names) {
+    const o = organs[name];
+    if (o && typeof o === 'object' && 'data' in (o as Record<string, unknown>)) {
+      out[name] = (o as { data: unknown }).data;
+    }
+  }
+  return out;
+}
 
 // Minimum graded items (trades + flags + alerts) across the window for a
 // mining run to even bother calling Claude. Below this, we return
@@ -311,7 +339,16 @@ serve(async (req) => {
     const userId = (users?.[0]?.id as string | undefined) ?? null;
 
     const { start, end } = windowBounds();
-    const corpus = await gatherCorpus(supabase, start, end);
+    const [corpus, brain] = await Promise.all([
+      gatherCorpus(supabase, start, end),
+      buildClaudeContext(supabase, {
+        audience: 'cotrader',
+        consumerName: 'ct-playbook-curator',
+      }).catch((e) => {
+        console.warn('[ct-playbook-curator] brain build failed:', e instanceof Error ? e.message : String(e));
+        return null;
+      }),
+    ]);
     const totalGraded = corpus.graded_trades.length + corpus.graded_flags.length + corpus.graded_alerts.length;
 
     // Insufficient-corpus short-circuit. Skip the Claude call entirely —
@@ -330,7 +367,18 @@ serve(async (req) => {
       }), { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    const userMessage = JSON.stringify({ window: { start, end }, ...corpus });
+    const brainContext = brain ? {
+      session_date: brain.preamble.temporalAnchor,
+      what_just_happened: brain.preamble.whatJustHappened,
+      principles: brain.activePrinciples,
+      organs: pickOrganSubset(brain.organs as Record<string, unknown>, ORGAN_SUBSET_FOR_PLAYBOOK),
+    } : null;
+
+    const userMessage = JSON.stringify({
+      window: { start, end },
+      brain_context: brainContext,
+      ...corpus,
+    });
 
     let claudeText = '';
     const claudeCallStart = Date.now();
