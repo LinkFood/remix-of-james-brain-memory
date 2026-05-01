@@ -1983,6 +1983,60 @@ export async function buildClaudeContext(
     if ('result' in r) organs[r.name] = r.result;
   }
 
+  // -------------------------------------------------------------------------
+  // Phase 8 / D8 — fire-and-forget telemetry insert.
+  //
+  // Every helper outcome (resolved or skipped) emits one row to
+  // ct_brain_telemetry. NEVER awaited — telemetry must not block the read
+  // path. Errors are swallowed; the brain returns to the consumer regardless.
+  // -------------------------------------------------------------------------
+  void (async () => {
+    try {
+      const consumerName = opts.consumerName ?? 'unknown';
+      const tickerFocusVal = tickerFocus ?? null;
+      const rows = helperOutcomes.map((o) => {
+        if ('result' in o) {
+          const m = o.result.meta;
+          let outputBytes = 0;
+          try {
+            outputBytes = JSON.stringify(o.result.data).length;
+          } catch (_e) { /* non-serializable — leave 0 */ }
+          return {
+            helper_name: o.name,
+            helper_version: m.helperVersion ?? null,
+            audience,
+            ticker_focus: tickerFocusVal,
+            consumer_name: consumerName,
+            latency_ms: Math.max(0, Math.round(m.latencyMs ?? 0)),
+            output_size_bytes: outputBytes,
+            cache_hit: !!m.cacheHit,
+            error: m.warning ? `warning:${m.warning}` : null,
+          };
+        }
+        // Skipped outcome — record reason for visibility, latency=0.
+        const reasonTag = o.skipped === 'error' && o.error
+          ? `skipped:error:${o.error.slice(0, 200)}`
+          : `skipped:${o.skipped}`;
+        return {
+          helper_name: o.name,
+          helper_version: null,
+          audience,
+          ticker_focus: tickerFocusVal,
+          consumer_name: consumerName,
+          latency_ms: 0,
+          output_size_bytes: 0,
+          cache_hit: false,
+          error: reasonTag,
+        };
+      });
+      if (rows.length > 0) {
+        await supabase.from('ct_brain_telemetry').insert(rows);
+      }
+    } catch (_e) {
+      // Swallow — telemetry must never bubble to the consumer.
+    }
+  })().catch(() => { /* belt + suspenders — promise rejection swallowed */ });
+
   // Build the WHAT JUST HAPPENED preamble from the event_recency organ.
   const eventRecencyOrgan = organs.event_recency as
     | HelperResult<EventRecencyResult>
