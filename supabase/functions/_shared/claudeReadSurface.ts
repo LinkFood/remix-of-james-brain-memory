@@ -1,14 +1,29 @@
 /**
- * claudeReadSurface — THE ISOLATION CONTRACT.
+ * claudeReadSurface — THE BRAIN. Single read API for Claude consumers.
  *
- * Every Claude-facing function (hypothesis proposer, health check, trade idea
- * generator, etc.) MUST assemble its context by calling `buildClaudeContext`.
- * Direct table reads from those functions for James-owned data are forbidden.
+ * Every Claude-facing function (hypothesis proposer, health check, tape
+ * reader, trade idea generator, EOD writers, specialists, chat, etc.) MUST
+ * assemble its context by calling `buildClaudeContext`. Direct table reads
+ * from consumer files are forbidden. UW MCP at runtime is forbidden — UW
+ * is write-path only via ingester crons (D4 in the synthesis architecture).
  *
- * Why this file exists: Claude runs its own paper account in parallel to
- * James. If Claude sees James's trades, reviews, or private rules, it starts
- * pattern-matching to James's behavior and stops being an independent trader.
- * This helper IS the firewall.
+ * AUDIENCE MODES (synthesis layer D3, post-2026-04-30):
+ *   - 'cotrader' (default) — operational amplifier for James. Sees ct_flags
+ *     WHERE source='james_star' and other James-owned signals. The post-
+ *     2026-04-25 strategic-reset architecture: Co-Trader is an intelligence
+ *     amplifier for James's trading, not an independent paper trader.
+ *   - 'paper_claude' — research-layer firewall. Preserves the ORIGINAL
+ *     isolation contract below. Used only when an explicit research-layer
+ *     Claude generation is being graded for independence from James's
+ *     behavior. NOT the default.
+ *   - 'analyst' / 'voice' / 'slack' / 'agent_internal' — future audiences.
+ *     See docs/SYNTHESIS_LAYER_ARCHITECTURE.md.
+ *
+ * ORIGINAL ISOLATION CONTRACT (preserved for `audience: 'paper_claude'`):
+ * Claude runs its own paper account in parallel to James. If paper-Claude
+ * sees James's trades, reviews, or private rules, it starts pattern-matching
+ * to James's behavior and stops being an independent trader. This file IS
+ * the firewall when the paper-Claude experiment runs.
  *
  *   ALLOWED READS (Claude may see):
  *     - ct_heartbeats (objective market snapshot — shared infrastructure)
@@ -53,6 +68,7 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { getConfig } from './configCache.ts';
 import { getWatchlist } from './watchlist.ts';
+import type { AudienceMode } from './contextHelper.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -582,6 +598,11 @@ export interface ClaudeContext {
 
   // Explicit denial list for auditability
   blockedFromReading: string[];
+  /**
+   * Audience mode this context was assembled for (synthesis layer D3).
+   * 'cotrader' is default. Determines which blocked-list applied.
+   */
+  audience: AudienceMode;
 }
 
 export interface BuildClaudeContextOpts {
@@ -641,19 +662,61 @@ export interface BuildClaudeContextOpts {
   institutionalLookbackDays?: number;
   /** Days back for indicator events. Default 7. */
   indicatorEventLookbackDays?: number;
+  /**
+   * Audience mode (synthesis layer D3). Default 'cotrader' (operational
+   * amplifier — sees James's hand-labeled signals like ct_flags WHERE
+   * source='james_star'). Use 'paper_claude' to preserve the original
+   * isolation contract for the research-layer Claude experiment. See
+   * docs/SYNTHESIS_LAYER_ARCHITECTURE.md for the full audience matrix
+   * (cotrader / paper_claude / analyst / voice / slack / agent_internal).
+   */
+  audience?: AudienceMode;
+  /** Consumer name for telemetry. Default 'unknown'. */
+  consumerName?: string;
 }
 
 // ---------------------------------------------------------------------------
-// The blocked list — hard-coded for auditability. Every Claude context response
-// carries this so a downstream log reader can prove what was off-limits.
+// The blocked list — hard-coded for auditability. Every Claude context
+// response carries this so a downstream log reader can prove what was
+// off-limits for the audience mode at hand.
+//
+// `BLOCKED_READS_PAPER` applies when audience === 'paper_claude' (preserves
+// the original isolation contract for the research-layer Claude experiment).
+// `BLOCKED_READS_COTRADER` is empty for now — the cotrader audience sees all
+// James-owned data, since Co-Trader is an intelligence amplifier for James,
+// not an independent paper trader (post-2026-04-25 strategic reset).
 // ---------------------------------------------------------------------------
-const BLOCKED_READS: string[] = [
+const BLOCKED_READS_PAPER: string[] = [
   "ct_trades WHERE trader='james'",
   "ct_book WHERE trader='james'",
   "ct_custom_rules WHERE trader='james'",
   "ct_james_reviews (entire table)",
   "ct_notes (entire table, if it exists)",
+  "ct_flags WHERE source='james_star' (James's hand-labeled signals)",
 ];
+
+const BLOCKED_READS_COTRADER: string[] = [
+  // Empty — cotrader sees James's signal. Reserved for future per-audience
+  // gates if needed.
+];
+
+/** Choose blocked-list per audience. Used in the response payload below. */
+function blockedReadsForAudience(audience: AudienceMode): string[] {
+  switch (audience) {
+    case 'paper_claude':
+      return BLOCKED_READS_PAPER;
+    case 'cotrader':
+    case 'analyst':
+    case 'voice':
+    case 'slack':
+    case 'agent_internal':
+    default:
+      return BLOCKED_READS_COTRADER;
+  }
+}
+
+/** @deprecated Use blockedReadsForAudience(). Kept for any external import. */
+const BLOCKED_READS: string[] = BLOCKED_READS_PAPER;
 
 // ---------------------------------------------------------------------------
 // Builder
@@ -663,6 +726,7 @@ export async function buildClaudeContext(
   supabase: SupabaseClient,
   opts: BuildClaudeContextOpts = {},
 ): Promise<ClaudeContext> {
+  const audience: AudienceMode = opts.audience ?? 'cotrader';
   const heartbeatLimit = opts.heartbeatLimit ?? 1;
   const openHypothesisLimit = opts.openHypothesisLimit ?? 30;
   const hypothesisEventLimit = opts.hypothesisEventLimit ?? 50;
@@ -1819,7 +1883,8 @@ export async function buildClaudeContext(
     maxConcurrent,
     maxSizePct,
     minHypConfidence,
-    blockedFromReading: [...BLOCKED_READS],
+    blockedFromReading: blockedReadsForAudience(audience),
+    audience,
   };
 }
 
