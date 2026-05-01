@@ -26,6 +26,42 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, calculateCost, ClaudeError } from '../_shared/anthropic.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { POST_MORTEM_ALERT_SYSTEM } from '../_shared/ctPrompts.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+
+// ---------------------------------------------------------------------------
+// Brain integration (Phase 4 — synthesis layer migration).
+// Audience: 'cotrader'. Organs surfaced to each per-alert post-mortem:
+//   flow_heatmap, specialist, pulse, detector, tape, event_recency,
+//   news_causality. (james_flags omitted — autopsies grade Claude's calls,
+//   not James's.) Built once at handler start, shared across every haiku
+//   call. tickerFocus is conceptual today; the orchestrator doesn't apply
+//   it — autopsy prompt names the alert's primary_ticker so haiku focuses
+//   correctly within the shared brain snapshot.
+// ---------------------------------------------------------------------------
+const ORGAN_SUBSET_FOR_POSTMORTEM: ReadonlyArray<string> = [
+  'flow_heatmap', 'specialist', 'pulse', 'detector', 'tape',
+  'event_recency', 'news_causality',
+];
+
+function pickOrganSubset(
+  organs: Record<string, unknown>,
+  names: ReadonlyArray<string>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const name of names) {
+    const o = organs[name];
+    if (o && typeof o === 'object' && 'data' in (o as Record<string, unknown>)) {
+      out[name] = (o as { data: unknown }).data;
+    }
+  }
+  return out;
+}
+
+interface BrainSnapshot {
+  session_date: string;
+  what_just_happened: string;
+  organs: Record<string, unknown>;
+}
 
 const MAX_PER_RUN = 10;         // bound Claude calls per cron tick
 const AXIS_VALUES = ['A','B','C','D','E','F'] as const;
@@ -185,8 +221,10 @@ async function callPostMortem(
   supabase: SupabaseClient,
   target: WrongTarget,
   ctx: Awaited<ReturnType<typeof gatherContext>>,
+  brain: BrainSnapshot | null,
 ): Promise<{ pm: PostMortemJson; tokens_in: number; tokens_out: number; cost: number; duration_ms: number } | null> {
   const payload = {
+    brain_context: brain,
     alert: {
       id: ctx.alertRow.id,
       kind: target.alert_kind,
@@ -324,10 +362,10 @@ async function confirmOrSeedBias(
 // ---------------------------------------------------------------------------
 // Process one target: context → Claude → insert → bias feedback.
 // ---------------------------------------------------------------------------
-async function processTarget(supabase: SupabaseClient, target: WrongTarget) {
+async function processTarget(supabase: SupabaseClient, target: WrongTarget, brain: BrainSnapshot | null) {
   const ctx = await gatherContext(supabase, target);
 
-  const result = await callPostMortem(supabase, target, ctx);
+  const result = await callPostMortem(supabase, target, ctx, brain);
   if (!result) return { ok: false, reason: 'claude_failed' as const };
 
   const pm = result.pm;
@@ -481,9 +519,27 @@ serve(async (req) => {
   let totalCost = 0;
   const errors: Array<{ alert_id: string; reason: string }> = [];
 
+  // Brain (synthesis layer Phase 4). Built once, shared across every per-alert
+  // haiku call this tick. Best-effort — falls through if it throws.
+  let brain: BrainSnapshot | null = null;
+  try {
+    const ctx = await buildClaudeContext(supabase, {
+      audience: 'cotrader',
+      consumerName: 'ct-alert-post-mortem',
+    });
+    brain = {
+      session_date: ctx.preamble.temporalAnchor,
+      what_just_happened: ctx.preamble.whatJustHappened,
+      organs: pickOrganSubset(ctx.organs as Record<string, unknown>, ORGAN_SUBSET_FOR_POSTMORTEM),
+    };
+  } catch (e) {
+    console.warn('[ct-alert-post-mortem] brain build failed (autopsies run without context):',
+      e instanceof Error ? e.message : String(e));
+  }
+
   for (const target of targets) {
     try {
-      const r = await processTarget(supabase, target);
+      const r = await processTarget(supabase, target, brain);
       if (r.ok) {
         written++;
         if (r.axis_misremembered) axisMisremembered++;
