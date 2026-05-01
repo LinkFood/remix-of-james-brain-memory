@@ -291,7 +291,11 @@ serve(async (req) => {
   // ISOLATION: all context (heartbeat, config, preamble) via Claude read surface.
   // The stale-first ordering below is a separate query against the same
   // Claude-own ct_hypotheses table — still inside the contract.
-  const claudeCtx = await buildClaudeContext(supabase, { heartbeatLimit: 1 });
+  const claudeCtx = await buildClaudeContext(supabase, {
+    audience: 'paper_claude',
+    consumerName: 'ct-hypothesis-health-check',
+    heartbeatLimit: 1,
+  });
   const marketState = marketStateFromContext(claudeCtx);
   // Use SHORT temporal anchor — judgeHypothesis is a strict-JSON Haiku
   // call. The full narrative-style preamble caused 6/6 parse failures on

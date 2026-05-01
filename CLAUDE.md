@@ -135,15 +135,23 @@ These are the shifts that led to the tenets above. Future sessions inherit the c
 
 11. **`recordDecision` should auto-resolve what it needs, not require callers to remember.** Preflight found 14+ call sites weren't passing `generation_id` to the decision journal. Per tenet 4 (fix class not instance): added module-scoped auto-resolution in `_shared/decisionJournal.ts` that queries `current_claude_generation()` and caches 60s. Every call site benefits without editing — "forgot to tag" is now structurally impossible. Same pattern applies to other implicit-context fields: resolve at the central point, not at every consumer.
 
-## Synthesis Layer
+## Synthesis Layer (shipped 2026-04-30 night, Phases 0-8)
 
 Every Co-Trader Claude-facing surface (cron consumers, chat, slash commands, future voice, terminal-Claude analysis) reads context through one orchestrator: `buildClaudeContext` in `supabase/functions/_shared/claudeReadSurface.ts`. The orchestrator fans out across 9 brain organs (`flow_heatmap`, `pulse`, `specialist`, `detector`, `tape`, `james_flags`, `news_causality`, `event_recency`, `analogs`) via `Promise.all`, audience-gates per helper, and emits one fire-and-forget telemetry row per invocation to `ct_brain_telemetry`.
 
 UW MCP is **write-path only** (ingester crons). Consumers never call UW at runtime — that's the load-bearing read/write separation rule (D4). New dimension of the world = new organ file in `_shared/`, not a new direct table read.
 
-`/health` payload via `SELECT public.get_brain_health(window_hours => 24);` — per-helper p50/p95 latency, error rate, cache-hit rate, total invocations.
+`/health` payload via `SELECT public.get_brain_health(window_hours => 24);` — per-helper p50/p95 latency, error/warning/skipped buckets, cache-hit rate, total invocations.
 
 **Operational reference:** `docs/SYNTHESIS_LAYER.md` — read first when working on consumers or organs. Design rationale and decision log: `docs/SYNTHESIS_LAYER_ARCHITECTURE.md`.
+
+### Pickup state (read on a fresh session)
+
+- **Telemetry deployed in 2 of 17 consumers** as of last commit: `ct-chat`, `ct-watcher`. The other 15 consumers will pick up the telemetry write on their next deploy (it's in the shared orchestrator, bundled per-function). Don't be surprised by a sparse `consumers[]` list in `get_brain_health` until everyone redeploys.
+- **`ct-session-analog` was 404 in production** from launch through 2026-04-30 evening (cron firing into nothing — pg_cron's "succeeded" status reflects only the SQL, not the HTTP response). Manually deployed 2026-04-30 night. First real `ct_session_embeddings` row builds at the next 21:30 UTC fire (Friday 2026-05-01). Until then, the `analogs` organ correctly returns `meta.warning='no_current_embedding'`.
+- **Phase 7 (capture path) is design-only.** Don't build it without a conversation with James. Open question: extend `ct_flags` (where james_star already lives) vs new `ct_james_reads` table.
+- **Verified working tonight:** smoke test through `ct-watcher` returned 9 telemetry rows, 0 errors, 2 expected warnings (`analogs:no_current_embedding`, `james_flags:no_rows`), latencies 147–914ms. RPC `get_brain_health(1)` returned valid JSON.
+- **Not yet bulk-redeployed:** the remaining 15 consumers. Decision deferred — let the next normal deploy (or a sweep) propagate the telemetry wire. No urgency; the consumers work fine without it.
 
 ## Disk Health Check
 

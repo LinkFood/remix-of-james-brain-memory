@@ -21,10 +21,10 @@ Each lives at `supabase/functions/_shared/<name>Context.ts` and conforms to `Con
 | `specialist` | `ct_specialist_reads` | Latest specialist read per watchlist ticker: prose, lean, conviction, flagged | all | 10 | 60 | none |
 | `detector` | `ct_flags` + `ct_detectors` | Recent detector flags last 24h, top 20 by recency, with pulse-at-fire and score breakdown | all | 20 | 60 | none |
 | `tape` | `ct_tape_commentary` | Latest tape narrative paragraph + N prior rows for continuity | all | 3 | 300 | none |
-| `james_flags` | `ct_james_flags` | Per-ticker recent James hand-labeled flags, newest first | **cotrader, analyst** | 5 | 300 | none |
+| `james_flags` | `ct_flags` WHERE `source='james_star'` | Per-ticker recent James hand-labeled flags, newest first (legacy `ct_james_flags` was unified into `ct_flags` on 2026-04-27) | **cotrader, analyst** | 5 | 300 | none |
 | `news_causality` | `ct_breaking_news` + `ct_news_analyses` + `ct_news_causality` | Severity-ranked recent news with optional causality (flow/dp 15-min hits + price moved) | all | 10 | 60 | none |
 | `event_recency` | `ct_events` + `ct_earnings_moves` + `ct_central_bank_state` + breaking news | Three temporal buckets: just_happened (72h), happening_today, upcoming (14d). Source for `preamble.whatJustHappened`. Structurally kills "watching for Powell speech today" hallucination class | all | 5 | 300 | none |
-| `analogs` | `ct_session_analogs` (semantic similarity over embedded session signatures) | Top-N most-similar past Co-Trader sessions to today | all | 3 | 300 | 300 |
+| `analogs` | `ct_session_embeddings` + RPC `search_ct_session_analogs` (cosine over Voyage 512-dim session signatures, EOD outcomes joined) | Top-N most-similar past Co-Trader sessions to today, with their realized EOD return — recall layer | all | 3 | 300 | 300 |
 
 **Audience filter `cotrader,analyst` on `james_flags`** preserves the `paper_claude` isolation contract — paper-Claude never sees James's hand-labeled signals.
 
@@ -201,6 +201,8 @@ Accumulated tonight (Phase 0–8) plus relevant standing rules.
 - **Cache-hit rate of 0 is normal at first call.** Only `flow_heatmap`, `pulse`, and `analogs` opt into caching. Live-data organs (specialist, detector, tape, james_flags, news_causality, event_recency) deliberately skip the cache so consumers see fresh data.
 
 - **The 1922-line `claudeReadSurface.ts` is the orchestrator.** It still carries the original inline data fetches (heartbeats, hypotheses, claude trades, principles, biases, etc.) for the three Phase 0 consumers. Phase 4 migrated 17+ consumers to read through `organs` instead. Future cleanup: convert remaining inline fetches into helpers, slim the orchestrator to ~300 lines.
+
+- **`ct-session-analog` was 404 in production from launch through 2026-04-30 evening.** The cron at `30 21 * * 1-5` was firing into a non-existent function (pg_cron's "succeeded" status reflects the SQL command, not the HTTP response). Deployed 2026-04-30 night. First real `ct_session_embeddings` row builds at the next 21:30 UTC fire (Friday 2026-05-01). Until then, `analogs` returns `meta.warning='no_current_embedding'`. Verify after Friday's close: `SELECT count(*) FROM ct_session_embeddings`.
 
 ---
 

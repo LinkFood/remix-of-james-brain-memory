@@ -334,6 +334,8 @@ serve(async (req) => {
   // Observations/alerts/wobbly-grades still come from the tape puller below —
   // those are Claude-authored watcher output, not James-owned data.
   const claudeCtx = await buildClaudeContext(supabase, {
+    audience: 'paper_claude',
+    consumerName: 'ct-hypothesis-proposer',
     openHypothesisLimit: 30,
     gradeLimit: 20,
   });

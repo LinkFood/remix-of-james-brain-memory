@@ -322,6 +322,8 @@ serve(async (req) => {
 
     const [ctx, breakingNews, upcomingEvents, snapshots, recentClosed, flowHeatmapContext] = await Promise.all([
       buildClaudeContext(supabase, {
+        audience: 'cotrader',
+        consumerName: 'ct-daily-brief',
         heartbeatLimit: 3,
         openHypothesisLimit: 25,
         hypothesisEventLimit: 30,
