@@ -722,7 +722,16 @@ serve(async (req) => {
         const regimeStr = payload.macro_regime ?? 'unspecified';
         const versionTag = briefVersion > 1 ? ` · v${briefVersion}` : '';
         const urgencyTag = urgency !== 'normal' ? ` · ${urgency.toUpperCase()}` : '';
-        const headerText = `Co-Trader Morning Brief · ${sessionDate} · ${regimeStr}${versionTag}${urgencyTag}`;
+        // v1 scheduled = morning brief. v1 manual / v2+ rebriefs get distinct labels
+        // so the Slack title doesn't say "Morning Brief" at 2pm when a breaking-news
+        // rebrief fires.
+        const titleNoun =
+          briefVersion === 1 && triggeredBy === 'scheduled' ? 'Morning Brief'
+          : triggeredBy === 'breaking_news' ? 'Rebrief — Breaking News'
+          : triggeredBy === 'regime_shift' ? 'Rebrief — Regime Shift'
+          : briefVersion > 1 ? 'Rebrief'
+          : 'Brief';
+        const headerText = `Co-Trader ${titleNoun} · ${sessionDate} · ${regimeStr}${versionTag}${urgencyTag}`;
 
         // Macro narrative — single mrkdwn section, Slack truncates ~3000 chars.
         const macroText = String(payload.macro_narrative || '').slice(0, 2800);
@@ -798,7 +807,7 @@ serve(async (req) => {
           elements: [{ type: 'mrkdwn', text: footerText }],
         });
 
-        const fallbackText = `Co-Trader Morning Brief ${sessionDate} · ${regimeStr}${versionTag}${urgencyTag} · ${ideas.length} ideas`;
+        const fallbackText = `Co-Trader ${titleNoun} ${sessionDate} · ${regimeStr}${versionTag}${urgencyTag} · ${ideas.length} ideas`;
         await ctSlackPushDirect(supabase, userId, fallbackText, 'daily-brief', blocks);
         slackOutcome = 'sent';
       }
