@@ -30,8 +30,8 @@ import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_sh
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { CT_SYSTEM_PROMPT_V1, CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
 import { getTemporalContext } from '../_shared/temporalContext.ts';
-import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
-import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+import type { FlowHeatmapResult } from '../_shared/flowHeatmapContext.ts';
 import { fetchFormattedMixedEdgePriors } from '../_shared/edgePriors.ts';
 import { buildMemoryBundle, getRecentSelfCorrections, getActiveBiases } from '../_shared/memoryRecall.ts';
 import { embedCtItem, buildCtRichText } from '../_shared/ctEmbed.ts';
@@ -1310,11 +1310,24 @@ serve(async (req) => {
     // zeroed map on query error — never crashes the cycle.
     const newsSentiment24h = await getNewsSentimentNet(supabase, watchlist, 24);
 
-    // 3b3. Temporal anchor + flow heatmap. Watcher emits JSON-in-prose, so
-    // use the SHORT temporal anchor — the full preamble breaks JSON parsing
-    // (proven on hypothesis-health-check). See _shared/temporalContext.ts.
+    // 3b3. Temporal anchor + brain (synthesis layer Phase 4). Watcher emits
+    // JSON-in-prose, so use the SHORT temporal anchor — the full preamble
+    // breaks JSON parsing (proven on hypothesis-health-check). See
+    // _shared/temporalContext.ts. Brain organs are read through the orchestrator
+    // (buildClaudeContext) instead of inline helper calls — flow_heatmap is
+    // one of the 8 organs composed in Promise.all with audience filtering and
+    // telemetry. Falls back to defensive empty on any organ miss.
     const tctx = getTemporalContext();
-    const flowHeatmapContext = await getFlowHeatmapContext(supabase, watchlist);
+    const ctx = await buildClaudeContext(supabase, {
+      audience: 'cotrader',
+      consumerName: 'ct-watcher',
+    });
+    const flowHeatmapContext: FlowHeatmapResult = ctx.organs.flow_heatmap?.data as FlowHeatmapResult ?? {
+      per_ticker: [],
+      generated_at: new Date().toISOString(),
+      lookback_hours: 168,
+      math_mode: 'aggressive_directional_decay',
+    };
     const flowHeatmapMeta = {
       generated_at: flowHeatmapContext.generated_at,
       lookback_hours: flowHeatmapContext.lookback_hours,
@@ -1512,51 +1525,12 @@ ${m.macro_label} in ~${m.hours_remaining.toFixed(1)}h (${m.event_date}${m.event_
     // 6. Parse Claude response
     const parsed = claudeText ? parseClaudeJson(claudeText) : null;
 
-    // 6b. Temporal-coherence validator (best-effort). Validates the narrative
-    // strings the watcher emitted (observation/glance/up_case/down_case +
-    // status_line). Persisted into the heartbeat row's current_reads JSONB
-    // after the writeHeartbeat call returns the id. See _shared/temporalValidator.ts.
-    let validatorOk = true;
-    let validatorContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
-    if (parsed) {
-      const narrativeForValidation = [
-        asString(parsed.observation) ?? '',
-        toArray(parsed.glance).filter((g): g is string => typeof g === 'string').join(' | '),
-        asString(parsed.up_case) ?? '',
-        asString(parsed.down_case) ?? '',
-        asString(parsed.status_line) ?? '',
-      ].filter(s => typeof s === 'string' && s.trim().length > 0).join('\n\n---\n\n');
-      if (narrativeForValidation) {
-        try {
-          const validation = await validateTemporalCoherence(narrativeForValidation, tctx.session_date, {
-            tickerContext: toArray(parsed.instruments).filter((s): s is string => typeof s === 'string').join(', ') || undefined,
-          });
-          validatorOk = validation.ok;
-          validatorContradictions = validation.contradictions;
-          const critical = validation.contradictions.filter(c => c.severity === 'critical');
-          if (critical.length > 0) {
-            console.warn(
-              `[ct-watcher] temporal validator flagged ${critical.length} CRITICAL contradiction(s) for session ${tctx.session_date}:`,
-              JSON.stringify(critical),
-            );
-          } else if (!validation.ok && validation.contradictions.length > 0) {
-            console.warn(
-              `[ct-watcher] temporal validator flagged ${validation.contradictions.length} warning(s):`,
-              JSON.stringify(validation.contradictions),
-            );
-          }
-        } catch (e) {
-          console.warn('[ct-watcher] temporal validator threw (non-blocking):', String(e));
-        }
-      }
-    }
-    const temporalValidatorWarnings = {
-      ok: validatorOk,
-      session_date: tctx.session_date,
-      contradiction_count: validatorContradictions.length,
-      critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
-      contradictions: validatorContradictions,
-    };
+    // Phase 4 (synthesis layer) — the inline post-call temporalValidator is
+    // gone. Structural prevention via the orchestrator's preamble
+    // (whatJustHappened, sourced from the event_recency organ) closes the bug
+    // class at the source: Claude no longer has to compute "is this today?"
+    // because the resolved 72h timeline rides on every prompt. Validator
+    // chain (D10) lives orchestrator-side and runs across consumers.
 
     // 7. Dispatch by state — ALWAYS end with at least a heartbeat row
     let heartbeatId: string | null = null;
@@ -1643,7 +1617,12 @@ ${m.macro_label} in ~${m.hours_remaining.toFixed(1)}h (${m.event_date}${m.event_
               ...existing,
               flow_heatmap_per_ticker: flowHeatmapContext.per_ticker,
               flow_heatmap_meta: flowHeatmapMeta,
-              temporal_validator_warnings: temporalValidatorWarnings,
+              // Phase 4 brain provenance — names of organs the orchestrator
+              // composed for this watcher cycle. Replaces the per-cycle
+              // temporal_validator_warnings (validator chain is now
+              // orchestrator-side; whatJustHappened preamble is the
+              // structural fix this used to chase).
+              brain_organs_invoked: Object.keys(ctx.organs ?? {}),
             },
           })
           .eq('id', heartbeatId);
