@@ -19,13 +19,15 @@
 # Stop:   Ctrl-C
 # Override interval:  INTERVAL_SEC=60 bash ...
 #
-# What changed 2026-04-30 evening (current as-of):
-#   - Tier-aware contract poller throttle live
-#   - 5-min UW dedup cache live (28 functions redeployed)
-#   - All 15 Claude consumers anchored + heatmap-context-aware
-#   - Hypothesis-judge Haiku resumed (forced tool-use)
-#   - Tide formula fixed (net_call - net_put, not +)
-#   - OI snapshot rate-limit retry handles MSFT/GOOGL/AMZN/META gap
+# What changed 2026-04-30 → 2026-05-01 overnight (current as-of):
+#   - Synthesis Layer Phases 0-8 shipped (single buildClaudeContext, 9 organs, telemetry)
+#   - System Warden live (15 invariants, 30-min cron, Slack on state-change)
+#   - Specialist Recall property live (10th organ, 3-state outcome rendering)
+#   - tickerCoherenceValidator kills data-fabrication hallucination class
+#   - Budget views ET-bucketed (no more UTC-rollover zero-out)
+#   - 22 UW ingesters bulk-redeployed for setUwCaller hygiene
+#   - Captain Into The Storm governing image landed (build-time discipline only —
+#     runtime preamble wire DEFERRED to 2026-05-15 per recall experiment design)
 
 set -uo pipefail
 
@@ -71,9 +73,40 @@ while true; do
   TS_UTC=$(date -u '+%H:%M UTC')
   TODAY=$(date -u +%Y-%m-%d)
   echo "==============================================================================="
-  echo "  Co-Trader Tuesday Watch — ${TS}  (${TS_UTC})"
-  echo "  Tracking 15 fixes shipped Mon 2026-04-27 evening"
+  echo "  Co-Trader Live Watch — ${TS}  (${TS_UTC})"
+  echo "  Synthesis Layer + Warden + Specialist Recall live since 2026-05-01"
   echo "==============================================================================="
+
+  # --- WARDEN HEALTH (top-of-monitor — the boat's integrity check) ---
+  echo ""
+  echo "WARDEN — invariant-based self-supervision (Slack only on state-change)"
+  echo "-------------------------------------------------------------------------------"
+  curl -s -X POST "${SUPA}/rest/v1/rpc/get_warden_health" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" \
+    -H "Content-Type: application/json" -d '{"window_hours":24}' 2>/dev/null \
+    | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin); t=d['totals']
+    icon='🟢' if t['failing']==0 and t['errored']==0 else ('🟡' if t['critical_failing']==0 else '🔴')
+    print(f\"  {icon} {t['passing']}/{t['total_enabled']} passing  ·  failing={t['failing']}  errored={t['errored']}  critical={t['critical_failing']}\")
+    for f in d.get('failures',[])[:5]:
+        print(f\"     [{f.get('severity','?'):8}] {f.get('name','?'):50} v={f.get('value')}  → {f.get('runbook_path','')}\")
+except Exception as e: print(f'  err: {e}')"
+
+  # --- BRAIN HEALTH (synthesis layer telemetry) ---
+  echo ""
+  echo "BRAIN — buildClaudeContext orchestrator (9 organs, fire-and-forget telemetry)"
+  echo "-------------------------------------------------------------------------------"
+  curl -s -X POST "${SUPA}/rest/v1/rpc/get_brain_health" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" \
+    -H "Content-Type: application/json" -d '{"window_hours":24}' 2>/dev/null \
+    | python3 -c "
+import json,sys
+try:
+    d=json.load(sys.stdin); t=d['totals']
+    print(f\"  invocations={t['total_invocations']}  helpers={t['distinct_helpers']}  consumers={t['distinct_consumers']}  errors={t['total_errors']}  warnings={t['total_warnings']}\")
+except Exception as e: print(f'  err: {e}')"
 
   # --- WATCHLIST PURITY (new for Tuesday) ---
   echo ""

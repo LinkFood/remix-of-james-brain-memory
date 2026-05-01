@@ -497,7 +497,7 @@ export interface UseFlowHeatmapStrikesArgs {
   mathMode?: HeatmapMathMode;
   /** $ floor. Default 50,000 (lower than the combined view because per-strike cells are smaller). */
   minPremium?: number;
-  /** Cap on rows returned. Default 30. */
+  /** Number of top strikes to return (ranked by total absolute flow across their expiries). All cells passing min-premium for those strikes are returned. Default 20. */
   strikeCount?: number;
   /** Include today's expiry (0DTE). Default false — symmetry with combined view. */
   include0DTE?: boolean;
@@ -508,7 +508,7 @@ export function useFlowHeatmapStrikes(args: UseFlowHeatmapStrikesArgs) {
   const lookbackHours = args.lookbackHours ?? 168;
   const mathMode = args.mathMode ?? 'aggressive_directional_decay';
   const minPremium = args.minPremium ?? 50_000;
-  const strikeCount = args.strikeCount ?? 30;
+  const strikeCount = args.strikeCount ?? 20;
   const include0DTE = args.include0DTE ?? false;
 
   return useQuery<HeatmapStrikeRow[]>({

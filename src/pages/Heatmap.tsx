@@ -208,6 +208,8 @@ export default function Heatmap() {
             colorAnchor={toolbar.colorAnchor}
             onCellClick={handleCellClick}
             include0DTE={toolbar.include0DTE}
+            minPremium={toolbar.minPremium}
+            lookbackHours={lookbackHours}
           />
         )}
 
