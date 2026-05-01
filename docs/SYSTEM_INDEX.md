@@ -2,6 +2,8 @@
 
 If you're a future Claude session and the System Warden flagged something, or James pasted a Slack alert into chat, or a badge on the site looks wrong — start here. Find your category below, follow the link in reading order, and don't pattern-match the symptom to whichever runbook you read most recently. The categories are the load-bearing distinctions; the symptom is the cover.
 
+> **Governing image** — Co-Trader is being built toward "captain reading the tape with foreknowledge of the storm." Every decision in this codebase evaluates against whether it makes the captain better at reading the storm or adds complexity that doesn't compound. See `CLAUDE.md` § *The End State — Captain Into The Storm* (and the long-form companion `docs/END_STATE_VISION.md`) before proposing any structural change.
+
 ---
 
 ## Brain / Synthesis Layer broken

@@ -135,6 +135,28 @@ These are the shifts that led to the tenets above. Future sessions inherit the c
 
 11. **`recordDecision` should auto-resolve what it needs, not require callers to remember.** Preflight found 14+ call sites weren't passing `generation_id` to the decision journal. Per tenet 4 (fix class not instance): added module-scoped auto-resolution in `_shared/decisionJournal.ts` that queries `current_claude_generation()` and caches 60s. Every call site benefits without editing — "forgot to tag" is now structurally impossible. Same pattern applies to other implicit-context fields: resolve at the central point, not at every consumer.
 
+## The End State — Captain Into The Storm
+
+Co-Trader's operational vision: a captain reading the tape with foreknowledge of the storm. A normal trader walks into Monday somewhat cold. The captain walks into Monday knowing FOMC is Wednesday at 2 PM ET, AAPL reports Tuesday close, MSFT Wednesday post, GOOGL Thursday post; that Pulse is steady-positive into a high-IV catalyst week; that the heatmap shows call-side premium stacking on QQQ at next-Friday's expiry; that the NVDA specialist has been raising conviction since Friday; that the news watcher caught a Bloomberg whisper on iPhone demand Sunday night; that the last three FOMC weeks in this Pulse regime resolved with a specific pattern; that the warden confirms all crons are green and the brain organs are firing.
+
+All those facts go into one prompt that produces a single read. That's the synthesis layer working — the captain reading the tape through every sensory input at once, knowing the storm shape going in.
+
+The asymmetry is **structural multiplication**, not additive context. Tape alone is layer 1. Tape × regime is layer 2. Tape × regime × historical analog is layer 3. Each layer multiplies signal-to-noise on the layer below by filtering through prior knowledge. Three layers stacked is the asymmetry institutional desks pay quants to manufacture. We manufacture it for one trader, on consumer APIs, with the captain steering — not riding.
+
+The architecture pieces map onto the metaphor:
+
+- Specialist recall — the captain remembering the last storm
+- Heatmap — where positioning is staging
+- Event recency — the barometer reading
+- Pulse — the regime swell
+- Validators (temporal, event, ticker coherence) — the firewall against confabulating coordinates the captain didn't take
+- Warden — the boat's own integrity check
+- Brain organs composed via `buildClaudeContext` — the captain's nine sensory inputs converging on one read
+
+The discipline boundary holds. Flag, don't trade. Microscope, not fund. Structural prevention, not patches. The captain steers — never rides.
+
+**Decision ritual extension.** Every build decision evaluates against: *"Does this make the captain better at reading the storm, or does it add complexity that doesn't compound?"* If the latter — stop and redesign.
+
 ## Synthesis Layer (shipped 2026-04-30 night, Phases 0-8)
 
 Every Co-Trader Claude-facing surface (cron consumers, chat, slash commands, future voice, terminal-Claude analysis) reads context through one orchestrator: `buildClaudeContext` in `supabase/functions/_shared/claudeReadSurface.ts`. The orchestrator fans out across 9 brain organs (`flow_heatmap`, `pulse`, `specialist`, `detector`, `tape`, `james_flags`, `news_causality`, `event_recency`, `analogs`) via `Promise.all`, audience-gates per helper, and emits one fire-and-forget telemetry row per invocation to `ct_brain_telemetry`.

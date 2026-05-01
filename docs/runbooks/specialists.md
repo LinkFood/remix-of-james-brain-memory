@@ -96,3 +96,25 @@ For Sonnet truncation:
 - Functions: `ct-specialist-<ticker>` (×10), `_shared/specialistRunner.ts`
 - Memory: `project_co_trader_amzn_specialist_reads_gap.md`, `feedback_sonnet_long_json_use_tool_use.md`, `project_co_trader_specialist_bias_weekend.md`, `feedback_quant_card_silent_regression.md`, `haiku45_prose_json_drift.md`
 - Related runbooks: `hallucination_class.md`, `cron_health.md`
+
+---
+
+## Recall property (added 2026-05-01)
+
+Each specialist now sees its own prior reads on the ticker before deciding. The recall block is built by `_shared/specialistRecallContext.ts` and injected by `specialistRunner.ts` between `systemContextHeader` and the JSON-shape prompt.
+
+Pulled per fire:
+- Last 5 flagged reads on the ticker (with grades joined from `ct_flag_grades` where available)
+- Last 5 days of unflagged reads with conviction ≥ 50
+
+Three outcome states render distinctly so the model doesn't conflate pending with no-signal:
+- `→ win/loss/partial` — flagged + graded
+- `→ pending` — flagged + grade not yet landed
+- `—` — unflagged
+
+If the recall block is missing or wrong, check:
+1. `get_brain_health(window_hours => 1)` — does `specialist_recall` show invocations? If not, the orchestrator isn't calling it.
+2. `specialist_reads_per_ticker_today_rth` Warden invariant — failing means the substrate (`ct_specialist_reads`) is starved.
+3. `specialist_memory_table_dead` Warden invariant — should always pass with low value. If it fails (rows accumulating), someone re-activated the dead v1 writer path; recall should still source from `ct_specialist_reads`, not `ct_specialist_memory`.
+
+The N-pin choices (5 + 5, 5-day window, conviction ≥ 50) are documented in `specialistRecallContext.ts` header — tune intentionally, not accidentally.

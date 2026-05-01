@@ -92,6 +92,8 @@ import eventRecencyHelper from './eventRecencyContext.ts';
 import { formatWhatJustHappened } from './eventRecencyContext.ts';
 import type { EventRecencyResult } from './eventRecencyContext.ts';
 import analogsHelper from './analogsContext.ts';
+import specialistRecallHelper from './specialistRecallContext.ts';
+import type { SpecialistRecallResult } from './specialistRecallContext.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1936,6 +1938,7 @@ export async function buildClaudeContext(
     newsCausalityHelper,
     eventRecencyHelper,
     analogsHelper,
+    specialistRecallHelper,
   ];
 
   // Synthesis Phase 4: organ whitelist + tickerFocus + perOrganOpts plumbing.

@@ -40,6 +40,7 @@ import type {
 import type { TapeContextResult } from './tapeContext.ts';
 import type { DetectorContextResult } from './detectorContext.ts';
 import type { NewsCausalityResult, NewsItem } from './newsCausalityContext.ts';
+import type { SpecialistRecallResult, RecallEntry, RecallStats } from './specialistRecallContext.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -139,6 +140,86 @@ const DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','
  * a possibility for this ticker today. Without it, NVDA on a Tuesday will
  * happily theorize about 0DTE plays that can't structurally exist.
  */
+
+// ---------------------------------------------------------------------------
+// formatRecallBlock — render the recall organ as a compact, structured
+// system-prompt block. Three-state outcome rendering per the build spec:
+//   → win/loss/partial      flagged + graded
+//   → pending               flagged + not yet graded
+//   —                       unflagged
+// Visually distinct so the specialist does not mis-read pending as no-signal.
+//
+// Format choices (locked in):
+//   - structured fields only — NO read_text excerpt (Claude's own past prose,
+//     don't pay tokens to re-inject it).
+//   - explicit anti-streak-bias clause — the recall is provenance, not a
+//     directional driver. lean must come from current flow, not from streak.
+//   - relative timestamps for compactness ("4h ago", "2d ago") — the absolute
+//     ts is in `ts` if Claude needs it, but compact reads better at glance.
+// ---------------------------------------------------------------------------
+function relativeAge(iso: string, nowMs: number): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return '?';
+  const sec = Math.max(0, Math.round((nowMs - t) / 1000));
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.round(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const d = Math.round(hr / 24);
+  return `${d}d ago`;
+}
+
+function formatRecallEntry(e: RecallEntry, nowMs: number): string {
+  const age = relativeAge(e.ts, nowMs).padEnd(8, ' ');
+  const lean = (e.direction_lean ?? 'unknown').padEnd(7, ' ');
+  const conviction = e.conviction == null ? '--' : String(e.conviction).padStart(2, ' ');
+  if (!e.flagged) {
+    return `- ${age} ${lean} ${conviction} —`;
+  }
+  const label = e.flag_label ?? 'flag';
+  if (e.outcome === 'pending') {
+    return `- ${age} ${lean} ${conviction} · ${label} → pending`;
+  }
+  const alphaStr = e.alpha_pct == null
+    ? ''
+    : ` alpha ${e.alpha_pct >= 0 ? '+' : ''}${e.alpha_pct.toFixed(2)}%`;
+  return `- ${age} ${lean} ${conviction} · ${label} → ${e.outcome}${alphaStr}`;
+}
+
+function formatStatsLine(stats: RecallStats): string {
+  if (stats.flagged_total === 0) {
+    return 'Stats: 0 flagged · no track record yet.';
+  }
+  const hr = stats.hit_rate_when_graded == null
+    ? 'n/a'
+    : `${Math.round(stats.hit_rate_when_graded * 100)}%`;
+  const streak = stats.current_streak_kind === 'none'
+    ? 'none'
+    : `${stats.current_streak_kind} ×${stats.current_streak_length}`;
+  return (
+    `Stats: ${stats.flagged_total} flagged ` +
+    `(${stats.flagged_graded} graded, ${stats.flagged_pending} pending) ` +
+    `· hit-rate when graded: ${hr} · current streak: ${streak}`
+  );
+}
+
+function formatRecallBlock(ticker: string, recall: SpecialistRecallResult): string {
+  if (recall.reads.length === 0) {
+    return `[YOUR LAST READS ON ${ticker}]\n(no prior reads in window — fresh ticker or fresh week.)\n\n`;
+  }
+  const nowMs = Date.now();
+  const lines = recall.reads.map((e) => formatRecallEntry(e, nowMs));
+  return [
+    `[YOUR LAST READS ON ${ticker} — facts. Quote verbatim if referenced; do not restate with different numbers.`,
+    `STREAK IS PROVENANCE, NOT SIGNAL. If you have been bearish 3 fires in a row, that does not make this fire bearish — let current flow + state drive lean. Streak only tells you to inspect whether you are right or are repeating yourself.]`,
+    formatStatsLine(recall.stats),
+    '',
+    ...lines,
+    '',
+  ].join('\n') + '\n';
+}
+
 async function buildSystemContextHeader(
   supabase: SupabaseClient,
   ticker: string,
@@ -1048,7 +1129,7 @@ export async function runSpecialistWakeup(
       audience: 'cotrader',
       consumerName: `ct-specialist-${ticker.toLowerCase()}`,
       tickerFocus: ticker,
-      organs: ['flow_heatmap', 'specialist', 'pulse', 'tape', 'james_flags', 'news_causality', 'event_recency'],
+      organs: ['flow_heatmap', 'specialist', 'pulse', 'tape', 'james_flags', 'news_causality', 'event_recency', 'specialist_recall'],
     }),
     // Cross-book detector visibility — no tickerFocus so we see PEER flags.
     buildClaudeContext(supabase, {
@@ -1198,6 +1279,17 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
   // and whether 0DTE is even structurally possible for this ticker today —
   // see _shared/dteEligibility.ts.
   const systemContextHeader = await buildSystemContextHeader(supabase, ticker, new Date());
+
+  // 14a. RECALL block — first install of the per-entity self-awareness
+  // property. Pulls the specialist's own last 5 flagged reads + last 5 days
+  // of unflagged-with-conviction-≥50 reads on this ticker, with grades
+  // joined where available. See _shared/specialistRecallContext.ts for the
+  // organ definition and N-pin rationale. cotrader audience only.
+  const recallOrgan = ctx.organs.specialist_recall as
+    | { data: SpecialistRecallResult }
+    | undefined;
+  const recallBlock = recallOrgan ? formatRecallBlock(ticker, recallOrgan.data) : '';
+
   const model = CLAUDE_MODELS.haiku;
   const claudeStart = Date.now();
   let claudeRes: Awaited<ReturnType<typeof callClaude>> | null = null;
@@ -1207,7 +1299,10 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
       model,
       // Phase 4: temporal anchor sourced from the brain preamble (same string
       // contents, sourced through buildClaudeContext for unified provenance).
-      system: `${ctx.preamble.temporalAnchor}\n\n${systemContextHeader}\n\n${prompt}${CROSS_FACET_PROMPT_SUFFIX}`,
+      // Phase B (specialist recall): recallBlock injects between system
+      // context and the JSON-shape prompt — so the specialist sees its own
+      // history before being asked to decide.
+      system: `${ctx.preamble.temporalAnchor}\n\n${systemContextHeader}\n\n${recallBlock}${prompt}${CROSS_FACET_PROMPT_SUFFIX}`,
       messages: [{ role: 'user', content: userPayload }],
       max_tokens: 2000,
       temperature: 0.2,
