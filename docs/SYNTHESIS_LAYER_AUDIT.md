@@ -156,6 +156,7 @@ Each becomes a new file `_shared/<name>Context.ts` implementing `ContextHelper<T
 | Field | Value |
 |---|---|
 | Source table | `ct_james_flags` |
+| **Addendum 2026-04-30** | source corrected from `ct_james_flags` (dropped) to `ct_flags WHERE source='james_star'` (unified per migration 20260427000010) |
 | Returned shape | Per-ticker recent James flags with `note`, `direction_view`, `flagged_at` |
 | Default cap | 5 most recent per ticker, last 24h |
 | Audience filter | `['cotrader', 'analyst']` ONLY (excluded from `paper_claude` per D3 firewall preservation) |
