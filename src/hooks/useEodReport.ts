@@ -78,6 +78,53 @@ export interface ScorecardSummary {
   score_pct: number | null;
 }
 
+export interface FlowRecapEntry {
+  ticker: string;
+  contract: string;
+  strike_expiry?: string;
+  direction?: string;
+  classification?: string;
+  premium_usd: number | null;
+  premium_fmt?: string;
+  score: number | null;
+  stacking_prints: number | null;
+  stacking_signal?: string;
+  ticker_unusual?: boolean;
+  dte: number | null;
+  event_time_tag?: string;
+  commentary: string;
+}
+
+export interface StackRecapEntry {
+  ticker: string;
+  contract: string;
+  strike_expiry?: string;
+  side?: string;
+  direction?: string;
+  prints: number | null;
+  peak_pct: number | null;
+  current_pct: number | null;
+  track_status?: string;
+  first_print_tag?: string;
+  commentary: string;
+}
+
+export interface RealizedRecapEntry {
+  ticker: string;
+  contract: string;
+  strike_expiry?: string;
+  side?: string;
+  direction?: string;
+  peak_pct: number | null;
+  entry_price: number | null;
+  peak_price: number | null;
+  prints: number | null;
+  first_print_tag?: string;
+  peak_at_tag?: string;
+  time_to_milestone?: { pct: number; minutes: number } | null;
+  commentary: string;
+}
+
 export interface EodReportRow {
   id: string;
   session_date: string;
@@ -95,6 +142,9 @@ export interface EodReportRow {
   tomorrow_watchlist: TomorrowWatchEntry[];
   skip_tomorrow: SkipTomorrowEntry[];
   lessons_today: string[];
+  flow_recap: FlowRecapEntry[];
+  stack_recap: StackRecapEntry[];
+  realized_recap: RealizedRecapEntry[];
   script: string | null;
   cost_usd: number | null;
   tokens_in: number | null;
@@ -144,6 +194,9 @@ const COLS = [
   'tomorrow_watchlist',
   'skip_tomorrow',
   'lessons_today',
+  'flow_recap',
+  'stack_recap',
+  'realized_recap',
   'script',
   'cost_usd',
   'tokens_in',

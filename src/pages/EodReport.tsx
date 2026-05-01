@@ -28,6 +28,9 @@ import {
   type SkipTomorrowEntry,
   type BreakingEventToday,
   type ScorecardSummary,
+  type FlowRecapEntry,
+  type StackRecapEntry,
+  type RealizedRecapEntry,
 } from '@/hooks/useEodReport';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -54,6 +57,9 @@ import {
   Copy,
   Check,
   FileText,
+  Zap,
+  Layers,
+  Flame,
 } from 'lucide-react';
 
 // ---------- formatters ----------
@@ -506,6 +512,148 @@ function BreakingEventRow({ ev }: { ev: BreakingEventToday }) {
   );
 }
 
+// ---------- Today's Tape rows ----------
+
+function fmtNumPct(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  const v = Number(n);
+  return `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`;
+}
+
+function fmtPremium(usd: number | null | undefined, fallback?: string): string {
+  if (fallback) return fallback;
+  if (usd == null || !Number.isFinite(Number(usd))) return '—';
+  const v = Math.abs(Number(usd));
+  const sign = Number(usd) >= 0 ? '+' : '-';
+  if (v >= 1_000_000) return `${sign}$${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${sign}$${(v / 1_000).toFixed(0)}K`;
+  return `${sign}$${v.toFixed(0)}`;
+}
+
+function recapDirChip(direction: string | null | undefined): { cls: string; label: string; Icon: typeof TrendingUp } {
+  const d = (direction || '').toLowerCase();
+  if (d.includes('bull') || d === 'up' || d === 'long') {
+    return { cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40', label: 'BULL', Icon: TrendingUp };
+  }
+  if (d.includes('bear') || d === 'down' || d === 'short') {
+    return { cls: 'bg-red-500/15 text-red-300 border-red-500/40', label: 'BEAR', Icon: TrendingDown };
+  }
+  return { cls: 'bg-slate-500/15 text-slate-300 border-slate-500/40', label: d.toUpperCase() || '—', Icon: Minus };
+}
+
+function FlowRecapRow({ f }: { f: FlowRecapEntry }) {
+  const dir = recapDirChip(f.direction);
+  const Icon = dir.Icon;
+  const stackTag = f.stacking_prints != null && Number(f.stacking_prints) >= 5
+    ? <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/30">×{f.stacking_prints}</span>
+    : null;
+  return (
+    <div className="rounded border border-border/60 bg-muted/10 p-2 space-y-1">
+      <div className="flex items-start gap-2 flex-wrap">
+        <span className="text-[11px] font-mono font-bold text-foreground tabular-nums">{f.ticker}</span>
+        <span className="text-[11px] font-mono text-muted-foreground">{f.strike_expiry || f.contract}</span>
+        <span className={cn('inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border', dir.cls)}>
+          <Icon className="w-3 h-3" /> {dir.label}
+        </span>
+        <span className="text-[11px] font-mono tabular-nums text-emerald-300 ml-auto">{fmtPremium(f.premium_usd, f.premium_fmt)}</span>
+        {f.score != null && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/30">
+            {Math.round(Number(f.score))}
+          </span>
+        )}
+        {stackTag}
+        {f.ticker_unusual && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+            unusual
+          </span>
+        )}
+      </div>
+      {f.commentary && (
+        <div className="text-[12px] leading-snug text-foreground/85 pl-1">{f.commentary}</div>
+      )}
+      <div className="text-[10px] text-muted-foreground/80 pl-1 flex items-center gap-2 flex-wrap">
+        {f.event_time_tag && <span className="font-mono">{f.event_time_tag}</span>}
+        {f.dte != null && <span>{f.dte}DTE</span>}
+        {f.classification && <span className="font-mono">{f.classification}</span>}
+      </div>
+    </div>
+  );
+}
+
+function StackRecapRow({ s }: { s: StackRecapEntry }) {
+  const dir = recapDirChip(s.direction);
+  const Icon = dir.Icon;
+  const peakColor = s.peak_pct != null && Number(s.peak_pct) >= 50
+    ? 'text-emerald-300' : s.peak_pct != null && Number(s.peak_pct) >= 0 ? 'text-foreground/80' : 'text-red-300';
+  return (
+    <div className="rounded border border-sky-500/25 bg-sky-500/5 p-2 space-y-1">
+      <div className="flex items-start gap-2 flex-wrap">
+        <span className="text-[11px] font-mono font-bold text-foreground tabular-nums">{s.ticker}</span>
+        <span className="text-[11px] font-mono text-muted-foreground">{s.strike_expiry || s.contract}</span>
+        <span className={cn('inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border', dir.cls)}>
+          <Icon className="w-3 h-3" /> {dir.label}
+        </span>
+        {s.prints != null && (
+          <span className="text-[11px] font-mono px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-200 border border-sky-500/40 ml-auto">
+            ×{s.prints}
+          </span>
+        )}
+        {s.peak_pct != null && (
+          <span className={cn('text-[11px] font-mono tabular-nums', peakColor)}>peak {fmtNumPct(s.peak_pct)}</span>
+        )}
+      </div>
+      {s.commentary && (
+        <div className="text-[12px] leading-snug text-foreground/85 pl-1">{s.commentary}</div>
+      )}
+      <div className="text-[10px] text-muted-foreground/80 pl-1 flex items-center gap-2 flex-wrap">
+        {s.first_print_tag && <span className="font-mono">first {s.first_print_tag}</span>}
+        {s.track_status && <span className="font-mono">{s.track_status.toLowerCase()}</span>}
+        {s.current_pct != null && <span>now {fmtNumPct(s.current_pct)}</span>}
+      </div>
+    </div>
+  );
+}
+
+function RealizedRecapRow({ r }: { r: RealizedRecapEntry }) {
+  const dir = recapDirChip(r.direction);
+  const Icon = dir.Icon;
+  const peak = r.peak_pct != null ? Number(r.peak_pct) : null;
+  const peakColor = peak == null ? 'text-muted-foreground'
+    : peak >= 200 ? 'text-emerald-200 font-bold'
+    : peak >= 100 ? 'text-emerald-300 font-bold'
+    : peak >= 50 ? 'text-emerald-300' : 'text-foreground/80';
+  return (
+    <div className="rounded border border-amber-500/30 bg-amber-500/5 p-2 space-y-1">
+      <div className="flex items-start gap-2 flex-wrap">
+        <span className="text-[11px] font-mono font-bold text-foreground tabular-nums">{r.ticker}</span>
+        <span className="text-[11px] font-mono text-muted-foreground">{r.strike_expiry || r.contract}</span>
+        <span className={cn('inline-flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border', dir.cls)}>
+          <Icon className="w-3 h-3" /> {dir.label}
+        </span>
+        <span className={cn('text-[13px] font-mono tabular-nums ml-auto', peakColor)}>
+          {fmtNumPct(r.peak_pct)}
+        </span>
+        {r.time_to_milestone && r.time_to_milestone.minutes != null && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/40">
+            {r.time_to_milestone.pct}% in {r.time_to_milestone.minutes}m
+          </span>
+        )}
+      </div>
+      {r.commentary && (
+        <div className="text-[12px] leading-snug text-foreground/85 pl-1">{r.commentary}</div>
+      )}
+      <div className="text-[10px] text-muted-foreground/80 pl-1 flex items-center gap-2 flex-wrap">
+        {r.first_print_tag && <span className="font-mono">first {r.first_print_tag}</span>}
+        {r.peak_at_tag && <span className="font-mono">peak {r.peak_at_tag}</span>}
+        {r.entry_price != null && r.peak_price != null && (
+          <span className="font-mono">${Number(r.entry_price).toFixed(2)} → ${Number(r.peak_price).toFixed(2)}</span>
+        )}
+        {r.prints != null && r.prints > 1 && <span>×{r.prints}</span>}
+      </div>
+    </div>
+  );
+}
+
 function TomorrowChip({ w }: { w: TomorrowWatchEntry }) {
   const high = w.priority === 'high';
   return (
@@ -603,6 +751,9 @@ function ReportEntry({ row, defaultOpen }: { row: EodReportRow; defaultOpen: boo
   const tomorrow = Array.isArray(row.tomorrow_watchlist) ? row.tomorrow_watchlist : [];
   const skip = Array.isArray(row.skip_tomorrow) ? row.skip_tomorrow : [];
   const lessons = Array.isArray(row.lessons_today) ? row.lessons_today : [];
+  const flowRecap = Array.isArray(row.flow_recap) ? row.flow_recap : [];
+  const stackRecap = Array.isArray(row.stack_recap) ? row.stack_recap : [];
+  const realizedRecap = Array.isArray(row.realized_recap) ? row.realized_recap : [];
 
   const summary: ScorecardSummary =
     row.scorecard_summary && typeof row.scorecard_summary === 'object'
@@ -713,6 +864,57 @@ function ReportEntry({ row, defaultOpen }: { row: EodReportRow; defaultOpen: boo
                   <TickerCloseCard key={`${tc.ticker}-${i}`} tc={tc} />
                 ))}
               </div>
+            </section>
+          )}
+
+          {/* Today's Tape — flow / realized / stacks */}
+          {(flowRecap.length > 0 || realizedRecap.length > 0 || stackRecap.length > 0) && (
+            <section className="space-y-3">
+              <h3 className="text-xs uppercase tracking-wider text-muted-foreground inline-flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5 text-amber-400" /> Today's Tape
+                <span className="text-muted-foreground/60">
+                  ({flowRecap.length} flow / {realizedRecap.length} realized / {stackRecap.length} stack)
+                </span>
+              </h3>
+
+              {realizedRecap.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[10px] uppercase tracking-wider text-amber-300 inline-flex items-center gap-1.5">
+                    <Flame className="w-3 h-3" /> Top Realized
+                  </div>
+                  <div className="space-y-1.5">
+                    {realizedRecap.map((r, i) => (
+                      <RealizedRecapRow key={`r-${r.contract}-${i}`} r={r} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {flowRecap.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[10px] uppercase tracking-wider text-emerald-300 inline-flex items-center gap-1.5">
+                    <Zap className="w-3 h-3" /> Top Scored Flows
+                  </div>
+                  <div className="space-y-1.5">
+                    {flowRecap.map((f, i) => (
+                      <FlowRecapRow key={`f-${f.contract}-${i}`} f={f} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {stackRecap.length > 0 && (
+                <div className="space-y-2">
+                  <div className="text-[10px] uppercase tracking-wider text-sky-300 inline-flex items-center gap-1.5">
+                    <Layers className="w-3 h-3" /> Stacking Conviction
+                  </div>
+                  <div className="space-y-1.5">
+                    {stackRecap.map((s, i) => (
+                      <StackRecapRow key={`s-${s.contract}-${i}`} s={s} />
+                    ))}
+                  </div>
+                </div>
+              )}
             </section>
           )}
 

@@ -88,6 +88,40 @@ interface SpecialistReadRow { ticker: string; direction_lean: string | null; con
 interface BreakingNewsRow { id: string; headline: string; source: string | null; severity: number; sentiment: string | null; category: string | null; summary: string | null; ingested_at: string; }
 interface EventRow { event_type: string | null; ticker: string | null; event_date: string; event_time: string | null; title: string | null; importance: number | null; raw: Record<string, unknown> | null; }
 interface TickerSnapshotRow { ticker: string; spot: number | null; gamma_flip: number | null; call_wall: number | null; put_wall: number | null; iv_rank: number | null; regime: string | null; }
+interface ScoredFlowRow {
+  ticker: string;
+  option_symbol: string | null;
+  strike: number | string | null;
+  expiry: string | null;
+  dte: number | null;
+  direction: string | null;
+  classification: string | null;
+  premium: number | string | null;
+  score: number | null;
+  event_ts: string;
+  stacking_prints: number | null;
+  stacking_signal: string | null;
+  ticker_is_unusual: boolean | null;
+}
+interface ContractTrackRow {
+  ticker: string;
+  option_symbol: string;
+  strike: number | string | null;
+  expiry: string | null;
+  side: string | null;
+  predicted_direction: string | null;
+  print_count: number | null;
+  print_time: string | null;
+  entry_contract_price: number | string | null;
+  current_contract_pct: number | string | null;
+  peak_contract_price: number | string | null;
+  peak_contract_pct: number | string | null;
+  peak_contract_at: string | null;
+  time_to_50pct: number | null;
+  time_to_100pct: number | null;
+  time_to_200pct: number | null;
+  track_status: string | null;
+}
 
 interface ScorecardRow {
   ticker: string;
@@ -337,9 +371,83 @@ const EMIT_EOD_REPORT_TOOL = {
         description: '1-3 strings, 1 sentence each. What was learned today. Feeds JAC reflection layer.',
         items: { type: 'string' },
       },
+      flow_recap: {
+        type: 'array',
+        description: 'Echo flow_recap_input rows verbatim, adding a 1-sentence commentary explaining why this flow matters. Up to 7 items. Empty array if input empty.',
+        items: {
+          type: 'object',
+          required: ['ticker', 'contract', 'commentary'],
+          properties: {
+            ticker:          { type: 'string' },
+            contract:        { type: 'string' },
+            strike_expiry:   { type: 'string' },
+            direction:       { type: 'string' },
+            classification:  { type: 'string' },
+            premium_usd:     { type: ['number', 'null'] },
+            premium_fmt:     { type: 'string' },
+            score:           { type: ['number', 'null'] },
+            stacking_prints: { type: ['integer', 'null'] },
+            stacking_signal: { type: 'string' },
+            ticker_unusual:  { type: 'boolean' },
+            dte:             { type: ['integer', 'null'] },
+            event_time_tag:  { type: 'string' },
+            commentary:      { type: 'string', description: '1 sentence: what this print signals — direction conviction, regime alignment, stacking confirmation. Reference the data, no fluff.' },
+          },
+        },
+      },
+      stack_recap: {
+        type: 'array',
+        description: 'Echo stack_recap_input rows verbatim, adding a 1-sentence commentary on the stacking pattern. Up to 5 items. Empty array if input empty.',
+        items: {
+          type: 'object',
+          required: ['ticker', 'contract', 'commentary'],
+          properties: {
+            ticker:           { type: 'string' },
+            contract:         { type: 'string' },
+            strike_expiry:    { type: 'string' },
+            side:             { type: 'string' },
+            direction:        { type: 'string' },
+            prints:           { type: ['integer', 'null'] },
+            peak_pct:         { type: ['number', 'null'] },
+            current_pct:      { type: ['number', 'null'] },
+            track_status:     { type: 'string' },
+            first_print_tag:  { type: 'string' },
+            commentary:       { type: 'string', description: '1 sentence: institutional repeat-conviction read. Reference prints + peak%.' },
+          },
+        },
+      },
+      realized_recap: {
+        type: 'array',
+        description: 'Echo realized_recap_input rows verbatim, adding a 1-sentence commentary on what the move signals. Up to 5 items. Empty array if input empty.',
+        items: {
+          type: 'object',
+          required: ['ticker', 'contract', 'commentary'],
+          properties: {
+            ticker:           { type: 'string' },
+            contract:         { type: 'string' },
+            strike_expiry:    { type: 'string' },
+            side:             { type: 'string' },
+            direction:        { type: 'string' },
+            peak_pct:         { type: ['number', 'null'] },
+            entry_price:      { type: ['number', 'null'] },
+            peak_price:       { type: ['number', 'null'] },
+            prints:           { type: ['integer', 'null'] },
+            first_print_tag:  { type: 'string' },
+            peak_at_tag:      { type: 'string' },
+            time_to_milestone: {
+              type: ['object', 'null'],
+              properties: {
+                pct:     { type: 'integer' },
+                minutes: { type: 'integer' },
+              },
+            },
+            commentary:       { type: 'string', description: '1 sentence: the WHY behind the move — catalyst, regime, signature class. No celebrating.' },
+          },
+        },
+      },
       script: {
         type: 'string',
-        description: 'Narratable version, ~180 words, plain prose. Lead with the day\'s verdict, top 2-3 carryover themes, end with EXACTLY: "That\'s your wrap."',
+        description: 'Narratable version, ~200 words, plain prose. Lead with the day\'s verdict, weave in 2-3 carryover themes AND the top realized contract or stacking signal of the day, end with EXACTLY: "That\'s your wrap."',
       },
     },
   },
@@ -480,6 +588,9 @@ serve(async (req) => {
     pulseRes,
     readsRes,
     snapshotsRes,
+    topFlowsRes,
+    topStacksRes,
+    topRealizedRes,
   ] = await Promise.all([
     sb.from('ct_eod_summaries')
       .select('id, market_stats, ticker_stats, specialist_scorecard, edge_attribution, top_print_grades, top_realized_tracks, regime_tag, snapshot_hit_rate')
@@ -515,6 +626,31 @@ serve(async (req) => {
     sb.from('ct_ticker_snapshots')
       .select('ticker, spot, gamma_flip, call_wall, put_wall, iv_rank, regime')
       .in('ticker', watchlist),
+    // Top scored flows today by premium — biggest single prints we caught.
+    sb.from('ct_scored_flow')
+      .select('ticker, option_symbol, strike, expiry, dte, direction, classification, premium, score, event_ts, stacking_prints, stacking_signal, ticker_is_unusual')
+      .in('ticker', watchlist)
+      .gte('event_ts', dayStartIso)
+      .lte('event_ts', dayEndIso)
+      .order('premium', { ascending: false, nullsFirst: false })
+      .limit(15),
+    // Contracts that stacked most today — institutional repeat conviction.
+    sb.from('ct_contract_tracks')
+      .select('ticker, option_symbol, strike, expiry, side, predicted_direction, print_count, print_time, peak_contract_pct, current_contract_pct, track_status')
+      .in('ticker', watchlist)
+      .gte('print_time', dayStartIso)
+      .lte('print_time', dayEndIso)
+      .gte('print_count', 3)
+      .order('print_count', { ascending: false })
+      .limit(10),
+    // Top realized — biggest peak% on tracks first-printed today.
+    sb.from('ct_contract_tracks')
+      .select('ticker, option_symbol, strike, expiry, side, predicted_direction, print_time, entry_contract_price, peak_contract_price, peak_contract_pct, peak_contract_at, current_contract_pct, time_to_50pct, time_to_100pct, time_to_200pct, track_status, print_count')
+      .in('ticker', watchlist)
+      .gte('print_time', dayStartIso)
+      .lte('print_time', dayEndIso)
+      .order('peak_contract_pct', { ascending: false, nullsFirst: false })
+      .limit(10),
   ]);
 
   const fetchWarnings: string[] = [];
@@ -524,6 +660,9 @@ serve(async (req) => {
   if (pulseRes.error) fetchWarnings.push(`pulse: ${pulseRes.error.message}`);
   if (readsRes.error) fetchWarnings.push(`specialist_reads: ${readsRes.error.message}`);
   if (snapshotsRes.error) fetchWarnings.push(`ticker_snapshots: ${snapshotsRes.error.message}`);
+  if (topFlowsRes.error) fetchWarnings.push(`top_flows: ${topFlowsRes.error.message}`);
+  if (topStacksRes.error) fetchWarnings.push(`top_stacks: ${topStacksRes.error.message}`);
+  if (topRealizedRes.error) fetchWarnings.push(`top_realized: ${topRealizedRes.error.message}`);
 
   const journal = (journalRes.data ?? null) as EodSummaryRow | null;
   const morningBrief = (morningBriefRes.data ?? null) as DailyBriefRow | null;
@@ -531,6 +670,9 @@ serve(async (req) => {
   const pulse = (pulseRes.data ?? []) as FlowPulseTickRow[];
   const reads = (readsRes.data ?? []) as SpecialistReadRow[];
   const snapshots = (snapshotsRes.data ?? []) as TickerSnapshotRow[];
+  const topFlows = (topFlowsRes.data ?? []) as ScoredFlowRow[];
+  const topStacks = (topStacksRes.data ?? []) as ContractTrackRow[];
+  const topRealized = (topRealizedRes.data ?? []) as ContractTrackRow[];
 
   // Breaking news (severity >= 3) + upcoming/today events from brain organs.
   // The news_causality helper applies a default 6h lookback; for an EOD report
@@ -848,6 +990,118 @@ serve(async (req) => {
       }
     : null;
 
+  // ===========================================================================
+  // STEP 5b — Pre-format flow / stack / realized recap inputs.
+  // Sonnet echoes the deterministic fields and adds a 1-line commentary per
+  // row. The pre-format keeps Sonnet's job small + cheap and prevents drift
+  // on numeric fields (premium, peak_contract_pct, etc).
+  // ===========================================================================
+
+  function fmtStrikeExpiry(strike: number | string | null, expiry: string | null, side: string | null): string {
+    const s = strike != null ? Number(strike) : null;
+    const sideTag = side ? side.toUpperCase().slice(0, 1) : '';
+    const exp = expiry ? expiry.slice(0, 10) : '';
+    if (s != null && Number.isFinite(s)) {
+      return `$${s.toFixed(0)}${sideTag}${exp ? ` ${exp}` : ''}`;
+    }
+    return [sideTag, exp].filter(Boolean).join(' ');
+  }
+
+  // FLOW RECAP — biggest scored prints today.
+  const flowRecapInput = topFlows.slice(0, 7).map(f => {
+    const prem = f.premium != null ? Number(f.premium) : null;
+    return {
+      ticker: f.ticker,
+      contract: f.option_symbol ?? fmtStrikeExpiry(f.strike, f.expiry, null),
+      strike_expiry: fmtStrikeExpiry(f.strike, f.expiry, null),
+      direction: f.direction ?? null,
+      classification: f.classification ?? null,
+      premium_usd: prem,
+      premium_fmt: fmtUsd(prem),
+      score: f.score ?? null,
+      stacking_prints: f.stacking_prints ?? null,
+      stacking_signal: f.stacking_signal ?? null,
+      ticker_unusual: !!f.ticker_is_unusual,
+      dte: f.dte ?? null,
+      event_time_tag: tagIsoTimestamp(f.event_ts, sessionDate),
+    };
+  });
+
+  // peak_contract_pct + current_contract_pct are stored as decimal fractions
+  // (1.0 = +100%). Convert to percentage units for UI/Sonnet consumption.
+  const decToPct = (v: number | string | null | undefined): number | null => {
+    if (v == null) return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return n * 100;
+  };
+
+  // STACK RECAP — contracts that stacked most aggressively today.
+  // Dedup on option_symbol (multiple track rows can exist if dedup index slipped).
+  const stackSeen = new Set<string>();
+  const stackRecapInput = topStacks
+    .filter(t => {
+      const k = t.option_symbol ?? `${t.ticker}-${t.strike}-${t.expiry}-${t.side}`;
+      if (stackSeen.has(k)) return false;
+      stackSeen.add(k);
+      return true;
+    })
+    .slice(0, 5)
+    .map(t => ({
+      ticker: t.ticker,
+      contract: t.option_symbol,
+      strike_expiry: fmtStrikeExpiry(t.strike, t.expiry, t.side),
+      side: t.side,
+      direction: t.predicted_direction,
+      prints: t.print_count ?? null,
+      peak_pct: decToPct(t.peak_contract_pct),       // % units (decimal × 100)
+      current_pct: decToPct(t.current_contract_pct), // % units
+      track_status: t.track_status,
+      first_print_tag: t.print_time ? tagIsoTimestamp(t.print_time, sessionDate) : null,
+    }));
+
+  // REALIZED RECAP — top peak% on tracks first-printed today.
+  // Threshold: only surface tracks that hit >= 25% peak (decimal 0.25).
+  const realizedSeen = new Set<string>();
+  const realizedRecapInput = topRealized
+    .filter(t => {
+      if (t.peak_contract_pct == null) return false;
+      const p = Number(t.peak_contract_pct);
+      if (!Number.isFinite(p) || p < 0.25) return false;
+      const k = t.option_symbol;
+      if (realizedSeen.has(k)) return false;
+      realizedSeen.add(k);
+      return true;
+    })
+    .slice(0, 5)
+    .map(t => {
+      const peakDec = Number(t.peak_contract_pct); // decimal: 2.17 = +217%
+      const peakPctUi = peakDec * 100;
+      const entry = t.entry_contract_price != null ? Number(t.entry_contract_price) : null;
+      const peakPx = t.peak_contract_price != null ? Number(t.peak_contract_price) : null;
+      // Prefer the most aggressive realization milestone available — compare
+      // in % units against the time_to_*pct columns (50, 100, 200).
+      const ttg =
+        (t.time_to_200pct != null && peakPctUi >= 200) ? { pct: 200, minutes: t.time_to_200pct }
+        : (t.time_to_100pct != null && peakPctUi >= 100) ? { pct: 100, minutes: t.time_to_100pct }
+        : (t.time_to_50pct != null && peakPctUi >= 50) ? { pct: 50, minutes: t.time_to_50pct }
+        : null;
+      return {
+        ticker: t.ticker,
+        contract: t.option_symbol,
+        strike_expiry: fmtStrikeExpiry(t.strike, t.expiry, t.side),
+        side: t.side,
+        direction: t.predicted_direction,
+        peak_pct: peakPctUi,
+        entry_price: entry,
+        peak_price: peakPx,
+        prints: t.print_count ?? null,
+        first_print_tag: t.print_time ? tagIsoTimestamp(t.print_time, sessionDate) : null,
+        peak_at_tag: t.peak_contract_at ? tagIsoTimestamp(t.peak_contract_at, sessionDate) : null,
+        time_to_milestone: ttg,
+      };
+    });
+
   const userMessage = {
     session_date: sessionDate,
     session_day_name: dayNameFromYmd(sessionDate),
@@ -924,6 +1178,14 @@ serve(async (req) => {
 
     journal_attribution: journalAttribution,
 
+    // Today's option-flow detail. Sonnet ECHOES these arrays into flow_recap /
+    // stack_recap / realized_recap output fields verbatim, adding a 1-line
+    // `commentary` per row. Numeric fields are pre-formatted; the model never
+    // needs to compute anything here.
+    flow_recap_input: flowRecapInput,
+    stack_recap_input: stackRecapInput,
+    realized_recap_input: realizedRecapInput,
+
     // Brain organs (synthesis layer Phase 4) — sibling sense-organ JSON for
     // Sonnet to weave into per_ticker_close, carryover_themes, lessons_today.
     // Missing organs degrade silently. event_recency.just_happened is the
@@ -957,7 +1219,7 @@ serve(async (req) => {
       model: CLAUDE_MODELS.sonnet,
       system: tctx.temporalAnchorPreamble + '\n\n' + EOD_REPORT_SYSTEM,
       messages: [{ role: 'user', content: JSON.stringify(userMessage) }],
-      max_tokens: 6000,
+      max_tokens: 8500,
       temperature: 0.3,
       tools: [EMIT_EOD_REPORT_TOOL as unknown as Record<string, unknown>],
       tool_choice: { type: 'tool', name: 'emit_eod_report' },
@@ -1117,6 +1379,18 @@ serve(async (req) => {
     tomorrow_watchlist: Array.isArray(sonnetOut.tomorrow_watchlist) ? sonnetOut.tomorrow_watchlist : [],
     skip_tomorrow: Array.isArray(sonnetOut.skip_tomorrow) ? sonnetOut.skip_tomorrow : [],
     lessons_today: Array.isArray(sonnetOut.lessons_today) ? sonnetOut.lessons_today : [],
+    // Today's option-flow recap. Fall back to the pre-formatted input if Sonnet
+    // returns an empty/missing array — better to ship the data without
+    // commentary than ship nothing.
+    flow_recap: Array.isArray(sonnetOut.flow_recap) && sonnetOut.flow_recap.length > 0
+      ? sonnetOut.flow_recap
+      : flowRecapInput,
+    stack_recap: Array.isArray(sonnetOut.stack_recap) && sonnetOut.stack_recap.length > 0
+      ? sonnetOut.stack_recap
+      : stackRecapInput,
+    realized_recap: Array.isArray(sonnetOut.realized_recap) && sonnetOut.realized_recap.length > 0
+      ? sonnetOut.realized_recap
+      : realizedRecapInput,
     script: typeof sonnetOut.script === 'string' ? sonnetOut.script : null,
 
     morning_brief_id: morningBrief?.id ?? null,
@@ -1265,6 +1539,37 @@ serve(async (req) => {
         const lessonsLines = arr(reportRow.lessons_today).slice(0, 3)
           .map(l => `• ${String(l).slice(0, 280)}`).join('\n');
 
+        // Today's tape block — top 3 flows, top 1 realized, top 2 stacks.
+        // All optional; only emit if data exists.
+        const flowRows = arr(reportRow.flow_recap) as Array<Record<string, unknown>>;
+        const stackRows = arr(reportRow.stack_recap) as Array<Record<string, unknown>>;
+        const realizedRows = arr(reportRow.realized_recap) as Array<Record<string, unknown>>;
+        const flowLines = flowRows.slice(0, 3).map(f => {
+          const ticker = String(f.ticker ?? '');
+          const dirEmoji = String(f.direction ?? '').toLowerCase().includes('bull') ? ':chart_with_upwards_trend:'
+            : String(f.direction ?? '').toLowerCase().includes('bear') ? ':chart_with_downwards_trend:' : '•';
+          const strike = String(f.strike_expiry ?? f.contract ?? '');
+          const prem = String(f.premium_fmt ?? '');
+          const score = f.score != null ? ` · score ${Math.round(Number(f.score))}` : '';
+          const stackTag = f.stacking_prints != null && Number(f.stacking_prints) >= 5 ? ` · ×${f.stacking_prints}` : '';
+          return `${dirEmoji} ${ticker} ${strike} ${prem}${score}${stackTag}`;
+        }).join('\n');
+        const stackLines = stackRows.slice(0, 2).map(s => {
+          const ticker = String(s.ticker ?? '');
+          const strike = String(s.strike_expiry ?? s.contract ?? '');
+          const prints = s.prints != null ? `×${s.prints}` : '';
+          const peak = s.peak_pct != null ? ` · peak ${Number(s.peak_pct).toFixed(0)}%` : '';
+          return `• ${ticker} ${strike} ${prints}${peak}`;
+        }).join('\n');
+        const realizedLines = realizedRows.slice(0, 1).map(r => {
+          const ticker = String(r.ticker ?? '');
+          const strike = String(r.strike_expiry ?? r.contract ?? '');
+          const peak = r.peak_pct != null ? `+${Number(r.peak_pct).toFixed(0)}%` : '—';
+          const ttm = r.time_to_milestone as { pct: number; minutes: number } | null | undefined;
+          const ttmStr = ttm && ttm.minutes != null ? ` · ${ttm.pct}% in ${ttm.minutes}m` : '';
+          return `:fire: ${ticker} ${strike} → ${peak}${ttmStr}`;
+        }).join('\n');
+
         const blocks: Array<Record<string, unknown>> = [
           { type: 'header', text: { type: 'plain_text', text: `EOD Wrap · ${dayNameFromYmd(sessionDate)} ${sessionDate}`, emoji: true } },
           { type: 'divider' },
@@ -1273,6 +1578,13 @@ serve(async (req) => {
             { type: 'mrkdwn', text: `*Scorecard*\n${scorecardLine}` },
           ]},
         ];
+        const tapeParts: string[] = [];
+        if (flowLines) tapeParts.push(`*Top flows*\n${flowLines}`);
+        if (realizedLines) tapeParts.push(`*Top realized*\n${realizedLines}`);
+        if (stackLines) tapeParts.push(`*Top stacks*\n${stackLines}`);
+        if (tapeParts.length > 0) {
+          blocks.push({ type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text: `:zap: *Today's Tape*\n${tapeParts.join('\n\n')}` } });
+        }
         if (carryLines) blocks.push({ type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text: `:link: *Carryover*\n${carryLines}` } });
         if (overnightLines) blocks.push({ type: 'divider' }, { type: 'section', text: { type: 'mrkdwn', text: `*Overnight*\n${overnightLines}` } });
         blocks.push({ type: 'divider' }, { type: 'section', fields: [

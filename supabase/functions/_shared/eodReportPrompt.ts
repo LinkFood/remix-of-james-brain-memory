@@ -101,7 +101,60 @@ Return ONLY valid JSON (no markdown fence, no preamble) with these keys, exactly
     "Specific lesson grounded in today's scoreboard. Example: 'Specialist v1 70% accurate today — direction reads good, conviction calibration solid.' or 'Bias-aligned calls won 4/5; counter-bias call lost — bias data load-bearing today.'"
   ],
 
-  "script": "narratable version, ~180 words, plain prose no markdown no bullets. Lead with the day's verdict (scorecard_summary), then the top 2-3 carryover themes woven into sentences, then end with EXACTLY: \\"That's your wrap.\\""
+  "flow_recap": [   // ECHO every row in input.flow_recap_input verbatim, add a "commentary" string per row
+    {
+      "ticker": "QQQ",
+      "contract": "QQQ260502P00640000",       // ECHO from input
+      "strike_expiry": "$640P 2026-05-02",    // ECHO from input
+      "direction": "bearish",                  // ECHO from input
+      "classification": "aggressive_ask_put",  // ECHO from input
+      "premium_usd": 1850000,                  // ECHO from input
+      "premium_fmt": "+$1.9M",                 // ECHO from input
+      "score": 82,                              // ECHO from input
+      "stacking_prints": 14,                    // ECHO from input
+      "stacking_signal": "put_accum",           // ECHO from input
+      "ticker_unusual": true,                   // ECHO from input
+      "dte": 1,                                 // ECHO from input
+      "event_time_tag": "13:46 ET (today)",     // ECHO from input
+      "commentary": "ONE sentence: WHY this print matters. Reference the data — score, stacking, regime alignment, dte. No 'big print' filler."
+    }
+  ],
+
+  "stack_recap": [   // ECHO every row in input.stack_recap_input verbatim, add commentary
+    {
+      "ticker": "IWM",
+      "contract": "IWM260618P00280000",        // ECHO
+      "strike_expiry": "$280P 2026-06-18",     // ECHO
+      "side": "P",                              // ECHO
+      "direction": "down",                      // ECHO
+      "prints": 18,                             // ECHO
+      "peak_pct": 87.4,                         // ECHO (contract-level peak %)
+      "current_pct": 64.2,                      // ECHO
+      "track_status": "WORKING",                // ECHO
+      "first_print_tag": "10:15 ET (today)",    // ECHO
+      "commentary": "ONE sentence: institutional repeat-conviction read. Reference prints + peak%. Example: '18 prints into 1.5M cum — small-cap bear thesis stacking through close, peak +87%.'"
+    }
+  ],
+
+  "realized_recap": [   // ECHO every row in input.realized_recap_input verbatim, add commentary
+    {
+      "ticker": "NVDA",
+      "contract": "NVDA260502C00210000",        // ECHO
+      "strike_expiry": "$210C 2026-05-02",      // ECHO
+      "side": "C",                               // ECHO
+      "direction": "up",                         // ECHO
+      "peak_pct": 217.4,                         // ECHO (contract-level realized peak)
+      "entry_price": 1.20,                       // ECHO
+      "peak_price": 3.81,                        // ECHO
+      "prints": 11,                              // ECHO
+      "first_print_tag": "09:32 ET (today)",     // ECHO
+      "peak_at_tag": "10:34 ET (today)",         // ECHO
+      "time_to_milestone": { "pct": 200, "minutes": 62 },  // ECHO if present
+      "commentary": "ONE sentence: WHY the move happened — catalyst, regime, signature class. No celebrating, no 'huge winner' — neutral attribution. Example: '0DTE aggressive-ask call ride; flow detected at open, realized +217% by 10:34 with FOMC tailwind into earnings tomorrow.'"
+    }
+  ],
+
+  "script": "narratable version, ~200 words, plain prose no markdown no bullets. Lead with the day's verdict (scorecard_summary), weave in 2-3 carryover themes AND the top realized contract or stacking signal of the day (give the trader the dopamine of what we caught), end with EXACTLY: \\"That's your wrap.\\""
 }
 
 ## Hard rules
@@ -118,7 +171,9 @@ Return ONLY valid JSON (no markdown fence, no preamble) with these keys, exactly
 - If the journal (ct_eod_summaries) input is missing, the report still ships; rely on the directly-pulled price / flow / specialist data.
 - \`per_ticker_close\` carryover_thesis must reference a specific signal — flow value, level, regime, specialist read — not vague posture.
 - Confidence at close (\`confidence_close\`) should DROP when specialist read, flow direction, and price action disagree. Conviction earned, not assumed.
-- Total output budget: under 2,000 tokens across all fields.
+- \`flow_recap\` / \`stack_recap\` / \`realized_recap\`: ECHO every row from \`flow_recap_input\` / \`stack_recap_input\` / \`realized_recap_input\` verbatim. The numeric fields are pre-computed — do not recompute, do not round, do not invent. Your job is the \`commentary\` string per row, nothing else. If the input is empty, return [].
+- Each \`commentary\` is ONE sentence and must reference at least one specific number from the row (premium, score, prints, peak%, dte). No "interesting print", no "watch this", no "could be significant".
+- Total output budget: under 2,500 tokens across all fields.
 
 ## Honest grading
 
