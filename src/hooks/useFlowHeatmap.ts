@@ -34,7 +34,12 @@ export type HeatmapMathMode =
 
 export interface HeatmapRow {
   ticker: string;
-  /** Monday of the expiry week (ISO date YYYY-MM-DD). */
+  /** Friday-of-ISO-week of the expiry (ISO date YYYY-MM-DD).
+   *  Reconciled 2026-04-30 to match the live RPC's
+   *  `(expiry_date - isodow + 5)` formula in
+   *  `20260430170000_ct_flow_heatmap_live_rewrite.sql`. Earlier docs/mock
+   *  said "Monday"; live data is Friday — Friday is the canonical option-
+   *  expiry weekday for US-listed weekly contracts. */
   expiry_bucket_week: string;
   /** How many distinct expiries roll up into this week-bucket. */
   expiry_count_in_bucket: number;
@@ -120,36 +125,42 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-/** Monday (UTC) of the week containing `d`. */
-function mondayOf(d: Date): Date {
-  const day = d.getUTCDay(); // 0 = Sun, 1 = Mon, ...
-  const diff = day === 0 ? -6 : 1 - day;
-  const m = new Date(d);
-  m.setUTCDate(d.getUTCDate() + diff);
-  m.setUTCHours(0, 0, 0, 0);
-  return m;
+/** Friday-of-ISO-week (UTC) of the week containing `d`. Matches the live
+ *  RPC's `(expiry_date - isodow + 5)` formula. Sat/Sun roll forward to next
+ *  week's Friday so the mock isn't accidentally producing weekend buckets. */
+function fridayOf(d: Date): Date {
+  const js = d.getUTCDay(); // 0=Sun..6=Sat
+  const iso = js === 0 ? 7 : js; // ISO: Mon=1..Sun=7
+  const diff = 5 - iso; // Mon→+4, Tue→+3, ..., Fri→0, Sat→-1, Sun→-2
+  const f = new Date(d);
+  f.setUTCDate(d.getUTCDate() + diff);
+  f.setUTCHours(0, 0, 0, 0);
+  return f;
 }
 
 function toISODate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-/** Build the column headers (expiry-week Mondays) covering the window. */
+/** Build the column headers (expiry-week Fridays) covering the window.
+ *  Reconciled 2026-04-30 to match the live RPC convention — Friday-of-ISO-week,
+ *  NOT Monday. Earlier mock generator produced Monday buckets which never
+ *  matched live RPC output once it shipped. */
 function buildExpiryWeeks(maxExpiryDays: number, include0DTE: boolean): string[] {
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
   const weeks: string[] = [];
-  const startMonday = mondayOf(today);
+  const startFriday = fridayOf(today);
   // First column: 0DTE = the today bucket if include0DTE, otherwise skip.
-  // We represent 0DTE as "today's date" exactly (not the week's Monday).
+  // We represent 0DTE as "today's date" exactly (not the week's Friday).
   if (include0DTE) {
     weeks.push(toISODate(today));
   }
-  // Then rolling weekly buckets keyed on Monday until maxExpiryDays.
+  // Then rolling weekly buckets keyed on Friday until maxExpiryDays.
   for (let offset = 0; offset <= maxExpiryDays; offset += 7) {
-    const m = new Date(startMonday);
-    m.setUTCDate(startMonday.getUTCDate() + offset);
-    const iso = toISODate(m);
+    const f = new Date(startFriday);
+    f.setUTCDate(startFriday.getUTCDate() + offset);
+    const iso = toISODate(f);
     if (!weeks.includes(iso)) weeks.push(iso);
     if (offset > maxExpiryDays) break;
   }

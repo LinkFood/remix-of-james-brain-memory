@@ -30,6 +30,19 @@ import {
   EMPTY_CELL_BG,
   EMPTY_CELL_TEXT,
 } from './heatmapColors';
+// Synthesis Layer Phase 5 — brain organ mirrors for row + cell enrichment.
+// Each hook polls 30-60s and degrades to empty on missing data, so the grid
+// renders fine even when one organ is unavailable.
+import { useFlowPulse, type FlowPulseRow } from '@/hooks/useFlowPulse';
+import {
+  useDetectorFlagsByTicker,
+  filterFlagsByExpiryBucket,
+} from '@/hooks/useDetectorFlags';
+import { useJamesFlags, jamesFlagMatchesCell } from '@/hooks/useJamesFlags';
+import { useNewsCausality } from '@/hooks/useNewsCausality';
+import { useHeatmapMultiModeAgreement } from '@/hooks/useHeatmapMultiModeAgreement';
+import { useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
 
 export interface HeatmapCell {
   ticker: string;
@@ -124,6 +137,89 @@ function formatExpiryHeader(iso: string, _expiryCount: number): { date: string; 
   return { date, hint };
 }
 
+// ---------------------------------------------------------------------------
+// Phase 5 — row chips and cell-marker rendering helpers
+// ---------------------------------------------------------------------------
+
+type DirectionLeanBucket = 'bullish' | 'bearish' | 'neutral' | 'mixed';
+
+function leanBucketColor(lean: DirectionLeanBucket | null | undefined): string {
+  switch (lean) {
+    case 'bullish': return 'bg-sky-500/20 text-sky-200 border-sky-500/40';
+    case 'bearish': return 'bg-orange-500/20 text-orange-200 border-orange-500/40';
+    case 'mixed':   return 'bg-slate-500/20 text-slate-200 border-slate-500/40';
+    case 'neutral': return 'bg-muted/40 text-muted-foreground border-border';
+    default:        return 'bg-muted/30 text-muted-foreground/70 border-border/40';
+  }
+}
+
+/** Concise FlowPulse regime tag for the row chip. Tone follows premium-net sign. */
+function pulseRegimeLabel(p: FlowPulseRow | undefined): { label: string; tone: DirectionLeanBucket } {
+  if (!p) return { label: '—', tone: 'neutral' };
+  const net = Number.isFinite(p.premium_net) ? p.premium_net : 0;
+  const cp = Number.isFinite(p.call_put_ratio) ? p.call_put_ratio : 1;
+  let tone: DirectionLeanBucket = 'neutral';
+  if (Math.abs(net) < 50_000) tone = cp > 1.5 ? 'bullish' : cp < 0.66 ? 'bearish' : 'neutral';
+  else tone = net > 0 ? 'bullish' : 'bearish';
+  let regime = 'steady';
+  if (p.is_unusual) regime = 'unusual';
+  else if (cp > 2 || cp < 0.5) regime = 'tilted';
+  else if (Math.abs(net) > 1_000_000) regime = 'flowing';
+  return { label: regime, tone };
+}
+
+// ---------------------------------------------------------------------------
+// Batched specialist-reads query — one row per ticker, latest by updated_at.
+// useSpecialistReads (single-ticker hook) violates hook-rules in a render loop.
+// ---------------------------------------------------------------------------
+
+interface BatchedSpecialistRead {
+  ticker: string;
+  read_text: string;
+  direction_lean: DirectionLeanBucket | null;
+  conviction: number | null;
+  updated_at: string;
+}
+
+function useSpecialistReadsForTickers(tickers: string[]) {
+  const sortedTickers = useMemo(() => [...tickers].sort(), [tickers]);
+  const query = useQuery<BatchedSpecialistRead[]>({
+    queryKey: ['specialist-reads-batch', sortedTickers],
+    refetchInterval: 30_000,
+    staleTime: 25_000,
+    retry: false,
+    queryFn: async () => {
+      if (sortedTickers.length === 0) return [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sb: any = supabase;
+      // Over-pull (3x ticker count) so we have headroom to keep the latest
+      // per ticker. Deduped client-side.
+      const { data, error } = await sb.from('ct_specialist_reads')
+        .select('ticker, read_text, direction_lean, conviction, updated_at')
+        .in('ticker', sortedTickers)
+        .order('updated_at', { ascending: false })
+        .limit(Math.min(sortedTickers.length * 3, 60));
+      if (error) throw error;
+      const seen = new Map<string, BatchedSpecialistRead>();
+      for (const r of (Array.isArray(data) ? data : []) as BatchedSpecialistRead[]) {
+        if (!r.ticker || seen.has(r.ticker)) continue;
+        seen.set(r.ticker, r);
+      }
+      return Array.from(seen.values());
+    },
+  });
+  const byTicker = useMemo(() => {
+    const m = new Map<string, BatchedSpecialistRead>();
+    for (const r of query.data ?? []) m.set(r.ticker.toUpperCase(), r);
+    return m;
+  }, [query.data]);
+  return { byTicker, isLoading: query.isLoading };
+}
+
+// ---------------------------------------------------------------------------
+// FlowHeatmapGrid
+// ---------------------------------------------------------------------------
+
 export function FlowHeatmapGrid({
   rows,
   mathMode,
@@ -132,6 +228,40 @@ export function FlowHeatmapGrid({
   tickers,
 }: FlowHeatmapGridProps) {
   const tickerList = (tickers && tickers.length > 0) ? tickers : HEATMAP_DEFAULT_TICKERS;
+
+  // ---------------------------------------------------------------------
+  // Phase 5 — brain-organ data hooks for row + cell enrichment.
+  //
+  // Each hook is defensive (empty data on error / missing table) so a
+  // partially-built brain doesn't break grid render. Polled at 30-60s; the
+  // bell-ring useMarketHoursTrigger invalidator picks them up at the open.
+  // ---------------------------------------------------------------------
+  const { byTicker: detectorByTicker } = useDetectorFlagsByTicker({
+    watchlist: tickerList,
+    lookbackHours: 24,
+    limit: 100,
+  });
+  const { byTicker: jamesByTicker } = useJamesFlags({
+    watchlist: tickerList,
+    lookbackHours: 24,
+  });
+  const news = useNewsCausality({ lookbackHours: 6, cap: 50, minSeverity: 3 });
+  const { byTicker: specialistByTicker } = useSpecialistReadsForTickers(tickerList);
+  const { rows: pulseRows } = useFlowPulse(60);
+  const pulseByTicker = useMemo(() => {
+    const m = new Map<string, FlowPulseRow>();
+    for (const r of pulseRows ?? []) m.set(r.ticker.toUpperCase(), r);
+    return m;
+  }, [pulseRows]);
+
+  // Multi-mode agreement: 3 directional RPCs fanned out (60s cadence). The
+  // ring marker only renders when the visible mode is directional — for
+  // non-directional modes we skip the entire computation.
+  const isDirectional = isDirectionalMode(mathMode);
+  const agreement = useHeatmapMultiModeAgreement({
+    tickers: tickerList,
+    enabled: isDirectional,
+  });
 
   /** Index rows by [ticker][expiry_bucket_week]. Defensive: skip null/malformed rows. */
   const cellMap = useMemo(() => {
@@ -192,7 +322,9 @@ export function FlowHeatmapGrid({
 
   // Layout: ticker label column + N expiry columns. Use minmax so very long
   // expiry lists scroll horizontally and we don't squash cells unreadable.
-  const gridTemplateColumns = `64px repeat(${expiryWeeks.length}, minmax(72px, 1fr))`;
+  // Widened from 64px → 200px to fit the Phase 5 row chips (specialist lean,
+  // pulse regime, hot-news count) inline alongside the ticker label.
+  const gridTemplateColumns = `200px repeat(${expiryWeeks.length}, minmax(72px, 1fr))`;
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -224,10 +356,84 @@ export function FlowHeatmapGrid({
           <div className="space-y-1">
             {tickerList.map((ticker) => {
               const rowValues = valuesByTicker.get(ticker) ?? [];
+              const tkUpper = ticker.toUpperCase();
+              // Phase 5 row chips — read straight from the brain organs.
+              const specialist = specialistByTicker.get(tkUpper);
+              const pulse = pulseByTicker.get(tkUpper);
+              const pulseChip = pulseRegimeLabel(pulse);
+              const hotNews = news.hotCountForTicker(tkUpper, { withinMin: 30, minSev: 3 });
+              const tickerDetectorFlags = detectorByTicker.get(tkUpper) ?? [];
+              const tickerJamesFlags = jamesByTicker.get(tkUpper) ?? [];
               return (
                 <div key={ticker} className="grid items-center" style={{ gridTemplateColumns }}>
-                  <div className="px-2 text-[11px] font-mono font-semibold text-foreground/80 tabular-nums">
-                    {ticker}
+                  <div className="pl-2 pr-1 flex items-center gap-1.5 min-w-0">
+                    <span className="text-[11px] font-mono font-semibold text-foreground/80 tabular-nums shrink-0">
+                      {ticker}
+                    </span>
+                    {/* Specialist chip — direction lean + conviction */}
+                    {specialist?.direction_lean ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            className={cn(
+                              'inline-flex items-center gap-0.5 px-1 py-px rounded-sm text-[9px] font-mono uppercase tracking-wide border',
+                              leanBucketColor(specialist.direction_lean),
+                            )}
+                          >
+                            <span>{specialist.direction_lean.slice(0, 4)}</span>
+                            {specialist.conviction != null && (
+                              <span className="opacity-70">{Math.round(specialist.conviction)}</span>
+                            )}
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-xs max-w-xs">
+                          <div className="font-semibold mb-0.5">Specialist · {ticker}</div>
+                          <div className="text-foreground/80 text-[11px]">{specialist.read_text}</div>
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : (
+                      <span className="px-1 py-px rounded-sm text-[9px] font-mono uppercase tracking-wide border border-border/30 text-muted-foreground/50">
+                        spec —
+                      </span>
+                    )}
+                    {/* Pulse regime chip */}
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span
+                          className={cn(
+                            'inline-flex items-center px-1 py-px rounded-sm text-[9px] font-mono uppercase tracking-wide border',
+                            leanBucketColor(pulseChip.tone),
+                          )}
+                        >
+                          {pulseChip.label}
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="text-xs">
+                        <div className="font-semibold mb-0.5">Pulse · {ticker}</div>
+                        {pulse ? (
+                          <div className="text-foreground/80 text-[11px] space-y-0.5">
+                            <div>C/P ratio: {Number.isFinite(pulse.call_put_ratio) ? pulse.call_put_ratio.toFixed(2) : '—'}</div>
+                            <div>net premium: ${Math.round((pulse.premium_net ?? 0) / 1000).toLocaleString()}K</div>
+                            {pulse.is_unusual && <div className="text-amber-300">⚡ unusual vs 30d</div>}
+                          </div>
+                        ) : (
+                          <div className="text-muted-foreground text-[11px]">no pulse data</div>
+                        )}
+                      </TooltipContent>
+                    </Tooltip>
+                    {/* Hot news badge — only if > 0 */}
+                    {hotNews > 0 && (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex items-center px-1 py-px rounded-sm text-[9px] font-mono font-bold bg-rose-500/25 text-rose-200 border border-rose-500/40">
+                            {hotNews}n
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="text-xs">
+                          <div className="font-semibold">{hotNews} hot news ·  ≥sev 3, last 30m</div>
+                        </TooltipContent>
+                      </Tooltip>
+                    )}
                   </div>
                   {expiryWeeks.map((wk) => {
                     const row = cellMap.get(`${ticker}::${wk}`);
@@ -276,6 +482,43 @@ export function FlowHeatmapGrid({
                         : deltaVal < 0
                           ? 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
                           : 'bg-slate-500/10 text-muted-foreground';
+
+                    // Phase 5 cell-level enrichment ----------------------------------
+                    // Detector flag border/glow when an active flag matches this cell.
+                    const cellDetectorFlags = filterFlagsByExpiryBucket(
+                      tickerDetectorFlags, ticker, wk,
+                    );
+                    const detectorBorder = (() => {
+                      if (cellDetectorFlags.length === 0) return null;
+                      // Strongest by score wins. Direction colors the ring.
+                      const top = [...cellDetectorFlags].sort(
+                        (a, b) => (b.score ?? 0) - (a.score ?? 0),
+                      )[0];
+                      const dirColor =
+                        top.direction === 'bullish' ? 'ring-sky-400/80 shadow-sky-500/30'
+                        : top.direction === 'bearish' ? 'ring-orange-400/80 shadow-orange-500/30'
+                        : 'ring-slate-400/80 shadow-slate-500/30';
+                      return { ringClass: cn('ring-2 shadow-[0_0_8px]', dirColor), top };
+                    })();
+
+                    // James-flag gold dot — only when his flag's expiry rolls up here.
+                    const cellJamesFlags = tickerJamesFlags.filter((f) =>
+                      jamesFlagMatchesCell(f, ticker, wk),
+                    );
+
+                    // Multi-mode agreement ring (only in directional modes).
+                    const cellAgreement = isDirectional ? agreement.get(ticker, wk) : undefined;
+                    const showAgreementRing =
+                      cellAgreement &&
+                      (cellAgreement.level === 'two_of_three' || cellAgreement.level === 'three_of_three');
+                    const agreementRingClass = !showAgreementRing
+                      ? ''
+                      : cellAgreement!.winner === 'bullish'
+                        ? 'ring-1 ring-sky-300/60'
+                        : cellAgreement!.winner === 'bearish'
+                          ? 'ring-1 ring-orange-300/60'
+                          : '';
+
                     const cell: HeatmapCell = {
                       ticker: row.ticker,
                       expiryBucketWeek: row.expiry_bucket_week,
@@ -304,10 +547,20 @@ export function FlowHeatmapGrid({
                               hasDelta ? 'h-9 pb-2.5' : 'h-8',
                               bg,
                               text,
+                              // Phase 5 markers — outermost layer. Detector glow
+                              // wins over agreement ring when both apply.
+                              detectorBorder ? detectorBorder.ringClass : agreementRingClass,
                             )}
                             aria-label={`${ticker} ${wk} ${formatTooltipValue(value, mathMode)}`}
                           >
                             <span className="leading-none">{formatCellValue(value, mathMode)}</span>
+                            {/* James-flag gold dot — top-left, doesn't compete with delta chip */}
+                            {cellJamesFlags.length > 0 && (
+                              <span
+                                className="pointer-events-none absolute top-0.5 left-0.5 w-1.5 h-1.5 rounded-full bg-amber-400 shadow-[0_0_4px] shadow-amber-500/70"
+                                aria-label={`James flag x${cellJamesFlags.length}`}
+                              />
+                            )}
                             {hasDelta && (
                               <span
                                 className={cn(
@@ -338,6 +591,33 @@ export function FlowHeatmapGrid({
                               Delta: {formatDeltaChip(deltaVal)}
                               {row.delta_pct != null && Number.isFinite(row.delta_pct) && (
                                 <> ({row.delta_pct > 0 ? '+' : ''}{row.delta_pct.toFixed(1)}%)</>
+                              )}
+                            </div>
+                          )}
+                          {/* Phase 5 — convergence summary in tooltip */}
+                          {(detectorBorder || cellJamesFlags.length > 0 || showAgreementRing) && (
+                            <div className="text-[10px] mt-1 border-t border-border/40 pt-1 space-y-0.5">
+                              {detectorBorder && (
+                                <div className="text-foreground/80">
+                                  <span className="font-mono text-amber-300">▣</span>{' '}
+                                  {cellDetectorFlags.length} detector flag{cellDetectorFlags.length === 1 ? '' : 's'}
+                                  {' · '}
+                                  {detectorBorder.top.detector_name ?? detectorBorder.top.detector_id ?? 'detector'}
+                                  {' '}
+                                  ({detectorBorder.top.direction})
+                                </div>
+                              )}
+                              {cellJamesFlags.length > 0 && (
+                                <div className="text-amber-200">
+                                  ★ {cellJamesFlags.length} James flag{cellJamesFlags.length === 1 ? '' : 's'}
+                                </div>
+                              )}
+                              {showAgreementRing && cellAgreement && (
+                                <div className="text-foreground/70">
+                                  Multi-mode agreement: {cellAgreement.bullish_votes}↑ / {cellAgreement.bearish_votes}↓
+                                  {' '}
+                                  ({cellAgreement.level === 'three_of_three' ? '3 of 3' : '2 of 3'})
+                                </div>
                               )}
                             </div>
                           )}
