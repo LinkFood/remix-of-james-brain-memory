@@ -43,6 +43,7 @@ import {
 } from '@/hooks/useContractTracks';
 import { MacroBanner } from '@/components/command/MacroBanner';
 import { TapeReaderBanner } from '@/components/command/TapeReaderBanner';
+import { SystemWardenCard } from '@/components/system/SystemWardenCard';
 import { OvernightPositioning } from '@/components/command/OvernightPositioning';
 import { StackingPatterns } from '@/components/command/StackingPatterns';
 import { FlowPulse } from '@/components/command/FlowPulse';
@@ -1028,6 +1029,7 @@ export default function Tape() {
           windows. Now: cards row uses every pixel between chat and news. */}
       <div className="p-4 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:gap-4">
           <div className="min-w-0 space-y-4">
+        <SystemWardenCard />
         <TapeReaderBanner />
         <MacroBanner onTickerClick={(t) => setActiveTicker(t)} />
         <FlowPulse onTickerClick={(t) => setActiveTicker(t)} />
