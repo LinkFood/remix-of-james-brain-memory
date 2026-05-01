@@ -87,10 +87,9 @@ import detectorHelper from './detectorContext.ts';
 import tapeHelper from './tapeContext.ts';
 import jamesFlagsHelper from './jamesFlagsContext.ts';
 import newsCausalityHelper from './newsCausalityContext.ts';
-import eventRecencyHelper, {
-  formatWhatJustHappened,
-  type EventRecencyResult,
-} from './eventRecencyContext.ts';
+import eventRecencyHelper from './eventRecencyContext.ts';
+import { formatWhatJustHappened } from './eventRecencyContext.ts';
+import type { EventRecencyResult } from './eventRecencyContext.ts';
 
 // ---------------------------------------------------------------------------
 // Types
