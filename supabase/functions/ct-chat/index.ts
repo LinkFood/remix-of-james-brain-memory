@@ -1414,17 +1414,14 @@ serve(async (req) => {
 
     // System prompt — preamble first (temporal anchor + what-just-happened
     // event recency), then the generation/identity/surface preamble, then
-    // CT_CHAT_SYSTEM. The tail override clause neutralizes the legacy UW MCP
-    // line that still appears in chatPromptV1.ts; we no longer offer Claude a
-    // live UW handle — all read context now comes through the brain.
+    // CT_CHAT_SYSTEM. Phase 4 of the synthesis layer migrated chat to read
+    // exclusively through the brain — chatPromptV1 itself now states the
+    // read-path contract, so no tail override is needed.
     const systemPrompt = [
       ctx.preamble.temporalAnchor,
       ctx.preamble.whatJustHappened,
       claudeSystemPromptPreamble(ctx),
       CT_CHAT_SYSTEM,
-      '',
-      'READ PATH — SUPERSEDES ANY PRIOR LINE ABOUT LIVE UW MCP ACCESS:',
-      'You DO NOT have a live Unusual Whales MCP handle this turn. Every read you need is already in the [LIVE STATE] payload, sourced from the brain organs (flow_heatmap, pulse, specialist, detector, tape, james_flags, news_causality, event_recency). If the answer is not in that payload, say so plainly — do not fabricate UW values, and do not promise to "pull live" anything.',
     ].join('\n');
 
     // Prepend a context block as the first user turn so Claude sees live state
