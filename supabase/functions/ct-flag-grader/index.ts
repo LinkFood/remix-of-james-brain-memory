@@ -37,7 +37,7 @@ import { isMarketOpen } from '../_shared/marketClock.ts';
 type FlagStatus = 'active' | 'conviction' | 'graded' | 'invalidated';
 type Direction = 'bullish' | 'bearish' | 'neutral';
 type Outcome = 'win' | 'partial' | 'loss' | 'invalidated_early';
-type FlagSource = 'specialist' | 'james_star' | 'signature_alarm';
+type FlagSource = 'specialist' | 'james_star' | 'signature_alarm' | 'detector_alarm';
 
 interface FlagRow {
   id: string;
@@ -260,18 +260,18 @@ async function loadContractTrack(
   supabase: SupabaseClient,
   optionSymbol: string,
   flagCreatedAt: string,
+  flagHorizonTs: string,
 ): Promise<{ peak_contract_pct: number | null; max_drawdown_pct: number | null } | null> {
-  // Use the MAX peak across all tracks for this option_symbol in the flag
-  // window, not the closest-by-print_time. Print-grader creates a new track
-  // per print of the same contract, so an option_symbol typically has 2-18
-  // tracks. The closest-by-print_time approach grabbed whichever track had
-  // the same fired-at timestamp as the flag — often a brand-new track that
-  // got polled once and froze at peak=0. Taking MAX captures the contract's
-  // actual best move, regardless of which track sample observed it.
+  // Use the MAX peak across all tracks for this option_symbol in the flag's
+  // actionable window: 1h before created through horizon. Print-grader creates
+  // a new track per print of the same contract, so an option_symbol typically
+  // has 2-18 tracks. Taking MAX captures the contract's actual best move,
+  // regardless of which track sample observed it.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data, error } = await (supabase.rpc as any)('ct_max_peak_for_flag', {
     p_option_symbol: optionSymbol,
     p_flag_created: flagCreatedAt,
+    p_flag_horizon: flagHorizonTs,
   });
   if (error || !data || (Array.isArray(data) ? data.length === 0 : !data)) return null;
   const row = Array.isArray(data) ? data[0] : data;
@@ -291,11 +291,16 @@ async function gradeExpiredFlags(
   sourceDefaults: SourceDefaults,
 ): Promise<{ graded: number; skipped: number; bySource: Record<string, number>; errors: string[] }> {
   const nowIso = new Date().toISOString();
+  // ASC by horizon_ts: oldest expired flags get graded first so the backlog
+  // actually drains. Without ORDER BY, postgres returns whatever the planner
+  // chooses — typically the most recent rows — and pre-existing backlog from
+  // days ago never gets touched.
   const { data: flags, error } = await supabase
     .from('ct_flags')
     .select('id, source, specialist_ticker, instrument, option_symbol, strike, expiry, side, direction, score, tags, horizon_ts, entry_price, target_price, status, confirmed_t1, created_at')
     .in('status', ['active', 'conviction'])
     .lte('horizon_ts', nowIso)
+    .order('horizon_ts', { ascending: true })
     .limit(200);
 
   if (error) {
@@ -315,13 +320,6 @@ async function gradeExpiredFlags(
 
   for (const row of flags as FlagRow[]) {
     try {
-      const horizonOpen = isMarketOpen(row.horizon_ts);
-      // Trading-clock gate: don't bake stale Friday-close prices into outcomes.
-      if (!nowOpen && !horizonOpen) {
-        skipped += 1;
-        continue;
-      }
-
       const tickerForPrice = row.specialist_ticker ?? row.instrument;
       let outcome: Outcome;
       let entryPx: number | null = null;
@@ -330,28 +328,50 @@ async function gradeExpiredFlags(
       let alphaPct: number | null = null;
       let notes = '';
 
-      if (row.source === 'signature_alarm') {
+      // Contract-axis grading covers ANY flag whose `entry_price` represents an
+      // option contract price rather than the underlying spot — i.e. anything
+      // with an option_symbol fired off contract activity (signature_alarm,
+      // detector_alarm). Underlying-axis (specialist, james_star) follows
+      // below. Without this branch, detector_alarm flags were graded against
+      // the underlying close — entry $11.25 (option) vs exit $426 (MSFT spot)
+      // produced absurd "+3693% win" outcomes that polluted the pattern table.
+      if (row.source === 'signature_alarm' || row.source === 'detector_alarm') {
         // Contract-axis grading: read peak / drawdown from ct_contract_tracks.
+        // Note: NO trading-clock gate here — peak_contract_pct is already
+        // computed from intraday option-quote polling and doesn't depend on
+        // ct_price_bars freshness.
         if (!row.option_symbol) {
           skipped += 1;
           continue;
         }
-        const track = await loadContractTrack(supabase, row.option_symbol, row.created_at);
+        const track = await loadContractTrack(supabase, row.option_symbol, row.created_at, row.horizon_ts);
         if (!track) {
           skipped += 1;
-          console.warn(`[ct-flag-grader] alarm ${row.id}: no contract track`);
+          console.warn(`[ct-flag-grader] ${row.source} ${row.id}: no contract track`);
           continue;
         }
         outcome = computeAlarmOutcome(track.peak_contract_pct, track.max_drawdown_pct, sourceDefaults);
         const peakStr = track.peak_contract_pct == null ? 'n/a' : (track.peak_contract_pct * 100).toFixed(1) + '%';
         const ddStr = track.max_drawdown_pct == null ? 'n/a' : (track.max_drawdown_pct * 100).toFixed(1) + '%';
-        notes = `signature_alarm contract-axis: peak=${peakStr} drawdown=${ddStr} (win>=${sourceDefaults.alarmWinPct}% loss>=${sourceDefaults.alarmLossPct}%)`;
+        notes = `${row.source} contract-axis: peak=${peakStr} drawdown=${ddStr} (win>=${sourceDefaults.alarmWinPct}% loss>=${sourceDefaults.alarmLossPct}%)`;
       } else {
         // specialist + james_star both grade on underlying spot move.
-        entryPx = row.entry_price ?? null;
-        if (entryPx === null || !Number.isFinite(entryPx)) {
-          entryPx = await nearestClose(supabase, tickerForPrice, row.created_at);
+        // Trading-clock gate applies HERE only — underlying-axis grading reads
+        // ct_price_bars, which doesn't tick outside RTH. Grading a flag whose
+        // horizon fell during a market-closed window using stale Friday-close
+        // prices on both ends produces a fake-zero outcome.
+        const horizonOpen = isMarketOpen(row.horizon_ts);
+        if (!nowOpen && !horizonOpen) {
+          skipped += 1;
+          continue;
         }
+        // ALWAYS fetch underlying spot from price_bars — never trust
+        // row.entry_price for underlying-axis grading. Specialist flags
+        // historically stored the option price in entry_price, which gets
+        // compared against underlying close at horizon and produces absurd
+        // 100x+ outcomes (e.g., entry $1.50 vs exit $674 → +44893%). The
+        // spot at created_at is the right anchor.
+        entryPx = await nearestClose(supabase, tickerForPrice, row.created_at);
         exitPx = await nearestClose(supabase, tickerForPrice, row.horizon_ts);
         if (entryPx === null || exitPx === null || entryPx <= 0) {
           skipped += 1;
