@@ -28,10 +28,9 @@ import {
   TickerQuantCard,
 } from '../_shared/tickerQuantCard.ts';
 import { fetchFormattedMixedEdgePriors } from '../_shared/edgePriors.ts';
-import { getWatchlist } from '../_shared/watchlist.ts';
 import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
-import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
-import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+import type { FlowHeatmapResult } from '../_shared/flowHeatmapContext.ts';
 
 const VALID_HORIZONS = new Set(['intraday', 'session', 'swing', 'multi_day']);
 const VALID_TRIGGER_TYPES = new Set(['price_cross', 'break_above', 'break_below', 'touch_level', 'time_gate']);
@@ -633,11 +632,23 @@ serve(async (req) => {
   // (proven on hypothesis-health-check). See _shared/temporalContext.ts.
   const tctx = getTemporalContext();
 
-  // Flow heatmap — POSITIONING REGIME (168h, aggressive-directional decay).
-  // Pulled once per run, reused across every hypothesis. Defensive: returns
-  // empty per_ticker on RPC failure, never throws.
-  const watchlistForHeatmap = await getWatchlist(supabase);
-  const flowHeatmapContext = await getFlowHeatmapContext(supabase, watchlistForHeatmap);
+  // Phase 4 (synthesis layer) — read every brain organ through the orchestrator
+  // instead of issuing per-organ inline calls. The orchestrator runs all
+  // helpers in Promise.all, audience-gates each, and persists telemetry; the
+  // consumer just reads ctx.organs.<name>?.data. Backward-compat note: the
+  // legacy inline getFlowHeatmapContext() pulled the same RPC the helper
+  // wraps, so the data shape is identical. Empty per_ticker is the documented
+  // failure mode (helper never throws). See docs/SYNTHESIS_LAYER_ARCHITECTURE.md.
+  const ctx = await buildClaudeContext(supabase, {
+    audience: 'cotrader',
+    consumerName: 'ct-trade-idea-generator',
+  });
+  const flowHeatmapContext: FlowHeatmapResult = ctx.organs.flow_heatmap?.data as FlowHeatmapResult ?? {
+    per_ticker: [],
+    generated_at: new Date().toISOString(),
+    lookback_hours: 168,
+    math_mode: 'aggressive_directional_decay',
+  };
 
   // Empirical priors from /edge attribution — aggregate + per-ticker.
   // Fetched once per run, reused across every hypothesis.
@@ -1095,43 +1106,12 @@ serve(async (req) => {
 
     results.push({ hypothesis_id: hyp.id, outcome: 'armed', idea_id: inserted.id });
 
-    // Temporal-coherence validator (best-effort). Validates the human-facing
-    // rationale + Sonnet reasoning against session_date. Critical contradictions
-    // log + ride along on ct_claude_decisions.context_snapshot below.
-    let armValidatorOk = true;
-    let armValidatorContradictions: Array<{ quote: string; issue: string; severity: 'critical' | 'warning' }> = [];
-    const narrativeForValidation = [
-      idea.rationale ?? '',
-      sonnetOutcome?.reasoning ?? '',
-    ].filter(s => typeof s === 'string' && s.trim().length > 0).join('\n\n---\n\n');
-    if (narrativeForValidation) {
-      try {
-        const validation = await validateTemporalCoherence(narrativeForValidation, tctx.session_date, { tickerContext: idea.instrument });
-        armValidatorOk = validation.ok;
-        armValidatorContradictions = validation.contradictions;
-        const critical = validation.contradictions.filter(c => c.severity === 'critical');
-        if (critical.length > 0) {
-          console.warn(
-            `[ct-trade-idea-generator] temporal validator flagged ${critical.length} CRITICAL contradiction(s) on idea ${inserted.id}:`,
-            JSON.stringify(critical),
-          );
-        } else if (!validation.ok && validation.contradictions.length > 0) {
-          console.warn(
-            `[ct-trade-idea-generator] temporal validator flagged ${validation.contradictions.length} warning(s) on idea ${inserted.id}:`,
-            JSON.stringify(validation.contradictions),
-          );
-        }
-      } catch (e) {
-        console.warn('[ct-trade-idea-generator] temporal validator threw (non-blocking):', String(e));
-      }
-    }
-    const armTemporalValidatorWarnings = {
-      ok: armValidatorOk,
-      session_date: tctx.session_date,
-      contradiction_count: armValidatorContradictions.length,
-      critical_count: armValidatorContradictions.filter(c => c.severity === 'critical').length,
-      contradictions: armValidatorContradictions,
-    };
+    // Phase 4 (synthesis layer) — the inline post-call temporalValidator block
+    // moved structural-prevention upstream: ctx.preamble.whatJustHappened (from
+    // event_recency organ) gives Claude the resolved last-72h timeline before
+    // the call, so the prior "model framed yesterday's event as today" failure
+    // mode is closed at the source. Validator chain (D10) lives orchestrator-
+    // side now and runs across consumers, not per-consumer here.
 
     // Decision journal — armed trade idea. Include abbreviated quant card
     // (instrument only) and Sonnet outcome if escalation fired.
@@ -1183,7 +1163,10 @@ serve(async (req) => {
           lookback_hours: flowHeatmapContext.lookback_hours,
           math_mode: flowHeatmapContext.math_mode,
         },
-        temporal_validator_warnings: armTemporalValidatorWarnings,
+        // Phase 4: synthesis-layer brain provenance — names of organs the
+        // orchestrator surfaced to this idea's call. Useful for replay and
+        // for auditing that ctx.organs.flow_heatmap actually populated.
+        brain_organs_invoked: Object.keys(ctx.organs ?? {}),
       },
       tool_calls_summary: { tool: 'propose_trade_idea', input: toolUse.input, sonnet: sonnetOutcome?.decision ?? null },
       tokens_in: thisCallTokensIn + (sonnetOutcome?.tokens_in ?? 0),
