@@ -48,6 +48,31 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+
+// ---------------------------------------------------------------------------
+// Brain integration (Phase 4 — synthesis layer migration).
+// Audience: 'cotrader'. Organs: full set (graders need visibility — verdict
+// quality on a contested debate hinges on what the rest of the brain saw at
+// that moment). Built once at handler start, shared across all per-debate
+// haiku-fallback calls. Price-path verdicts don't read brain (price is
+// authoritative), but the haiku fallback uses it as additional context.
+// ---------------------------------------------------------------------------
+function summarizeOrgansForPrompt(organs: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, organ] of Object.entries(organs)) {
+    if (organ && typeof organ === 'object' && 'data' in (organ as Record<string, unknown>)) {
+      out[name] = (organ as { data: unknown }).data;
+    }
+  }
+  return out;
+}
+
+interface BrainSnapshot {
+  session_date: string;
+  what_just_happened: string;
+  organs: Record<string, unknown>;
+}
 
 // Bound Haiku fan-out per run. 50 pending debates/day would be extraordinary
 // single-user volume — a 20 cap is plenty headroom.
@@ -178,6 +203,7 @@ Rules:
 async function haikuVerdict(
   debate: DebateRow,
   priceContext: { move_pct: number | null; ticks: number; horizon_hrs: number },
+  brain: BrainSnapshot | null,
 ): Promise<HaikuVerdict | null> {
   const payload = {
     topic: debate.topic,
@@ -188,6 +214,7 @@ async function haikuVerdict(
     user_pick: debate.user_pick,
     elapsed_hrs_since_debate: (Date.now() - new Date(debate.created_at).getTime()) / 3_600_000,
     price_context: priceContext,
+    brain_context: brain,
   };
   try {
     const res = await callClaude({
@@ -220,6 +247,7 @@ async function haikuVerdict(
 async function scoreDebate(
   supabase: SupabaseClient,
   debate: DebateRow,
+  brain: BrainSnapshot | null,
 ): Promise<{ path: 'price' | 'haiku' | 'skip'; verdict: 'right' | 'wrong' | 'pending' | null }> {
   // Determine horizon from the picked side's best_trade.
   const pickedSide = debate.user_pick === 'bull'
@@ -286,7 +314,7 @@ async function scoreDebate(
       move_pct: movePct,
       ticks: tickCount,
       horizon_hrs: horizonHrs,
-    });
+    }, brain);
     if (h) {
       verdict = h.verdict;
       path = 'haiku';
@@ -414,9 +442,27 @@ serve(async (req) => {
   let right = 0, wrong = 0, pendingCount = 0;
   let pricePath = 0, haikuPath = 0, skipped = 0;
 
+  // Brain (synthesis layer Phase 4). Built once, shared across all per-debate
+  // haiku-fallback calls in this tick. Best-effort — falls through if it throws.
+  let brain: BrainSnapshot | null = null;
+  try {
+    const ctx = await buildClaudeContext(supabase, {
+      audience: 'cotrader',
+      consumerName: 'ct-debate-outcome-scorer',
+    });
+    brain = {
+      session_date: ctx.preamble.temporalAnchor,
+      what_just_happened: ctx.preamble.whatJustHappened,
+      organs: summarizeOrgansForPrompt(ctx.organs),
+    };
+  } catch (e) {
+    console.warn('[ct-debate-outcome-scorer] brain build failed (haiku fallback runs without context):',
+      e instanceof Error ? e.message : String(e));
+  }
+
   for (const row of rows) {
     try {
-      const r = await scoreDebate(supabase, row);
+      const r = await scoreDebate(supabase, row, brain);
       if (r.path === 'price') pricePath++;
       else if (r.path === 'haiku') haikuPath++;
       else skipped++;
