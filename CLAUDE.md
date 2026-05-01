@@ -167,13 +167,20 @@ UW MCP is **write-path only** (ingester crons). Consumers never call UW at runti
 
 **Operational reference:** `docs/SYNTHESIS_LAYER.md` — read first when working on consumers or organs. Design rationale and decision log: `docs/SYNTHESIS_LAYER_ARCHITECTURE.md`.
 
-### Pickup state (read on a fresh session)
+### Pickup state (read on a fresh session — last updated 2026-05-01 ~05:00 UTC)
 
-- **Telemetry deployed in 2 of 17 consumers** as of last commit: `ct-chat`, `ct-watcher`. The other 15 consumers will pick up the telemetry write on their next deploy (it's in the shared orchestrator, bundled per-function). Don't be surprised by a sparse `consumers[]` list in `get_brain_health` until everyone redeploys.
-- **`ct-session-analog` was 404 in production** from launch through 2026-04-30 evening (cron firing into nothing — pg_cron's "succeeded" status reflects only the SQL, not the HTTP response). Manually deployed 2026-04-30 night. First real `ct_session_embeddings` row builds at the next 21:30 UTC fire (Friday 2026-05-01). Until then, the `analogs` organ correctly returns `meta.warning='no_current_embedding'`.
-- **Phase 7 (capture path) is design-only.** Don't build it without a conversation with James. Open question: extend `ct_flags` (where james_star already lives) vs new `ct_james_reads` table.
-- **Verified working tonight:** smoke test through `ct-watcher` returned 9 telemetry rows, 0 errors, 2 expected warnings (`analogs:no_current_embedding`, `james_flags:no_rows`), latencies 147–914ms. RPC `get_brain_health(1)` returned valid JSON.
-- **Not yet bulk-redeployed:** the remaining 15 consumers. Decision deferred — let the next normal deploy (or a sweep) propagate the telemetry wire. No urgency; the consumers work fine without it.
+- **All 17 brain consumers redeployed.** Telemetry instrumented on every Claude-facing surface. Last 24h `get_brain_health(24)` shows 10 distinct consumers reporting (others fire on slower cadences and will appear as their crons hit).
+- **Specialist Recall property live** (commit `afbcfd7`) — 10th brain organ `specialistRecallContext.ts`. Each per-ticker specialist now sees its last 5 flagged + last 5 unflagged-conv-≥50 reads on the ticker before deciding. Three-state outcome rendering. audienceFilter cotrader-only. First live exercise tomorrow morning RTH 13:00–13:54 UTC.
+- **End State — Captain Into The Storm** governing image landed in CLAUDE.md ## peer to Thesis. Long-form companion `docs/END_STATE_VISION.md`. **Runtime preamble wire deferred to 2026-05-15** to keep the recall-property C1 hit-rate experiment falsifiable. Don't wire captain framing into preamble before then.
+- **Ticker coherence validator live** (`tickerCoherenceValidator.ts`, commit `54ccaaf`). Kills the data-fabrication hallucination class. ct-chat post-validated; off-universe mentions flagged in `ct_chat_tokens.validator_warnings` and counted by `chat_off_universe_mentions_24h` warden invariant.
+- **Budget views ET-bucketed** (commit `67c4a19`). UW + Tavily badges no longer drop to zero at UTC midnight.
+- **`ct-session-analog` was 404 in prod** until manual deploy 2026-04-30 night. First real `ct_session_embeddings` row builds at tonight's (Friday 2026-05-01) 21:30 UTC fire. Until then `analogs` organ correctly warns `no_current_embedding`.
+- **Phase 7 capture path** is design-only — don't build without James input.
+- **Warden state (13/15 passing, 0 erroring, 0 critical):** the 2 remaining warns are expected to self-heal in tomorrow's RTH —
+  - `brain_telemetry_insert_rate_24h` = 99 (threshold ≥100). RTH crons firing tomorrow morning push past threshold.
+  - `uw_caller_set_on_recent_calls` = 65.6% (info, threshold ≥80%). Bulk-redeployed all 22 UW ingesters; rolling-1000-call sample heals as fresh tagged calls displace null-caller history.
+- **Verification routines scheduled** (visible at https://claude.ai/code/routines): C2 prompt-diff @ 2026-05-01 14:00 UTC, synthesis-layer 72h health @ 2026-05-04 14:00 UTC, C3 warden week-1 @ 2026-05-08 14:00 UTC, C1+C4+C5 14-day acceptance @ 2026-05-15 14:00 UTC.
+- **Read-first memory for tomorrow's pickup:** `~/.claude/projects/-Users-jameschellis/memory/project_co_trader_pickup_2026_05_01_session_watch.md`.
 
 ## System Warden (shipped 2026-05-01)
 
