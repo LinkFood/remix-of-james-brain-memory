@@ -45,6 +45,35 @@ import {
   type TavilyResult,
   type TavilyTier,
 } from '../_shared/tavilyClient.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+
+// ---------------------------------------------------------------------------
+// Brain integration (Phase 4 — synthesis layer migration).
+// Audience: 'cotrader'. Organs surfaced to the per-article classifier:
+//   - event_recency  (so "stale-vs-fresh" severity is anchored to last-72h
+//                     material events, not the model's prior)
+//   - news_causality (existing news context the brain already mined — keeps
+//                     the per-article classifier from re-rating duplicates)
+//   - flow_heatmap   (current flow regime — severity 4 vs 3 often hinges on
+//                     whether the tape is already pricing it)
+// Tavily remains the source for new news; the brain provides existing context.
+// One brain build per handler tick is shared across every classify call.
+// ---------------------------------------------------------------------------
+interface BrainSummary {
+  session_date: string;
+  what_just_happened: string;
+  event_recency: unknown;
+  news_causality: unknown;
+  flow_heatmap: unknown;
+}
+
+function pickOrgan(organs: Record<string, unknown>, name: string): unknown {
+  const o = organs[name];
+  if (o && typeof o === 'object' && 'data' in (o as Record<string, unknown>)) {
+    return (o as { data: unknown }).data;
+  }
+  return null;
+}
 
 // ---------------------------------------------------------------------------
 // Minimal Haiku classifier prompt — narrower than ct-tavily-news-watcher's
@@ -143,10 +172,12 @@ async function classifyArticle(
   result: TavilyResult,
   watchlist: string[],
   scopedTicker: string,
+  brain: BrainSummary | null,
 ): Promise<ClassifyOutcome> {
   const userMessage = JSON.stringify({
     watchlist,
     scoped_ticker: scopedTicker,
+    brain_context: brain,
     article: {
       title: result.title,
       url: result.url,
@@ -220,6 +251,27 @@ serve(async (req) => {
 
   try {
     const watchlist = await getWatchlist(supabase);
+
+    // Brain (synthesis layer Phase 4). One build per handler tick, shared
+    // across every per-article classify call. Best-effort — if the brain
+    // throws, the classifier still runs without context.
+    let brain: BrainSummary | null = null;
+    try {
+      const ctx = await buildClaudeContext(supabase, {
+        audience: 'cotrader',
+        consumerName: 'ct-news-sweep',
+      });
+      brain = {
+        session_date: ctx.preamble.temporalAnchor,
+        what_just_happened: ctx.preamble.whatJustHappened,
+        event_recency: pickOrgan(ctx.organs as Record<string, unknown>, 'event_recency'),
+        news_causality: pickOrgan(ctx.organs as Record<string, unknown>, 'news_causality'),
+        flow_heatmap: pickOrgan(ctx.organs as Record<string, unknown>, 'flow_heatmap'),
+      };
+    } catch (e) {
+      console.warn('[news-sweep] brain build failed (classifier runs without context):',
+        e instanceof Error ? e.message : String(e));
+    }
 
     // -----------------------------------------------------------------------
     // Step 1: Hot-ticker selector — count flags per watchlist ticker in window.
@@ -352,7 +404,7 @@ serve(async (req) => {
 
       // 3. Classify + insert each fresh article.
       for (const article of fresh) {
-        const outcome = await classifyArticle(article, watchlist, ticker);
+        const outcome = await classifyArticle(article, watchlist, ticker, brain);
         totalTokensIn += outcome.tokens_in;
         totalTokensOut += outcome.tokens_out;
         if (outcome.rate_limited) rateLimitHits += 1;
