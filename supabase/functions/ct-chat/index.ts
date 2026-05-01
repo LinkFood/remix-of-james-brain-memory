@@ -25,6 +25,7 @@ import { isKillSwitchActive } from '../_shared/killSwitch.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { CT_CHAT_SYSTEM } from '../_shared/chatPromptV1.ts';
 import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
+import { validateTickerCoherence } from '../_shared/tickerCoherenceValidator.ts';
 import { voyageEmbed } from '../_shared/ctEmbed.ts';
 import { queryDcdBrain, shouldQueryDcdBrain, type CrossFacetHit } from '../_shared/crossFacetMemory.ts';
 import { CT_PROMPT_VERSION } from '../_shared/systemPromptV1.ts';
@@ -1455,6 +1456,25 @@ serve(async (req) => {
       });
       responseText = parseTextContent(res).trim();
 
+      // ----- Ticker-coherence validator (kills data-fabrication hallucination
+      // class, e.g. inventing CDNS $4.5M when CDNS is not in our universe).
+      // Runs synchronously (cheap regex over response text); warnings persist
+      // to ct_chat_tokens.validator_warnings. Warden invariant
+      // chat_off_universe_mentions_24h counts rows-with-warnings.
+      let validatorWarnings: ReturnType<typeof JSON.parse> | null = null;
+      try {
+        const result = await validateTickerCoherence(responseText, ctx);
+        if (!result.ok && result.warnings.length > 0) {
+          validatorWarnings = result.warnings;
+          console.warn(
+            `[ct-chat] ticker_coherence flagged ${result.warnings.length} off-universe mentions:`,
+            result.warnings.map((w) => w.issue).join(' | '),
+          );
+        }
+      } catch (e) {
+        console.warn('[ct-chat] ticker_coherence threw:', e instanceof Error ? e.message : String(e));
+      }
+
       // Record cost + usage. Chat doesn't use agent_tasks, so write direct
       // to ct_chat_tokens. Fire-and-forget — never blocks the response.
       try {
@@ -1478,6 +1498,7 @@ serve(async (req) => {
           user_message: message.slice(0, 500),
           response_chars: responseText.length,
           cross_facet_hits: crossFacet.hits.length,
+          validator_warnings: validatorWarnings,
         }).then(() => { /* fire-and-forget */ });
         // Dual-write to unified ct_claude_usage so /health shows ct-chat
         // alongside every other ct-* Claude caller. ct_chat_tokens stays as
