@@ -32,6 +32,25 @@ import { logMcpCalls } from '../_shared/mcpLog.ts';
 import { embedCtItem } from '../_shared/ctEmbed.ts';
 import { ctSlackPush } from '../_shared/ctSlack.ts';
 import { getConfig } from '../_shared/configCache.ts';
+import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+
+// ---------------------------------------------------------------------------
+// Brain integration (Phase 4 — synthesis layer migration).
+// Audience: 'cotrader'. Organs: full set. The orchestrator runs all 8 helpers
+// internally; we surface them in the user payload so Claude has the same
+// world-view as every other Co-Trader consumer when picking an investigation.
+// ---------------------------------------------------------------------------
+function summarizeOrgansForPrompt(organs: Record<string, unknown>): Record<string, unknown> {
+  // Pull the typed `data` field off each organ (helpers wrap data in a
+  // {data, meta} envelope). Skip organs that didn't run for the audience.
+  const out: Record<string, unknown> = {};
+  for (const [name, organ] of Object.entries(organs)) {
+    if (organ && typeof organ === 'object' && 'data' in (organ as Record<string, unknown>)) {
+      out[name] = (organ as { data: unknown }).data;
+    }
+  }
+  return out;
+}
 
 // Default MCP budget if ct_config key watcher.mcp.budget_per_tick is missing.
 // The watcher and curiosity share this single source of truth — same key.
@@ -219,9 +238,24 @@ serve(async (req) => {
     const { data: users } = await supabase.from('profiles').select('id').limit(1);
     const userId = (users?.[0]?.id as string | undefined) ?? null;
 
-    const context = await buildContext(supabase);
+    // Brain (synthesis layer) + 30-min consumer-specific tape — assembled
+    // in parallel. Brain gives world-view; consumer context gives the
+    // 30-min curiosity window the original cron was built around.
+    const [context, brain] = await Promise.all([
+      buildContext(supabase),
+      buildClaudeContext(supabase, {
+        audience: 'cotrader',
+        consumerName: 'ct-curiosity',
+      }),
+    ]);
 
-    const userPayload = `[TAPE STATE — last 30 min]\n${JSON.stringify(context, null, 2)}\n\n[END STATE]\n\nGiven this, pick ONE specific investigation worth a deeper look — or skip cleanly if nothing warrants it. Budget: ${mcpBudget} UW MCP calls max. Return the JSON shape specified in the system prompt.`;
+    const brainContext = {
+      session_date: brain.preamble.temporalAnchor,
+      what_just_happened: brain.preamble.whatJustHappened,
+      organs: summarizeOrgansForPrompt(brain.organs),
+    };
+
+    const userPayload = `[BRAIN — current world view]\n${JSON.stringify(brainContext, null, 2)}\n\n[TAPE STATE — last 30 min]\n${JSON.stringify(context, null, 2)}\n\n[END STATE]\n\nGiven this, pick ONE specific investigation worth a deeper look — or skip cleanly if nothing warrants it. Budget: ${mcpBudget} UW MCP calls max. Return the JSON shape specified in the system prompt.`;
 
     const uwKey = Deno.env.get('UW_API_KEY');
     if (!uwKey) {
