@@ -36,6 +36,10 @@ export interface TemporalContext {
   now_utc: string;
   /** Current wall-clock time in New York, formatted 'HH:MM ET'. */
   now_et: string;
+  /** Session-state snapshot for the model: 'PRE_MARKET' | 'OPEN' | 'POST_MARKET' | 'WEEKEND'. */
+  session_state: 'PRE_MARKET' | 'OPEN' | 'POST_MARKET' | 'WEEKEND';
+  /** Minutes until 16:00 ET close. Negative when post-close, null when WEEKEND or before open. */
+  minutes_until_close: number | null;
   /**
    * Drop-in preamble for NARRATIVE-OUTPUT consumers (morning brief, EOD
    * report, tape reader, etc.). Prepend to system prompt before any
@@ -160,32 +164,82 @@ export function getTemporalContext(): TemporalContext {
   const now_utc = now.toISOString();
   const now_et = `${formatNyTime(now)} ET`;
 
+  // Session-state grounding. Hardcoded RTH window (09:30-16:00 ET) — no
+  // half-day calendar yet; if NYSE has a 13:00 ET close, this preamble will
+  // still claim 16:00 ET and the model needs to be told via per-day events.
+  const dowIdx = nyDayIndex(now);
+  const isWeekend = dowIdx === 0 || dowIdx === 6;
+  const nyTime = formatNyTime(now); // 'HH:MM' 24h
+  const [hh, mm] = nyTime.split(':').map((s) => parseInt(s, 10));
+  const minutesIntoDay = hh * 60 + mm;
+  const OPEN_MIN = 9 * 60 + 30;     // 09:30 ET
+  const CLOSE_MIN = 16 * 60;        // 16:00 ET
+  let session_state: TemporalContext['session_state'];
+  let minutes_until_close: number | null;
+  if (isWeekend) {
+    session_state = 'WEEKEND';
+    minutes_until_close = null;
+  } else if (minutesIntoDay < OPEN_MIN) {
+    session_state = 'PRE_MARKET';
+    minutes_until_close = null;
+  } else if (minutesIntoDay >= CLOSE_MIN) {
+    session_state = 'POST_MARKET';
+    minutes_until_close = minutesIntoDay - CLOSE_MIN; // negative-from-close, kept positive as "minutes since close"
+  } else {
+    session_state = 'OPEN';
+    minutes_until_close = CLOSE_MIN - minutesIntoDay;
+  }
+
+  const sessionStateLine = (() => {
+    if (session_state === 'WEEKEND') return `Market: WEEKEND (no RTH today). RTH window M-F 09:30-16:00 ET.`;
+    if (session_state === 'PRE_MARKET') {
+      const minsToOpen = OPEN_MIN - minutesIntoDay;
+      return `Market: PRE_MARKET. RTH opens at 09:30 ET (${minsToOpen} min from now). RTH window 09:30-16:00 ET.`;
+    }
+    if (session_state === 'POST_MARKET') {
+      return `Market: POST_MARKET. RTH closed at 16:00 ET (${minutes_until_close} min ago). RTH window 09:30-16:00 ET.`;
+    }
+    // OPEN
+    const hoursLeft = Math.floor((minutes_until_close ?? 0) / 60);
+    const minsLeft = (minutes_until_close ?? 0) % 60;
+    const friendly = hoursLeft > 0 ? `${hoursLeft}h ${minsLeft}m` : `${minsLeft}m`;
+    return `Market: OPEN. RTH 09:30-16:00 ET. Time until 16:00 ET close: **${minutes_until_close} minutes (${friendly})**.`;
+  })();
+
   const temporalAnchorPreamble =
     `**Today is ${session_date} (${session_day_name}).** ` +
-    `Current time: ${now_et} (${now_utc} UTC).\n\n` +
+    `Current time: ${now_et} (${now_utc} UTC).\n` +
+    `${sessionStateLine}\n\n` +
     `CRITICAL TEMPORAL FRAME — read carefully:\n` +
     `- ALL "today" / "tomorrow" / "yesterday" / day-name references in YOUR OUTPUT must anchor to ${session_date}. ` +
     `Tomorrow = ${session_date} + 1 day. Yesterday = ${session_date} - 1 day.\n` +
+    `- ALL "minutes until close" / "final N minutes" / "N hours into the session" references in YOUR OUTPUT must use ` +
+    `the **${session_state}** state and **${minutes_until_close ?? 'N/A'}** minutes-until-close value above. ` +
+    `Do NOT estimate or pattern-complete time-to-close from prior text — the value above is authoritative.\n` +
     `- ANY date-relative language in input data (hypothesis claims, trade theses, news headlines, prior model output, ` +
     `grade rationales) was written on a PRIOR day or in a different context. Treat that text as HISTORICAL, not as a ` +
     `description of today. NEVER repeat its "today" framing.\n` +
     `- Where input data carries pre-resolved tags **TODAY** / **YESTERDAY** / **TOMORROW** / **+N days** / **-N days**, ` +
     `those tags are AUTHORITATIVE — use them verbatim in your prose.\n` +
     `- Do NOT compute relative dates from raw timestamps. Use the tags or anchor to ${session_date}.\n` +
-    `- If you find yourself referencing "Friday gap-down" / "Monday rally" / "yesterday's earnings" without explicit ` +
-    `grounding from a pre-tagged input field, STOP and re-read the temporal frame. The frame is non-negotiable.`;
+    `- If you find yourself referencing "Friday gap-down" / "Monday rally" / "yesterday's earnings" / ` +
+    `"final N minutes" without explicit grounding from a pre-tagged input field or the session-state line, ` +
+    `STOP and re-read the temporal frame. The frame is non-negotiable.`;
 
   // Short variant for JSON / tool-use consumers — no narrative-style
   // instructions, just the date anchor.
   const temporalAnchorShort =
     `Reference date: ${session_date} (${session_day_name}). ` +
-    `Any "today/tomorrow/yesterday" or day-name references anchor to this date.`;
+    `${sessionStateLine} ` +
+    `Any "today/tomorrow/yesterday" or "minutes-until-close" references anchor to this frame.`;
 
   return {
     session_date,
     session_day_name,
     now_utc,
     now_et,
+    session_state,
+    minutes_until_close,
     temporalAnchorPreamble,
     temporalAnchorShort,
   };
