@@ -153,6 +153,20 @@ UW MCP is **write-path only** (ingester crons). Consumers never call UW at runti
 - **Verified working tonight:** smoke test through `ct-watcher` returned 9 telemetry rows, 0 errors, 2 expected warnings (`analogs:no_current_embedding`, `james_flags:no_rows`), latencies 147–914ms. RPC `get_brain_health(1)` returned valid JSON.
 - **Not yet bulk-redeployed:** the remaining 15 consumers. Decision deferred — let the next normal deploy (or a sweep) propagate the telemetry wire. No urgency; the consumers work fine without it.
 
+## System Warden (shipped 2026-05-01)
+
+Invariant-based self-supervision. The synthesis layer + cron health catch CRASHES; the Warden catches **silent wrongness** — a counter that froze, a row count that flatlined, a view returning the wrong column, a specialist that writes flags but never reads. Built because James caught the UTC-rollover budget bug 2026-04-30 by glancing at a badge.
+
+- **Manifest table:** `public.ct_invariants` — one row per check. Adding an invariant is a database `INSERT`, not a code change (Tenet 25).
+- **Append-only history:** `public.ct_invariant_log`.
+- **Slack one-fire-per-state-change:** `public.ct_warden_alarm_state`.
+- **Edge function:** `ct-system-warden`. Cron: every 30 min (`*/30 * * * *`), all day. Posts ONLY on state change (pass→fail/error, fail/error→pass) plus a once-per-day heartbeat when nothing changed.
+- **Dashboard RPC:** `SELECT public.get_warden_health(window_hours => 24);` — returns `totals`, `by_category`, sorted `failures[]` each with its `runbook_path`.
+- **Adding an invariant:** write a SELECT-only query returning one row with `(metric_value numeric, message text)`, then `INSERT INTO ct_invariants (name, category, description, query_sql, expected_min, expected_max, expected_bool, severity, runbook_path)`. Picked up on the next 30-min run.
+- **Read-first on a Warden Slack alert:** `docs/SYSTEM_INDEX.md` is the runbook navigator; every invariant carries a `runbook_path` pointing back into it.
+
+Severity grades: `info` (log only), `warn` (Slack on first fail and on recovery), `critical` (Slack on first fail, on every escalation, and on recovery).
+
 ## Disk Health Check
 
 Run `df -h /` at session start, before big builds (3+ files/agents), every 5+ commits, and before deploys/pushes. If under 20GB: `sudo rm -rf /private/tmp/*`, re-verify, stop if still low.
