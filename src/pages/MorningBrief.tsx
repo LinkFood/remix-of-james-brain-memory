@@ -77,6 +77,14 @@ function formatGenAt(iso: string | null): string {
 
 // ---------- color helpers ----------
 
+// Strip prompt-anchor markdown (** TODAY 09:50 ET **) from time-tagged strings.
+// tagIsoTimestamp wraps timestamps in markdown bold for Sonnet's grounding,
+// but the UI renders plain text — the asterisks would show literally.
+function stripBold(s: string | null | undefined): string {
+  if (!s) return '';
+  return String(s).replace(/\*\*/g, '');
+}
+
 function tiltStyle(tilt: string): { card: string; chip: string; label: string } {
   switch (tilt) {
     case 'long_lean':
@@ -275,7 +283,7 @@ function BreakingEventRow({ ev }: { ev: BreakingEvent }) {
       <div className="min-w-0 flex-1">
         <div className="text-[12px] leading-snug text-foreground/90">{ev.headline}</div>
         <div className="text-[10px] text-muted-foreground mt-0.5 flex items-center gap-1.5">
-          {ev.time && <span>{ev.time}</span>}
+          {ev.time && <span>{stripBold(ev.time)}</span>}
           {ev.source && (
             <>
               <span className="text-muted-foreground/40">·</span>
@@ -470,7 +478,7 @@ function BriefEntry({ row, defaultOpen }: { row: DailyBriefRow; defaultOpen: boo
                     key={i}
                     className="flex items-baseline justify-between gap-2 px-3 py-1.5 text-[12px]"
                   >
-                    <span className="text-muted-foreground font-mono shrink-0">{p.at}</span>
+                    <span className="text-muted-foreground font-mono shrink-0">{stripBold(p.at)}</span>
                     <span className="flex-1 truncate text-foreground/85 px-2">{p.name}</span>
                     <span className="font-mono font-medium tabular-nums">{p.value}</span>
                   </div>
