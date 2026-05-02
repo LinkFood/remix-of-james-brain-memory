@@ -537,6 +537,20 @@ James-side biases (the absence of re-confirmation on James-side may
 reflect "no consumer re-confirms them" rather than "they've stopped
 applying").
 
+### Per-bias decisions executed 2026-05-02 ~03:30 UTC
+
+- **Row 3 (89986224)** — ARCHIVED (`active=false`). Reason: observed_count=1,
+  never re-confirmed since first_seen, transient. FK constraint
+  (`ct_biases_superseded_by_fkey`) blocks hard DELETE — another row
+  references this via `superseded_by`. Soft-delete via `active=false`
+  is the correct semantics; preserves the FK chain.
+- **Rows 1, 2, 4, 5, 6, 7** — KEPT. Re-confirmed Claude-side rows (1,
+  5, 7) are real biases. James-side rows (2, 4, 6) are
+  personal-discipline references by design — `last_confirmed = first_seen`
+  reflects "no automated re-checker," not "stopped applying."
+
+Active bias count: 7 → 6 ✓.
+
 ## Pending — P2 #10 gap-shape candidates
 
 Counts last 7d: 1,151 alarms in `ct_signature_alarm_log` vs 1,399
@@ -588,6 +602,28 @@ or `text[]` — check schema before running.)
 **Skip-the-investigation option:** if the gap is non-load-bearing
 (both numbers are healthy fire rates), James can mark P2 #10 stale
 and remove from the punch list rather than disambiguate.
+
+### P2 #10 — REMOVED-AS-STALE 2026-05-02 ~03:30 UTC
+
+The reproducibility probe ran on all 3 candidate shapes (A/B/C). Result:
+**none reproducible — `source_flow_ids` is NULL across every sampled
+signature_alarm flag from the last 7d.** The original "1:1 mismatch fix"
+framing presupposes an alarm→flag linkage column that doesn't exist in
+populated data. There's no diagnostic that would show whether 1:1 holds
+because there's no linkage data to verify against.
+
+**Verdict:** stale framing. The 1,151 vs 1,399 count diff reflects two
+independently-maintained tables — alarm log (alarm fired) vs flag table
+(score-eligible event passed to flag pipeline). Not 1:1 by design or
+by data.
+
+**If future auditability becomes load-bearing:** file separately as
+"populate `ct_flags.source_flow_ids` on signature_alarm flag-write."
+That's a different problem from the original P2 #10 framing — it's
+adding linkage to a writer that currently doesn't populate it, not
+fixing a 1:1 mismatch.
+
+Marked stale, removed from punch list.
 
 ## References
 - `docs/LINKJAC_COTRADER_PLAYBOOK.md` — current operational scoreboard
