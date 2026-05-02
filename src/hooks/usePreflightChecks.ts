@@ -458,10 +458,23 @@ async function runCronFailuresCheck(): Promise<PreflightCheck> {
 async function runMorningBriefCheck(now: Date): Promise<PreflightCheck> {
   const startedIso = new Date().toISOString();
   try {
-    const { data, error } = await supabase
-      .from('ct_reports')
-      .select('id, report_type, created_at, summary')
-      .eq('report_type', 'morning_brief')
+    // ct_daily_briefs is the Co-Trader morning brief table (NOT ct_reports —
+    // that's the JAC-side news/research index). The brief cron fires at
+    // ~7am ET weekdays and rebriefs intraday on regime shifts; multiple rows
+    // per session_date are allowed (brief_version increments).
+    const { data, error } = await (supabase.from('ct_daily_briefs' as never) as unknown as {
+      select: (cols: string) => {
+        order: (col: string, opts: { ascending: boolean }) => {
+          limit: (n: number) => {
+            maybeSingle: () => Promise<{
+              data: { id: string; session_date: string; brief_version: number | null; created_at: string } | null;
+              error: { message: string } | null;
+            }>;
+          };
+        };
+      };
+    })
+      .select('id, session_date, brief_version, created_at')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -481,19 +494,20 @@ async function runMorningBriefCheck(now: Date): Promise<PreflightCheck> {
     }
 
     const ageH = minutesAgo(data.created_at) / 60;
-    // On weekdays we want brief < 6h old (fired at ~6am ET).
-    // Off-days, an older brief is fine — just show green if present.
+    // Weekdays: today's brief should land by ~10:00 UTC (7am ET). 26h-grace
+    // covers "today's brief from this morning OR yesterday's still current
+    // if today's hasn't fired yet." Weekends: last weekday brief is ≤72h old.
     let status: CheckStatus;
     let explanation: string;
     if (!weekday) {
-      status = 'green';
+      status = ageH <= 72 ? 'green' : 'yellow';
       explanation = `Last brief ${ageH.toFixed(1)}h ago (weekend, no fresh brief expected)`;
-    } else if (ageH <= 6) {
+    } else if (ageH <= 26) {
       status = 'green';
-      explanation = `Brief ${ageH.toFixed(1)}h old`;
-    } else if (ageH <= 12) {
+      explanation = `Brief ${ageH.toFixed(1)}h old (session ${data.session_date})`;
+    } else if (ageH <= 30) {
       status = 'yellow';
-      explanation = `Brief ${ageH.toFixed(1)}h old (expected < 6h on weekdays)`;
+      explanation = `Brief ${ageH.toFixed(1)}h old — today's may not have fired yet`;
     } else {
       status = 'red';
       explanation = `Brief stale: ${ageH.toFixed(1)}h old`;
@@ -506,8 +520,9 @@ async function runMorningBriefCheck(now: Date): Promise<PreflightCheck> {
       explanation,
       lastCheckedAt: startedIso,
       details: [
-        { label: 'Created at', status, note: new Date(data.created_at).toLocaleString() },
-        { label: 'Report ID', status: 'green', note: String(data.id) },
+        { label: 'session_date', status: 'green', note: String(data.session_date) },
+        { label: 'created_at', status, note: new Date(data.created_at).toLocaleString() },
+        { label: 'brief_version', status: 'green', note: String(data.brief_version ?? 1) },
       ],
     };
   } catch (err) {
@@ -516,7 +531,7 @@ async function runMorningBriefCheck(now: Date): Promise<PreflightCheck> {
       key: 'morning_brief',
       name: 'Morning brief fresh',
       status: 'red',
-      explanation: 'Failed to query ct_reports',
+      explanation: 'Failed to query ct_daily_briefs',
       lastCheckedAt: startedIso,
       details: [],
       error: message,
@@ -524,7 +539,7 @@ async function runMorningBriefCheck(now: Date): Promise<PreflightCheck> {
   }
 }
 
-async function runUwUsageCheck(): Promise<PreflightCheck> {
+async function runUwUsageCheck(now: Date): Promise<PreflightCheck> {
   const startedIso = new Date().toISOString();
   try {
     const { data, error } = await supabase
@@ -551,6 +566,20 @@ async function runUwUsageCheck(): Promise<PreflightCheck> {
     const today = todayIso();
     const isToday = data.session_date === today;
 
+    // Time-of-week-aware threshold: only flag red if the budget is BURNING
+    // through into the trading day. Friday-end-of-session at 65% read on
+    // Saturday isn't a problem — it's just where Friday landed. Same usage
+    // pre-Monday-bell IS a problem — the new session started but UW counter
+    // hasn't reset yet, so the Mon trading window will be capped early.
+    const weekday = isWeekday(now);
+    const marketActive = isMarketActive(now);
+    // ET hour for the pre-bell window check (04:00 ET → 09:30 ET). Reuse
+    // isMarketActive's lookup logic instead of re-deriving the timezone math.
+    const et = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const etHour = et.getHours();
+    const preBell = weekday && etHour >= 4 && etHour < 10; // 04:00–09:59 ET
+    const dangerWindow = weekday && (preBell || marketActive);
+
     let status: CheckStatus;
     let explanation: string;
     if (!isToday) {
@@ -561,10 +590,15 @@ async function runUwUsageCheck(): Promise<PreflightCheck> {
       explanation = `UW usage ${pct}% — full budget available`;
     } else if (pct < 50) {
       status = 'yellow';
-      explanation = `UW usage ${pct}% — weekend ate some of today's budget`;
-    } else {
+      explanation = `UW usage ${pct}% — partial budget already consumed`;
+    } else if (dangerWindow) {
       status = 'red';
-      explanation = `UW usage ${pct}% before open — budget largely spent`;
+      explanation = `UW usage ${pct}% during trading window — budget capped`;
+    } else {
+      // Off-hours / weekend: 50%+ usage is just how Friday's session ended,
+      // not a freshness signal. UW counter resets on the new ET trading day.
+      status = 'yellow';
+      explanation = `UW usage ${pct}% (off-hours — last session's end-of-day total)`;
     }
 
     return {
@@ -577,6 +611,7 @@ async function runUwUsageCheck(): Promise<PreflightCheck> {
         { label: 'session_date', status: isToday ? 'green' : 'yellow', note: String(data.session_date) },
         { label: 'daily_count / daily_limit', status, note: `${data.daily_count} / ${data.daily_limit}` },
         { label: 'pct', status, note: `${pct}%` },
+        { label: 'window', status: 'green', note: dangerWindow ? 'pre-bell or RTH' : (weekday ? 'weekday off-hours' : 'weekend') },
       ],
     };
   } catch (err) {
@@ -992,7 +1027,7 @@ export function usePreflightChecks(options?: { refreshMs?: number }): PreflightR
       runCronCheck(now),
       runCronFailuresCheck(),
       runMorningBriefCheck(now),
-      runUwUsageCheck(),
+      runUwUsageCheck(now),
       runHeartbeatCheck(now),
       runBiasesCheck(),
       runWeekendNewsCheck(now),
