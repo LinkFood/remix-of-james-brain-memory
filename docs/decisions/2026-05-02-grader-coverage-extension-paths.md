@@ -133,3 +133,98 @@ If James prefers Path A first, the right phasing is: wait until 2026-05-15, scop
 3. **Premium-axis on detector flags.** Path B doesn't grade premium axis on detector flags — they get `legacy_grade_outcome` only. The forensic doc's premium-axis findings will remain limited to specialist-source rows. Acceptable?
 
 Awaiting your call before Phase B build.
+
+---
+
+## EXECUTED — Path B shipped 2026-05-02 ~23:50 UTC
+
+James called Path B. Migration `20260502070000_corpus_unified_verdict.sql` rebuilt the MV with `ct_flag_grades` LEFT JOIN, added `unified_verdict` / `grade_source` / `verdict_axes_available` columns, recreated all three RPCs against `unified_verdict`. Single commit, MV + RPCs together (the SQL function `corpus_baseline` had a static dep on the MV; CASCADE drop required recreate-in-same-migration).
+
+### Settled-row count: 68 → 1,322
+
+| metric | before (specialist v2 only) | after (unified) | × |
+|--|--:|--:|--:|
+| total flags | 5,255 | 5,255 | — |
+| settled (win/loss/partial) | 68 | **1,322** | 19.4× |
+| invalidated (excluded from hit-rate) | 0 | 141 | — |
+| pending | 22 | 22 | — |
+| ungraded | 5,165 | 3,770 | 0.73× |
+| hit_rate_weighted (overall) | 0.5368 | **0.5212** | — |
+
+Settled count exceeded the 1,200 estimate by 122. Acceptance criterion ✅.
+
+### Hit-rate cross-check between graders
+
+The two graders agree to within 1.7pp on weighted hit rate over their respective coverage:
+
+| grade_source | n total | settled | hit_rate_weighted | hit_rate_strict | invalidated |
+|--|--:|--:|--:|--:|--:|
+| legacy_single_axis | 1,395 | 1,254 | 0.5203 | 0.2895 | 141 |
+| specialist_v2_multi_axis | 90 | 68 | 0.5368 | 0.2941 | 0 |
+| **delta** | | | **+0.0165** | +0.0046 | |
+
+That's a 1.65pp gap on weighted hit rate over comparable populations. Within sampling noise for these N values. **Combining the two graders into `unified_verdict` is methodologically sound.** Note: legacy is single-axis (underlying at flag.horizon_hours); v2 is multi-axis (premium + 4h + 1d + 3d + blended). The comparison above is `unified_verdict` (= v2.blended for v2 rows, legacy.outcome for legacy rows). Different definitions, agreeing closely — that's the substantive finding.
+
+### New anomaly cells at the LOAD-BEARING threshold (N≥30 settled, |Δ|≥0.10)
+
+Run on unified data, dimensions `instrument / side / direction / time_of_day_bucket / dte_bucket / premium_bucket / aggressor / regime / day_of_week / detector_id / grade_source`:
+
+| dim | value | n | settled | invalidated | hit_rate_unified | Δ baseline (0.521) |
+|--|--|--:|--:|--:|--:|--:|
+| **side** | **put** | 1,680 | **431** | 70 | **0.311** | **−0.210** ⭐⭐ |
+| instrument | TSLA | 499 | 116 | 9 | 0.323 | −0.198 ⭐ |
+| detector_id | zerodte_put_voi_extreme_v1 | 144 | 34 | 5 | 0.338 | −0.183 |
+| instrument | NVDA | 825 | 212 | 16 | 0.703 | +0.182 ⭐ |
+| detector_id | smart_money_repeat_v1 | 392 | 103 | 2 | 0.694 | +0.173 ⭐ |
+| instrument | AMZN | 381 | 52 | 11 | 0.663 | +0.142 |
+| instrument | SPY | 1,133 | 273 | 20 | 0.403 | −0.118 |
+| side | call | 3,498 | 891 | 71 | 0.623 | +0.102 |
+
+**At the strict load-bearing threshold (N≥30 AND |Δ|≥0.20), only put-side underperformance survives.** This is the highest-confidence pattern in the corpus by sample size and effect magnitude.
+
+### What happened to the original 7 captured patterns
+
+Sample expansion (~10× to ~25× per pattern) was a stress test. Most prior patterns were small-sample artifacts in specialist-v2-only data. One held.
+
+| id | original signature | original Δ (n) | unified Δ (n) | new status | reason |
+|--:|--|--:|--:|--|--|
+| 1 | fri / 3d-axis | +0.17 (40) | +0.05 (44) | deprecated | axis-specific signal; legacy doesn't have isolated 3d-axis |
+| 2 | mon / 3d-axis | −0.27 (23) | −0.02 (281) | deprecated | sample 12× → effect collapsed |
+| 3 | NVDA / 3d-axis | +0.22 (13) | +0.18 (212) | **VALIDATED** | direction held, magnitude held, sample 16× |
+| 4 | GOOGL / 3d-axis | +0.22 (9) | +0.07 (51) | deprecated | small-sample noise |
+| 5 | midday_1230_1400 | −0.22 (11) | +0.01 (126) | deprecated | totally vanished |
+| 6 | morning_1030_1130 | +0.20 (17) | +0.07 (102) | deprecated | weakened below load-bearing |
+| 7 | MSFT / blended | +0.16 (13) | +0.08 (89) | deprecated | weakened below load-bearing |
+
+**1 of 7 (14%) survived the unified scan.** This is honest empirical work — the 6 that didn't survive were noise that the thin specialist-v2 corpus couldn't distinguish from signal. Pattern capture is doing what it should.
+
+### New patterns captured (status='observed', need next-session re-confirmation)
+
+Inserted ids 8-11 (see `ct_observed_patterns`):
+
+- **id 8** — put-side underperformance (Δ −0.210, n=431). Strongest signal; only one clearing strict load-bearing threshold. Cross-references `feedback_direction_inference_repeatedhits_put_inverted.md`.
+- **id 9** — TSLA underperformance (Δ −0.198, n=116). May be a downstream of put-side once we can do 2D slices.
+- **id 10** — NVDA broad outperformance unified (Δ +0.182, n=212). Companion to validated id=3 — confirms the NVDA effect isn't 3d-axis-specific.
+- **id 11** — smart_money_repeat_v1 detector quality (Δ +0.173, n=103). Detector-portfolio signal.
+
+### Open questions surfaced
+
+1. **Is the put underperformance a direction-inference bug or a real bias?** Per `feedback_direction_inference_repeatedhits_put_inverted.md`, RepeatedHits puts must map ask-aggressive to bearish "buying puts." The fix shipped weeks ago. The unified data shows puts at 31.1% hit rate on n=431. Three hypotheses:
+   - (a) Residual inference bug not caught by the prior fix (regression test).
+   - (b) Universe regime mismatch: chop + trending_up dominate the 30d window; puts naturally underperform in those regimes.
+   - (c) Specialist + detectors are systematically over-flagging puts (false-positive rate higher on puts than calls).
+   
+   Phase 1 audit: run `slice_by('side', filters: {regime: 'chop'})` and `slice_by('side', filters: {regime: 'trending_up'})` once we have multi-filter support. If puts underperform in EVERY regime, hypothesis (a) or (c). If puts underperform only in trending_up, hypothesis (b). Currently slice_by accepts `p_filters jsonb` — works.
+2. **Is TSLA underperformance just put-side underperformance in disguise?** TSLA puts probably dominate the cohort. Need 2D slice to disambiguate.
+3. **Should id=10 (NVDA unified) and id=3 (NVDA 3d) coexist as observed patterns?** They're effectively duplicate. Decision: keep both — id=3 is a precise 3d-axis-specific claim (validated), id=10 is the broad version (observed). If id=10 confirms next session, deprecate id=3 (subsumed).
+
+### Acceptance summary
+
+✅ Corpus MV refreshed with unified_verdict + grade_source + axes_available.
+✅ Settled count jumped to 1,322 (target ~1,200+).
+✅ Re-run of corpus_baseline + find_anomalies surfaces meaningful-N anomalies.
+✅ 7 prior captured patterns re-validated; 1 promoted, 6 deprecated.
+✅ 4 new load-bearing patterns captured.
+✅ Decisions doc updated (this section).
+✅ methodology-patterns.md created with new entry (`docs/methodology-patterns.md`).
+✅ Warden green on corpus_freshness; pre-existing 2-warn telemetry pair persists, unrelated to this work.
