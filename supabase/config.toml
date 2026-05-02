@@ -462,5 +462,11 @@ verify_jwt = false
 [functions.ct-detector-scoreboard-update]
 verify_jwt = false
 
+[functions.ct-specialist-prompt-lifecycle-v2]
+verify_jwt = false
+
 [functions.ct-eod-specialist-narrative]
+verify_jwt = false
+
+[functions.ct-regime-capture]
 verify_jwt = false
