@@ -290,6 +290,60 @@ machine doesn't transition tracks out of WORKING (separate bug), or
 the design is intentionally WORKING-only. Worth a separate audit but
 out of scope for tonight.
 
+## Auxiliary findings → next session
+
+### **TOP P0 NEXT SESSION: track-state machine doesn't transition**
+
+Discovered while investigating P0 #1 calibration data quality.
+`ct_contract_tracks` has 3,465 WORKING rows / 0 REALIZED / 0 EXPIRED.
+Tracks never transition out of WORKING. Implications:
+- `peak_contract_pct` reflects polling cadence, not actual contract
+  performance over its lifetime
+- Any metric reading peak% (the entire contract-axis grader, all
+  detector calibrations, all backtests) is potentially distorted
+- Calibration of P0 #1 thresholds had to use strict-win-rate (binary
+  outcome label) as anchor instead of peak distribution — workable
+  but a band-aid
+
+Investigation scope: read poller (`ct-contract-poller`) state-machine
+transitions; identify why no track ever flips to REALIZED. Likely a
+"polling stopped but status unchanged" class. After fix, re-poll old
+tracks to recover their actual peaks. Then P0 #1 thresholds can be
+re-calibrated against accurate peak distribution.
+
+Estimated: 1-2 days for state machine + re-poll + verify.
+
+### Audit-first caught a wrong fix — class lesson
+
+Original P0 #1 framing was "DTE-bucketed underlying-axis (specialist)
+target_threshold_pct." Phase B investigation (forced by audit-first
+discipline) revealed three false premises:
+
+1. **Underlying-axis corpus too thin** — 12 grades total, calibration
+   impossible. The "DTE buckets" change would have applied to <1% of
+   grades.
+2. **Wrong axis** — 99% of corpus is contract-axis (signature_alarm +
+   detector_alarm). Underlying-axis was the wrong target.
+3. **C1 contamination risk** — original framing would have changed
+   specialist grading during the active C1 hit-rate measurement
+   window. Redirecting to contract-axis kept underlying-axis untouched
+   and zeroed the contamination.
+
+Without the audit, the wrong fix would have shipped on a wrong premise
+— affecting 1% of grades while polluting the recall property's
+falsifiability.
+
+**The captain decision (Option D)** redirected the work to contract-axis
+DTE bucketing using strict-win-rate as anchor (since peak_contract_pct
+distribution is suspect — see track-state-machine bug above). Phase D
+verify confirmed 88 of 1394 grades (6.3%) shift under new thresholds
+— sane shifts, no catastrophic flips. Strict win-rate flattens from
+12.9-29.3% spread to 27.7-33.8% across all 5 DTE buckets.
+
+Class lesson: **audit-first applies to brief-level too.** When data
+shape contradicts the brief's premise, surface it BEFORE writing code,
+not after. The brief itself is a hypothesis to be tested.
+
 ## References
 - `docs/LINKJAC_COTRADER_PLAYBOOK.md` — current operational scoreboard
 - `~/.claude/projects/-Users-jameschellis/memory/project_co_trader_pickup_2026_05_01_session_watch.md` — pickup state, including ct_specialist_memory deprecation

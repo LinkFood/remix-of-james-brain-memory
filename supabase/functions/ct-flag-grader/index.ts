@@ -62,21 +62,60 @@ interface FlagRow {
 // ---------------------------------------------------------------------------
 // Defaults for non-specialist sources — pulled from ct_config when present.
 // ---------------------------------------------------------------------------
+type DteBucket = '0dte' | '1_3d' | '4_14d' | '15_45d' | '46d_plus';
+
+interface AlarmBucketThresholds {
+  winPct: number;       // peak% threshold for win
+  lossPct: number;      // drawdown% threshold for loss
+}
+
 interface SourceDefaults {
   // james_star (underlying-axis)
   jamesWinPct: number;       // >= this in direction = win
   jamesLossPct: number;      // <= -this against direction = loss
-  // signature_alarm (contract-axis)
-  alarmWinPct: number;       // >= this peak% = win
-  alarmLossPct: number;      // drawdown >= this = loss
+  // signature_alarm + detector_alarm (contract-axis) — DTE-bucketed thresholds
+  // calibrated 2026-05-02 against 1,395 grades / 4-day window.
+  alarmBuckets: Record<DteBucket, AlarmBucketThresholds>;
 }
+
+const DEFAULT_ALARM_BUCKETS: Record<DteBucket, AlarmBucketThresholds> = {
+  '0dte':     { winPct: 50, lossPct: 30 },
+  '1_3d':     { winPct: 50, lossPct: 30 },
+  '4_14d':    { winPct: 40, lossPct: 25 },
+  '15_45d':   { winPct: 30, lossPct: 20 },
+  '46d_plus': { winPct: 20, lossPct: 15 },
+};
 
 const DEFAULT_SOURCE_DEFAULTS: SourceDefaults = {
   jamesWinPct: 1.5,
   jamesLossPct: 1.0,
-  alarmWinPct: 50,
-  alarmLossPct: 30,
+  alarmBuckets: DEFAULT_ALARM_BUCKETS,
 };
+
+/**
+ * Map DTE-at-fire-time to a bucket label. DTE = days(expiry - flag.created_at).
+ * Negative DTE (e.g., expiry already passed when flag fired — anomaly) clamps
+ * to 0DTE.
+ */
+function bucketForDte(dte: number | null): DteBucket {
+  if (dte == null || !Number.isFinite(dte) || dte <= 0) return '0dte';
+  if (dte <= 3) return '1_3d';
+  if (dte <= 14) return '4_14d';
+  if (dte <= 45) return '15_45d';
+  return '46d_plus';
+}
+
+function computeDteFromFlag(expiry: string | null, createdAt: string): number | null {
+  if (!expiry) return null;
+  try {
+    const expDate = new Date(expiry.length > 10 ? expiry : `${expiry}T00:00:00Z`);
+    const cre = new Date(createdAt);
+    if (isNaN(expDate.getTime()) || isNaN(cre.getTime())) return null;
+    return Math.round((expDate.getTime() - cre.getTime()) / 86_400_000);
+  } catch {
+    return null;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Price lookup — nearest ct_price_bars close within ±30min slop.
@@ -153,14 +192,21 @@ function computeJamesOutcome(direction: Direction, changePct: number, defaults: 
 }
 
 // ---------------------------------------------------------------------------
-// Signature-alarm outcome — contract-axis from ct_contract_tracks.
+// Signature-alarm + detector_alarm outcome — contract-axis from
+// ct_contract_tracks, DTE-bucketed thresholds (calibrated 2026-05-02).
 // ---------------------------------------------------------------------------
-function computeAlarmOutcome(peakPct: number | null, drawdownPct: number | null, defaults: SourceDefaults): Outcome {
+function computeAlarmOutcome(
+  peakPct: number | null,
+  drawdownPct: number | null,
+  bucket: DteBucket,
+  defaults: SourceDefaults,
+): Outcome {
   // peakPct is fractional (0.5 = +50%) per ct_contract_tracks convention.
   const peak = peakPct == null ? 0 : peakPct * 100;
   const drawdown = drawdownPct == null ? 0 : drawdownPct * 100;
-  if (peak >= defaults.alarmWinPct) return 'win';
-  if (drawdown >= defaults.alarmLossPct) return 'loss';
+  const thresholds = defaults.alarmBuckets[bucket];
+  if (peak >= thresholds.winPct) return 'win';
+  if (drawdown >= thresholds.lossPct) return 'loss';
   if (peak > 0) return 'partial';
   return 'invalidated_early';
 }
@@ -181,15 +227,28 @@ async function getTargetThreshold(supabase: SupabaseClient): Promise<number> {
 }
 
 async function getSourceDefaults(supabase: SupabaseClient): Promise<SourceDefaults> {
-  const out = { ...DEFAULT_SOURCE_DEFAULTS };
+  // Deep-clone the alarm buckets so per-call mutations don't leak globally.
+  const out: SourceDefaults = {
+    jamesWinPct: DEFAULT_SOURCE_DEFAULTS.jamesWinPct,
+    jamesLossPct: DEFAULT_SOURCE_DEFAULTS.jamesLossPct,
+    alarmBuckets: {
+      '0dte':     { ...DEFAULT_ALARM_BUCKETS['0dte'] },
+      '1_3d':     { ...DEFAULT_ALARM_BUCKETS['1_3d'] },
+      '4_14d':    { ...DEFAULT_ALARM_BUCKETS['4_14d'] },
+      '15_45d':   { ...DEFAULT_ALARM_BUCKETS['15_45d'] },
+      '46d_plus': { ...DEFAULT_ALARM_BUCKETS['46d_plus'] },
+    },
+  };
+  const winKeys = ['0dte', '1_3d', '4_14d', '15_45d', '46d_plus'].map(b => `grader.alarm_win_pct.${b}`);
+  const lossKeys = ['0dte', '1_3d', '4_14d', '15_45d', '46d_plus'].map(b => `grader.alarm_loss_pct.${b}`);
   const { data } = await supabase
     .from('ct_config')
     .select('key, value')
     .in('key', [
       'grader.james_win_pct',
       'grader.james_loss_pct',
-      'grader.alarm_win_pct',
-      'grader.alarm_loss_pct',
+      ...winKeys,
+      ...lossKeys,
     ]);
   for (const row of data ?? []) {
     const v = row.value;
@@ -197,8 +256,12 @@ async function getSourceDefaults(supabase: SupabaseClient): Promise<SourceDefaul
     if (!Number.isFinite(n) || n < 0) continue;
     if (row.key === 'grader.james_win_pct') out.jamesWinPct = n;
     else if (row.key === 'grader.james_loss_pct') out.jamesLossPct = n;
-    else if (row.key === 'grader.alarm_win_pct') out.alarmWinPct = n;
-    else if (row.key === 'grader.alarm_loss_pct') out.alarmLossPct = n;
+    else {
+      const winMatch = /^grader\.alarm_win_pct\.(0dte|1_3d|4_14d|15_45d|46d_plus)$/.exec(row.key);
+      const lossMatch = /^grader\.alarm_loss_pct\.(0dte|1_3d|4_14d|15_45d|46d_plus)$/.exec(row.key);
+      if (winMatch) out.alarmBuckets[winMatch[1] as DteBucket].winPct = n;
+      else if (lossMatch) out.alarmBuckets[lossMatch[1] as DteBucket].lossPct = n;
+    }
   }
   return out;
 }
@@ -322,10 +385,14 @@ async function gradeExpiredFlags(
           console.warn(`[ct-flag-grader] ${row.source} ${row.id}: no contract track`);
           continue;
         }
-        outcome = computeAlarmOutcome(track.peak_contract_pct, track.max_drawdown_pct, sourceDefaults);
+        const dte = computeDteFromFlag(row.expiry, row.created_at);
+        const bucket = bucketForDte(dte);
+        const thresholds = sourceDefaults.alarmBuckets[bucket];
+        outcome = computeAlarmOutcome(track.peak_contract_pct, track.max_drawdown_pct, bucket, sourceDefaults);
         const peakStr = track.peak_contract_pct == null ? 'n/a' : (track.peak_contract_pct * 100).toFixed(1) + '%';
         const ddStr = track.max_drawdown_pct == null ? 'n/a' : (track.max_drawdown_pct * 100).toFixed(1) + '%';
-        notes = `${row.source} contract-axis: peak=${peakStr} drawdown=${ddStr} (win>=${sourceDefaults.alarmWinPct}% loss>=${sourceDefaults.alarmLossPct}%)`;
+        const dteStr = dte == null ? 'n/a' : `${dte}d`;
+        notes = `${row.source} contract-axis: peak=${peakStr} drawdown=${ddStr} dte=${dteStr} bucket=${bucket} (win>=${thresholds.winPct}% loss>=${thresholds.lossPct}%)`;
       } else {
         // specialist + james_star both grade on underlying spot move.
         // Trading-clock gate applies HERE only — underlying-axis grading reads
