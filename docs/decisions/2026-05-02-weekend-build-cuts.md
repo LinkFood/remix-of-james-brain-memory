@@ -263,6 +263,33 @@ docs pass.
 - Mon backlog: prompt-debug logging path scope.
 - #9 / #10 Phase A reports land later tonight (per James's pull-forward).
 
+## P0 #2 — REMOVED from punch list (2026-05-02 dedicated push)
+
+**Item:** "Per-option-symbol track dedup (print-grader). Diagnostic ran
+previously; gap confirmed. Ship the fix."
+
+**Status: REMOVED. No current gap visible.**
+
+**Evidence:** Audited 3,000 of 3,465 WORKING tracks (87% of population)
+on 2026-05-02 ~01:30 UTC. Zero duplicate `option_symbol` values across
+the sample. The `ct_contract_tracks_option_symbol_working_uniq` partial
+UNIQUE INDEX (shipped 2026-04-28, memory `project_co_trader_per_symbol_dedup_2026_04_28.md`)
+is enforced and holding.
+
+**Most likely explanation:** The Apr 28 UNIQUE index closed the dedup
+gap. The punch-list item was authored before that fix landed (or
+contemporaneously) and was never updated to reflect "shipped."
+
+**Don't ship a fix for a non-problem.** Re-add to the punch list if a
+future audit surfaces actual duplicates. Tonight's discipline:
+class-kill check first, ship only if a problem exists.
+
+**Adjacent observation worth flagging:** REALIZED + EXPIRED status row
+counts are zero. Every track is WORKING. Either the track-state
+machine doesn't transition tracks out of WORKING (separate bug), or
+the design is intentionally WORKING-only. Worth a separate audit but
+out of scope for tonight.
+
 ## References
 - `docs/LINKJAC_COTRADER_PLAYBOOK.md` — current operational scoreboard
 - `~/.claude/projects/-Users-jameschellis/memory/project_co_trader_pickup_2026_05_01_session_watch.md` — pickup state, including ct_specialist_memory deprecation
