@@ -754,71 +754,23 @@ Current alarm at 90% (`uw_budget_critical_pct`) is correct. Treat 80% weekday-cl
 
 ## P0 — Calibration / signal quality
 
-### 0. Re-poll canonical week + diff signature corpus  ⏰ run when UW budget has headroom
+> **Punchlist staleness audits.** Items aging >3 days without explicit gating get a relevance audit. See `docs/runbooks/punchlist_staleness.md` for the pattern. Most-recent archive: `docs/decisions/2026-05-02-punchlist-staleness-archive.md` — removed P0 #0 (canonical re-poll, superseded by detector lifecycle), P0 #1 (DTE-bucketed grader, superseded by Specialist Scoreboard v2), P0 #2 (per-symbol track dedup, resolved by 2026-04-28 UNIQUE INDEX), P2 #10 (alarm-log gap, stale — needs archeology before any fix).
 
-**The problem:** Every detector predicate was built off the canonical Mon-Fri 4/20→4/24 corpus. That corpus reads from `ct_contract_tracks.peak_contract_pct`. ~60% of tracks have peak=0 because the poller couldn't keep up before today's throughput bump. The winners pool is structurally under-inclusive — we tuned detectors against ~70% of actual winners, missing the long tail of fast-spike winners whose track only got one poll.
+### 0. ~~Re-poll canonical week + diff signature corpus~~ — **ARCHIVED 2026-05-02 (SUPERSEDED)**
 
-**Implication:** Detectors aren't wrong (every flag is a real pattern), but they're under-inclusive (missing patterns the corpus didn't see). Sunday calibration was built on biased data.
-
-**The fix is a one-shot re-poll of the canonical week:**
-
-1. Wait until UW daily budget has headroom (tonight if we close ≤70%, otherwise Sat/Sun when nothing competes for budget)
-2. Force-fire `ct-contract-poller` in `offhours` mode against tracks `print_time >= 2026-04-20 AND print_time < 2026-04-25`
-3. Bypass cadence filter (these are cold tracks, every poll captures real movement)
-4. Estimated cost: ~5k UW calls (5,000 tracks × 1-2 polls each)
-5. Will take ~2 hours via */3 cron at maxPerRun=100, OR ~30 min force-fired manually
-
-**Diff procedure:**
-1. Snapshot `ct_signature_magnitude_stats` BEFORE re-poll → save as `pre_repoll_corpus.json`
-2. Run re-poll
-3. Snapshot AFTER → save as `post_repoll_corpus.json`
-4. Diff: new signature_classes appearing? hit_rates shifting? n_tracks growing? Class with biggest delta = the one most affected by polling bias.
-
-**Sunday calibration agenda after re-poll:**
-- Re-run detector portfolio backtest against corrected corpus
-- Identify classes that promoted/demoted
-- Adjust detector thresholds for the new winner distribution
-- Some detectors may stay identical; others may shift
-
-**Trigger conditions to run NOW (tonight):**
-- UW close ≤70% AND
-- Off-hours window (post-21:00 UTC) AND
-- No active backfill pipe running
-
-**Trigger condition Sat/Sun:**
-- Whenever — UW budget is unconstrained on weekends
-
-**Why this is P0 and not Sunday-default:** detector portfolio depends on this. Every day we don't run it, new flags fire on a biased corpus. Once shipped, it's permanent — corpus stays clean going forward because the poller now keeps up.
+Superseded by detector lifecycle K=4 + `ct_detector_lifecycle_state` + continuous scoreboard (commit `9504dcb`). Detectors now earn status empirically over rolling windows; one-shot canonical-week tuning is redundant. Saved ~5–15K UW calls. See `docs/decisions/2026-05-02-punchlist-staleness-archive.md` Item 1 for full context and re-trigger conditions.
 
 ---
 
-### 1. DTE-bucketed win threshold (grader)
-**Symptom:** Today's high-conviction flags showed +7-11% peaks but the grader's `alarmWinPct=50` (fixed) marks them as `partial` because none hit +50%. The Won tab is artificially empty for non-0DTE setups even when the system found real movement.
+### 1. ~~DTE-bucketed win threshold (grader)~~ — **ARCHIVED 2026-05-02 (SUPERSEDED)**
 
-**Today's evidence:** 9 unique contracts at score ≥70, peaks 1-11%, none hit +50%. 3 went negative. The signal looks reasonable; the success criteria are too tight for mid-DTE.
-
-**Fix path:**
-- Make `alarmWinPct` DTE-bucketed in `ct_flag_grader/index.ts` `computeAlarmOutcome`:
-  - 0DTE: 50% peak (current)
-  - 1-7 DTE: 30% peak
-  - 8-30 DTE: 15% peak
-  - 30+ DTE: 10% peak
-- Mirror in `ct_config` so it's tunable
-- Re-grade past 7 days using the new buckets
-- Today's MSFT 425C (10-DTE, +11%) flips from `partial` → `win`
-
-**Why deferred:** Need at least one full week of data under bucketed thresholds to validate vs the corpus before changing how we measure success. Sunday calibration item.
+Superseded by Specialist Scoreboard v2 (commits `4bc606a`, `65d8996`, `f36da46`, 2026-05-02 ~05:30 UTC). DTE-relative timing is now structural via `ct_specialist_grade_axes` + 4h/1d/3d underlying-axis windows + `blended_verdict`. Adding DTE buckets to v1's premium-only grader would be redundant. See `docs/decisions/2026-05-02-punchlist-staleness-archive.md` Item 2.
 
 ---
 
-### 2. Per-option-symbol track dedup (print-grader)
-**Symptom:** Each print of a contract creates a new ct_contract_tracks row. WORKING pool has 6,990 tracks for ~4,400 unique option_symbols (1.6x dup ratio). Top dups: QQQ260618P00600000 has 18 tracks.
+### 2. ~~Per-option-symbol track dedup (print-grader)~~ — **ARCHIVED 2026-05-02 (RESOLVED)**
 
-**Cost:** Every duplicate track competes for poller throughput → the freshest print starves the older same-contract tracks. Grader's MAX-peak RPC papers over this but doesn't fix it.
-
-**Fix path:** print-grader UPSERTs on (option_symbol) instead of INSERTs per print. Single track per symbol, sweep_count + last_quoted_at advance with each new print. Drops WORKING pool to ~4,400 → poller cycles through 1.6x faster at same maxPerRun.
-
-**Why deferred:** Touches every track-create path. Needs careful migration to dedup existing rows. Saturday's heavy work.
+Resolved by 2026-04-28 partial UNIQUE INDEX `ct_contract_tracks_option_symbol_working_uniq` — class is structurally impossible (Tenet 15). Saturday-night audit 2026-05-02 ~01:30 UTC sampled 3,000 of 3,465 WORKING tracks: zero duplicates. See `docs/decisions/2026-05-02-punchlist-staleness-archive.md` Item 3.
 
 ---
 
@@ -878,15 +830,9 @@ v2 prompts shipped this morning have hard-gated bias audit + 3:3:1 few-shot. Dir
 ### 9. Bear-side signature class corpus growth
 After the directionInference fix, corpus has 37 `aggressive_ask_put` (bearish) classes, all with hit_rate 0-4% historically because the recent regime has been bullish. As bearish moves materialize, those classes will accumulate winners and signature_v1 will start firing bearish.
 
-### 10. Ct_signature_alarm_log → ct_flags 1:1 audit ⚠ DIAGNOSTIC RUN 2026-04-28 evening — gap confirmed
-Some flag rows may not have matching alarm_log entries (and vice versa) — would explain occasional grader misses. Worth a Sunday SQL audit.
+### 10. ~~Ct_signature_alarm_log → ct_flags 1:1 audit~~ — **ARCHIVED 2026-05-02 (STALE — needs archeology)**
 
-**Diagnostic finding (read-only, last 7d):**
-- ct_flags signature_alarm rows: **733**
-- ct_signature_alarm_log entries: **610**
-- **Gap: 123 flags without an alarm log entry (16.8%)**
-
-123 missing alarm log rows means 16.8% of signature_alarm flags have no provenance row in the log table. That's enough to explain the periodic "flag exists but grader can't find lineage" misses. Not fixed tonight — needs Sunday SQL audit to determine: (a) which fired path skips the log write, (b) whether the gap is a cron timing race (flag written before log row commits) or a logic gap (no log write call on that code path), (c) backfill rule for missing rows. **Fix is structural — find the path that doesn't write the log row, add the write, audit class becomes impossible.**
+2026-04-28 diagnostic claimed 733 flags vs 610 alarm-log entries (gap = "missing alarm logs"). 2026-05-02 audit re-ran the count: **1,151 alarms vs 1,399 flags — gap is in the *opposite* direction**. At least three possible gap shapes (1 alarm → many flags / alarms missing flag-write / non-alarm-path writers tagging signature_alarm); current diagnostic doesn't distinguish between them. Fixing without knowing the shape would be guessing. See `docs/decisions/2026-05-02-punchlist-staleness-archive.md` Item 4. Re-trigger: re-run counts, identify gap shape via alarm-to-flag join, *then* fix specific path. Tag `[needs-archeology]` if it returns.
 
 ### 11b. ct_compute_gamma_flip last-resort fallback picks bad strikes ✅ SHIPPED 2026-04-28 evening (commit `d0973cc`)
 **Symptom:** Sometimes returns far-OTM strike (NVDA showed 1.5 with spot 213, QQQ 451 with spot 658). Happens when sign-change scan finds no crossing in the meaningful-strikes window, or when spot is null (QQQ). The function falls back to "smallest |net_gex| across all strikes" which on sparse gex chains picks a thin OTM tail.
