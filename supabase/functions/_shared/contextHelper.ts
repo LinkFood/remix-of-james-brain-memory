@@ -226,7 +226,8 @@ export type HelperName =
   | 'hypotheses'
   | 'claude_trades'
   | 'analogs'
-  | 'specialist_recall';
+  | 'specialist_recall'
+  | 'regime';
 
 /**
  * Top-level brain options. Consumers pass this to `buildClaudeContext`.
