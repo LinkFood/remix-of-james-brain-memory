@@ -373,6 +373,85 @@ Class lesson: **audit-first applies to brief-level too.** When data
 shape contradicts the brief's premise, surface it BEFORE writing code,
 not after. The brief itself is a hypothesis to be tested.
 
+## #9 Detector Lifecycle Phase B — SHIPPED
+
+Migrations + edge fn + cron + warden invariant landed 2026-05-02
+~03:00 UTC. First fire verified successful.
+
+### Components
+
+- `20260502020000_ct_detector_scoreboard.sql` — `ct_detector_scoreboard`
+  (append-only snapshot per detector per run) + `ct_detector_lifecycle_state`
+  (single row per detector, K-gate streak tracking) + RPC
+  `ct_detector_outcome_stats(p_since_days)` returning composite hit
+  rate (wins + 0.5*partials)/n_graded + 10 ct_config keys for thresholds
+  + K stability gate.
+- `supabase/functions/ct-detector-scoreboard-update/index.ts` — calls
+  RPC at 7d + 30d windows, computes proposed_status against config
+  thresholds, upserts scoreboard snapshot + lifecycle state, applies
+  flip when streak >= K AND proposed != current. Slack one-shot per
+  flip via existing `ctSlackPushDirect` pattern.
+- `20260502020100_ct_detector_scoreboard_cron.sql` — three cron
+  schedules: `*/30 13-20 * * 1-5` RTH weekdays + `0 0-12,21-23 * * 1-5`
+  off-hours weekdays + `0 * * * 0,6` weekends.
+- `20260502020200_warden_detector_scoreboard_freshness.sql` — invariant
+  warns if no scoreboard snapshot in last 90 min RTH (via 120 min cap
+  to cover off-hours).
+
+### K=4 stability gate rationale
+
+`ct_config['detector.lifecycle.stability_runs'] = 4`.
+
+The gate requires `proposed_status` to hold across 4 consecutive cron
+runs before flipping `ct_detectors.status`. At RTH cadence (`*/30`),
+that's ~2 hours of stability minimum. The reasoning:
+
+- **Single-run flip = noise risk.** A burst of partials in a 5-minute
+  window can shove `hr_v3` across a threshold; without the gate, a
+  detector would flip status on each cron, then flip back. Slack
+  discipline destroyed.
+- **K=4 ≈ 2 hours of stability.** Long enough that a transient hot
+  streak doesn't trigger promotion; short enough that genuine signal
+  reaches actionable status within a half-day.
+- **Configurable per Tenet 16.** Future tuning: raise K if Slack noise
+  matters; lower K if promotions feel too sluggish.
+- **Streak resets on flip.** Post-flip streak goes to 0 — new
+  equilibrium baseline. Prevents oscillation where a freshly-promoted
+  detector's hr_v3 immediately recalculates against the new gate and
+  flips back.
+
+### First fire results (2026-05-02 ~03:00 UTC)
+
+14 lifecycle state rows created. 3 promotions PROPOSED, none EXECUTED
+(all streak=1, K=4 not reached):
+
+- `unusual_oi_v1`: shadow → live (leapfrog: n=320, hr_v3=43%, clears
+  trial→live floor)
+- `smart_money_repeat_v1`: shadow → trial (n=105, hr_v3=68% top of
+  portfolio)
+- `whale_v1`: shadow → trial (n=143, hr_v3=46%; note n is 7 below
+  the 150 floor for trial→live, so it stops at trial)
+
+11 detectors stable (signature_v1, cluster_default, cluster_slow_stacker,
+specialist_flag stay at current; 7 shadow-status hold).
+
+Per-detector flips will execute over the next ~2 hours of cron runs
+IF the proposed_status holds. If a detector's hr_v3 fluctuates,
+streak resets and the flip is delayed. Slack will fire on each actual
+flip at the moment of `ct_detectors.status` UPDATE.
+
+### Operational reference
+
+- Source-of-truth UI query (until /detectors page lands Mon-Tue):
+  `SELECT detector_id, current_status, proposed_status, proposed_streak,
+   last_flip_at FROM ct_detector_lifecycle_state ORDER BY detector_id;`
+- Warden alarm state already wired — `detector_scoreboard_freshness`
+  joins the existing 18 invariants.
+- Manual force-fire: `SELECT public.invoke_edge_function(
+   'ct-detector-scoreboard-update', '{}'::jsonb);`
+- Disable lifecycle Slack: `UPDATE ct_config SET value='false'::jsonb
+  WHERE key='detector.lifecycle.slack_enabled';`
+
 ## Pending — Q4 bias inventory (7 active rows)
 
 Full row contents persisted here so they survive session boundaries.

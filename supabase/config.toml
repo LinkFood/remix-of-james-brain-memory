@@ -458,3 +458,6 @@ verify_jwt = false
 
 [functions.ct-system-warden]
 verify_jwt = false
+
+[functions.ct-detector-scoreboard-update]
+verify_jwt = false
