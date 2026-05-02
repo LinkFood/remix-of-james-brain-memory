@@ -224,34 +224,6 @@ async function updatePatternSafe(
   }
 }
 
-async function writeSpecialistMemorySafe(
-  supabase: SupabaseClient,
-  flag: FlagRow,
-  outcome: Outcome,
-  alphaPct: number | null,
-): Promise<void> {
-  if (!flag.specialist_ticker) return;
-  try {
-    const alphaStr = alphaPct === null ? 'n/a' : alphaPct.toFixed(2);
-    const optSym = flag.option_symbol ?? flag.instrument;
-    const summary = `${flag.direction} ${optSym} @ score ${flag.score} → ${outcome} (alpha ${alphaStr}%)`;
-    const importance = outcome === 'win' ? 8 : outcome === 'loss' ? 7 : 5;
-
-    const { error } = await supabase
-      .from('ct_specialist_memory')
-      .insert({
-        specialist_ticker: flag.specialist_ticker,
-        flag_id: flag.id,
-        memory_type: 'graded_flag',
-        summary,
-        importance,
-      });
-    if (error) console.warn(`[ct-flag-grader] memory write ${flag.id}: ${error.message}`);
-  } catch (e) {
-    console.warn(`[ct-flag-grader] memory write threw: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Contract-track lookup — closest track for option_symbol around print_time
 // nearest to flag.created_at. Returns peak/drawdown fractions (0.5 = +50%).
@@ -424,11 +396,14 @@ async function gradeExpiredFlags(
         errors.push(`flag update ${row.id}: ${updErr.message.slice(0, 200)}`);
       }
 
-      // Pattern + memory writes only fire for specialist flags — they're the
-      // only source whose signatures aggregate into ct_flag_patterns.
+      // Pattern updates only fire for specialist flags — they're the only
+      // source whose signatures aggregate into ct_flag_patterns. NOTE: do NOT
+      // write to ct_specialist_memory — that table is dead-by-design in v2.
+      // The specialist recall organ sources from ct_specialist_reads +
+      // ct_flag_grades. Reactivating the writer fires the
+      // `specialist_memory_table_dead` warden invariant.
       if (row.source === 'specialist') {
         await updatePatternSafe(supabase, row.id, outcome, alphaPct);
-        await writeSpecialistMemorySafe(supabase, row, outcome, alphaPct);
       }
 
       graded += 1;
