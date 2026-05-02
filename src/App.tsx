@@ -35,6 +35,7 @@ import Flags from "./pages/Flags";
 import Tape from "./pages/Tape";
 import TapeReader from "./pages/TapeReader";
 import Specialists from "./pages/Specialists";
+import Detectors from "./pages/Detectors";
 import CostDashboard from "./pages/CostDashboard";
 import Patterns from "./pages/Patterns";
 import Budget from "./pages/Budget";
@@ -87,6 +88,7 @@ const TrackedRoutes = () => {
       <Route path="/tape" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/tape"><Tape /></RouteBoundary></AuthLayout>} />
       <Route path="/tape-reader" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/tape-reader"><TapeReader /></RouteBoundary></AuthLayout>} />
       <Route path="/specialists" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/specialists"><Specialists /></RouteBoundary></AuthLayout>} />
+      <Route path="/detectors" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/detectors"><Detectors /></RouteBoundary></AuthLayout>} />
       <Route path="/cost" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/cost"><CostDashboard /></RouteBoundary></AuthLayout>} />
       <Route path="/patterns" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/patterns"><Patterns /></RouteBoundary></AuthLayout>} />
       <Route path="/budget" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/budget"><Budget /></RouteBoundary></AuthLayout>} />

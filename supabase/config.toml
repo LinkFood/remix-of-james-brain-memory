@@ -461,3 +461,6 @@ verify_jwt = false
 
 [functions.ct-detector-scoreboard-update]
 verify_jwt = false
+
+[functions.ct-eod-specialist-narrative]
+verify_jwt = false

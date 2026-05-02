@@ -603,6 +603,37 @@ or `text[]` — check schema before running.)
 (both numbers are healthy fire rates), James can mark P2 #10 stale
 and remove from the punch list rather than disambiguate.
 
+## EOD per-specialist daily grade narrative — SHIPPED 2026-05-02 ~04:00 UTC
+
+New consumer `ct-eod-specialist-narrative` writes one row per
+(session_date, ticker) to `ct_eod_specialist_narratives`. Sonnet
+generates 2-3 paragraph per-ticker recap covering:
+- specialist reads (lean trajectory, conviction shifts) from `ct_specialist_reads`
+- flag fires today + grade outcomes (DTE-bucketed) from `ct_flags` + `ct_flag_grades`
+- regime context via `buildClaudeContext` audience='cotrader' tickerFocus=ticker
+
+Concurrency-limited at 3 parallel tickers (Sonnet spend control).
+
+**Phase C verify** (NVDA, SPY, QQQ on 2026-05-01):
+- 3 narratives stored, no validator-warning failures
+- Cost ~$0.09 per ticker → ~$0.90/day for full 10-ticker watchlist
+- Brain organs invoked: flow_heatmap, pulse, news_causality, event_recency, tape
+
+**Phase D cron deployed** — `30 21 * * 1-5` (4:30 PM ET weekdays after EOD grade-pass).
+
+C1-safe: read-only consumer downstream of specialist context, doesn't
+modify the recall organ or any specialist prompt surface.
+
+## /detectors UI page — SHIPPED 2026-05-02 ~04:00 UTC
+
+New read-only page at `/detectors` reads `ct_detector_scoreboard` + `ct_detector_lifecycle_state`.
+Per-detector table: current_status, proposed_status, stability_streak, n_graded,
+hr_30d, hr_7d, w/l streak, last refresh. Pending flips (proposed ≠ current AND streak < K=4)
+highlighted with countdown to flip.
+
+Auto-refetch 30s. Pure UI mode per Tenet 26 — no actions, no mutations.
+Surfaced in TopNav Trade group + Command Palette.
+
 ### P2 #10 — REMOVED-AS-STALE 2026-05-02 ~03:30 UTC
 
 The reproducibility probe ran on all 3 candidate shapes (A/B/C). Result:

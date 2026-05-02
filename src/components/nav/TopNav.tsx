@@ -73,6 +73,7 @@ const NAV_GROUPS: NavGroup[] = [
       { path: '/heatmap', label: 'Heatmap' },
       { path: '/pulse', label: 'Pulse' },
       { path: '/specialists', label: 'Specialists' },
+      { path: '/detectors', label: 'Detectors' },
     ],
   },
   {

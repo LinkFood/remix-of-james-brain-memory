@@ -57,6 +57,7 @@ const ROUTES: RouteEntry[] = [
   { path: '/',             label: 'Flags',          group: 'Trade' },
   { path: '/pulse',        label: 'Pulse',          group: 'Trade' },
   { path: '/specialists',  label: 'Specialists',    group: 'Trade' },
+  { path: '/detectors',    label: 'Detectors',      group: 'Trade' },
   // Review
   { path: '/edge',         label: 'Edge',           group: 'Review' },
   { path: '/patterns',     label: 'Patterns',       group: 'Review' },
