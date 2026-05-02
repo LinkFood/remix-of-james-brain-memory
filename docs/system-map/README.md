@@ -12,14 +12,16 @@ reads what / what's orphaned, **start here.**
 
 | Surface | Count | Status |
 |---|---|---|
-| Edge functions | 163 | Audited — see `edge-functions.md` |
-| Migrations | 419 | Distinct tables: 68 |
-| Tables | 68 | Audited — see `tables.md` |
-| Live crons (cron.job) | 221 | 124 ct-* + 97 jac-* / shared |
-| Brain organs | 10 | (+2 infrastructure files) |
-| Warden invariants | 19 | All passing 2026-05-02 |
-| UI pages | 33 | Audited — see `ui-surfaces.md` |
-| UI hooks | 105 | 34 currently unimported |
+| Edge functions | 165 | +ct-regime-capture, +ct-specialist-prompt-lifecycle-v2 (2026-05-02 v2 build) |
+| Migrations | 428 | Distinct tables: 77 |
+| Tables | 77 | +9 from 2026-05-02 v2 build (5 regime + 4 specialist v2) — see `2026-05-02-v2-amendment.md` |
+| Live crons (cron.job) | 224 | +3 from v2 (regime-capture-rth/offhours, specialist-score-v2-nightly) |
+| Brain organs | 11 | +regime; specialist_recall extended |
+| Warden invariants | 26 | +7 from 2026-05-02 v2 build. All 26 passing post-build. |
+| UI pages | 33 | Pulse rebuilt, Specialists extended |
+| UI hooks | 107 | +useRegimeState, +useSpecialistScoreboardV2 |
+
+> 📎 **2026-05-02 v2 amendment:** see [`2026-05-02-v2-amendment.md`](./2026-05-02-v2-amendment.md) for the diff Pulse v2 + Specialist Scoreboard v2 contributed to this map.
 
 ## Files
 
