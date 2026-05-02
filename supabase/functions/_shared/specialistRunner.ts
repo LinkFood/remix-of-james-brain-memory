@@ -33,6 +33,7 @@ import {
 import { readPulseContext } from './pulseContext.ts';
 import { getTemporalContext, tagIsoTimestamp } from './temporalContext.ts';
 import { validateTemporalCoherence } from './temporalValidator.ts';
+import { validateTickerCoherence } from './tickerCoherenceValidator.ts';
 import { buildClaudeContext } from './claudeReadSurface.ts';
 import type {
   FlowHeatmapResult,
@@ -187,6 +188,11 @@ function formatRecallEntry(e: RecallEntry, nowMs: number): string {
   return `- ${age} ${lean} ${conviction} · ${label} → ${e.outcome}${alphaStr}`;
 }
 
+function pct(v: number | null | undefined): string {
+  if (v == null || !Number.isFinite(v)) return 'n/a';
+  return `${Math.round(v * 100)}%`;
+}
+
 function formatStatsLine(stats: RecallStats): string {
   if (stats.flagged_total === 0) {
     return 'Stats: 0 flagged · no track record yet.';
@@ -204,16 +210,59 @@ function formatStatsLine(stats: RecallStats): string {
   );
 }
 
+/**
+ * v2 enrichment lines for the recall block. Terse — Claude consumers don't
+ * need essays. Each block is one line; missing sources are omitted (no fake
+ * "n/a" rows). Returns [] when no v2 fields populated.
+ */
+function formatV2EnrichmentLines(stats: RecallStats): string[] {
+  const lines: string[] = [];
+
+  const ma = stats.multi_axis_stats;
+  if (ma) {
+    lines.push(
+      `Multi-axis: premium ${pct(ma.hit_rate_premium)} / 4h ${pct(ma.hit_rate_underlying_4h)} / 1d ${pct(ma.hit_rate_underlying_1d)} / 3d ${pct(ma.hit_rate_underlying_3d)} / blended ${pct(ma.hit_rate_blended)} (n=${ma.n_graded} graded)`,
+    );
+    if (ma.drift_slope_7d != null && Number.isFinite(ma.drift_slope_7d)) {
+      const sign = ma.drift_slope_7d >= 0 ? '+' : '';
+      lines.push(`Drift ${sign}${ma.drift_slope_7d.toFixed(1)}pp/wk over 30d`);
+    }
+  }
+
+  if (stats.regime_conditional && stats.regime_conditional.length > 0) {
+    const parts = stats.regime_conditional.map(
+      (r) => `${r.regime} ${pct(r.hit_rate_blended)} (n=${r.n_graded})`,
+    );
+    lines.push(`Regime-cond: ${parts.join(', ')}`);
+  }
+
+  if (stats.conviction_calibration_curve && stats.conviction_calibration_curve.length > 0) {
+    const parts = stats.conviction_calibration_curve.map(
+      (c) => `${c.bucket} ${pct(c.hit_rate)} (${c.is_per_specialist ? 'per' : 'cross'})`,
+    );
+    lines.push(`Conviction: ${parts.join(', ')}`);
+  }
+
+  const lc = stats.lifecycle;
+  if (lc) {
+    lines.push(`Lifecycle: ${lc.prompt_version} ${lc.status.toUpperCase()} · current ${pct(lc.hit_rate_current)}`);
+  }
+
+  return lines;
+}
+
 function formatRecallBlock(ticker: string, recall: SpecialistRecallResult): string {
   if (recall.reads.length === 0) {
     return `[YOUR LAST READS ON ${ticker}]\n(no prior reads in window — fresh ticker or fresh week.)\n\n`;
   }
   const nowMs = Date.now();
   const lines = recall.reads.map((e) => formatRecallEntry(e, nowMs));
+  const v2Lines = formatV2EnrichmentLines(recall.stats);
   return [
     `[YOUR LAST READS ON ${ticker} — facts. Quote verbatim if referenced; do not restate with different numbers.`,
     `STREAK IS PROVENANCE, NOT SIGNAL. If you have been bearish 3 fires in a row, that does not make this fire bearish — let current flow + state drive lean. Streak only tells you to inspect whether you are right or are repeating yourself.]`,
     formatStatsLine(recall.stats),
+    ...v2Lines,
     '',
     ...lines,
     '',
@@ -1388,6 +1437,41 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
     contradictions: validatorContradictions,
   };
 
+  // 15c. Ticker-coherence validator (best-effort). Catches the data-fabrication
+  // hallucination class — specialists naming tickers outside the watchlist or
+  // outside the supplied context. Mirrors the ct-chat wiring (commit 54ccaaf).
+  // Same persistence pattern as temporal: warnings ride along on each
+  // recordDecision context_snapshot below as ticker_validator_warnings.
+  // No new column needed on ct_specialist_reads — the decision journal is the
+  // canonical write target for specialist post-Claude validators.
+  let tickerValidatorWarnings: {
+    ok: boolean;
+    warning_count: number;
+    warnings: Array<{ ticker?: string; quote: string; issue: string; severity: string }>;
+  } = { ok: true, warning_count: 0, warnings: [] };
+  if (narrativeForValidation) {
+    try {
+      const tcr = await validateTickerCoherence(narrativeForValidation, ctx);
+      tickerValidatorWarnings = {
+        ok: tcr.ok,
+        warning_count: tcr.warnings.length,
+        warnings: tcr.warnings.map(w => ({
+          quote: w.quote,
+          issue: w.issue,
+          severity: w.severity,
+        })),
+      };
+      if (!tcr.ok && tcr.warnings.length > 0) {
+        console.warn(
+          `[specialistRunner] ${ticker} ticker_coherence flagged ${tcr.warnings.length} off-universe mention(s):`,
+          tcr.warnings.map(w => w.issue).join(' | '),
+        );
+      }
+    } catch (e) {
+      console.warn(`[specialistRunner] ${ticker} ticker_coherence threw (non-blocking):`, String(e));
+    }
+  }
+
   // 16. Insert flags.
   // ct_scored_flow.id is bigint; ct_flags.source_flow_ids is BIGINT[] (retyped
   // in migration 20260423000035). Keep numeric — don't coerce to string.
@@ -1422,6 +1506,7 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
         brain_consumer: `ct-specialist-${ticker.toLowerCase()}`,
         brain_organs_invoked: Object.keys(ctx.organs ?? {}),
         temporal_validator_warnings: temporalValidatorWarnings,
+        ticker_validator_warnings: tickerValidatorWarnings,
       },
       tokens_in: tokensIn,
       tokens_out: tokensOut,
@@ -1555,6 +1640,7 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
         brain_consumer: `ct-specialist-${ticker.toLowerCase()}`,
         brain_organs_invoked: Object.keys(ctx.organs ?? {}),
         temporal_validator_warnings: temporalValidatorWarnings,
+        ticker_validator_warnings: tickerValidatorWarnings,
       },
       tokens_in: tokensIn,
       tokens_out: tokensOut,

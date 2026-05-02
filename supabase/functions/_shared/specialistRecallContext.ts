@@ -60,9 +60,17 @@ import type {
   HelperDescription,
   AudienceMode,
 } from './contextHelper.ts';
+import {
+  fetchV2Enrichment,
+  type ConvictionCurveRow,
+  type LifecycleRow,
+  type MultiAxisStats,
+  type RegimeConditionalRow,
+  type V2EnrichmentResult,
+} from './specialistRecallV2.ts';
 
 const HELPER_NAME = 'specialist_recall';
-const HELPER_VERSION = 'v1';
+const HELPER_VERSION = 'v2';
 
 const FLAGGED_CAP = 5;
 const UNFLAGGED_CAP = 5;
@@ -103,6 +111,33 @@ export interface RecallStats {
   hit_rate_when_graded: number | null;
   current_streak_kind: 'win' | 'loss' | 'mixed' | 'none';
   current_streak_length: number;
+
+  // ---- v2 enrichment (all optional — older callers keep working) -----------
+  /**
+   * Multi-axis stats from ct_specialist_scoreboard_v2 WHERE regime='all' AND
+   * window_label='lifetime'. Premium = option-price P&L; underlying_*=spot
+   * move at horizon. Blended = combined verdict. Drift slope = pp/week of
+   * rolling 7d hit_rate over last 30d. undefined when v2 row missing.
+   */
+  multi_axis_stats?: MultiAxisStats;
+  /**
+   * Top regime-conditional rows for this specialist, ordered by sample size
+   * (n_graded DESC), capped at REGIME_COND_LIMIT. Empty array when v2 has no
+   * regime-specific rows yet.
+   */
+  regime_conditional?: RegimeConditionalRow[];
+  /**
+   * Conviction-bucket calibration. Per-specialist when N ≥ config-driven
+   * threshold (default 30); else falls back to cross-specialist '__ALL__'
+   * row. is_per_specialist flags which source was used per bucket. Empty
+   * array when neither source has data.
+   */
+  conviction_calibration_curve?: ConvictionCurveRow[];
+  /**
+   * Live prompt-version lifecycle row from ct_specialist_prompt_lifecycle.
+   * Picks status='live' (most active version). undefined when no live row.
+   */
+  lifecycle?: LifecycleRow;
 }
 
 export interface SpecialistRecallResult {
@@ -276,6 +311,12 @@ export async function getSpecialistRecallContext(
       .order('updated_at', { ascending: false })
       .limit(UNFLAGGED_CAP);
 
+    // v2 enrichment runs in parallel with the existing recall reads. It is
+    // best-effort — if the v2 tables are empty / missing / 4xx, the recall
+    // organ still returns its v1 shape unchanged. Per-helper warnings surface
+    // via meta.warning when the v2 layer was expected but came back blank.
+    const v2EnrichmentP = fetchV2Enrichment(supabase, ticker);
+
     const [flaggedRes, unflaggedRes] = await Promise.all([flaggedQ, unflaggedQ]);
 
     if (flaggedRes.error) {
@@ -289,6 +330,9 @@ export async function getSpecialistRecallContext(
     const unflaggedRows = (unflaggedRes.data ?? []) as RawRead[];
 
     if (flaggedRows.length === 0 && unflaggedRows.length === 0) {
+      // No v1 history. Still await v2 to avoid orphaned promise; result is
+      // discarded since stats stay empty.
+      v2EnrichmentP.catch(() => undefined);
       return emptyResult(startedAt, ticker, 'no_history');
     }
 
@@ -352,7 +396,26 @@ export async function getSpecialistRecallContext(
       (a, b) => Date.parse(b.ts) - Date.parse(a.ts),
     );
 
-    const stats = computeStats(reads);
+    const baseStats = computeStats(reads);
+
+    // Resolve the v2 enrichment that's been racing alongside.
+    let v2: V2EnrichmentResult = {};
+    try {
+      v2 = await v2EnrichmentP;
+    } catch (e) {
+      // Defensive — fetchV2Enrichment is already fail-soft, but a thrown
+      // promise here must never crash the recall organ.
+      const msg = e instanceof Error ? e.message : String(e);
+      v2 = { warning: `v2_threw:${msg}` };
+    }
+
+    const stats: RecallStats = {
+      ...baseStats,
+      ...(v2.multi_axis_stats ? { multi_axis_stats: v2.multi_axis_stats } : {}),
+      ...(v2.regime_conditional ? { regime_conditional: v2.regime_conditional } : {}),
+      ...(v2.conviction_calibration_curve ? { conviction_calibration_curve: v2.conviction_calibration_curve } : {}),
+      ...(v2.lifecycle ? { lifecycle: v2.lifecycle } : {}),
+    };
 
     return {
       data: {
@@ -369,6 +432,7 @@ export async function getSpecialistRecallContext(
         cacheHit: false,
         latencyMs: Date.now() - startedAt,
         truncated: false,
+        ...(v2.warning ? { warning: v2.warning } : {}),
       },
     };
   } catch (e) {
@@ -418,8 +482,13 @@ const specialistRecallHelper: ContextHelper<SpecialistRecallResult> = {
         'from ct_flag_grades) plus last 5 unflagged-with-conviction≥50 reads ' +
         'within 5 days. Each entry carries ts, lean, conviction, flag_label, ' +
         'and outcome (win/loss/partial/pending/unflagged). Stats include ' +
-        'hit_rate_when_graded and current_streak_kind+length. Requires ' +
-        'opts.tickerFocus — recall is per-entity. cotrader audience only.',
+        'hit_rate_when_graded and current_streak_kind+length. v2 enrichment ' +
+        '(optional, best-effort): multi_axis_stats (premium / 4h / 1d / 3d / ' +
+        'blended hit rates + drift slope), regime_conditional (top-5 by sample ' +
+        'size), conviction_calibration_curve (per-specialist when N≥config; ' +
+        'cross-specialist __ALL__ fallback), lifecycle (live prompt_version + ' +
+        'status). Requires opts.tickerFocus — recall is per-entity. cotrader ' +
+        'audience only.',
       exampleResult: {
         ticker: 'NVDA',
         reads: [
