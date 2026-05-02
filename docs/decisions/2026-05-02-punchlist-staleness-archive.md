@@ -6,7 +6,10 @@
 
 ## Context
 
-The Co-Trader playbook punchlist accumulated four items added pre-2026-05-02 that, on a Saturday-night relevance audit, no longer survive scrutiny. The system's empirical evolution (detector lifecycle, Specialist Scoreboard v2, the 2026-04-28 UNIQUE INDEX, Saturday's audit findings) has either superseded, resolved, or invalidated the original framing of each item.
+The Co-Trader playbook punchlist accumulated five items added pre-2026-05-02 that, on relevance audit, no longer survive scrutiny. The system's empirical evolution (detector lifecycle, Specialist Scoreboard v2, the 2026-04-28 UNIQUE INDEX, the 2026-04-30 OI per-ticker quota fix, Saturday's audit findings) has either superseded, resolved, or invalidated the original framing of each item.
+
+**Items 1–4** archived 2026-05-02 ~01:30 UTC during the late-Saturday session.
+**Item 5 (LB6)** archived 2026-05-02 ~12:30 UTC during the Saturday-morning sweep — its premise was caught false during Phase A audit BEFORE any UW spend.
 
 Per Tenets 14 and 25 ("built to evolve, not to be right on day 1" / "evolves in STRUCTURE, not just within structure"), punchlist items are theory at insertion time. Architecture lands → the theory needs re-checking. This is that audit.
 
@@ -138,11 +141,69 @@ Tag this as `[needs-archeology]` if it returns to a punch list.
 
 ---
 
+## Item 5 — LB6. OvernightPositioning historical gap (Saturday-morning sweep)
+
+**Status: ARCHIVED — RESOLVED**
+
+### Original framing
+- Surfaced 2026-04-30 ~14:30 ET. UW rate-limited the OI snapshot fn for 12+ days, leaving 4 watchlist tickers with stale `ct_oi_snapshots`:
+  - MSFT, GOOGL, META — last good snap 2026-04-28
+  - AMZN — last good snap 2026-04-24
+- Proposed Saturday backfill: ~14 ticker-day UW calls (3 sessions × 3 tickers + 5 sessions × AMZN) to close the historical gap so `ct_top_oi_shifts` would render all 10 watchlist tickers.
+- Estimated cost: 14–30 UW calls.
+
+### Why obsolete (RESOLVED)
+
+Phase A audit at 2026-05-02 ~12:30 UTC found the gap was already structurally closed:
+
+- **The 2026-04-30 per-ticker quota migration** (`20260430183000_top_oi_shifts_per_ticker_quota.sql`) shipped a per-ticker `LIMIT N` (default 5) on the `ct_top_oi_shifts` RPC. The original symptom — 6/10 tickers visible in OvernightPositioning — was caused by NVDA/TSLA's high-OI contracts crowding out lower-OI tickers in the global LIMIT, not by missing snapshots.
+- **Live data on 2026-05-01:** all 4 "stuck" tickers have substantive OI snapshot rows with valid `oi_delta_1d`:
+  - META: 78 rows, $2.95B at risk on top contract
+  - GOOGL: 87 rows, $1.83B at risk
+  - MSFT: 22 rows, $1.82B at risk
+  - AMZN: 50 rows, $0.41B at risk
+- **The OvernightPositioning component** iterates the full WATCHLIST array on render — every ticker gets a row with the "no significant overnight positioning" stub when 0 shifts. Panel renders 10/10.
+
+### Architecturally what handles this need now
+
+`ct_top_oi_shifts(p_limit, p_ticker, p_per_ticker_limit)` RPC with the per-ticker quota. The presentation layer iterates WATCHLIST so empty-result tickers render gracefully.
+
+### Bonus methodology finding
+
+The proposed backfill body shape (`{"ticker": "MSFT", "session_date": "2026-04-29"}`) would have silently failed regardless: `ct-oi-backfill-historical/index.ts` is hardcoded to today + yesterday and accepts only `{ limit?, tickers? }`. Captured separately in `docs/decisions/2026-05-02-oi-backfill-historical-parameterization.md` as a future-improvement.
+
+### What to do if symptom recurs
+
+If `/tape` OvernightPositioning panel ever renders <10 tickers again:
+1. Re-verify ground truth FIRST — query `ct_top_oi_shifts(100, NULL, 5)` for the missing ticker. If rows exist there, the gap is in presentation, not data.
+2. If rows don't exist for a missing ticker → check `ct_oi_snapshots` for that ticker × recent dates. Confirm snapshots actually missing before proposing backfill.
+3. Only after ground truth confirms a real data gap, decide on backfill — and parameterize `ct-oi-backfill-historical` properly first (see related decision doc).
+
+---
+
 ## Aggregate impact
 
-- **4 items removed** from `docs/LINKJAC_COTRADER_PLAYBOOK.md` punchlist.
-- **~5–15K UW calls saved** by archiving Item 1.
+- **5 items removed** from `docs/LINKJAC_COTRADER_PLAYBOOK.md` punchlist.
+- **~5–15K UW calls saved** by archiving Item 1; **~14–30 UW calls saved** by archiving Item 5 (LB6).
 - **Pattern formalized** as `docs/runbooks/punchlist_staleness.md` so future audits run on cadence rather than ad-hoc.
+
+---
+
+## Methodology footnote — Cowork mis-flagging (2026-05-02 morning)
+
+In the Saturday-morning Track 2 review, `ct-regime-watch` was framed as a "bonus edge function shipped overnight not in the original brief." That framing was wrong:
+
+- **Actual git history:** added 2026-04-17 (commit `14adaa6`), wave 30 refinement 2026-04-30 (`f4a23b8`).
+- **Actual system-map state:** `ct-regime-watch` was already correctly listed as the producer of `ct_regime_inversions` at `docs/system-map/edge-functions.md:113` since the 2026-05-01 system-map regen.
+
+What was actually missing was warden coverage — the function wasn't in `ct_growth_crons`. Closed via migration `20260502050000_warden_growth_cron_allow_empty.sql` (with a new `allow_empty` column for event-driven crons whose target tables can legitimately stay empty).
+
+**Methodology lesson** for future "shipped overnight" framings:
+1. Run `git log --all --oneline -- <file>` before assuming novelty.
+2. Grep `docs/system-map/` for the entity in question — if the system-map already documents it, the framing is wrong.
+3. The actual gap is usually narrower than first stated. (Here: warden coverage, not orphan-producer.)
+
+Cost of the misframing: ~5 minutes of redundant audit time. Cost without the verification step would have been a needless revert. Audit-first discipline catches this class of error too.
 
 ## Related
 - `docs/decisions/2026-05-02-saturday-night-audit-results.md` — source of the audit numbers used here.

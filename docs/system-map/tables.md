@@ -52,6 +52,7 @@ Count: 50
 | `ct_print_tracks` | 17647 | `ct-print-grader` | - | - | ct-edge-miner, ct-print-grader | - | - | LIVE |
 | `ct_pulse_events` | 620 | - | - | `20260423000018_ct_pulse`, `20260423000021_dp_scrub_pass1` +1 | - | - | - | DORMANT (rows but no live producer in code) |
 | `ct_pulse_timeline` | 7280 | - | - | `20260423000018_ct_pulse`, `20260423000019_ct_pulse_refresh_fix` +1 | - | - | - | DORMANT (rows but no live producer in code) |
+| `ct_regime_inversions` | 0 | `ct-regime-watch` | - | `20260418000008_regime_inversions` | ct-slack-digest | useRegimeInversions | - | EVENT-DRIVEN (event-only writes — empty during stable regimes is normal). Warden coverage via `allow_empty=true` row in `ct_growth_crons` (2026-05-02 amendment). |
 | `ct_scored_flow` | 18309 | - | - | `20260423000027_v2_flow_scoring`, `20260424000003_v2_score_flow_alerts_fix` +4 | _shared, ct-eod-report, ct-eod-summary, ct-oi-backfill-historical, ct-oi-snapshot, ct-slack-digest, +2 | - | - | DORMANT (rows but no live producer in code) |
 | `ct_signature_alarm_log` | 1151 | `ct-signature-watcher` | - | `20260428145000_signature_watcher_score_f`, `20260428162000_backfill_zero_score_flags` +1 | ct-signature-watcher | - | - | LIVE |
 | `ct_signature_alarm_state` | 1 | `ct-signature-watcher` | - | `20260426000050_signature_alarm_state` | ct-signature-watcher | - | - | DORMANT-LOW (few rows) |
