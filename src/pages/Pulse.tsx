@@ -1,466 +1,696 @@
 /**
- * /pulse — per-ticker weighted signal score across today's session.
+ * /pulse — Pulse v2 regime view.
  *
- * Each tile shows:
- *   - Current net score (green/red)
- *   - 15m slope
- *   - Sparkline of the score through the session
- *   - Dollar-volume bar (bull vs bear weighted premium)
- *   - Vote breakdown by signal type (toggle-filterable)
+ * Five panels stacked top-down:
+ *   1. Market-wide tile + 10 ticker tiles (current regime grid)
+ *   2. Per-ticker raw signals table (momentum, breadth, trajectory, dispersion, duration, macro)
+ *   3. Recent transitions log (last 7 days, classification-change only, capped 50)
+ *   4. Analog frequency table (next-bucket distribution from last 30d market-wide)
+ *   5. (sub-section) v1 Pulse score timeline — kept as a collapsible footer for
+ *      continuity, the v2 page is the new primary view.
  *
- * Data flows from ct_pulse_timeline (refreshed every 5 min by ct_pulse_tick).
- * Line and breakdown render the FULL score; toggles currently filter the
- * breakdown counts only (v2 will add filter-aware line recompute on client).
+ * Backend: ct_regime_classifications + ct_regime_signals + ct_regime_history
+ * via useRegimeState. Refresh 30s; bell-cross invalidation handled globally
+ * by useMarketHoursTrigger mounted in App root.
+ *
+ * Weekend fallback: if dataAnchor > 15 min old, banner explains we're showing
+ * the last captured state and the page still renders the same panels using
+ * that anchor. ct_regime_history's append-only model means transitions/analogs
+ * are session-stable across the weekend.
+ *
+ * C1 protection: this file does not touch specialist context — it reads
+ * regime tables only. Specialist recall property unaffected.
  */
 
-import { useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
-import { supabase } from '@/integrations/supabase/client';
+import { useMemo } from 'react';
+import {
+  Activity,
+  ChevronUp,
+  ChevronDown,
+  Equal,
+  AlertTriangle,
+  Clock,
+  Calendar as CalendarIcon,
+} from 'lucide-react';
 import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
 import { cn } from '@/lib/utils';
-import { Activity, TrendingUp, RefreshCw, Target } from 'lucide-react';
-import { Area, AreaChart, ResponsiveContainer, ReferenceLine, Tooltip } from 'recharts';
-import { ChartSafe } from '@/components/ChartSafe';
+import {
+  REGIME_WATCHLIST,
+  MARKET_KEY,
+  useRegimeState,
+  classificationStyle,
+  formatClassificationLabel,
+  formatAge,
+  formatBucketTime,
+  formatBucketDate,
+  macroBadges,
+  type RegimeClassificationRow,
+  type RegimeSignalRow,
+  type RegimeConfigRow,
+  type Trajectory,
+} from '@/hooks/useRegimeState';
 
-const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
+// ---- Sub-components (file-local) -------------------------------------------
 
-const SIGNAL_TYPES = [
-  { key: 'sweep',        label: 'Sweeps',     color: '#60a5fa' },
-  // dp_cluster RETIRED 2026-04-23 (direction unreliable)
-  { key: 'news',         label: 'News',       color: '#f59e0b' },
-  { key: 'insider',      label: 'Insider',    color: '#34d399' },
-  { key: 'congress',     label: 'Congress',   color: '#f472b6' },
-  { key: 'claude_alert', label: 'Claude',     color: '#22d3ee' },
-];
-
-interface TimelineRow {
-  ticker: string;
-  bucket_ts: string;
-  score: number;
-  bull_votes: number;
-  bear_votes: number;
-  bull_weighted_usd: number;
-  bear_weighted_usd: number;
-  signals_by_type: Record<string, { n: number; bull: number; bear: number }> | null;
+function TrajectoryIcon({ trajectory }: { trajectory: Trajectory | null }) {
+  if (trajectory === 'accelerating') {
+    return <ChevronUp className="w-4 h-4 text-emerald-400" aria-label="accelerating" />;
+  }
+  if (trajectory === 'decaying') {
+    return <ChevronDown className="w-4 h-4 text-red-400" aria-label="decaying" />;
+  }
+  if (trajectory === 'steady') {
+    return <Equal className="w-4 h-4 text-amber-300" aria-label="steady" />;
+  }
+  return <span className="text-muted-foreground text-xs">—</span>;
 }
 
-interface FlagSummary {
-  id: string;
-  specialist_ticker: string;
-  direction: 'bullish' | 'bearish' | 'neutral' | string | null;
-  status: string | null;
-  score: number | null;
-  created_at: string;
-  horizon_ts: string | null;
-}
-
-function fmtUsd(n: number): string {
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
-  return `$${Math.round(n)}`;
-}
-
-function scoreColor(score: number): string {
-  if (score > 15) return '#10b981';    // emerald
-  if (score > 5)  return '#34d399';    // teal
-  if (score > -5) return '#64748b';    // slate
-  if (score > -15) return '#f87171';   // red-300
-  return '#dc2626';                     // red
-}
-
-function TickerTile({
-  ticker,
-  rows,
-  enabledTypes,
-  flags,
-}: {
-  ticker: string;
-  rows: TimelineRow[];
-  enabledTypes: Set<string>;
-  flags: FlagSummary[];
-}) {
-  const navigate = useNavigate();
-  const latest = rows[rows.length - 1];
-  const fifteenAgo = rows[Math.max(0, rows.length - 4)];
-  const slope = latest && fifteenAgo ? latest.score - fifteenAgo.score : 0;
-  const score = latest?.score ?? 0;
-  const color = scoreColor(score);
-
-  // Series for sparkline — just (bucket_ts, score) pairs
-  const series = useMemo(
-    () => rows.map((r) => ({ t: r.bucket_ts.slice(11, 16), s: r.score })),
-    [rows]
-  );
-
-  // Snap each flag's created_at to the nearest existing sparkline bucket key,
-  // so ReferenceLine x= matches an actual xKey on the AreaChart.
-  const flagMarkers = useMemo(() => {
-    if (!flags.length || !series.length) return [] as Array<{ id: string; x: string; stroke: string }>;
-    const bucketTimes = series.map((s) => s.t);
-    const keyToMs = new Map<string, number>();
-    for (const t of bucketTimes) {
-      const [hh, mm] = t.split(':').map(Number);
-      keyToMs.set(t, hh * 60 + mm);
-    }
-    return flags.map((f) => {
-      const hhmm = f.created_at.slice(11, 16);
-      const [fh, fm] = hhmm.split(':').map(Number);
-      const fMin = fh * 60 + fm;
-      // find nearest bucket key
-      let bestKey = bucketTimes[0];
-      let bestDelta = Infinity;
-      for (const [k, v] of keyToMs.entries()) {
-        const d = Math.abs(v - fMin);
-        if (d < bestDelta) { bestDelta = d; bestKey = k; }
-      }
-      const stroke =
-        f.direction === 'bullish' ? '#10b981' :
-        f.direction === 'bearish' ? '#ef4444' :
-        '#64748b';
-      return { id: f.id, x: bestKey, stroke };
-    });
-  }, [flags, series]);
-
-  const flagCounts = useMemo(() => {
-    let bull = 0, bear = 0, conviction = 0;
-    for (const f of flags) {
-      if (f.direction === 'bullish') bull++;
-      else if (f.direction === 'bearish') bear++;
-      if (f.status === 'conviction') conviction++;
-    }
-    return { bull, bear, conviction, total: flags.length };
-  }, [flags]);
-
-  // Aggregate bull/bear votes + weighted USD respecting toggles.
-  const agg = useMemo(() => {
-    let bullVotes = 0, bearVotes = 0;
-    let bullUsd = 0, bearUsd = 0;
-    const byType: Record<string, { n: number; bull: number; bear: number }> = {};
-    for (const r of rows) {
-      const sbt = r.signals_by_type ?? {};
-      for (const [t, v] of Object.entries(sbt)) {
-        if (!enabledTypes.has(t)) continue;
-        if (!byType[t]) byType[t] = { n: 0, bull: 0, bear: 0 };
-        // Use the most recent bucket's counts (they're cumulative)
-        byType[t] = v;
-      }
-    }
-    // bull/bear from latest bucket, filtered
-    for (const t of Object.keys(byType)) {
-      bullVotes += byType[t].bull;
-      bearVotes += byType[t].bear;
-    }
-    if (latest) {
-      bullUsd = Number(latest.bull_weighted_usd) || 0;
-      bearUsd = Number(latest.bear_weighted_usd) || 0;
-    }
-    return { bullVotes, bearVotes, bullUsd, bearUsd, byType };
-  }, [rows, enabledTypes, latest]);
-
-  const volTotal = agg.bullUsd + agg.bearUsd;
-  const bullPct = volTotal > 0 ? (agg.bullUsd / volTotal) * 100 : 50;
-
+function ConfidenceBar({ value }: { value: number }) {
+  const pct = Math.max(0, Math.min(100, value));
+  // Color tracks confidence — low = muted, high = solid
+  const color =
+    pct >= 70 ? 'bg-emerald-500'
+    : pct >= 50 ? 'bg-sky-500'
+    : pct >= 30 ? 'bg-amber-500'
+    : 'bg-muted';
   return (
-    <Card className="p-3 flex flex-col gap-2 hover:shadow-md transition-shadow">
-      <div className="flex items-baseline justify-between">
-        <div className="font-mono font-semibold text-base">{ticker}</div>
-        <div className="text-xs text-muted-foreground tabular-nums">
-          {slope >= 0 ? '▲' : '▼'} {slope.toFixed(2)}
-        </div>
+    <div className="flex items-center gap-1.5">
+      <div className="h-1 w-12 rounded bg-muted/40 overflow-hidden">
+        <div className={cn('h-full', color)} style={{ width: `${pct}%` }} />
       </div>
-      <div className="text-3xl font-bold tabular-nums" style={{ color }}>
-        {score >= 0 ? '+' : ''}{score.toFixed(1)}
-      </div>
+      <span className="text-[10px] text-muted-foreground tabular-nums">{Math.round(pct)}</span>
+    </div>
+  );
+}
 
-      {/* Sparkline */}
-      <div className="h-[54px] -mx-1">
-        <ChartSafe>
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={series} margin={{ top: 2, right: 2, left: 2, bottom: 2 }}>
-              <defs>
-                <linearGradient id={`g-${ticker}`} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%"  stopColor={color} stopOpacity={0.6} />
-                  <stop offset="95%" stopColor={color} stopOpacity={0.05} />
-                </linearGradient>
-              </defs>
-              <ReferenceLine y={0} stroke="hsl(var(--border))" strokeDasharray="2 2" />
-              {flagMarkers.map((m) => (
-                <ReferenceLine
-                  key={m.id}
-                  x={m.x}
-                  stroke={m.stroke}
-                  strokeWidth={1}
-                  strokeDasharray="3 3"
-                  ifOverflow="hidden"
-                />
-              ))}
-              <Area
-                type="monotone"
-                dataKey="s"
-                stroke={color}
-                strokeWidth={1.5}
-                fill={`url(#g-${ticker})`}
-                isAnimationActive={false}
-              />
-              <Tooltip
-                contentStyle={{ fontSize: 10, padding: '2px 6px' }}
-                labelFormatter={() => ''}
-                formatter={(value: number) => [value.toFixed(2), 'score']}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </ChartSafe>
-      </div>
-
-      {/* Dollar volume bar */}
-      {volTotal > 0 && (
-        <div>
-          <div className="h-1.5 w-full rounded bg-muted overflow-hidden flex">
-            <div className="bg-emerald-500" style={{ width: `${bullPct}%` }} />
-            <div className="bg-red-500" style={{ width: `${100 - bullPct}%` }} />
-          </div>
-          <div className="flex justify-between text-[9px] text-muted-foreground mt-0.5 tabular-nums">
-            <span>{fmtUsd(agg.bullUsd)}</span>
-            <span>{fmtUsd(agg.bearUsd)}</span>
-          </div>
-        </div>
+function ClassificationBadge({
+  name,
+  description,
+  size = 'sm',
+}: {
+  name: string;
+  description?: string | null;
+  size?: 'sm' | 'lg';
+}) {
+  const style = classificationStyle(name);
+  const label = formatClassificationLabel(name);
+  const content = (
+    <Badge
+      variant="outline"
+      className={cn(
+        'font-mono border',
+        style.badge,
+        size === 'lg' ? 'text-sm py-1 px-2.5' : 'text-[10px] py-0 px-1.5',
       )}
+    >
+      {label}
+    </Badge>
+  );
+  if (!description) return content;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="cursor-help">{content}</span>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs text-xs">
+        {description}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
-      {/* Active specialist flags */}
-      {flagCounts.total > 0 && (
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); navigate(`/flags?specialist=${ticker}`); }}
-          className="flex items-center gap-1.5 text-[10px] px-1.5 py-0.5 rounded bg-muted/40 hover:bg-muted/70 transition-colors text-muted-foreground hover:text-foreground font-mono self-start"
-          title={`${flagCounts.total} active flag${flagCounts.total > 1 ? 's' : ''} on ${ticker} — click to view`}
+function MacroBadges({ row }: { row: RegimeSignalRow | null | undefined }) {
+  const badges = macroBadges(row?.macro_proximity ?? null);
+  if (badges.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1">
+      {badges.map((b) => (
+        <Badge
+          key={b.label}
+          variant="outline"
+          className="text-[10px] py-0 px-1.5 font-mono border-purple-500/40 bg-purple-500/10 text-purple-300"
         >
-          <Target className="w-3 h-3" />
-          <span className="text-foreground tabular-nums">{flagCounts.total}</span>
-          <span>flag{flagCounts.total > 1 ? 's' : ''}</span>
-          {flagCounts.bull > 0 && <span className="text-emerald-400 tabular-nums">+{flagCounts.bull}</span>}
-          {flagCounts.bear > 0 && <span className="text-red-400 tabular-nums">-{flagCounts.bear}</span>}
-          {flagCounts.conviction > 0 && (
-            <span className="text-amber-400 tabular-nums">★{flagCounts.conviction}</span>
-          )}
-        </button>
-      )}
+          {b.label} {b.days}d
+        </Badge>
+      ))}
+    </div>
+  );
+}
 
-      {/* Vote counts by type */}
-      <div className="flex flex-wrap gap-1">
-        {SIGNAL_TYPES.filter((st) => enabledTypes.has(st.key)).map((st) => {
-          const v = agg.byType[st.key];
-          if (!v || v.n === 0) return null;
-          return (
-            <div
-              key={st.key}
-              className="text-[9px] px-1.5 py-0.5 rounded font-mono flex items-center gap-1"
-              style={{ backgroundColor: `${st.color}22`, color: st.color }}
-              title={`${st.label}: ${v.bull} bull, ${v.bear} bear`}
-            >
-              <span>{st.label.slice(0, 3)}</span>
-              <span className="tabular-nums">{v.bull > 0 && `+${v.bull}`}{v.bear > 0 && ` -${v.bear}`}</span>
-            </div>
-          );
-        })}
+// ---- Panels ----------------------------------------------------------------
+
+function MarketTile({
+  classification,
+  signals,
+  config,
+}: {
+  classification: RegimeClassificationRow | null;
+  signals: RegimeSignalRow | null;
+  config: Map<string, RegimeConfigRow>;
+}) {
+  if (!classification) {
+    return (
+      <Card className="p-6 border-dashed">
+        <div className="text-sm text-muted-foreground flex items-center gap-2">
+          <Activity className="w-4 h-4" />
+          Market-wide regime — awaiting first capture
+        </div>
+      </Card>
+    );
+  }
+  const style = classificationStyle(classification.classification);
+  const desc = config.get(classification.classification)?.description ?? null;
+  const dur = signals?.duration_minutes ?? null;
+  return (
+    <Card className={cn('p-5 border-2', style.border, style.bg)}>
+      <div className="flex flex-wrap items-start gap-4 justify-between">
+        <div className="space-y-2">
+          <div className="text-[11px] uppercase tracking-wider text-muted-foreground font-mono">
+            Market-wide regime
+          </div>
+          <ClassificationBadge
+            name={classification.classification}
+            description={desc}
+            size="lg"
+          />
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <ConfidenceBar value={classification.confidence} />
+            {dur != null && (
+              <span className="flex items-center gap-1 tabular-nums">
+                <Clock className="w-3 h-3" />
+                {dur}m in regime
+              </span>
+            )}
+            <span className="tabular-nums">
+              bucket {formatBucketTime(classification.bucket_ts)} ET
+            </span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 text-xs">
+          <SignalKv label="momentum" value={fmt2(signals?.momentum)} accent={signSign(signals?.momentum)} />
+          <SignalKv label="breadth" value={fmt2(signals?.breadth)} />
+          <SignalKv
+            label="trajectory"
+            valueNode={
+              <span className="flex items-center gap-1">
+                <TrajectoryIcon trajectory={signals?.trajectory ?? null} />
+                <span className="font-mono">{signals?.trajectory ?? '—'}</span>
+              </span>
+            }
+          />
+          <SignalKv label="dispersion" value={fmt2(signals?.dispersion)} />
+        </div>
+      </div>
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <span className="text-[11px] text-muted-foreground uppercase tracking-wider">macro</span>
+        <MacroBadges row={signals} />
+        {macroBadges(signals?.macro_proximity ?? null).length === 0 && (
+          <span className="text-[11px] text-muted-foreground italic">
+            no events within 5 trading days
+          </span>
+        )}
       </div>
     </Card>
   );
 }
 
-export default function Pulse() {
-  const qc = useQueryClient();
-  const [enabled, setEnabled] = useState<Set<string>>(
-    new Set(SIGNAL_TYPES.map((s) => s.key))
-  );
-  const [recomputing, setRecomputing] = useState(false);
-
-  const { data: rows, isLoading, dataUpdatedAt } = useQuery<TimelineRow[]>({
-    queryKey: ['ct_pulse_timeline'],
-    queryFn: async () => {
-      const today = new Date().toISOString().slice(0, 10);
-      const { data, error } = await supabase
-        .from('ct_pulse_timeline' as never)
-        .select('ticker, bucket_ts, score, bull_votes, bear_votes, bull_weighted_usd, bear_weighted_usd, signals_by_type')
-        .eq('session_date', today)
-        .order('bucket_ts', { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as unknown as TimelineRow[];
-    },
-    refetchInterval: 60_000,
-  });
-
-  const byTicker = useMemo(() => {
-    const m = new Map<string, TimelineRow[]>();
-    for (const t of TICKERS) m.set(t, []);
-    for (const r of rows ?? []) {
-      const arr = m.get(r.ticker);
-      if (arr) arr.push(r);
-    }
-    return m;
-  }, [rows]);
-
-  // Active specialist flags created today, still within horizon. Grouped by
-  // ticker to overlay on each sparkline + count badge.
-  const { data: activeFlags } = useQuery<FlagSummary[]>({
-    queryKey: ['ct_flags_active_on_pulse'],
-    queryFn: async () => {
-      const today = new Date().toISOString().slice(0, 10);
-      const { data, error } = await supabase
-        .from('ct_flags' as never)
-        .select('id, specialist_ticker, direction, status, score, created_at, horizon_ts')
-        .in('status', ['active', 'conviction'])
-        .gte('created_at', today)
-        .order('created_at', { ascending: true });
-      if (error) throw error;
-      return (data ?? []) as unknown as FlagSummary[];
-    },
-    refetchInterval: 30_000,
-  });
-
-  const flagsByTicker = useMemo(() => {
-    const m = new Map<string, FlagSummary[]>();
-    for (const f of activeFlags ?? []) {
-      // filter out any with expired horizon on the client
-      if (f.horizon_ts && new Date(f.horizon_ts).getTime() < Date.now()) continue;
-      const arr = m.get(f.specialist_ticker) ?? [];
-      arr.push(f);
-      m.set(f.specialist_ticker, arr);
-    }
-    return m;
-  }, [activeFlags]);
-
-  const toggle = (key: string) => {
-    setEnabled((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key); else next.add(key);
-      return next;
-    });
-  };
-
-  const forceRefresh = async () => {
-    setRecomputing(true);
-    try {
-      await supabase.rpc('ct_pulse_tick' as never);
-      qc.invalidateQueries({ queryKey: ['ct_pulse_timeline'] });
-    } catch (e) {
-      console.error('[Pulse] refresh failed:', e);
-    } finally {
-      setRecomputing(false);
-    }
-  };
-
-  const totalVotes = useMemo(() => {
-    let bull = 0, bear = 0;
-    for (const arr of byTicker.values()) {
-      const latest = arr[arr.length - 1];
-      if (!latest) continue;
-      const sbt = latest.signals_by_type ?? {};
-      for (const [t, v] of Object.entries(sbt)) {
-        if (!enabled.has(t)) continue;
-        bull += v.bull;
-        bear += v.bear;
-      }
-    }
-    return { bull, bear };
-  }, [byTicker, enabled]);
-
+function SignalKv({
+  label,
+  value,
+  valueNode,
+  accent,
+}: {
+  label: string;
+  value?: string;
+  valueNode?: React.ReactNode;
+  accent?: 'pos' | 'neg' | undefined;
+}) {
+  const cls =
+    accent === 'pos' ? 'text-emerald-300'
+    : accent === 'neg' ? 'text-red-300'
+    : 'text-foreground';
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <div className="max-w-[1600px] mx-auto p-4 space-y-4">
-        <header className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Activity className="w-5 h-5 text-primary" />
-              <span>Pulse</span>
-              <span className="text-sm text-muted-foreground font-normal">
-                per-ticker weighted signal score — today
-              </span>
-            </h1>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              Every sweep, DP cluster, news, insider/congress trade, and Claude alert
-              classified bull/bear/neutral and weighted by size + recency. Line starts
-              at 0 at 09:30 ET, moves with the tape.
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="text-[11px] text-muted-foreground tabular-nums">
-              {totalVotes.bull} bull / {totalVotes.bear} bear
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={forceRefresh}
-              disabled={recomputing}
-              className="text-xs"
-            >
-              <RefreshCw className={cn('w-3 h-3 mr-1', recomputing && 'animate-spin')} />
-              {recomputing ? 'Refreshing…' : 'Refresh'}
-            </Button>
-          </div>
-        </header>
+    <div className="flex flex-col">
+      <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-mono">
+        {label}
+      </span>
+      {valueNode ? valueNode : (
+        <span className={cn('font-mono tabular-nums', cls)}>{value ?? '—'}</span>
+      )}
+    </div>
+  );
+}
 
-        {/* Signal-type toggles */}
-        <Card className="p-3 flex items-center gap-2 flex-wrap">
-          <span className="text-xs text-muted-foreground mr-2">Signals:</span>
-          {SIGNAL_TYPES.map((st) => {
-            const on = enabled.has(st.key);
+function TickerGrid({
+  perTickerLatest,
+  perTickerSignals,
+  config,
+}: {
+  perTickerLatest: Map<string, RegimeClassificationRow>;
+  perTickerSignals: Map<string, RegimeSignalRow>;
+  config: Map<string, RegimeConfigRow>;
+}) {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+      {REGIME_WATCHLIST.map((t) => {
+        const cls = perTickerLatest.get(t);
+        const sig = perTickerSignals.get(t);
+        const style = cls ? classificationStyle(cls.classification) : classificationStyle('unknown');
+        const desc = cls ? config.get(cls.classification)?.description ?? null : null;
+        return (
+          <Card
+            key={t}
+            className={cn('p-2.5 border space-y-1.5', style.border, style.bg)}
+          >
+            <div className="flex items-center justify-between">
+              <span className="font-mono font-semibold text-sm">{t}</span>
+              <TrajectoryIcon trajectory={sig?.trajectory ?? null} />
+            </div>
+            {cls ? (
+              <>
+                <ClassificationBadge name={cls.classification} description={desc} />
+                <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                  <ConfidenceBar value={cls.confidence} />
+                  <span className="font-mono tabular-nums">
+                    {fmt2(sig?.momentum)}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="text-[11px] text-muted-foreground italic">no capture yet</div>
+            )}
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+function SignalsTable({
+  perTickerLatest,
+  perTickerSignals,
+  marketSignals,
+}: {
+  perTickerLatest: Map<string, RegimeClassificationRow>;
+  perTickerSignals: Map<string, RegimeSignalRow>;
+  marketSignals: RegimeSignalRow | null;
+}) {
+  const marketBreadth = marketSignals?.breadth;
+  const marketDispersion = marketSignals?.dispersion;
+  return (
+    <Card className="overflow-hidden">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-20">Ticker</TableHead>
+            <TableHead className="w-32">Regime</TableHead>
+            <TableHead className="text-right">Momentum</TableHead>
+            <TableHead className="text-right">Breadth</TableHead>
+            <TableHead className="w-28">Trajectory</TableHead>
+            <TableHead className="text-right">Dispersion</TableHead>
+            <TableHead className="text-right">Duration</TableHead>
+            <TableHead>Macro</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {/* Market-wide row first */}
+          <TableRow className="bg-muted/30">
+            <TableCell className="font-mono font-semibold">MARKET</TableCell>
+            <TableCell>
+              {perTickerLatest.get(MARKET_KEY) ? (
+                <ClassificationBadge name={perTickerLatest.get(MARKET_KEY)!.classification} />
+              ) : (
+                <span className="text-muted-foreground text-xs">—</span>
+              )}
+            </TableCell>
+            <TableCell className={cn('text-right font-mono tabular-nums', momentumClass(marketSignals?.momentum))}>
+              {fmt2(marketSignals?.momentum)}
+            </TableCell>
+            <TableCell className="text-right font-mono tabular-nums">
+              {fmt2(marketSignals?.breadth)}
+            </TableCell>
+            <TableCell>
+              <span className="flex items-center gap-1 text-xs">
+                <TrajectoryIcon trajectory={marketSignals?.trajectory ?? null} />
+                <span className="font-mono">{marketSignals?.trajectory ?? '—'}</span>
+              </span>
+            </TableCell>
+            <TableCell className="text-right font-mono tabular-nums">
+              {fmt2(marketSignals?.dispersion)}
+            </TableCell>
+            <TableCell className="text-right font-mono tabular-nums">
+              {marketSignals?.duration_minutes ?? '—'}
+              {marketSignals?.duration_minutes != null && <span className="text-muted-foreground">m</span>}
+            </TableCell>
+            <TableCell>
+              <MacroBadges row={marketSignals} />
+            </TableCell>
+          </TableRow>
+          {REGIME_WATCHLIST.map((t) => {
+            const cls = perTickerLatest.get(t);
+            const sig = perTickerSignals.get(t);
             return (
-              <button
-                key={st.key}
-                onClick={() => toggle(st.key)}
-                className={cn(
-                  'text-[11px] px-2 py-1 rounded border font-mono transition-colors',
-                  on ? 'border-transparent' : 'border-muted bg-muted/20 text-muted-foreground'
-                )}
-                style={on ? { backgroundColor: `${st.color}22`, color: st.color, borderColor: `${st.color}44` } : undefined}
-              >
-                {on ? '☑' : '☐'} {st.label}
-              </button>
+              <TableRow key={t}>
+                <TableCell className="font-mono">{t}</TableCell>
+                <TableCell>
+                  {cls ? (
+                    <ClassificationBadge name={cls.classification} />
+                  ) : (
+                    <span className="text-muted-foreground text-xs">—</span>
+                  )}
+                </TableCell>
+                <TableCell className={cn('text-right font-mono tabular-nums', momentumClass(sig?.momentum))}>
+                  {fmt2(sig?.momentum)}
+                </TableCell>
+                <TableCell className="text-right font-mono tabular-nums text-muted-foreground italic">
+                  {/* Per-ticker breadth typically N/A — fall back to market */}
+                  {sig?.breadth != null ? fmt2(sig.breadth) : (
+                    <span title="per-ticker breadth N/A — showing market-wide">
+                      ({fmt2(marketBreadth)})
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <span className="flex items-center gap-1 text-xs">
+                    <TrajectoryIcon trajectory={sig?.trajectory ?? null} />
+                    <span className="font-mono">{sig?.trajectory ?? '—'}</span>
+                  </span>
+                </TableCell>
+                <TableCell className="text-right font-mono tabular-nums text-muted-foreground italic">
+                  {sig?.dispersion != null ? fmt2(sig.dispersion) : (
+                    <span title="per-ticker dispersion N/A — showing market-wide">
+                      ({fmt2(marketDispersion)})
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className="text-right font-mono tabular-nums">
+                  {sig?.duration_minutes ?? '—'}
+                  {sig?.duration_minutes != null && <span className="text-muted-foreground">m</span>}
+                </TableCell>
+                <TableCell>
+                  <MacroBadges row={sig} />
+                </TableCell>
+              </TableRow>
             );
           })}
-        </Card>
+        </TableBody>
+      </Table>
+    </Card>
+  );
+}
 
-        {/* Tiles */}
-        {isLoading && !rows ? (
-          <Card className="p-8 text-center text-sm text-muted-foreground">
-            Loading pulse…
-          </Card>
-        ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {TICKERS.map((t) => (
-              <TickerTile
-                key={t}
-                ticker={t}
-                rows={byTicker.get(t) ?? []}
-                enabledTypes={enabled}
-                flags={flagsByTicker.get(t) ?? []}
-              />
+function TransitionsPanel({
+  transitions,
+}: {
+  transitions: ReturnType<typeof useRegimeState>['transitions'];
+}) {
+  const grouped = useMemo(() => {
+    const map = new Map<string, typeof transitions>();
+    for (const t of transitions) {
+      const day = formatBucketDate(t.created_at);
+      const arr = map.get(day) ?? [];
+      arr.push(t);
+      map.set(day, arr);
+    }
+    return Array.from(map.entries());
+  }, [transitions]);
+
+  if (transitions.length === 0) {
+    return (
+      <Card className="p-4 text-sm text-muted-foreground">
+        No regime transitions in the last 7 days. Live transitions begin landing
+        once classification capture has run for at least two adjacent buckets.
+      </Card>
+    );
+  }
+
+  return (
+    <Card className="p-4 max-h-96 overflow-y-auto space-y-3">
+      {grouped.map(([day, list]) => (
+        <div key={day}>
+          <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-mono mb-1">
+            {day}
+          </div>
+          <ul className="space-y-1">
+            {list.map((t) => (
+              <li
+                key={t.id}
+                className="flex items-center gap-2 text-xs font-mono"
+              >
+                <span className="text-muted-foreground tabular-nums w-12">
+                  {formatBucketTime(t.created_at)}
+                </span>
+                <span className="font-semibold w-16">
+                  {t.tickerKey === MARKET_KEY ? 'MARKET' : t.ticker}
+                </span>
+                <span className="text-muted-foreground">
+                  {formatClassificationLabel(t.from_classification)}
+                </span>
+                <span className="text-foreground">→</span>
+                <ClassificationBadge name={t.to_classification} />
+                <span className="text-muted-foreground tabular-nums ml-auto">
+                  conf {Math.round(t.confidence)}
+                </span>
+              </li>
             ))}
-          </div>
-        )}
+          </ul>
+        </div>
+      ))}
+    </Card>
+  );
+}
 
-        <div className="text-[10px] text-muted-foreground leading-relaxed space-y-1">
-          <div>
-            Score = sum of (direction × signal-weight × size-multiplier × recency-decay)
-            across today's session. Reset at 09:30 ET. Half-lives: sweeps 45m, DP 2h,
-            news 6h, insider 14d, congress 30d, Claude alert 1h.
-          </div>
-          <div>
-            <span className="font-semibold">Color scale:</span> green &gt;+15 (strong bull)
-            / teal +5 to +15 / slate neutral / red-light -5 to -15 / red &lt; -15 (strong bear).
-            <span className="font-semibold ml-2">Volume bar:</span> bull vs bear dollar-weighted premium.
-            <span className="font-semibold ml-2">Chips:</span> per-signal-type vote counts — bullish and bearish.
-          </div>
-          <div>
-            Refreshes every 60s. Cron recomputes every 5 min during RTH.
-            SPX signals folded into SPY. Watchlist: 12 tickers.
+function AnalogsPanel({
+  marketLatest,
+  analogFrequencyByPrior,
+}: {
+  marketLatest: RegimeClassificationRow | null;
+  analogFrequencyByPrior: ReturnType<typeof useRegimeState>['analogFrequencyByPrior'];
+}) {
+  if (!marketLatest) {
+    return (
+      <Card className="p-4 text-sm text-muted-foreground">
+        Analog frequency unavailable — no market-wide classification yet.
+      </Card>
+    );
+  }
+  const freq = analogFrequencyByPrior.get(marketLatest.classification);
+  if (!freq || freq.totalOccurrences === 0) {
+    return (
+      <Card className="p-4 text-sm text-muted-foreground">
+        Current regime is{' '}
+        <ClassificationBadge name={marketLatest.classification} />. No prior
+        occurrences in the last 30 days yet — analog distribution will populate
+        as more captures accumulate.
+      </Card>
+    );
+  }
+  return (
+    <Card className="p-4 space-y-3">
+      <div className="text-sm">
+        Current regime <ClassificationBadge name={freq.prior} />{' '}
+        — observed{' '}
+        <span className="font-mono tabular-nums">{freq.totalOccurrences}</span>{' '}
+        prior buckets in the last 30d. Next-bucket distribution:
+      </div>
+      <ul className="space-y-1.5">
+        {freq.distribution.slice(0, 6).map((d) => (
+          <li key={d.next} className="flex items-center gap-3 text-xs">
+            <div className="w-44 flex justify-end">
+              <ClassificationBadge name={d.next} />
+            </div>
+            <div className="flex-1 h-1.5 bg-muted/40 rounded overflow-hidden">
+              <div
+                className={cn('h-full', classificationStyle(d.next).dot)}
+                style={{ width: `${d.pct}%` }}
+              />
+            </div>
+            <span className="font-mono tabular-nums w-20 text-right">
+              {d.count}× ({d.pct.toFixed(0)}%)
+            </span>
+          </li>
+        ))}
+      </ul>
+      <div className="text-[10px] text-muted-foreground">
+        Frequency table only — true cosine analog search via{' '}
+        <code className="text-[10px]">search_ct_regime_analogs</code> RPC requires
+        a Voyage embedding round-trip and is deferred to v2.1.
+      </div>
+    </Card>
+  );
+}
+
+// ---- Helpers --------------------------------------------------------------
+
+function fmt2(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  if (Math.abs(n) >= 100) return n.toFixed(0);
+  if (Math.abs(n) >= 10) return n.toFixed(1);
+  return n.toFixed(2);
+}
+
+function signSign(n: number | null | undefined): 'pos' | 'neg' | undefined {
+  if (n == null || !Number.isFinite(n)) return undefined;
+  if (n > 0.05) return 'pos';
+  if (n < -0.05) return 'neg';
+  return undefined;
+}
+
+function momentumClass(n: number | null | undefined): string {
+  const s = signSign(n);
+  if (s === 'pos') return 'text-emerald-300';
+  if (s === 'neg') return 'text-red-300';
+  return '';
+}
+
+// ---- Page ------------------------------------------------------------------
+
+export default function Pulse() {
+  const state = useRegimeState();
+  const {
+    marketLatest,
+    marketSignals,
+    perTickerLatest,
+    perTickerSignals,
+    configByName,
+    transitions,
+    analogFrequencyByPrior,
+    dataAnchor,
+    ageMinutes,
+    isStale,
+    isLoading,
+    isError,
+  } = state;
+
+  const stalenessCopy = useMemo(() => {
+    if (!dataAnchor) return null;
+    if (!isStale) return null;
+    return `Last regime capture ${formatAge(ageMinutes)}. Showing that snapshot — auto-resumes when capture cron resumes.`;
+  }, [dataAnchor, isStale, ageMinutes]);
+
+  return (
+    <TooltipProvider delayDuration={150}>
+      <div className="min-h-screen bg-background text-foreground">
+        <div className="max-w-[1600px] mx-auto p-4 space-y-4">
+          {/* Header */}
+          <header className="flex flex-wrap items-baseline justify-between gap-3">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+                <Activity className="w-5 h-5 text-primary" />
+                <span>Pulse</span>
+                <Badge variant="outline" className="font-mono text-[10px]">v2</Badge>
+              </h1>
+              <p className="text-xs text-muted-foreground mt-0.5 max-w-2xl">
+                Regime classification across the 10-ticker universe. Each 5-min bucket
+                tags one of {configByName.size || '—'} active regimes with a confidence
+                score and rationale. Transitions and analog frequency back-test what
+                the current regime usually resolves into.
+              </p>
+            </div>
+            <div className="text-right text-[11px] text-muted-foreground tabular-nums space-y-0.5">
+              <div className="flex items-center gap-1.5 justify-end">
+                <Clock className="w-3 h-3" />
+                {dataAnchor ? `anchor ${formatBucketTime(dataAnchor)} ET` : 'awaiting first capture'}
+              </div>
+              <div>{ageMinutes != null ? formatAge(ageMinutes) : ''}</div>
+            </div>
+          </header>
+
+          {/* Staleness banner */}
+          {stalenessCopy && (
+            <Card className="p-3 border-amber-500/40 bg-amber-500/5 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
+              <div className="text-xs text-amber-100">{stalenessCopy}</div>
+            </Card>
+          )}
+
+          {/* Error banner */}
+          {isError && (
+            <Card className="p-3 border-red-500/40 bg-red-500/5 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <div className="text-xs text-red-200">
+                One of the regime queries failed. Page renders best-effort from the
+                queries that succeeded. Refresh to retry.
+              </div>
+            </Card>
+          )}
+
+          {/* 1. Current regime panel */}
+          <section className="space-y-3">
+            <h2 className="text-xs uppercase tracking-wider text-muted-foreground font-mono flex items-center gap-2">
+              <span>Current regime</span>
+              {isLoading && !marketLatest && <span className="italic">loading…</span>}
+            </h2>
+            <MarketTile
+              classification={marketLatest}
+              signals={marketSignals}
+              config={configByName}
+            />
+            <TickerGrid
+              perTickerLatest={perTickerLatest}
+              perTickerSignals={perTickerSignals}
+              config={configByName}
+            />
+          </section>
+
+          {/* 2. Signals panel */}
+          <section className="space-y-2">
+            <h2 className="text-xs uppercase tracking-wider text-muted-foreground font-mono">
+              Signals
+            </h2>
+            <SignalsTable
+              perTickerLatest={perTickerLatest}
+              perTickerSignals={perTickerSignals}
+              marketSignals={marketSignals}
+            />
+          </section>
+
+          {/* 3. Recent transitions */}
+          <section className="space-y-2">
+            <h2 className="text-xs uppercase tracking-wider text-muted-foreground font-mono flex items-center gap-2">
+              <CalendarIcon className="w-3 h-3" />
+              <span>Transitions — last 7 days</span>
+              <Badge variant="outline" className="text-[10px] font-mono">
+                {transitions.length}
+              </Badge>
+            </h2>
+            <TransitionsPanel transitions={transitions} />
+          </section>
+
+          {/* 4. Analogs frequency table */}
+          <section className="space-y-2">
+            <h2 className="text-xs uppercase tracking-wider text-muted-foreground font-mono">
+              Analogs — how does this regime usually resolve?
+            </h2>
+            <AnalogsPanel
+              marketLatest={marketLatest}
+              analogFrequencyByPrior={analogFrequencyByPrior}
+            />
+          </section>
+
+          {/* Footer note */}
+          <div className="text-[10px] text-muted-foreground leading-relaxed pt-2">
+            Refresh: 30s during RTH, slower off-hours. Bell-cross invalidates all queries
+            globally. ct-regime-capture writes one row per (ticker, bucket) every 5 min RTH.
+            Adding a new classification is a row INSERT in <code className="text-[10px]">ct_regime_config</code>.
           </div>
         </div>
       </div>
-    </div>
+    </TooltipProvider>
   );
 }

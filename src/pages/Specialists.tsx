@@ -13,6 +13,13 @@ import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Progress } from '@/components/ui/progress';
+import {
+  Tooltip as UiTooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription,
 } from '@/components/ui/sheet';
@@ -21,6 +28,15 @@ import { Target, RefreshCw, ArrowUp, ArrowDown, Minus } from 'lucide-react';
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { ChartSafe } from '@/components/ChartSafe';
 import { useSpecialistScoreboard, SpecialistScoreboardRow } from '@/hooks/useSpecialistScoreboard';
+import {
+  useSpecialistScoreboardV2,
+  buildConvictionView,
+  topRegimes,
+  CONVICTION_BUCKETS,
+  type SpecialistScoreboardV2Row,
+  type PromptLifecycleRow,
+  type ConvictionBucketView,
+} from '@/hooks/useSpecialistScoreboardV2';
 
 const TICKERS = ['SPY','QQQ','IWM','AAPL','MSFT','GOOGL','AMZN','META','NVDA','TSLA'];
 
@@ -194,13 +210,285 @@ function Sparkline({ data, color }: { data: { day: string; n: number }[]; color:
   );
 }
 
+// ---------- V2 sub-panels (multi-axis, regime, calibration, streaks, lifecycle) ----------
+
+function hitRateClass(hr: number | null): string {
+  if (hr == null) return 'text-muted-foreground/60';
+  if (hr >= 0.55) return 'text-emerald-300';
+  if (hr < 0.45) return 'text-red-300';
+  return 'text-foreground';
+}
+
+function fmtPct(hr: number | null, digits = 0): string {
+  if (hr == null) return '—';
+  return `${(hr * 100).toFixed(digits)}%`;
+}
+
+function StreakGlyph({ value }: { value: number }) {
+  if (value >= 2) return <span className="text-emerald-300" aria-label={`${value} streak`}>▲▲</span>;
+  if (value === 1) return <span className="text-emerald-300" aria-label="1 streak">▲</span>;
+  if (value === 0) return <span className="text-muted-foreground/60" aria-label="flat">▬</span>;
+  if (value === -1) return <span className="text-red-300" aria-label="-1 streak">▼</span>;
+  return <span className="text-red-300" aria-label={`${value} streak`}>▼▼</span>;
+}
+
+function MultiAxisPanel({ row }: { row: SpecialistScoreboardV2Row | undefined }) {
+  if (!row) {
+    return (
+      <div className="text-[10px] text-muted-foreground/60 border-t border-border/40 pt-1.5">
+        no v2 grades yet
+      </div>
+    );
+  }
+  const cells: Array<{ key: string; label: string; value: number | null; title: string }> = [
+    { key: 'prem', label: 'prem', value: row.hit_rate_premium, title: 'Premium-axis hit rate (option premium win/loss)' },
+    { key: '4h', label: '4h', value: row.hit_rate_underlying_4h, title: 'Underlying directional hit rate, 4h window' },
+    { key: '1d', label: '1d', value: row.hit_rate_underlying_1d, title: 'Underlying directional hit rate, 1d window' },
+    { key: '3d', label: '3d', value: row.hit_rate_underlying_3d, title: 'Underlying directional hit rate, 3d window' },
+  ];
+  return (
+    <div className="border-t border-border/40 pt-1.5 space-y-1">
+      <div className="grid grid-cols-4 gap-1 text-[10px]">
+        {cells.map((c) => (
+          <UiTooltip key={c.key}>
+            <TooltipTrigger asChild>
+              <div className="flex flex-col items-center bg-muted/30 rounded px-1 py-0.5 cursor-help">
+                <span className="text-muted-foreground/70">{c.label}</span>
+                <span className={cn('font-mono tabular-nums font-bold', hitRateClass(c.value))}>
+                  {fmtPct(c.value)}
+                </span>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-[10px]">{c.title}</TooltipContent>
+          </UiTooltip>
+        ))}
+      </div>
+      <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+        <span>blended <span className={cn('font-mono tabular-nums', hitRateClass(row.hit_rate_blended))}>{fmtPct(row.hit_rate_blended)}</span></span>
+        <span className="font-mono tabular-nums">n={row.n_graded}</span>
+      </div>
+    </div>
+  );
+}
+
+function RegimePanel({ rows }: { rows: SpecialistScoreboardV2Row[] }) {
+  if (rows.length === 0) {
+    return (
+      <div className="border-t border-border/40 pt-1.5">
+        <div className="text-[9px] text-muted-foreground/70 mb-0.5">regime conditional</div>
+        <div className="text-[10px] text-muted-foreground/60">no regime grades yet</div>
+      </div>
+    );
+  }
+  return (
+    <div className="border-t border-border/40 pt-1.5">
+      <div className="text-[9px] text-muted-foreground/70 mb-0.5">regime conditional</div>
+      <div className="space-y-0.5">
+        {rows.map((r) => (
+          <div key={r.regime} className="flex items-center justify-between text-[10px] font-mono tabular-nums">
+            <span className="truncate text-muted-foreground" title={r.regime}>{r.regime}</span>
+            <span className="flex items-center gap-2">
+              <span className={hitRateClass(r.hit_rate_blended)}>{fmtPct(r.hit_rate_blended)}</span>
+              <span className="text-muted-foreground/60">n={r.n_graded}</span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ConvictionMicroCurve({ view }: { view: ConvictionBucketView[] }) {
+  const hasAny = view.some((v) => v.hitRate != null);
+  if (!hasAny) {
+    return (
+      <div className="border-t border-border/40 pt-1.5">
+        <div className="text-[9px] text-muted-foreground/70 mb-0.5">conviction calibration</div>
+        <div className="text-[10px] text-muted-foreground/60">no calibration yet</div>
+      </div>
+    );
+  }
+  return (
+    <div className="border-t border-border/40 pt-1.5">
+      <div className="text-[9px] text-muted-foreground/70 mb-1">conviction calibration</div>
+      <div className="grid grid-cols-5 gap-1">
+        {view.map((b) => {
+          const heightPct = b.hitRate != null ? Math.max(8, Math.round(b.hitRate * 100)) : 0;
+          const fill =
+            b.hitRate == null ? 'bg-muted/30'
+              : b.hitRate >= 0.55 ? 'bg-emerald-400/60'
+              : b.hitRate < 0.45 ? 'bg-red-400/60'
+              : 'bg-blue-400/60';
+          const ringClass =
+            b.source === 'specialist' ? 'ring-1 ring-emerald-400/40'
+              : b.source === 'baseline' ? 'ring-1 ring-muted-foreground/20 ring-dashed'
+              : '';
+          return (
+            <UiTooltip key={b.bucket}>
+              <TooltipTrigger asChild>
+                <div className={cn('flex flex-col items-center cursor-help')}>
+                  <div className="relative h-[20px] w-full bg-muted/20 rounded-sm overflow-hidden">
+                    {b.hitRate != null && (
+                      <div
+                        className={cn('absolute bottom-0 left-0 right-0', fill, ringClass)}
+                        style={{ height: `${heightPct}%` }}
+                      />
+                    )}
+                  </div>
+                  <div className="text-[8px] font-mono text-muted-foreground/70 mt-0.5">{b.bucket}</div>
+                </div>
+              </TooltipTrigger>
+              <TooltipContent side="top" className="text-[10px]">
+                {b.hitRate == null ? 'no data' : (
+                  <span>
+                    {b.bucket} conv: {fmtPct(b.hitRate, 1)} (n={b.n})
+                    <br />
+                    source: {b.source === 'specialist' ? 'per-specialist (N≥30)' : 'cross-specialist baseline'}
+                  </span>
+                )}
+              </TooltipContent>
+            </UiTooltip>
+          );
+        })}
+      </div>
+      <div className="text-[8px] text-muted-foreground/50 mt-0.5 leading-tight">
+        per-specialist when N≥30; '__ALL__' baseline otherwise
+      </div>
+    </div>
+  );
+}
+
+function StreakDriftRow({ row }: { row: SpecialistScoreboardV2Row | undefined }) {
+  if (!row) return null;
+  const driftPctPerWk = row.drift_slope_7d;
+  const driftClass =
+    driftPctPerWk == null ? 'text-muted-foreground/60'
+      : driftPctPerWk > 0.005 ? 'text-emerald-300'
+      : driftPctPerWk < -0.005 ? 'text-red-300'
+      : 'text-muted-foreground';
+  const driftLabel = driftPctPerWk == null
+    ? '—'
+    : `${driftPctPerWk >= 0 ? '+' : ''}${(driftPctPerWk * 100).toFixed(1)}pp/wk`;
+  return (
+    <div className="border-t border-border/40 pt-1.5">
+      <div className="grid grid-cols-3 gap-1 text-[10px]">
+        <UiTooltip>
+          <TooltipTrigger asChild>
+            <div className="flex flex-col items-center cursor-help">
+              <span className="text-[9px] text-muted-foreground/70">read</span>
+              <span className="font-mono tabular-nums flex items-center gap-1">
+                <StreakGlyph value={row.read_streak_signed} />
+                <span className="text-foreground">{row.read_streak_signed >= 0 ? '+' : ''}{row.read_streak_signed}</span>
+              </span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-[10px]">
+            Consecutive same-direction reads (positive=bullish, negative=bearish)
+          </TooltipContent>
+        </UiTooltip>
+        <UiTooltip>
+          <TooltipTrigger asChild>
+            <div className="flex flex-col items-center cursor-help">
+              <span className="text-[9px] text-muted-foreground/70">graded</span>
+              <span className="font-mono tabular-nums flex items-center gap-1">
+                <StreakGlyph value={row.graded_streak_signed} />
+                <span className="text-foreground">{row.graded_streak_signed >= 0 ? '+' : ''}{row.graded_streak_signed}</span>
+              </span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-[10px]">
+            Consecutive graded outcomes (positive=wins, negative=losses)
+          </TooltipContent>
+        </UiTooltip>
+        <UiTooltip>
+          <TooltipTrigger asChild>
+            <div className="flex flex-col items-center cursor-help">
+              <span className="text-[9px] text-muted-foreground/70">drift</span>
+              <span className={cn('font-mono tabular-nums', driftClass)}>{driftLabel}</span>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="top" className="text-[10px]">
+            7-day rolling slope of blended hit rate (pp = percentage points)
+          </TooltipContent>
+        </UiTooltip>
+      </div>
+    </div>
+  );
+}
+
+function lifecycleStatusBadge(status: string): { label: string; cls: string } {
+  switch (status) {
+    case 'live': return { label: 'LIVE', cls: 'border-emerald-500/50 text-emerald-300 bg-emerald-500/10' };
+    case 'trial': return { label: 'TRIAL', cls: 'border-blue-500/50 text-blue-300 bg-blue-500/10' };
+    case 'shadow': return { label: 'SHADOW', cls: 'border-slate-500/50 text-slate-300 bg-slate-500/10' };
+    case 'decay': return { label: 'DECAY', cls: 'border-amber-500/50 text-amber-300 bg-amber-500/10' };
+    case 'retired': return { label: 'RETIRED', cls: 'border-red-500/50 text-red-300 bg-red-500/10 line-through' };
+    default: return { label: status.toUpperCase(), cls: 'border-muted-foreground/40 text-muted-foreground' };
+  }
+}
+
+const STABLE_RUNS_GATE = 4;
+
+function LifecyclePanel({ row }: { row: PromptLifecycleRow | undefined }) {
+  if (!row) {
+    return (
+      <div className="border-t border-border/40 pt-1.5">
+        <div className="text-[10px] text-muted-foreground/60">no lifecycle row</div>
+      </div>
+    );
+  }
+  const badge = lifecycleStatusBadge(row.status);
+  const proposedDifferent = row.proposed_status && row.proposed_status !== row.status;
+  const stableProgress = Math.min(100, Math.round((row.consecutive_stable_runs / STABLE_RUNS_GATE) * 100));
+  return (
+    <div className="border-t border-border/40 pt-1.5 space-y-1">
+      <div className="flex items-center justify-between gap-1 flex-wrap">
+        <Badge variant="outline" className={cn('text-[9px] px-1.5 py-0 font-mono', badge.cls)}>
+          {badge.label}
+        </Badge>
+        <span className="text-[9px] font-mono text-muted-foreground">v{row.prompt_version}</span>
+        {proposedDifferent && (
+          <UiTooltip>
+            <TooltipTrigger asChild>
+              <Badge variant="outline" className="text-[9px] px-1 py-0 font-mono border-amber-500/40 text-amber-300 cursor-help">
+                → {row.proposed_status}
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="text-[10px]">
+              Lifecycle proposing transition to {row.proposed_status}; needs {STABLE_RUNS_GATE} consecutive stable runs to flip.
+            </TooltipContent>
+          </UiTooltip>
+        )}
+      </div>
+      <div className="space-y-0.5">
+        <div className="flex items-center justify-between text-[9px] text-muted-foreground">
+          <span>stable</span>
+          <span className="font-mono tabular-nums">{row.consecutive_stable_runs}/{STABLE_RUNS_GATE}</span>
+        </div>
+        <Progress value={stableProgress} className="h-1" />
+      </div>
+    </div>
+  );
+}
+
+interface V2TileProps {
+  scoreboardAllRow?: SpecialistScoreboardV2Row;
+  scoreboardRegimeRows: SpecialistScoreboardV2Row[];
+  calibrationView: ConvictionBucketView[];
+  lifecycleRow?: PromptLifecycleRow;
+}
+
+// ---------- end v2 sub-panels ----------
+
 function SpecialistTile({
   stats,
   outcome,
+  v2,
   onClick,
 }: {
   stats: SpecialistStats;
   outcome?: SpecialistScoreboardRow;
+  v2: V2TileProps;
   onClick: () => void;
 }) {
   const color = stats.hitRate != null && stats.hitRate >= 0.55
@@ -315,6 +603,13 @@ function SpecialistTile({
           ))
         )}
       </div>
+
+      {/* ---- V2 panels: multi-axis, regime, conviction, streak/drift, lifecycle ---- */}
+      <MultiAxisPanel row={v2.scoreboardAllRow} />
+      <RegimePanel rows={v2.scoreboardRegimeRows} />
+      <ConvictionMicroCurve view={v2.calibrationView} />
+      <StreakDriftRow row={v2.scoreboardAllRow} />
+      <LifecyclePanel row={v2.lifecycleRow} />
     </Card>
   );
 }
@@ -439,6 +734,38 @@ export default function Specialists() {
     return m;
   }, [scoreboard]);
 
+  // V2 scoreboard — multi-axis, regime, calibration, lifecycle.
+  // Coexists with v1 (parallel-run discipline per the v2 build brief).
+  const { data: v2Bundle } = useSpecialistScoreboardV2();
+  const v2ByTicker = useMemo(() => {
+    const out: Record<string, V2TileProps> = {};
+    const allByTicker = new Map<string, SpecialistScoreboardV2Row>();
+    for (const r of v2Bundle?.scoreboardAll ?? []) {
+      // Prefer the latest snapshot per ticker; window already filtered to 'lifetime' in hook.
+      const prev = allByTicker.get(r.specialist_ticker);
+      if (!prev || Date.parse(r.computed_at) > Date.parse(prev.computed_at)) {
+        allByTicker.set(r.specialist_ticker, r);
+      }
+    }
+    const lifecycleByTicker = new Map<string, PromptLifecycleRow>();
+    for (const r of v2Bundle?.lifecycleLive ?? []) {
+      lifecycleByTicker.set(r.specialist_ticker, r);
+    }
+    for (const t of TICKERS) {
+      out[t] = {
+        scoreboardAllRow: allByTicker.get(t),
+        scoreboardRegimeRows: topRegimes(t, v2Bundle?.scoreboardRegime ?? [], 5),
+        calibrationView: buildConvictionView(
+          t,
+          v2Bundle?.calibrationPerSpecialist ?? [],
+          v2Bundle?.calibrationBaseline ?? [],
+        ),
+        lifecycleRow: lifecycleByTicker.get(t),
+      };
+    }
+    return out;
+  }, [v2Bundle]);
+
   // Default tile order: hit_rate DESC (specialists with no outcome row sort last).
   const orderedTickers = useMemo(() => {
     return [...TICKERS].sort((a, b) => {
@@ -452,8 +779,10 @@ export default function Specialists() {
   }, [outcomeByName]);
 
   return (
+    <TooltipProvider delayDuration={200}>
     <div className="min-h-screen bg-background text-foreground">
       <div className="max-w-[1600px] mx-auto p-4 space-y-4">
+        {/* TooltipProvider wraps the page so per-tile UiTooltip components mount cleanly. */}
         <header className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
@@ -486,6 +815,12 @@ export default function Specialists() {
                 key={t}
                 stats={statsByTicker[t]}
                 outcome={outcomeByName[t]}
+                v2={v2ByTicker[t] ?? {
+                  scoreboardAllRow: undefined,
+                  scoreboardRegimeRows: [],
+                  calibrationView: CONVICTION_BUCKETS.map((b) => ({ bucket: b, hitRate: null, n: 0, source: 'empty' as const })),
+                  lifecycleRow: undefined,
+                }}
                 onClick={() => setSelected(t)}
               />
             ))}
@@ -516,8 +851,19 @@ export default function Specialists() {
             Tiles sorted by 7d hit rate. Snap fires nightly 23:00 UTC weekdays.
           </div>
           <div>Refreshes every 60s. Click a tile to see its last 10 flags.</div>
+          <div>
+            <span className="text-foreground">V2 scoreboard</span> (multi-axis / regime / conviction / streak / lifecycle):
+            from <span className="font-mono">ct_specialist_scoreboard_v2</span>,{' '}
+            <span className="font-mono">ct_specialist_conviction_calibration</span>,{' '}
+            <span className="font-mono">ct_specialist_prompt_lifecycle</span>. Filtered to{' '}
+            <span className="font-mono">window_label='lifetime'</span>. Updated by{' '}
+            <span className="font-mono">ct-specialist-prompt-lifecycle-v2</span> (K=4 stable gate).
+            Refresh: 5m. Calibration falls back to <span className="font-mono">'__ALL__'</span> baseline when
+            per-specialist N&lt;30 in a bucket.
+          </div>
         </div>
       </div>
     </div>
+    </TooltipProvider>
   );
 }
