@@ -344,6 +344,143 @@ Class lesson: **audit-first applies to brief-level too.** When data
 shape contradicts the brief's premise, surface it BEFORE writing code,
 not after. The brief itself is a hypothesis to be tested.
 
+## Pending — Q4 bias inventory (7 active rows)
+
+Full row contents persisted here so they survive session boundaries.
+Schema correction from earlier (no `last_triggered_at` column exists
+on `ct_biases`; the meaningful time field is `last_confirmed`). Per-bias
+decisions awaited from James.
+
+- **Bias 1** (`78ad909c-67b2-4499-8ebc-4fc2b296c622`) — *"I overweight
+  single-moment convergence signals in flow oscillation regimes"* —
+  voice: Claude (1st-person); severity: 5; instruments: SPY/QQQ/IWM;
+  observed_count: 3; first_seen: 2026-04-19T22:00; **last_confirmed:
+  2026-04-24T18:30 (RE-CONFIRMED 5d after first_seen)**; superseded_by:
+  null. Evidence: "8 of 10 high-conviction alerts (conviction 4-5) were
+  triggered by mechanical convergence rules during flow oscillation
+  periods, all invalidated within 2-8min. See regrades fb16b4c9,
+  6300cc91, eb318d23."
+
+- **Bias 2** (`0f294004-a616-43d8-a15e-8d0807618936`) — *"Averages
+  down losers"* — voice: James (2nd-person trader bias); severity: 5;
+  instruments: null; observed_count: 9; first_seen: 2026-04-18T14:51;
+  **last_confirmed: 2026-04-18T14:51 (= first_seen, never re-confirmed)**;
+  superseded_by: null. Evidence: "When the first entry is graded wrong,
+  follow-on size tends to increase on the same direction 58% of the
+  time. Scaling into a losing thesis instead of cutting and re-evaluating."
+
+- **Bias 3** (`89986224-75cb-486f-a548-5a31857c53ae`) — *"I assign
+  maximum conviction to bullish setups while underweighting oscillation
+  risk"* — voice: Claude (1st-person); severity: 4; instruments:
+  SPY/QQQ/IWM; observed_count: 1; first_seen: 2026-04-19T22:00;
+  **last_confirmed: 2026-04-19T22:00 (= first_seen, never re-confirmed)**;
+  superseded_by: null. Evidence: "Multiple conviction 5 bullish alerts
+  (fb16b4c9, 6300cc91, eb318d23) during established flow oscillation
+  pattern. Prior bias noted 72% long skew, but real issue is conviction
+  level - I give conviction…"
+
+- **Bias 4** (`3bbf4fef-6c82-4d65-b6c5-e29118e8e7df`) — *"Over-trades
+  on Fed days"* — voice: James (2nd-person trader bias); severity: 4;
+  instruments: SPY/QQQ; observed_count: 6; first_seen: 2026-04-18T14:51;
+  **last_confirmed: 2026-04-18T14:51 (= first_seen, never re-confirmed)**;
+  superseded_by: null. Evidence: "Fed-decision sessions show 3x normal
+  alert volume with post-decision calibration_delta averaging -24pp. Too
+  many calls during macro windows where dispersion is mechanical, not
+  informative."
+
+- **Bias 5** (`dff5c9b0-af84-460a-bc9e-fde933670327`) — *"I treat delta
+  flow reversals as regime shifts when they're retail whipsaw"* — voice:
+  Claude (1st-person); severity: 4; instruments: SPY/QQQ; observed_count:
+  4; first_seen: 2026-04-19T22:00; **last_confirmed: 2026-04-24T14:00
+  (RE-CONFIRMED 5d after first_seen)**; superseded_by: null. Evidence:
+  "Flow oscillation dominated entire session (10+ directional alerts
+  in 70min, 9 invalidated) yet I repeatedly called single delta flow
+  ticks 'regime reversals' or 'sustained positioning.'"
+
+- **Bias 6** (`6590174b-d310-49ce-8801-7835a961d390`) — *"Overweights
+  put flow in low-VIX tape"* — voice: James (2nd-person trader bias);
+  severity: 3; instruments: SPY; observed_count: 8; first_seen:
+  2026-04-18T14:51; **last_confirmed: 2026-04-18T14:51 (= first_seen,
+  never re-confirmed)**; superseded_by: null. Evidence: "When VIX < 14,
+  large put prints are read as bearish signal 81% of the time despite
+  realized delta staying positive. Put flow in suppressed-vol regimes
+  is usually hedging, not directional."
+
+- **Bias 7** (`cf61296f-6627-4a70-abf3-93725e509a3d`) — *"I underweight
+  0DTE expiry pin gravity vs flow signals"* — voice: Claude
+  (1st-person); severity: 3; instruments: SPY/QQQ; observed_count: 2;
+  first_seen: 2026-04-19T22:00; **last_confirmed: 2026-04-21T14:30
+  (RE-CONFIRMED 2d after first_seen)**; superseded_by: null. Evidence:
+  "Multiple alerts assigned conviction 3-5 to directional flow within
+  1h of 0DTE expiry when max-pain pin gravity (SPY 696, QQQ 631) was
+  the dominant structural force. Market pinned exactly as predicted…"
+
+**Cohort split:** 3 of 7 are Claude/specialist-side (1st-person, Apr 19
+batch — biases 1, 3, 5, 7) and 4 of 7 are James-side trader biases
+(2nd-person, Apr 18 batch — biases 2, 4, 6 — plus the 4th in cohort 1
+total mixing 7 → wait, count: 1/3/5/7 = 4 Claude-side, 2/4/6 = 3
+James-side. Re-state: 4 Claude-side (Apr 19) + 3 James-side (Apr 18)).
+**3 of 7 re-confirmed within 11 days** (1, 5, 7 — all Claude-side).
+**4 of 7 never re-confirmed** since creation (2, 3, 4, 6).
+
+**Decisions awaited:** keep all / retire stale / merge cohorts? Whether
+the regrade pipeline that confirms Claude-side biases also covers
+James-side biases (the absence of re-confirmation on James-side may
+reflect "no consumer re-confirms them" rather than "they've stopped
+applying").
+
+## Pending — P2 #10 gap-shape candidates
+
+Counts last 7d: 1,151 alarms in `ct_signature_alarm_log` vs 1,399
+flags with `source='signature_alarm'`. Net diff: +248 flags above
+alarm count. James to disambiguate which shape is real.
+
+The three possible gap shapes:
+
+- **Shape A — 1 alarm → many flags** (alarm fired, multiple flags written
+  from it). Diagnostic clue: count of flags per `alert_id` in
+  `source_flow_ids`. If most alerts are referenced by ≥2 flags, this
+  is the shape. Fix: dedupe at flag-write site or document as intended
+  multi-flag-per-alarm.
+
+- **Shape B — N alarms missing flag-write** (alarm logged but flag never
+  created). Diagnostic clue: `alert_id` rows in `ct_signature_alarm_log`
+  with no corresponding row in `ct_flags.source_flow_ids`. If
+  significant, points to a write-path bug in `ct-signature-watcher`
+  where the alarm-log INSERT succeeds but the flag-write fails or is
+  skipped. Fix: investigate the alarm → flag transition; likely a
+  conditional that filters some alarms out of flag creation.
+
+- **Shape C — Flags written by non-alarm path that share
+  `source='signature_alarm'`** (different writer also tagging signature_alarm).
+  Diagnostic clue: search for INSERT statements into `ct_flags` that
+  hardcode `source: 'signature_alarm'` outside of `ct-signature-watcher`.
+  If found, multiple writers contributing to the same source label
+  inflates the flag count without alarm-log entries. Fix: either route
+  all writers through alarm-log first, or distinguish the source labels.
+
+**Diagnostic the next session can run** (PostgREST array literal
+syntax for source_flow_ids array — earlier curl attempt failed array
+literal parsing; correct form may need `cs={uuid}` with explicit braces):
+
+```
+SELECT
+  COUNT(*) FILTER (WHERE source_flow_ids @> ARRAY[al.alert_id]) AS flags_with_alarm,
+  COUNT(*) FILTER (WHERE source_flow_ids IS NULL OR NOT (source_flow_ids @> ARRAY[al.alert_id])) AS flags_without_alarm
+FROM ct_signature_alarm_log al
+LEFT JOIN ct_flags f ON f.source_flow_ids @> ARRAY[al.alert_id]::uuid[]
+WHERE al.fired_at >= '2026-04-25'
+  AND f.created_at >= '2026-04-25';
+```
+
+(SQL above is sketch — actual query needs validation against the
+actual array element type. `ct_flags.source_flow_ids` may be `uuid[]`
+or `text[]` — check schema before running.)
+
+**Skip-the-investigation option:** if the gap is non-load-bearing
+(both numbers are healthy fire rates), James can mark P2 #10 stale
+and remove from the punch list rather than disambiguate.
+
 ## References
 - `docs/LINKJAC_COTRADER_PLAYBOOK.md` — current operational scoreboard
 - `~/.claude/projects/-Users-jameschellis/memory/project_co_trader_pickup_2026_05_01_session_watch.md` — pickup state, including ct_specialist_memory deprecation
