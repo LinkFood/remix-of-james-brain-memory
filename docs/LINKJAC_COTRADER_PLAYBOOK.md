@@ -292,20 +292,13 @@ Saturday actions:
 
 Heatmap data layer (shipped today) gives us a trustworthy reference. Without it, this audit would have been guesswork. With it, Saturday can definitively decide.
 
-### LB6) OvernightPositioning historical gap — Saturday backfill + delta-RPC fix
+### ~~LB6) OvernightPositioning historical gap — Saturday backfill + delta-RPC fix~~ — ARCHIVED 2026-05-02 [RESOLVED]
 
-Surfaced 2026-04-30 ~14:30 ET. UW rate-limited the OI snapshot fn for 12+ days, leaving these tickers with stale `ct_oi_snapshots`:
-- MSFT, GOOGL, META — last good snap 2026-04-28
-- AMZN — last good snap 2026-04-24
-
-Today's commit `762876c` shipped the rate-limit retry fix so future fires capture all 10 tickers. But the historical gap is structurally unfilled because `ct_compute_oi_deltas` requires strict 1-day-prior baseline. With 2-6 day gaps, no `oi_delta_1d` can be computed → `ct_top_oi_shifts` filters those rows out → panel still missing 4 tickers until gap is closed.
-
-Saturday actions:
-1. **Modify `ct_compute_oi_deltas`** to fall back to most-recent-prior snapshot when strict 1-day match fails. Store actual gap-days alongside the delta (new column `oi_delta_days int`). UI can show "+12K contracts (3-day delta)" instead of hiding the row.
-2. **Backfill the gap days** — write a one-shot script that fires `ct-oi-snapshot` against historical dates (~12 fires for MSFT/GOOGL/META, ~6 for AMZN). UW-heavy but only run once. Saturday is the right window (UW unconstrained).
-3. **Audit remaining ticker positions** — NVDA partial (16 calls vs 21) and TSLA's rate-limit history shows it inherits the gap on different runs depending on order. Consider shuffling ticker order each fire so no single position is consistently disadvantaged.
-
-After Saturday: all 10 tickers in panel, all 10 with current deltas, structurally protected against rate-limit gaps recurring (today's retry fix + Saturday's order shuffling + Saturday's gap-day backfill).
+> Archived as 5th staleness instance. Original symptom (6/10 tickers in panel) was resolved by the 2026-04-30 per-ticker quota migration `20260430183000_top_oi_shifts_per_ticker_quota.sql`, not by the proposed historical backfill. Phase A audit caught the false premise before any UW spend. All 10 watchlist tickers now have substantive OI data with valid `oi_delta_1d`.
+>
+> Bonus methodology finding: the proposed backfill body shape would have silently failed regardless — `ct-oi-backfill-historical` is hardcoded to today/yesterday. Captured separately.
+>
+> See `docs/decisions/2026-05-02-punchlist-staleness-archive.md#item-5` and `docs/decisions/2026-05-02-oi-backfill-historical-parameterization.md`.
 
 ### LB4) Bundle size warning (cosmetic)
 
