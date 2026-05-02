@@ -292,26 +292,55 @@ out of scope for tonight.
 
 ## Auxiliary findings → next session
 
-### **TOP P0 NEXT SESSION: track-state machine doesn't transition**
+### ~~TOP P0 NEXT SESSION: track-state machine doesn't transition~~ — **RETRACTED 2026-05-02**
 
-Discovered while investigating P0 #1 calibration data quality.
-`ct_contract_tracks` has 3,465 WORKING rows / 0 REALIZED / 0 EXPIRED.
-Tracks never transition out of WORKING. Implications:
-- `peak_contract_pct` reflects polling cadence, not actual contract
-  performance over its lifetime
-- Any metric reading peak% (the entire contract-axis grader, all
-  detector calibrations, all backtests) is potentially distorted
-- Calibration of P0 #1 thresholds had to use strict-win-rate (binary
-  outcome label) as anchor instead of peak distribution — workable
-  but a band-aid
+**This was a self-inflicted methodology error. NO BUG EXISTS.**
 
-Investigation scope: read poller (`ct-contract-poller`) state-machine
-transitions; identify why no track ever flips to REALIZED. Likely a
-"polling stopped but status unchanged" class. After fix, re-poll old
-tracks to recover their actual peaks. Then P0 #1 thresholds can be
-re-calibrated against accurate peak distribution.
+The original "3,465 WORKING / 0 REALIZED / 0 EXPIRED" finding came
+from filtering on enum values that don't exist for `ct_contract_tracks`.
+Print-grader uses `REALIZED`/`EXPIRED` for `ct_print_tracks`, but
+**contract-tracks uses a different enum entirely**:
+`WORKING / WIN / LOSS / EXPIRED_WIN / EXPIRED_LOSS / EXPIRED_FLAT / STALE`.
 
-Estimated: 1-2 days for state machine + re-poll + verify.
+Re-queried with correct enum values (Track A audit, ~02:30 UTC):
+
+| Status | Count |
+|---|---|
+| WORKING | 3,465 |
+| WIN | 350 |
+| LOSS | 534 |
+| EXPIRED_WIN | 739 |
+| EXPIRED_LOSS | 1,221 |
+| EXPIRED_FLAT | 2,039 |
+| STALE | 443 |
+| **Total** | **8,791** |
+
+**5,326 of 8,791 tracks (61%) are in terminal/post-WORKING states.**
+The state machine transitions normally via `ct-contract-poller`
+(line 282-328: terminal-status logic for EXPIRED_* + WIN/LOSS flips).
+
+**Implications for P0 #1 Option D shipped earlier tonight:**
+The peak_contract_pct distribution caveat I added was unfounded.
+Peak% IS reflective of actual contract performance — tracks get
+terminated, terminal states are reached. The Option D decision to
+use strict-win-rate as anchor was still correct (binary label is
+the cleanest metric), but the framing "peak distribution is
+poisoned" was wrong. **The P0 #1 ship stands as-is — only the
+auxiliary caveat was wrong, not the calibration.**
+
+### Audit-first applies to MY OWN claims too
+
+Same class lesson, scaled up: when I assert a structural finding
+(here: "state machine doesn't transition"), the audit-first
+discipline says VERIFY before elevating to "TOP P0 next session."
+I confidently filed a non-existent bug into the planning queue
+based on a 30-second wrong-enum query. Track A's Phase A audit
+caught the error within 5 minutes of actually reading the code.
+
+**Future-Claude rule:** before claiming a bug at the architectural
+level (state machine broken / writer path missing / class violation),
+read the relevant source file's enum/type declarations FIRST. Don't
+trust intuition built from filter-counts on unverified enums.
 
 ### Audit-first caught a wrong fix — class lesson
 
