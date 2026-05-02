@@ -191,20 +191,77 @@ the audit only because the Warden was already armed. **The brief's audit
 budget should include a grep for "dead path" / "dead writer" /
 "deprecated" before building functions in the same area.**
 
+## Saturday morning audit results (2026-05-02 ~00:30 UTC)
+
+### LB1 — preflight 9-check audit (read-only) → 6 green / 1 yellow / 2 red
+
+The "5 green / 2 yellow / 3 red" snapshot in the playbook (line 197) was
+from 2026-04-30, before the `book` check was removed. Current state:
+
+| Check | Status | Diagnosis |
+|---|---|---|
+| crons | green | 120 ct-* crons, 0 broken/stale (false-reds in audit parser were weekly schedules; real hook returns green) |
+| cron_failures_6h | green | 0 unresolved |
+| morning_brief | **🔴 RED → fixed (commit b5f4c05)** | Was querying `ct_reports.report_type='morning_brief'` — wrong table. Co-Trader morning brief writes to `ct_daily_briefs`. Re-pointed query. |
+| uw_usage | **🔴 RED → fixed (commit b5f4c05)** | Threshold `>50%` ignored time-of-week, fired red every weekend on routine Friday-end usage. Gated on `dangerWindow = weekday && (preBell || marketActive)`. |
+| heartbeat | green | last beat 1h17m ago (off-hours threshold 18h) |
+| biases | 🟡 yellow | 7 active (target 2-6). 3 James-side trader biases (Apr 18 batch, 2nd-person voice) + 4 Claude-side specialist biases (Apr 19 batch, 1st-person voice). All have `last_triggered_at = NULL`. **Pending James per-bias decision.** |
+| weekend_news | green | 30 rows since Fri 22:00 UTC |
+| config | green | 199 ct_config rows, 0 numeric bound violations |
+| kill_switch | green | disarmed, last update Apr 18 |
+
+Both reds were stale-assumption bugs in the check itself, not in
+underlying systems. Underlying systems (today's morning brief, today's
+UW usage) were healthy. **Class lesson:** when a preflight check goes
+red, audit the check's query logic first — the underlying signal often
+fired correctly elsewhere.
+
+### C1 prompt-diff substring query — structural verification gap
+
+The query as designed (substring match on `ct_claude_decisions.context_snapshot`
+for `[YOUR LAST READS ON <TICKER>]`) **structurally cannot return hits**.
+
+`recordDecision` writes metadata only (`events_considered`,
+`brain_organs_invoked`, `temporal_validator_warnings`, etc.) — NOT the
+rendered prompt body. The rendered prompt is constructed in
+`specialistRunner.ts` and passed to Claude, but never persisted. So the
+substring isn't there to find.
+
+**Indirect verification was adequate for C1:** 52 `helper_name='specialist_recall'`
+fires post 13:00 UTC across all 10 specialists with `error=null`,
+distributed in proportion to events_considered (TSLA/SPY/IWM/QQQ each 7
+fires; MSFT 2). Combined with code review (organ output → concat into
+prompt at line 1132 of specialistRunner) = the recall block IS reaching
+the prompt.
+
+**Mon backlog item — sampled prompt-debug logging path.** Future
+structural changes (Captain framing → preamble wire, analogs rendering,
+eventual DOMAIN_GLOSSARY → preamble wire) need runtime-falsifiable
+verification, not just trust-the-code. Design a minimal "sample the
+rendered prompt for the next N specialist fires into a debug column"
+mechanism. Don't build it now — capture the gap. Estimated scope: ~1-2
+hr Mon (one new column on ct_claude_decisions, opt-in flag in
+recordDecision call sites, retention cap).
+
+### Tenet 13 language expansion (deferred)
+
+Should the warden's purpose statement in CLAUDE.md / SYSTEM_INDEX.md be
+expanded to explicitly enumerate the three classes of failure it
+catches (operational / build-layer architectural drift / Claude
+hallucination re-emergence)? Current language is "silent wrongness"
+which covers all three semantically but doesn't separate them. The
+build-layer drift class was implicit until tonight. Consider for next
+docs pass.
+
 ## Open questions for next session
 
-- LB1 — Saturday will identify the actual 3 reds (current code has 9 checks,
-  no `book`). James decides per-check what gets fixed vs removed vs
-  accepted.
-- C1 prompt-diff query — Saturday will identify the `decision_type` enum
-  value used by specialist consumers and confirm `[YOUR LAST READS ON
-  <TICKER>]` substring presence.
-- #9 / #10 Phase A reports land Sunday.
-- Tenet 13 moment language: should the Warden's purpose statement in
-  `CLAUDE.md` be expanded to explicitly call out the build-layer
-  architectural-drift class? (Current language is "silent wrongness"
-  which covers it semantically but doesn't separate the operational vs.
-  architectural-drift cases.)
+- Per-check decisions on the LB1 fixes — landed; Mon morning's preflight
+  re-test will confirm dangerWindow path triggers correctly.
+- Per-bias decisions on the 7 active biases — keep all / retire stale /
+  merge cohorts? `last_triggered_at` NULL across all suggests no
+  consumer is reading them (or readers don't update the field).
+- Mon backlog: prompt-debug logging path scope.
+- #9 / #10 Phase A reports land later tonight (per James's pull-forward).
 
 ## References
 - `docs/LINKJAC_COTRADER_PLAYBOOK.md` — current operational scoreboard
