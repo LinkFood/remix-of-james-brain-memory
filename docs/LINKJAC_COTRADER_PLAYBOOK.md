@@ -225,54 +225,20 @@ Source identified: `useUpcomingReminders` hook reading JAC-side reminders (entri
 
 **Why not touching:** cross-facet data, James's personal items. He can clear them when he wants. The badge being persistent is informational, not a bug. **Saturday consideration:** add a "snooze older than N days" auto-action to the reminder pipeline so the badge naturally degrades instead of accumulating forever.
 
-### LB8) UW budget reduction plan — Saturday (target -5,000 calls/day)
+### ~~LB8) UW budget reduction plan — Saturday (target -5,000 calls/day)~~ — CLOSED 2026-05-02 [audit baseline refuted; needs re-derivation]
 
-James doesn't want to pay UW for the +10k extension. Daily 20k limit hits 85-95% on busy days; need ~5k/day structural savings to get comfortable headroom (75-80% close).
-
-**Audit baseline (2026-04-30 ~14:00 ET, 77.9% at that point):**
-- ct-contract-poller: ~50% of daily budget (~9-10k calls/day)
-- ct-flow-ingester (perticker + marketwide): ~18% (~3.5k)
-- `unknown` callers (missing setUwCaller): ~13% (~2.5k) — visibility gap
-- News, snapshots, sector-tide, etc: ~15% (~3k)
-
-**Saturday cuts (target -5,000):**
-
-1. **Contract poller throttle (-2,000 to -3,000)**
-   - Option A: `*/4` → `*/5` (drop 21 fires/day × ~95 calls)
-   - Option B: keep `*/4` but skip 0DTE-expired contracts after 2pm ET
-   - Option C: tier-aware step-down — when UW > 70%, drop to `*/5`; > 85%, drop to `*/7`
-   - Recommend C — auto-adapts to budget pressure without hurting freshness on light days
-
-2. **Move heavy non-RTH-essential to weekends (-1,500)**
-   - ct-attribute-signals-nightly → ct-attribute-signals-weekly (Saturday only)
-   - ct-correlation-compute → weekly
-   - Any backfill / canonical re-poll work → strict weekend-only enforcement (already partially scoped per `feedback_weekend_for_uw_heavy_work`)
-   - Weekends use 1-3% of budget; basically free compute window
-
-3. **De-dup overlapping endpoints (-500 to -1,000)**
-   - ct-snapshot-refresh + ct-flow-ingester both pull NOPE per-ticker
-   - Multiple ingesters call `get_options_chain` for overlapping expiries
-   - Solution: shared 5-min TTL cache layer in `_shared/uwClient.ts` keyed on (endpoint, params). Identical calls within window return cached. Specific to high-frequency call categories.
-
-4. **Stop polling expired 0DTE contracts (-500 to -1,000 on M/W/F)**
-   - Filter contract poller queries: skip if `expiry < now()`
-   - Currently re-polls expired contracts that have nothing left to track
-   - Heaviest impact on 0DTE-eligible single names (Mag7 Mon/Wed/Fri) and indexes (every day)
-
-5. **Tag the unknown callers (-0 direct; enables future cuts)**
-   - Audit which functions hit UW without `setUwCaller()` — check `_shared/uwClient.ts` callers + grep for raw `mcpCallToolAsData` invocations missing the tag
-   - 2.5k calls/day are unattributed; tagging makes optimization possible
-   - Today's existing setUwCaller() pass tagged 38 functions per memory — there are still gaps
-
-**Combined target: -5,000 to -6,500 calls/day. Heavy-day close: 75-80% instead of 88-92%. Comfortable.**
-
-**What NOT to cut** (signal-quality core):
-- ct-flow-ingester perticker (live tape feeder)
-- ct-pulse-tick / ct-flow-pulse-capture (drives /tape page)
-- ct-snapshot-refresh (too foundational)
-- Any RTH cron firing every */5 min on watchlist (the live signal layer)
-
-**Estimated effort:** 2-3h Saturday across all 5 cuts. Land Monday morning with budget comfortably under 80% on heavy days.
+> The audit baseline driving LB8 (16.3% mid-week share for `ct-historical-quote-backfill`, 50% for `ct-contract-poller`, 13% unknown callers, etc.) was systematically biased by two compounding methodology errors:
+>
+> 1. **PostgREST 1,000-row response cap** (`feedback_postgrest_1000_row_cap`) — sample skewed toward late-evening rows.
+> 2. **`session_date` ET-bucketing** (`(now() AT TIME ZONE 'America/New_York')::date`) silently mixes UTC clock-day and ET session-day. Caller-cadence questions answered with ET-bucket data systematically misattribute spillover.
+>
+> Track 2 investigation re-derived the `ct-historical-quote-backfill` number under correct bucketing: **0 mid-week calls, 4.31% Friday share (not 16.3%), 100% UTC↔ET boundary spillover**. Function is correctly weekend-gated (`*/30 * * * 0,6` UTC) and capped at ≤200 calls/fire — no leak.
+>
+> Same class as the 2026-04-30 budget-views ET-vs-UTC bug (`67c4a19`). Convention going forward: caller-cadence questions → UTC clock-day; budget-vs-cap questions → ET session_date; never silently mix.
+>
+> The other LB8 sub-cuts (contract poller throttle, weekend moves, dedup, expired-0DTE filter, tag unknown callers) may still warrant work, but their per-caller % shares need re-derivation under correct bucketing before deciding which to ship. Re-prioritize on fresh analysis if/when budget pressure recurs.
+>
+> See `docs/decisions/2026-05-02-historical-quote-backfill-investigation.md` for the full Track 2 audit.
 
 ### LB7) Tape reader "tide" formula audit — Saturday
 
@@ -767,15 +733,13 @@ Resolved by 2026-04-28 partial UNIQUE INDEX `ct_contract_tracks_option_symbol_wo
 
 ---
 
-### 3. Per-alert score-race fix coverage audit
-**Today's three score-race variants caught:**
-1. Morning: pg_cron sequencing (cron-level race) — fixed by inlining ct_score_existing_flow in watcher cron body
-2. Mid-day: edge-fn cold-start race — fixed by per-alert inline scoring in watcher
-3. Afternoon: executed_at=null skipped recovery — fixed by falling back to ingested_at
+### ~~3. Per-alert score-race fix coverage audit~~ — CLOSED 2026-05-02 [class killed]
 
-Each one was structurally distinct and only visible against live flow. There may be a fourth variant we haven't seen.
-
-**Action:** Sunday calibration — write a synthetic test that fires the watcher under cold-start, late-ingest, null-executed_at, and large-batch conditions. Confirm 0/N zero rate on each.
+> Final audit: zero race-risk sites remaining across the codebase. The "10 score-writers" framing was a miscount — actual writer surface is **4 SQL paths in 1 migration** (`20260424000038_scorer_context_columns.sql`), all score-first guaranteed (atomic INSERT/UPSERT in single statement). The only race-vulnerable consumer (`ct-signature-watcher`) has triple-layer protection: cron preflight + edge-function preflight + per-alert inline recovery. Specialists fail-safe (race → missed-fire on next 6-min cron, never wrong flag). Detector portfolio doesn't read `ct_scored_flow.score` at all.
+>
+> Class kill commits: `f5f2c4e` (2026-04-27) + `e88cc79` (2026-04-28).
+>
+> See `docs/decisions/2026-05-02-p0-3-score-race-coverage-final-audit.md` for full per-site classification with file:line citations.
 
 ---
 

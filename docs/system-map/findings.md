@@ -142,6 +142,39 @@ Currently specialists are graded via the underlying-axis grader path with n=12, 
 6. **Consider retiring `ct-mcp-shape-probe` + `ct-mcp-verify`** — analysis-mode-disguised debug tools
 7. **`ct-backtest-harness` migration to terminal-only** — Tenet 26 cleanup
 
+## Methodology lessons (added 2026-05-02 morning sweep)
+
+### UTC clock-day vs ET session_date — never silently mix
+
+**Surfaced by:** Track 2 ct-historical-quote-backfill investigation 2026-05-02 12:30 UTC.
+
+**The bug class:** `ct_uw_usage.session_date` is computed as `(now() AT TIME ZONE 'America/New_York')::date` per `20260418000002_uw_usage.sql`. Caller-cadence audits that bucket by `session_date` will silently misattribute UTC-clock-day spillover into the ET session.
+
+Concrete failure: `ct-historical-quote-backfill` is correctly weekend-gated (`*/30 * * * 0,6` UTC). All Saturday 00:00–01:01 UTC fires got tagged with Friday's `session_date` (because that's still Friday in ET). LB8 audit bucketed by `session_date` and saw "16.3% Friday-mid-week share" — actually it was 0% mid-week + a UTC↔ET boundary spillover. Compounded by PostgREST's 1,000-row response cap which sampled disproportionately from the late-evening window.
+
+**Convention going forward:**
+- Caller-cadence questions ("when does this cron fire?") → group by **UTC clock-day** (`(observed_at AT TIME ZONE 'UTC')::date`).
+- Budget-vs-cap questions ("are we under our 20k daily limit?") → group by **ET session_date** (matches the cap reset).
+- Never silently mix. If an audit needs both, run two queries and label each.
+
+Same class as the 2026-04-30 budget-views ET-vs-UTC bug (`67c4a19`). First time it bit the UI; second time it bit audit methodology.
+
+**Documentation:** `docs/decisions/2026-05-02-historical-quote-backfill-investigation.md`.
+
+---
+
+### "Score-writers" grep heuristics — count what writes, not what references
+
+**Surfaced by:** Track 1 P0 #3 score-race final audit 2026-05-02 12:30 UTC.
+
+The Saturday-night audit's "10 score-writers touching ct_scored_flow" was a miscount — that was 10 edge functions REFERENCING the table (read or write), not 10 writers. The real writer surface is **4 SQL paths in 1 migration** (`20260424000038_scorer_context_columns.sql`). All 4 are score-first guaranteed.
+
+**Convention going forward:** when grepping for "writers" of a table, filter for `INSERT|UPSERT|UPDATE` operations specifically, not bare table references. A function reading the table to compute downstream signal is not a writer; conflating the two inflates the audit surface and creates false coverage gaps.
+
+**Documentation:** `docs/decisions/2026-05-02-p0-3-score-race-coverage-final-audit.md`.
+
+---
+
 ## What the audit confirmed (good news)
 
 - **0 warden invariants failing** as of audit completion
