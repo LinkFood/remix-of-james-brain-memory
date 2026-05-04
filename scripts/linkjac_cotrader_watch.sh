@@ -130,6 +130,37 @@ except Exception as e: print(f'  err: {e}')"
   [[ -z "$REGIME_24H" ]] && REGIME_24H=0
   printf "  latest bucket: %s  ·  rows last 24h: %s (RTH expects ≥600)\n" "$REGIME_LATEST" "$REGIME_24H"
 
+  # ct_pulse_events — fed by ct-pulse-tick (every 5 min RTH) from 6 sources.
+  # Post-2026-05-04 bridge: ct_flow_alerts is the canonical sweep source. If
+  # signal_type='sweep' count drops to ~0 during RTH, the bridge is stalled.
+  PULSE_TODAY=$(curl -s -I "${SUPA}/rest/v1/ct_pulse_events?event_ts=gte.${TODAY}T13:30:00Z&select=id" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" -H "Prefer: count=exact" 2>&1 | grep -i content-range | sed 's|.*/||' | tr -d '\r\n ')
+  [[ -z "$PULSE_TODAY" ]] && PULSE_TODAY=0
+  PULSE_BREAKDOWN=$(curl -s "${SUPA}/rest/v1/ct_pulse_events?event_ts=gte.${TODAY}T13:30:00Z&select=signal_type" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" 2>/dev/null \
+    | python3 -c "
+import json,sys
+from collections import Counter
+d=json.load(sys.stdin)
+c=Counter(r['signal_type'] for r in d)
+print(' / '.join(f'{k}:{v}' for k,v in c.most_common()) or 'empty')")
+  printf "  pulse_events since bell: %s  (%s)\n" "$PULSE_TODAY" "$PULSE_BREAKDOWN"
+
+  # Per-ticker regime classifications — `unknown` count >=8 means signals are
+  # starved. Should be 4-6 unknown on a quiet tape, 0-2 on a directional day.
+  REGIME_CLASS=$(curl -s "${SUPA}/rest/v1/ct_regime_classifications?select=ticker,classification&order=last_updated.desc&limit=11" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" 2>/dev/null \
+    | python3 -c "
+import json,sys
+from collections import Counter
+d=json.load(sys.stdin)
+unknown_count = sum(1 for r in d if r['classification']=='unknown' and r.get('ticker'))
+total_per_ticker = sum(1 for r in d if r.get('ticker'))
+market = next((r for r in d if not r.get('ticker')), None)
+mclass = market['classification'] if market else 'none'
+print(f'MARKET={mclass}  ·  per-ticker unknown: {unknown_count}/{total_per_ticker}')")
+  printf "  classifications: %s\n" "$REGIME_CLASS"
+
   # --- SCOREBOARD FRESHNESS (v1 nightly 23 UTC M-F · v2 nightly 03 UTC) ---
   echo ""
   echo "SPECIALIST SCOREBOARDS (v1=23 UTC M-F · v2=03 UTC daily)"
