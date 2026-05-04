@@ -91,11 +91,17 @@ function bucketBefore(bucket: Date, stepsBack: number, minutes: number): Date {
 // ---------------------------------------------------------------------------
 // Momentum + breadth from ct_pulse_events
 // ---------------------------------------------------------------------------
+// ct_pulse_events.direction is SMALLINT (+1 / 0 / -1). usd_weight is nullable —
+// news/insider/congress events typically have no dollar-volume context, so we
+// fall back to base_weight × magnitude_mult (the canonical "signal weight"
+// Pulse v1's ct_pulse_timeline already uses for non-flow signals).
 interface PulseEventRow {
   ticker: string;
   event_ts: string;
-  direction: string | null;
+  direction: number | null;
   usd_weight: number | null;
+  base_weight: number | null;
+  magnitude_mult: number | null;
 }
 
 async function fetchPulseEvents(
@@ -106,7 +112,7 @@ async function fetchPulseEvents(
 ): Promise<PulseEventRow[]> {
   const { data, error } = await supabase
     .from('ct_pulse_events')
-    .select('ticker, event_ts, direction, usd_weight')
+    .select('ticker, event_ts, direction, usd_weight, base_weight, magnitude_mult')
     .in('ticker', watchlist)
     .gte('event_ts', fromTs.toISOString())
     .lt('event_ts', toTs.toISOString());
@@ -118,10 +124,14 @@ async function fetchPulseEvents(
 }
 
 /**
- * Net momentum for a ticker = sum(signed usd_weight) / NORMALIZER over events
- * within [fromTs, toTs). usd_weight is unsigned; direction supplies sign.
- * Returns null if no events.
+ * Net momentum for a ticker = sum(signed weight) / NORMALIZER over events
+ * within [fromTs, toTs). Weight = usd_weight when present (flow events),
+ * else base_weight * magnitude_mult * SIGNAL_WEIGHT_SCALE (news / insider /
+ * congress / claude_alert events that have no dollar context). direction is
+ * SMALLINT (+1/0/-1) per ct_pulse_events schema. Returns null if no events.
  */
+const SIGNAL_WEIGHT_SCALE = 100_000;  // 0.3 * 1.0 → $30k-equivalent for a base news event
+
 function computeMomentum(
   events: PulseEventRow[],
   ticker: string | null,
@@ -132,9 +142,17 @@ function computeMomentum(
   if (filtered.length === 0) return null;
   let sum = 0;
   for (const e of filtered) {
-    const w = Number(e.usd_weight ?? 0);
+    const dir = Number(e.direction);
+    if (!Number.isFinite(dir) || dir === 0) continue;
+    const sign = dir > 0 ? 1 : -1;
+    let w = Number(e.usd_weight);
+    if (!Number.isFinite(w) || w === 0) {
+      // Fall back to signal weight (base * magnitude) scaled to dollar-equivalent.
+      const bw = Number(e.base_weight ?? 0);
+      const mm = Number(e.magnitude_mult ?? 1);
+      w = bw * mm * SIGNAL_WEIGHT_SCALE;
+    }
     if (!Number.isFinite(w)) continue;
-    const sign = e.direction === 'bearish' ? -1 : e.direction === 'bullish' ? 1 : 0;
     sum += sign * w;
   }
   return sum / MOMENTUM_NORMALIZER;
