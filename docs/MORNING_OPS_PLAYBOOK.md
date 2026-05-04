@@ -1,8 +1,61 @@
 # Co-Trader Morning Ops Playbook
 
-**Last major update: 2026-04-27 evening — first portfolio test + 15 live fixes shipped.**
+**Last major update: 2026-05-04 morning — Pulse v2 + Specialist v2 first weekday RTH after Saturday's full-day build.**
 
 For terminal-Claude sessions, the same content auto-loads from `~/.claude/projects/-Users-jameschellis/memory/project_co_trader_morning_ops_checklist.md`. This file is the human-readable repo-tracked version.
+
+---
+
+## Monday 2026-05-04 — TODAY'S WATCH (read first)
+
+**The pickup state**: Saturday 2026-05-02 wrap left punchlist EMPTY, warden 26/26. Pulse v2 + Specialist v2 + v1 silent-failure fix all shipped. Today is the first weekday RTH where this all runs unattended.
+
+### Run the script
+```bash
+bash /Users/jameschellis/jac-agent-os/scripts/linkjac_cotrader_watch.sh
+```
+5-min refresh. Adds Pulse v2 cadence, scoreboard freshness, and the v1 23:00 UTC validation reminder on top of the existing detector / budget / watchlist / Slack panels.
+
+### Pre-bell warden state — 6 warns, none critical, triage
+
+| Invariant | Value | Self-heal trigger |
+|---|---|---|
+| `morning_brief_freshness` | 0 | Brief wrote at 11:01 UTC, 80s after the 11:00 check. Passes at 11:30 UTC fire. |
+| `regime_history_growing` | 11/24h | RTH cadence at 13:00 UTC = 132 rows/h. Heals fast. |
+| `brain_telemetry_consumer_coverage_24h` | 4 consumers | First RTH telemetry burst |
+| `brain_telemetry_insert_rate_24h` | 98 | 2 short of threshold; first RTH burst |
+| `specialist_grade_axes_growing` | 0/24h | Specialists fire today RTH → grader produces |
+| `cron_zero_row_upsert_silent_failure_class` | 1 (v1 scoreboard 53h stale) | **Tonight 23:00 UTC validation moment** — see below |
+
+### Tonight 23:00 UTC — THE validation moment for the v1 scoreboard fix
+
+The Saturday 2026-05-02 NULL-specialist fix shipped (`migration 20260502040900`), but the cron is `0 23 * * 1-5`, so it hasn't fired since Friday's bug. **Tonight's fire is the first weekday-23 UTC tick post-fix.** Tomorrow morning warden should flip 27/27 green if rows landed. If it stays red, second-order bug — check ct-specialist-scoreboard-update logs.
+
+### Pulse v2 first-RTH watch
+
+ct-regime-capture fires off-hours at 10:00 + 11:00 + 12:00 UTC, then RTH every 5 min from 13:00–21:00 UTC. **Already verified clean for 10:00 + 11:00 buckets.** Watch:
+- `/pulse` page leaves empty-state at 13:00 UTC bell — all 11 entities (10 tickers + market-wide) classify
+- momentum field non-null once pulse_events stream resumes
+- `ct_regime_history` row count surges from ~22/24h to 600+ by EOD
+- Embedding rate stays ≥95% (warden invariant `regime_embedding_present` watches this)
+
+### Specialist v2 watch
+
+- `/specialists` v2 panels with fresh nightly grades from Sun 03:00 UTC fire
+- MSFT/SPY/IWM blended hit_rate ≥ 0.55
+- AMZN/META/NVDA hit_rate trajectory (currently 0.50, decay was being proposed Saturday — watch for stabilize vs decay)
+- Lifecycle cron K=4 still gating (no flips for ≥3 more nights minimum)
+- C1 verification window reads continuing — acceptance review **2026-05-15**
+
+### What NOT to touch — preamble freeze through 2026-05-15
+
+Pulse v2 regime context is NOT injected into the runtime preamble. Data IS available via `organs.regime` for explicit consumers; just don't add it to the global preamble until the C1 hit-rate experiment closes. Same applies to specialist v2 enrichment.
+
+### Known open (not blocking RTH)
+
+`ct-signature-watcher` has a local `inferPredictedSource()` at lines 152-185 that never got the 4/28 RepeatedHits-put fix. Half of the "puts -21pp" pattern (id=8 in `ct_observed_patterns`) is artifact. Structural fix is `import { inferDirection } from '../_shared/directionInference.ts'`. Not urgent — flagged for a separate session.
+
+---
 
 ---
 

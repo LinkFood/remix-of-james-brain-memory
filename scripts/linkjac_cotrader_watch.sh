@@ -19,15 +19,25 @@
 # Stop:   Ctrl-C
 # Override interval:  INTERVAL_SEC=60 bash ...
 #
-# What changed 2026-04-30 → 2026-05-01 overnight (current as-of):
+# What changed 2026-04-30 → 2026-05-02 (current as-of):
 #   - Synthesis Layer Phases 0-8 shipped (single buildClaudeContext, 9 organs, telemetry)
-#   - System Warden live (15 invariants, 30-min cron, Slack on state-change)
+#   - System Warden live (27 invariants, 30-min cron, Slack on state-change)
 #   - Specialist Recall property live (10th organ, 3-state outcome rendering)
 #   - tickerCoherenceValidator kills data-fabrication hallucination class
 #   - Budget views ET-bucketed (no more UTC-rollover zero-out)
-#   - 22 UW ingesters bulk-redeployed for setUwCaller hygiene
+#   - Pulse v2 regime classification + analog history (4 tables, HNSW, brain organ #11)
+#     First RTH auto-fires Monday 2026-05-04 — every 5 min × 11 entities = ~132 rows/h
+#   - Specialist Scoreboard v2 multi-axis grading (4 tables, K=4 lifecycle gate)
+#   - V1 scoreboard NULL-specialist fix shipped 2026-05-02 — TONIGHT 23:00 UTC IS THE
+#     FIRST WEEKDAY FIRE POST-FIX. If row lands fresh tomorrow → class-killed for real.
+#   - Forensic post-op corpus: ct_flag_analysis_corpus (5,255 rows) + 3 helper RPCs
+#     + ct_observed_patterns + warden invariant. 4 patterns captured (id 8-11).
 #   - Captain Into The Storm governing image landed (build-time discipline only —
 #     runtime preamble wire DEFERRED to 2026-05-15 per recall experiment design)
+#
+# KNOWN OPEN: ct-signature-watcher has a local copy of inferPredictedSource() that
+# never got the 2026-04-28 RepeatedHits-put fix. Half of "puts -21pp" pattern is
+# artifact. Structural fix is import inferDirection from _shared. Not blocking RTH.
 
 set -uo pipefail
 
@@ -90,8 +100,8 @@ try:
     d=json.load(sys.stdin); t=d['totals']
     icon='🟢' if t['failing']==0 and t['errored']==0 else ('🟡' if t['critical_failing']==0 else '🔴')
     print(f\"  {icon} {t['passing']}/{t['total_enabled']} passing  ·  failing={t['failing']}  errored={t['errored']}  critical={t['critical_failing']}\")
-    for f in d.get('failures',[])[:5]:
-        print(f\"     [{f.get('severity','?'):8}] {f.get('name','?'):50} v={f.get('value')}  → {f.get('runbook_path','')}\")
+    for f in d.get('failures',[])[:6]:
+        print(f\"     [{f.get('severity','?'):8}] {f.get('name','?'):50} v={f.get('last_value')}  → {f.get('runbook_path','')}\")
 except Exception as e: print(f'  err: {e}')"
 
   # --- BRAIN HEALTH (synthesis layer telemetry) ---
@@ -107,6 +117,35 @@ try:
     d=json.load(sys.stdin); t=d['totals']
     print(f\"  invocations={t['total_invocations']}  helpers={t['distinct_helpers']}  consumers={t['distinct_consumers']}  errors={t['total_errors']}  warnings={t['total_warnings']}\")
 except Exception as e: print(f'  err: {e}')"
+
+  # --- PULSE V2 REGIME (new 2026-05-02 — first auto-fires Monday 2026-05-04) ---
+  echo ""
+  echo "PULSE V2 REGIME (off-hours hourly / RTH every 5 min — 11 entities/bucket)"
+  echo "-------------------------------------------------------------------------------"
+  REGIME_LATEST=$(curl -s "${SUPA}/rest/v1/ct_regime_history?select=bucket_ts&order=bucket_ts.desc&limit=1" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" 2>/dev/null \
+    | python3 -c "import json,sys;d=json.load(sys.stdin);print(d[0]['bucket_ts'][:16] if d else 'none')")
+  REGIME_24H=$(curl -s -I "${SUPA}/rest/v1/ct_regime_history?bucket_ts=gte.$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)&select=id" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" -H "Prefer: count=exact" 2>&1 | grep -i content-range | sed 's|.*/||' | tr -d '\r\n ')
+  [[ -z "$REGIME_24H" ]] && REGIME_24H=0
+  printf "  latest bucket: %s  ·  rows last 24h: %s (RTH expects ≥600)\n" "$REGIME_LATEST" "$REGIME_24H"
+
+  # --- SCOREBOARD FRESHNESS (v1 nightly 23 UTC M-F · v2 nightly 03 UTC) ---
+  echo ""
+  echo "SPECIALIST SCOREBOARDS (v1=23 UTC M-F · v2=03 UTC daily)"
+  echo "-------------------------------------------------------------------------------"
+  V1_LATEST=$(curl -s "${SUPA}/rest/v1/ct_specialist_scoreboard?select=computed_at&order=computed_at.desc&limit=1" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" 2>/dev/null \
+    | python3 -c "import json,sys;d=json.load(sys.stdin);print(d[0]['computed_at'][:19] if d else 'none')")
+  V2_LATEST=$(curl -s "${SUPA}/rest/v1/ct_specialist_scoreboard_v2?select=last_updated&order=last_updated.desc&limit=1" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" 2>/dev/null \
+    | python3 -c "import json,sys;d=json.load(sys.stdin);print(d[0]['last_updated'][:19] if d else 'none')")
+  GRADE_24H=$(curl -s -I "${SUPA}/rest/v1/ct_specialist_grade_axes?graded_at=gte.$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)&select=flag_id" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" -H "Prefer: count=exact" 2>&1 | grep -i content-range | sed 's|.*/||' | tr -d '\r\n ')
+  [[ -z "$GRADE_24H" ]] && GRADE_24H=0
+  printf "  v1 latest:  %s  (next fire 23:00 UTC tonight — VALIDATION OF NULL-FIX)\n" "$V1_LATEST"
+  printf "  v2 latest:  %s  (last nightly fire)\n" "$V2_LATEST"
+  printf "  grade_axes rows last 24h: %s\n" "$GRADE_24H"
 
   # --- WATCHLIST PURITY (new for Tuesday) ---
   echo ""
