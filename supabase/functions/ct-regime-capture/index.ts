@@ -267,12 +267,23 @@ async function fetchUpcomingEvents(
   });
 }
 
-function daysBetween(now: Date, eventDateStr: string): number {
-  // event_date is YYYY-MM-DD in ET-ish — compare at day granularity
+function daysUntil(now: Date, eventDateStr: string): number | null {
+  // Returns signed days from today → event_date. null if the event is in the
+  // past — past events are not "upcoming proximity," they're history. Earlier
+  // version clamped negatives to 0 which made last week's FOMC eternally read
+  // as "today" and triggered pre_event_macro forever.
   const evt = new Date(`${eventDateStr}T00:00:00Z`);
   const today = new Date(`${now.toISOString().slice(0, 10)}T00:00:00Z`);
   const ms = evt.getTime() - today.getTime();
-  return Math.max(0, Math.round(ms / (24 * 60 * 60 * 1000)));
+  const days = Math.round(ms / (24 * 60 * 60 * 1000));
+  return days < 0 ? null : days;
+}
+
+// Strict: a market-moving FOMC event is the meeting itself, the post-decision
+// statement/presser (same date as the meeting), or the minutes release.
+// Random Fed governor speeches in foreign cities are NOT FOMC events.
+function isFomcEvent(title: string): boolean {
+  return title.includes('fomc') || title.includes('interest-rate decision');
 }
 
 function buildMacroProximity(
@@ -286,14 +297,15 @@ function buildMacroProximity(
   const earningsClusters: Array<{ ticker: string; days: number }> = [];
 
   for (const e of events) {
-    const days = daysBetween(now, e.event_date);
+    const days = daysUntil(now, e.event_date);
+    if (days === null) continue;  // skip past events
     if (e.event_type === 'econ') {
       const title = (e.title ?? '').toLowerCase();
-      if (title.includes('fomc') || title.includes('fed')) {
+      if (isFomcEvent(title)) {
         fomc = fomc === null ? days : Math.min(fomc, days);
       } else if (title.includes('cpi') || title.includes('inflation')) {
         cpi = cpi === null ? days : Math.min(cpi, days);
-      } else if (title.includes('jobs') || title.includes('payroll') || title.includes('nfp') || title.includes('unemployment')) {
+      } else if (title.includes('jobs report') || title.includes('payroll') || title.includes('nfp') || title.includes('unemployment rate')) {
         jobs = jobs === null ? days : Math.min(jobs, days);
       }
     } else if (e.event_type === 'earnings' && e.ticker) {
