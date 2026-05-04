@@ -373,6 +373,16 @@ function evaluateRule(rule: ConfigRule, sig: RegimeSignal): RuleMatch {
     slacks.push(1.0);
   }
 
+  // breadth is structurally null for per-ticker rows (can't compute breadth
+  // across 1 ticker). Skip null-fail when constraint applies to a per-ticker
+  // row's breadth. dispersion is also per-ticker-null but is intentionally
+  // left enforced — high vs low dispersion is a MARKET-scope concept;
+  // per-ticker rows route to chop_neutral / trending / breaking rules that
+  // don't reference dispersion. See ct_regime_config row 'chop_neutral'.
+  const isPerTicker = sig.ticker !== null;
+  const skipNullForPerTicker = (label: string) =>
+    isPerTicker && label === 'breadth';
+
   // Numeric range thresholds
   const checkRange = (
     label: string,
@@ -383,7 +393,10 @@ function evaluateRule(rule: ConfigRule, sig: RegimeSignal): RuleMatch {
     const min = t[minKey] as number | undefined;
     const max = t[maxKey] as number | undefined;
     if (min === undefined && max === undefined) return null; // not constrained
-    if (value === null) return { matched: false, strength: 0, reasons: [`${label} is null but constrained`] };
+    if (value === null) {
+      if (skipNullForPerTicker(label)) return null; // structurally null at per-ticker scope
+      return { matched: false, strength: 0, reasons: [`${label} is null but constrained`] };
+    }
     if (typeof min === 'number' && value < min) {
       return { matched: false, strength: 0, reasons: [`${label}=${value.toFixed(2)} < ${minKey}=${min}`] };
     }
