@@ -161,6 +161,32 @@ mclass = market['classification'] if market else 'none'
 print(f'MARKET={mclass}  ·  per-ticker unknown: {unknown_count}/{total_per_ticker}')")
   printf "  classifications: %s\n" "$REGIME_CLASS"
 
+  # --- HYPOTHESIS PIPELINE (proposer → trade-idea-generator → book-writer) ---
+  # When proposer Claude calls error, the whole downstream Claude pipeline
+  # goes silent — no hypotheses → no trade ideas → no book entries → daily
+  # Claude cost drops from ~$18 to ~$4. 2026-05-04 outage cause: prose-mode
+  # JSON parse breaking 56% of fires (fixed via forced tool-use d0ce20f).
+  echo ""
+  echo "HYPOTHESIS PIPELINE (proposer fires 11/15/19 UTC weekdays — Sonnet)"
+  echo "-------------------------------------------------------------------------------"
+  PROP_OUTCOMES=$(curl -s "${SUPA}/rest/v1/ct_claude_decisions?decision_type=eq.propose_hypothesis&created_at=gte.$(date -u -v-24H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)&select=outcome" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" 2>/dev/null \
+    | python3 -c "
+import json,sys
+from collections import Counter
+d=json.load(sys.stdin)
+c=Counter(r.get('outcome','?') for r in d)
+errs=sum(v for k,v in c.items() if 'claude_error' in (k or ''))
+total=sum(c.values())
+print(f'last 24h: {total} fires  ·  errors: {errs}' + (' ⚠' if errs > 0 else ''))")
+  printf "  %s\n" "$PROP_OUTCOMES"
+
+  HYP_TODAY=$(curl -s -I "${SUPA}/rest/v1/ct_hypotheses?created_at=gte.${TODAY}T00:00:00Z&select=id" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" -H "Prefer: count=exact" 2>&1 | grep -i content-range | sed 's|.*/||' | tr -d '\r\n ')
+  TIG_TODAY=$(curl -s -I "${SUPA}/rest/v1/ct_claude_usage?source=eq.ct-trade-idea-generator&created_at=gte.${TODAY}T00:00:00Z&select=id" \
+    -H "Authorization: Bearer ${SR_KEY}" -H "apikey: ${SR_KEY}" -H "Prefer: count=exact" 2>&1 | grep -i content-range | sed 's|.*/||' | tr -d '\r\n ')
+  printf "  hypotheses created today: %s  ·  trade-idea-generator calls today: %s\n" "${HYP_TODAY:-0}" "${TIG_TODAY:-0}"
+
   # --- SCOREBOARD FRESHNESS (v1 nightly 23 UTC M-F · v2 nightly 03 UTC) ---
   echo ""
   echo "SPECIALIST SCOREBOARDS (v1=23 UTC M-F · v2=03 UTC daily)"
