@@ -31,7 +31,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
-import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError, calculateCost } from '../_shared/anthropic.ts';
+import { callClaude, CLAUDE_MODELS, parseToolUse, ClaudeError, calculateCost } from '../_shared/anthropic.ts';
 import { getConfig } from '../_shared/configCache.ts';
 import { buildClaudeContext, claudeSystemPromptPreamble } from '../_shared/claudeReadSurface.ts';
 import { recordDecision } from '../_shared/decisionJournal.ts';
@@ -439,6 +439,35 @@ serve(async (req) => {
 
   const systemPrompt = `${tctx.temporalAnchorPreamble}\n\n${claudeSystemPromptPreamble(claudeCtx)}\n\n${SYSTEM}`;
 
+  // Forced tool-use: Sonnet's prose-mode JSON is unreliable for long structured
+  // output (14 of 25 fires last 7 days errored with `Unexpected token 'L',
+  // "Looking at"...`). Tool-use returns parsed input directly, no parse step.
+  // See feedback_sonnet_long_json_use_tool_use.md for the canonical pattern.
+  const proposalTool = {
+    name: 'propose_hypotheses',
+    description: 'Return zero or more new trading hypotheses. Empty array is acceptable when nothing meets the bar.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        proposals: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              claim: { type: 'string' },
+              because: { type: 'array', items: { type: 'string' }, minItems: 3, maxItems: 5 },
+              invalidate_if: { type: 'string' },
+              horizon: { type: 'string', enum: ['session', 'week', 'month', 'open'] },
+              tickers: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['claim', 'because', 'invalidate_if', 'horizon', 'tickers'],
+          },
+        },
+      },
+      required: ['proposals'],
+    },
+  };
+
   let proposals: Proposal[] = [];
   let tokensIn = 0;
   let tokensOut = 0;
@@ -450,13 +479,17 @@ serve(async (req) => {
       messages: [{ role: 'user', content: JSON.stringify(userPayload) }],
       max_tokens: 2000,
       temperature: 0.4,
+      tools: [proposalTool],
+      tool_choice: { type: 'tool', name: 'propose_hypotheses' },
     });
     tokensIn = res.usage?.input_tokens ?? 0;
     tokensOut = res.usage?.output_tokens ?? 0;
     costUsd = calculateCost(CLAUDE_MODELS.sonnet_46, res.usage ?? { input_tokens: 0, output_tokens: 0 });
-    const raw = parseTextContent(res).trim();
-    const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-    const parsed = JSON.parse(stripped) as { proposals?: unknown };
+    const tool = parseToolUse(res);
+    if (!tool || tool.name !== 'propose_hypotheses') {
+      throw new Error(`expected tool_use propose_hypotheses, got ${tool?.name ?? 'none'}`);
+    }
+    const parsed = tool.input as { proposals?: unknown };
     const candidates = Array.isArray(parsed.proposals) ? parsed.proposals : [];
     proposals = candidates.filter(validateProposal) as Proposal[];
     // Hard cap even if Claude over-delivers.
