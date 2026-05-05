@@ -1,23 +1,46 @@
-// Co-Trader MCP server — v1, single tool, stdio transport, read-only.
+// Co-Trader MCP server — v2 Tier 1, six tools, stdio transport, read-only.
 //
 // Boot:   deno run --allow-all mcp/cotrader/server.ts
 // Verify: deno task smoke
 // Register with Claude Code: see mcp/cotrader/README.md.
+//
+// Tools:
+//   1. get_co_trader_context (v1.1 — byte-identical to current main, the
+//      composed brain context for a single watchlist ticker)
+//   2. get_observed_patterns (v2 — forensic pattern catalog)
+//   3. get_morning_brief (v2 — JAC's daily 6 AM ET digest)
+//   4. get_eod_summary (v2 — Co-Trader EOD session summary, slim by default)
+//   5. get_warden_state (v2 — System Warden invariant snapshot via RPC)
+//   6. get_recent_james_flags (v2 — flags James personally starred from /tape)
+//
+// Tier-1 tool `get_brain_principles` was DROPPED per Phase A audit §9.1 —
+// `brain_principles` table doesn't exist; `distill-principles` cron has been
+// silently no-op'ing. Re-add as Tier 2 after the writer is fixed and rows
+// populate. See `docs/audit/2026-05-05-cotrader-mcp-v2-tier1-phase-a.md`.
 
 import { McpServer } from 'npm:@modelcontextprotocol/sdk@1.29.0/server/mcp.js';
 import { StdioServerTransport } from 'npm:@modelcontextprotocol/sdk@1.29.0/server/stdio.js';
 import { z } from 'npm:zod@3.25.76';
 
 import { getCoTraderContext } from './tools/get_co_trader_context.ts';
+import { getObservedPatterns } from './tools/get_observed_patterns.ts';
+import { getMorningBrief } from './tools/get_morning_brief.ts';
+import { getEodSummary } from './tools/get_eod_summary.ts';
+import { getWardenState } from './tools/get_warden_state.ts';
+import { getRecentJamesFlags } from './tools/get_recent_james_flags.ts';
 import { UNIVERSE } from './lib/universe.ts';
 
 const SERVER_NAME = 'cotrader';
-const SERVER_VERSION = '1.0.0';
+const SERVER_VERSION = '2.0.0';
 
 const server = new McpServer({
   name: SERVER_NAME,
   version: SERVER_VERSION,
 });
+
+// ---------------------------------------------------------------------------
+// Tool 1: get_co_trader_context (v1.1 — UNCHANGED, byte-identical)
+// ---------------------------------------------------------------------------
 
 server.registerTool(
   'get_co_trader_context',
@@ -87,6 +110,296 @@ server.registerTool(
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       console.error(`[cotrader-mcp] ERROR ticker=${args.ticker} msg=${msg}`);
+      return {
+        content: [{ type: 'text', text: `Error: ${msg}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool 2: get_observed_patterns
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  'get_observed_patterns',
+  {
+    description:
+      "Returns the forensic platform's catalog of statistically-confirmed " +
+      'patterns over Co-Trader flag history (e.g. "puts -21pp baseline_delta at ' +
+      'n=431"). Each row carries pattern_signature (JSONB key axis/instrument/' +
+      'side/detector_id/etc.), n_observed, hit_rate_blended, baseline_delta, ' +
+      'recommended_action, and status. Use when the user asks about validated ' +
+      'patterns, the observed-pattern catalog, what the corpus has shown, or what ' +
+      'the system has statistically learned about flag outcomes. Default status ' +
+      'filter is validated+observed (excludes deprecated). READ-ONLY.',
+    inputSchema: {
+      ticker: z
+        .string()
+        .optional()
+        .describe(
+          'Optional ticker filter. Matches pattern_signature->>instrument via ' +
+            'JSONB containment. Off-watchlist tickers return empty without ' +
+            "throwing (pattern signatures don't always carry an instrument key).",
+        ),
+      status: z
+        .union([z.string(), z.array(z.string())])
+        .optional()
+        .describe(
+          'Status filter: validated | observed | deprecated. Accepts a single ' +
+            'string, comma-separated string, or array. Default: ["validated", "observed"].',
+        ),
+      min_n: z
+        .number()
+        .optional()
+        .describe(
+          'Optional minimum n_observed (sample size) filter. Drops patterns ' +
+            'with fewer settled observations.',
+        ),
+      limit: z
+        .number()
+        .optional()
+        .describe('Max rows to return. Default 25, hard cap 50.'),
+    },
+  },
+  async (args) => {
+    const t0 = Date.now();
+    try {
+      const result = await getObservedPatterns(args);
+      const totalMs = Date.now() - t0;
+      console.error(
+        `[cotrader-mcp] tool=get_observed_patterns ticker=${result.meta.appliedFilters.ticker ?? 'all'} ` +
+          `status=[${result.meta.appliedFilters.status.join(',')}] ` +
+          `rows=${result.meta.rowCount} total_ms=${totalMs}`,
+      );
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[cotrader-mcp] ERROR get_observed_patterns msg=${msg}`);
+      return {
+        content: [{ type: 'text', text: `Error: ${msg}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool 3: get_morning_brief
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  'get_morning_brief',
+  {
+    description:
+      "Returns JAC's morning brief for a given ET date (default: today's brief " +
+      'if it has fired, else yesterday). The brief is the daily ~6 AM ET digest ' +
+      "compiled by the jac-morning-brief cron — today's schedule, this-week " +
+      'deadlines, what JAC did overnight, brain activity summary, heads-up items. ' +
+      'Use when the user asks about the morning brief, what JAC compiled this ' +
+      'morning, today\'s schedule per JAC, or "did I get my brief today." ' +
+      'Returns a single row with title, summary, body_markdown, and structured ' +
+      'metadata. READ-ONLY. Note: brief content may include personal scheduling ' +
+      'context — treat MCP transcripts as private journal.',
+    inputSchema: {
+      date: z
+        .string()
+        .optional()
+        .describe(
+          'Optional ET session date (YYYY-MM-DD). Default: today ET if a brief ' +
+            'has likely fired (>= 6 AM ET), else yesterday ET.',
+        ),
+    },
+  },
+  async (args: { date?: string }) => {
+    const t0 = Date.now();
+    try {
+      const result = await getMorningBrief(args);
+      const totalMs = Date.now() - t0;
+      console.error(
+        `[cotrader-mcp] tool=get_morning_brief et_date=${result.meta.requestedEtDate} ` +
+          `found=${result.meta.rowCount} total_ms=${totalMs}`,
+      );
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[cotrader-mcp] ERROR get_morning_brief msg=${msg}`);
+      return {
+        content: [{ type: 'text', text: `Error: ${msg}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool 4: get_eod_summary
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  'get_eod_summary',
+  {
+    description:
+      "Returns Co-Trader's end-of-day session summary for a given trading " +
+      'session (default: most-recent completed session per market clock). ' +
+      'Combines ct_eod_reports (per-ticker close, regime shift, tomorrow watchlist, ' +
+      "lessons) with ct_eod_summaries (regime tag, snapshot hit-rate, today's " +
+      'realized tracks). Use when the user asks how a session graded out, what ' +
+      "the EOD report said, today's specialist scorecard, or tomorrow's watchlist. " +
+      'DEFAULT MODE IS SLIM (~3k tokens). Pass verbose: true for the full ' +
+      'long-form markdown narrative + every JSONB block (~12k tokens). READ-ONLY.',
+    inputSchema: {
+      date: z
+        .string()
+        .optional()
+        .describe(
+          'Optional ET session date (YYYY-MM-DD). Default: last completed ' +
+            "trading session per marketClock — yesterday's during RTH, today's " +
+            'after the close.',
+        ),
+      verbose: z
+        .boolean()
+        .optional()
+        .describe(
+          'Set true to include the full long-form summary_text markdown plus ' +
+            'every JSONB recap block (specialist_stats, ticker_stats, ' +
+            'edge_attribution, flow_recap, etc.). Default false (slim ~3k tokens).',
+        ),
+    },
+  },
+  async (args: { date?: string; verbose?: boolean }) => {
+    const t0 = Date.now();
+    try {
+      const result = await getEodSummary(args);
+      const totalMs = Date.now() - t0;
+      console.error(
+        `[cotrader-mcp] tool=get_eod_summary session=${result.meta.requestedSessionDate} ` +
+          `verbose=${result.meta.verbose} summary=${result.meta.summaryRowFound} ` +
+          `report=${result.meta.reportRowFound} total_ms=${totalMs}`,
+      );
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[cotrader-mcp] ERROR get_eod_summary msg=${msg}`);
+      return {
+        content: [{ type: 'text', text: `Error: ${msg}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool 5: get_warden_state
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  'get_warden_state',
+  {
+    description:
+      "Returns the System Warden's current invariant snapshot — totals + " +
+      'by-category breakdown + sorted failures[] each carrying severity, ' +
+      'runbook_path, last_value, and last_run_at. Backed by the canonical ' +
+      'public.get_warden_health(window_hours) RPC, server-aggregated in one ' +
+      'round-trip. Use when the user asks "is the system healthy right now," ' +
+      "what's failing, is the warden green, or whether any warden alarms have " +
+      'fired. NOT per-ticker — system health is global. READ-ONLY.',
+    inputSchema: {
+      window_hours: z
+        .number()
+        .optional()
+        .describe(
+          'Look-back window for the failures[] roll-up. Default 24, min 1, ' +
+            'max 720 (30 days). Lets the user widen the window to see ' +
+            'historical state changes.',
+        ),
+    },
+  },
+  async (args: { window_hours?: number }) => {
+    const t0 = Date.now();
+    try {
+      const result = await getWardenState(args);
+      const totalMs = Date.now() - t0;
+      console.error(
+        `[cotrader-mcp] tool=get_warden_state window_h=${result.meta.windowHours} ` +
+          `failures=${result.meta.failureCount} total_ms=${totalMs}`,
+      );
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[cotrader-mcp] ERROR get_warden_state msg=${msg}`);
+      return {
+        content: [{ type: 'text', text: `Error: ${msg}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool 6: get_recent_james_flags
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  'get_recent_james_flags',
+  {
+    description:
+      'Returns flags James has personally starred from the /tape UI within the ' +
+      'last `hours` hours (default 24, max 168). These are James\'s hand-labeled ' +
+      'signals (source=james_star) — distinct from the system\'s auto-generated ' +
+      'detector flags. Use when the user asks "what did I flag yesterday," "what ' +
+      'was I tracking this week," or "show me my own marks." Off-watchlist ' +
+      'tickers rejected (universe is locked: ' + UNIVERSE.join(', ') + '). ' +
+      'READ-ONLY. Returns rows with instrument, side, score, thesis, ' +
+      'invalidation, horizon, status, and timestamps.',
+    inputSchema: {
+      hours: z
+        .number()
+        .optional()
+        .describe('Lookback window in hours. Default 24, max 168 (1 week).'),
+      ticker: z
+        .string()
+        .optional()
+        .describe(
+          'Optional ticker filter. Must be in the locked 10-name universe. ' +
+            'Off-watchlist arg throws.',
+        ),
+      limit: z
+        .number()
+        .optional()
+        .describe('Max rows to return. Default 50, hard cap 200.'),
+    },
+  },
+  async (args: { hours?: number; ticker?: string; limit?: number }) => {
+    const t0 = Date.now();
+    try {
+      const result = await getRecentJamesFlags(args);
+      const totalMs = Date.now() - t0;
+      console.error(
+        `[cotrader-mcp] tool=get_recent_james_flags hours=${result.meta.appliedFilters.hours} ` +
+          `ticker=${result.meta.appliedFilters.ticker ?? 'all'} ` +
+          `rows=${result.meta.rowCount} total_ms=${totalMs}`,
+      );
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[cotrader-mcp] ERROR get_recent_james_flags msg=${msg}`);
       return {
         content: [{ type: 'text', text: `Error: ${msg}` }],
         isError: true,
