@@ -13,15 +13,17 @@
 //     session via `marketClock.lastMarketClose`.
 //   - 1:1 join — every report has a summary; not every summary has a report.
 //
-// Read-only (SELECT). Best-effort telemetry to `ct_brain_telemetry`.
+// Read-only (SELECT). Best-effort telemetry to `ct_mcp_tool_calls` (separate
+// table from organ telemetry per PR #11 review 2026-05-05).
 
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { resolveAuth } from '../lib/auth.ts';
 import { isMarketOpen, lastMarketClose } from '../../../supabase/functions/_shared/marketClock.ts';
 import { dateInTz } from '../../../supabase/functions/_shared/clock.ts';
+import { emitToolTelemetry } from '../lib/tool_telemetry.ts';
 
 const CONSUMER_NAME = 'cotrader-mcp';
-const TOOL_NAME = 'tool:get_eod_summary';
+const TOOL_NAME = 'get_eod_summary';
 const ET_TZ = 'America/New_York';
 
 export interface GetEodSummaryArgs {
@@ -102,26 +104,6 @@ function defaultSessionDate(): string {
   return dateInTz(refDate, ET_TZ);
 }
 
-async function emitTelemetry(
-  supabase: SupabaseClient,
-  args: { latencyMs: number; outputBytes: number; error?: string | null },
-): Promise<void> {
-  try {
-    await supabase.from('ct_brain_telemetry').insert({
-      helper_name: TOOL_NAME,
-      audience: 'cotrader',
-      ticker_focus: null,
-      consumer_name: CONSUMER_NAME,
-      latency_ms: args.latencyMs,
-      output_size_bytes: args.outputBytes,
-      cache_hit: false,
-      error: args.error ?? null,
-    });
-  } catch (_e) {
-    // never block
-  }
-}
-
 export async function getEodSummary(args: GetEodSummaryArgs): Promise<GetEodSummaryResult> {
   const t0 = performance.now();
   const warnings: string[] = [];
@@ -175,12 +157,24 @@ export async function getEodSummary(args: GetEodSummaryArgs): Promise<GetEodSumm
 
   if (summaryRes.error) {
     const msg = `ct_eod_summaries query failed: ${summaryRes.error.message}`;
-    void emitTelemetry(supabase, { latencyMs, outputBytes: 0, error: msg });
+    void emitToolTelemetry(supabase, {
+      tool: TOOL_NAME,
+      params: { date: sessionDate, verbose },
+      durationMs: latencyMs,
+      outputBytes: 0,
+      error: msg,
+    });
     throw new Error(msg);
   }
   if (reportRes.error) {
     const msg = `ct_eod_reports query failed: ${reportRes.error.message}`;
-    void emitTelemetry(supabase, { latencyMs, outputBytes: 0, error: msg });
+    void emitToolTelemetry(supabase, {
+      tool: TOOL_NAME,
+      params: { date: sessionDate, verbose },
+      durationMs: latencyMs,
+      outputBytes: 0,
+      error: msg,
+    });
     throw new Error(msg);
   }
 
@@ -203,10 +197,11 @@ export async function getEodSummary(args: GetEodSummaryArgs): Promise<GetEodSumm
         warnings,
       },
     };
-    void emitTelemetry(supabase, {
-      latencyMs,
+    void emitToolTelemetry(supabase, {
+      tool: TOOL_NAME,
+      params: { date: sessionDate, verbose },
+      durationMs: latencyMs,
       outputBytes: JSON.stringify(result).length,
-      error: null,
     });
     return result;
   }
@@ -278,7 +273,12 @@ export async function getEodSummary(args: GetEodSummaryArgs): Promise<GetEodSumm
   };
 
   const outputBytes = JSON.stringify(result).length;
-  void emitTelemetry(supabase, { latencyMs, outputBytes, error: null });
+  void emitToolTelemetry(supabase, {
+    tool: TOOL_NAME,
+    params: { date: sessionDate, verbose },
+    durationMs: latencyMs,
+    outputBytes,
+  });
 
   return result;
 }

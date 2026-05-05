@@ -12,15 +12,18 @@
 //     throwing (pattern signatures sometimes carry detector_id or time-of-day
 //     instead of ticker, so an ad-hoc symbol probe is legitimate).
 //
-// Read-only (SELECT). Best-effort telemetry to `ct_brain_telemetry` with
-// `helper_name='tool:get_observed_patterns'`, `consumer_name='cotrader-mcp'`.
+// Read-only (SELECT). Best-effort telemetry to `ct_mcp_tool_calls` with
+// `tool='get_observed_patterns'`, `consumer_name='cotrader-mcp'`. Per
+// PR #11 review (2026-05-05) — separated from ct_brain_telemetry so
+// organ-coverage queries against the brain telemetry stay clean.
 
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { resolveAuth } from '../lib/auth.ts';
 import { isUniverseTicker, UNIVERSE } from '../lib/universe.ts';
+import { emitToolTelemetry } from '../lib/tool_telemetry.ts';
 
 const CONSUMER_NAME = 'cotrader-mcp';
-const TOOL_NAME = 'tool:get_observed_patterns';
+const TOOL_NAME = 'get_observed_patterns';
 
 const VALID_STATUSES = new Set(['validated', 'observed', 'deprecated']);
 const DEFAULT_STATUS_FILTER: readonly string[] = ['validated', 'observed'];
@@ -96,26 +99,6 @@ function resolveStatusFilter(status: GetObservedPatternsArgs['status']): {
   return { values: cleaned, warnings };
 }
 
-async function emitTelemetry(
-  supabase: SupabaseClient,
-  args: { latencyMs: number; outputBytes: number; error?: string | null; tickerFocus: string | null },
-): Promise<void> {
-  try {
-    await supabase.from('ct_brain_telemetry').insert({
-      helper_name: TOOL_NAME,
-      audience: 'cotrader',
-      ticker_focus: args.tickerFocus,
-      consumer_name: CONSUMER_NAME,
-      latency_ms: args.latencyMs,
-      output_size_bytes: args.outputBytes,
-      cache_hit: false,
-      error: args.error ?? null,
-    });
-  } catch (_e) {
-    // Telemetry never blocks.
-  }
-}
-
 export async function getObservedPatterns(
   args: GetObservedPatternsArgs,
 ): Promise<GetObservedPatternsResult> {
@@ -189,11 +172,13 @@ export async function getObservedPatterns(
 
   if (error) {
     const msg = `ct_observed_patterns query failed: ${error.message}`;
-    void emitTelemetry(supabase, {
-      latencyMs,
+    void emitToolTelemetry(supabase, {
+      tool: TOOL_NAME,
+      ticker: tickerArg,
+      params: { ticker: tickerArg, status: statusValues, min_n: minN, limit },
+      durationMs: latencyMs,
       outputBytes: 0,
       error: msg,
-      tickerFocus: tickerArg,
     });
     throw new Error(msg);
   }
@@ -219,11 +204,12 @@ export async function getObservedPatterns(
   };
 
   const outputBytes = JSON.stringify(result).length;
-  void emitTelemetry(supabase, {
-    latencyMs,
+  void emitToolTelemetry(supabase, {
+    tool: TOOL_NAME,
+    ticker: tickerArg,
+    params: { ticker: tickerArg, status: statusValues, min_n: minN, limit },
+    durationMs: latencyMs,
     outputBytes,
-    error: null,
-    tickerFocus: tickerArg,
   });
 
   return result;
