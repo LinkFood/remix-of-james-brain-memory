@@ -97,7 +97,7 @@ serve(async (req) => {
 
       // 2b. Load existing principles
       const { data: existingPrinciples } = await supabase
-        .from('brain_principles')
+        .from('jac_principles')
         .select('id, principle, confidence, last_validated')
         .eq('user_id', userId)
         .order('created_at', { ascending: false });
@@ -185,7 +185,7 @@ Rules:
           }
 
           const { error: insertError } = await supabase
-            .from('brain_principles')
+            .from('jac_principles')
             .insert({
               user_id: userId,
               principle: item.principle,
@@ -236,7 +236,7 @@ Rules:
           }
 
           const { error: updateError } = await supabase
-            .from('brain_principles')
+            .from('jac_principles')
             .update(updateData)
             .eq('id', item.existingId)
             .eq('user_id', userId);
@@ -249,7 +249,7 @@ Rules:
 
         } else if (item.action === 'retire' && item.existingId) {
           const { error: deleteError } = await supabase
-            .from('brain_principles')
+            .from('jac_principles')
             .delete()
             .eq('id', item.existingId)
             .eq('user_id', userId);

@@ -25,3 +25,15 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Supabase table reference check
+        # B4 class-kill from 2026-05-05 distill-principles silent no-op audit.
+        # Catches functions that .from('<table>') against a name absent from
+        # the live PostgREST schema. Allowlist at
+        # scripts/check_supabase_table_refs.allowlist for known false-positives.
+        # Skips silently if SUPABASE_SERVICE_ROLE_KEY not configured (e.g.,
+        # forks without secrets) — caller should set the secret in repo settings.
+        env:
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SKIP_TABLE_REF_CHECK: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY == '' && '1' || '0' }}
+        run: bash scripts/check_supabase_table_refs.sh
