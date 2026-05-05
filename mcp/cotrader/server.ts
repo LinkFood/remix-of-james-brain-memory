@@ -6,7 +6,7 @@
 
 import { McpServer } from 'npm:@modelcontextprotocol/sdk@1.29.0/server/mcp.js';
 import { StdioServerTransport } from 'npm:@modelcontextprotocol/sdk@1.29.0/server/stdio.js';
-import { z } from 'npm:zod@3.23.8';
+import { z } from 'npm:zod@3.25.76';
 
 import { getCoTraderContext } from './tools/get_co_trader_context.ts';
 import { UNIVERSE } from './lib/universe.ts';
