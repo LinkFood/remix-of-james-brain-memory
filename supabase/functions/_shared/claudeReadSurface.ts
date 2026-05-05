@@ -730,6 +730,17 @@ export interface BuildClaudeContextOpts {
    * (cotrader / paper_claude / analyst / voice / slack / agent_internal).
    */
   audience?: AudienceMode;
+  /**
+   * v1.1 (2026-05-05) — skip the legacy flat-fields block (~50 sequential
+   * PostgREST queries; lines ~835–1907) and return ONLY the synthesis-layer
+   * organs + preamble. Cuts ~10s off public-internet wall-clock for MCP-style
+   * consumers that don't need the legacy flat fields. Default false →
+   * existing 18 production consumers (cron specialists, daily-brief,
+   * hypothesis-proposer, etc.) keep getting the full populated context. The
+   * MCP server is the canonical opt-in caller. Per Phase A audit
+   * `docs/audit/2026-05-05-cotrader-mcp-v1-1-phase-a.md`.
+   */
+  skipLegacyFlatFields?: boolean;
   /** Consumer name for telemetry. Default 'unknown'. */
   consumerName?: string;
   /**
@@ -805,6 +816,17 @@ export async function buildClaudeContext(
   opts: BuildClaudeContextOpts = {},
 ): Promise<ClaudeContext> {
   const audience: AudienceMode = opts.audience ?? 'cotrader';
+
+  // v1.1 lever (2026-05-05) — MCP-style consumers skip the legacy flat
+  // fields entirely. Existing consumers leave skipLegacyFlatFields undefined
+  // and run the full path below unchanged. See Phase A audit
+  // `docs/audit/2026-05-05-cotrader-mcp-v1-1-phase-a.md` for the empirical
+  // diagnosis (legacy block ≈ ~10s public-internet RTT cost from outside
+  // Supabase region; organs Promise.all is already cheap).
+  if (opts.skipLegacyFlatFields) {
+    return await buildSynthesisOnlyContext(supabase, opts, audience);
+  }
+
   const heartbeatLimit = opts.heartbeatLimit ?? 1;
   const openHypothesisLimit = opts.openHypothesisLimit ?? 30;
   const hypothesisEventLimit = opts.hypothesisEventLimit ?? 50;
@@ -2115,6 +2137,203 @@ export async function buildClaudeContext(
     // Synthesis layer Phase 3 (additive)
     organs,
     preamble,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// v1.1 (2026-05-05) — synthesis-only path. MCP-style consumers that don't
+// need the 50+ legacy flat-field queries enter here. Returns a ClaudeContext
+// with all legacy fields set to empty defaults; only `organs`, `preamble`,
+// `audience`, `watchlist`, and `blockedFromReading` carry real data.
+// ---------------------------------------------------------------------------
+async function buildSynthesisOnlyContext(
+  supabase: SupabaseClient,
+  opts: BuildClaudeContextOpts,
+  audience: AudienceMode,
+): Promise<ClaudeContext> {
+  const watchlist = await getWatchlist(supabase);
+  const tctx = getTemporalContext();
+  const fetchCtx: HelperFetchContext = {
+    supabase,
+    audience,
+    sessionDate: tctx.session_date,
+    watchlist,
+    consumerName: opts.consumerName ?? 'unknown',
+  };
+
+  const helpers: ReadonlyArray<ContextHelper<unknown>> = [
+    flowHeatmapHelper,
+    pulseHelper,
+    specialistHelper,
+    detectorHelper,
+    tapeHelper,
+    jamesFlagsHelper,
+    newsCausalityHelper,
+    eventRecencyHelper,
+    analogsHelper,
+    specialistRecallHelper,
+    regimeHelper,
+  ];
+
+  const organWhitelist: ReadonlySet<HelperName> | null =
+    !opts.organs || opts.organs === 'all'
+      ? null
+      : new Set(opts.organs);
+  const tickerFocus = opts.tickerFocus;
+  const perOrganOpts = opts.perOrganOpts ?? {};
+
+  type OrganOutcome =
+    | { name: HelperName; result: HelperResult<unknown> }
+    | { name: HelperName; skipped: 'audience_filter' | 'organ_filter' | 'error'; error?: string };
+
+  const helperOutcomes: OrganOutcome[] = await Promise.all(
+    helpers.map(async (h): Promise<OrganOutcome> => {
+      const name = h.name as HelperName;
+      if (organWhitelist && !organWhitelist.has(name)) {
+        return { name, skipped: 'organ_filter' };
+      }
+      if (h.audienceFilter && !h.audienceFilter.includes(audience)) {
+        return { name, skipped: 'audience_filter' };
+      }
+      const helperOpts: HelperOpts = {
+        ...(tickerFocus ? { tickerFocus } : {}),
+        ...(perOrganOpts[name] ?? {}),
+      };
+      try {
+        const result = await h.fetch(fetchCtx, helperOpts);
+        return { name, result };
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.warn(`[buildClaudeContext/synthOnly] helper ${name} threw:`, msg);
+        return { name, skipped: 'error', error: msg };
+      }
+    }),
+  );
+
+  const organs: Partial<Record<HelperName, HelperResult<unknown>>> = {};
+  for (const r of helperOutcomes) {
+    if ('result' in r) organs[r.name] = r.result;
+  }
+
+  // Fire-and-forget telemetry — same shape as the full path so warden +
+  // get_brain_health stay populated.
+  void (async () => {
+    try {
+      const consumerName = opts.consumerName ?? 'unknown';
+      const tickerFocusVal = tickerFocus ?? null;
+      const rows = helperOutcomes.map((o) => {
+        if ('result' in o) {
+          const m = o.result.meta;
+          let outputBytes = 0;
+          try {
+            outputBytes = JSON.stringify(o.result.data).length;
+          } catch (_e) { /* non-serializable */ }
+          return {
+            helper_name: o.name,
+            helper_version: m.helperVersion ?? null,
+            audience,
+            ticker_focus: tickerFocusVal,
+            consumer_name: consumerName,
+            latency_ms: Math.max(0, Math.round(m.latencyMs ?? 0)),
+            output_size_bytes: outputBytes,
+            cache_hit: !!m.cacheHit,
+            error: m.warning ? `warning:${m.warning}` : null,
+          };
+        }
+        const reasonTag = o.skipped === 'error' && o.error
+          ? `skipped:error:${o.error.slice(0, 200)}`
+          : `skipped:${o.skipped}`;
+        return {
+          helper_name: o.name,
+          helper_version: null,
+          audience,
+          ticker_focus: tickerFocusVal,
+          consumer_name: consumerName,
+          latency_ms: 0,
+          output_size_bytes: 0,
+          cache_hit: false,
+          error: reasonTag,
+        };
+      });
+      if (rows.length > 0) {
+        await supabase.from('ct_brain_telemetry').insert(rows);
+      }
+    } catch (_e) {
+      // swallow
+    }
+  })().catch(() => { /* swallow */ });
+
+  const eventRecencyOrgan = organs.event_recency as
+    | HelperResult<EventRecencyResult>
+    | undefined;
+  const whatJustHappened = eventRecencyOrgan
+    ? formatWhatJustHappened(eventRecencyOrgan.data, tctx.session_date)
+    : '';
+
+  return {
+    // === Empty defaults for the legacy flat fields ===
+    latestHeartbeat: null,
+    recentHeartbeats: [],
+    openHypotheses: [],
+    recentHypothesisEvents: [],
+    claudeOpenTrades: [],
+    claudeClosedTrades: [],
+    claudeArmedIdeas: [],
+    claudeRecentGrades: [],
+    recentFlowAlerts: [],
+    recentDarkPool: [],
+    recentNope: [],
+    netPremiumTicks: [],
+    greekFlow: [],
+    topMovers: [],
+    ivRanks: [],
+    maxPain: [],
+    vixLatest: null,
+    recentNews: [],
+    recentBreakingNews: [],
+    upcomingEvents: [],
+    earningsMoves: [],
+    fundamentals: [],
+    activePrinciples: [],
+    activeBiases: [],
+    activePlaybooks: [],
+    activeBrief: null,
+    latestWeeklyReview: null,
+    recentInsiderTrades: [],
+    recentPoliticalTrades: [],
+    recentAnalystActions: [],
+    shortInterestByTicker: [],
+    recentSectorTide: [],
+    skewByTicker: [],
+    technicalsByTicker: [],
+    currentGeneration: null,
+    pastGenerations: [],
+    predictionMarkets: [],
+    yieldCurve: null,
+    correlationsLatest: {},
+    sectorTideToday: [],
+    seasonalityCurrentMonth: [],
+    institutionalLast90d: [],
+    centralBankState: null,
+    indicatorEventsLast7d: [],
+    flowHeatmapPerTicker: [],
+    advisoryChatContext: '',
+    chatIsAdvisory: false,
+    autonomyMode: 'execute',
+    paperStartingBalance: 100000,
+    currentBalance: null,
+    maxConcurrent: 5,
+    maxSizePct: 5,
+    minHypConfidence: 0.45,
+    // === Real data ===
+    watchlist,
+    blockedFromReading: blockedReadsForAudience(audience),
+    audience,
+    organs,
+    preamble: {
+      temporalAnchor: tctx.temporalAnchorPreamble,
+      whatJustHappened,
+    },
   };
 }
 

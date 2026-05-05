@@ -5,11 +5,33 @@ terminal-Claude sessions. When you ask terminal-Claude "what's the setup on
 NVDA right now?", the model can call this MCP to pull the same payload the
 operational specialists, tape-reader, and EOD bridge already read internally.
 
-**One tool: `get_co_trader_context(ticker, include_regime?)`.**
+**One tool: `get_co_trader_context(ticker, include_regime?, organs?)`.**
 Returns regime classification + analogs, last 5 specialist reads (flagged +
 unflagged-conv-≥50), recent flow alerts, flow heatmap stacks, James-flagged
 signals, news causality, event recency, observed-pattern detectors, pulse
 state, and tape narration.
+
+**v1.1 (2026-05-05) — three additive optimizations:**
+
+- **`skipLegacyFlatFields` (internal):** the MCP passes this to
+  `buildClaudeContext` so the legacy ~50-query serial block (which contributes
+  ~10s of public-internet RTT) is bypassed. Other consumers (cron specialists,
+  daily-brief, etc.) still get the full populated context.
+- **5-min in-process TTL cache** on stable organs: `regime`, `event_recency`,
+  `analogs`, `specialist_recall`, `james_flags`. Volatile organs are always
+  fresh. Cache hits emit `ct_brain_telemetry` rows tagged `cache_hit:fresh_<sec>s`
+  so the warden + `get_brain_health` stay populated.
+- **`organs?: string[]` subset selection.** Pass an explicit list to scope the
+  fetch (e.g., `organs=['regime','specialist_recall']` for a sub-second
+  response). Unknown names: warn-and-fetch-recognized unless ALL provided are
+  unknown (then hard-fail). Default = all 11.
+
+**Measured perf (smoke 2026-05-05):**
+
+- Cold full call: ~1.5s (down from v1's ~13s — **8.4× faster**)
+- Warm full call (5 stable cache hits): ~390ms
+- Subset call after warm-up (`regime` + `specialist_recall`): ~1ms
+- Token budget: ~30k tokens (unchanged from v1 — same composed organ payload)
 
 ## Run locally
 

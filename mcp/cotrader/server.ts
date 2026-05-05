@@ -29,7 +29,9 @@ server.registerTool(
       'signals, news causality, event recency, observed-pattern detectors, pulse ' +
       'state, and tape narration — the same composed payload Co-Trader specialists ' +
       'and the tape-reader read internally. READ-ONLY. Universe is locked to: ' +
-      UNIVERSE.join(', ') + '.',
+      UNIVERSE.join(', ') + '. ' +
+      'For fast quick-lookups, scope via the optional organs[] param (e.g., ' +
+      'organs=["regime","specialist_recall"] is a sub-second response).',
     inputSchema: {
       ticker: z
         .string()
@@ -46,22 +48,36 @@ server.registerTool(
             'quick-lookups — skips one Voyage embed (~$0.0000016) and the ' +
             'analogs HNSW lookup.',
         ),
+      organs: z
+        .array(z.string())
+        .optional()
+        .describe(
+          'Optional subset of organs to fetch (default: all 11). Valid names: ' +
+            'flow_heatmap, pulse, specialist, detector, tape, james_flags, ' +
+            'news_causality, event_recency, analogs, specialist_recall, regime. ' +
+            'Unknown names are warned and ignored unless ALL are unknown ' +
+            '(then the call fails). Stable organs (regime, event_recency, analogs, ' +
+            'specialist_recall, james_flags) are 5-min in-process cached.',
+        ),
     },
   },
-  async (args: { ticker: string; include_regime?: boolean }) => {
+  async (args: { ticker: string; include_regime?: boolean; organs?: string[] }) => {
     const t0 = Date.now();
     try {
       const result = await getCoTraderContext({
         ticker: args.ticker,
         include_regime: args.include_regime,
+        organs: args.organs,
       });
       const totalMs = Date.now() - t0;
       // stderr — MCP protocol owns stdout
       console.error(
         `[cotrader-mcp] tool=get_co_trader_context ticker=${args.ticker.toUpperCase()} ` +
           `include_regime=${args.include_regime ?? true} ` +
+          `requested=${result.organsRequested.length} ` +
+          `cache_hits=${result.cacheHits.length} ` +
           `organs_invoked=${result.organsInvoked.length} ` +
-          `organs_skipped=${result.organsSkipped.length} ` +
+          `unknown_organs=${result.unknownOrgans.length} ` +
           `build_ms=${result.latencyMs} total_ms=${totalMs}`,
       );
       return {
