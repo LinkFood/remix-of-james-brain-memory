@@ -98,6 +98,7 @@ interface ClaudeVerdict {
   flags: FlagDecision[];
   pass_reason?: string | null;
   current_read: CurrentRead | null;
+  current_read_failure?: string | null;
 }
 
 const GENERIC_PROMPT_FALLBACK = `You are a per-ticker options-flow specialist in Co-Trader v2.
@@ -495,18 +496,26 @@ function parseClaudeVerdict(raw: string): ClaudeVerdict | { error: string } {
     });
   }
 
-  // Parse current_read. Missing or malformed → null (caller logs + skips write).
+  // Parse current_read. Missing or malformed → null + failure reason captured
+  // for the wakeup-log diagnostic ledger (ct_specialist_wakeup_log).
   let currentRead: CurrentRead | null = null;
+  let currentReadFailure: string | null = null;
   const crRaw = p.current_read as Record<string, unknown> | undefined;
-  if (crRaw && typeof crRaw === 'object') {
+  if (!crRaw) {
+    currentReadFailure = 'missing';
+  } else if (typeof crRaw !== 'object') {
+    currentReadFailure = 'not_object';
+  } else {
     const lean = String(crRaw.direction_lean ?? '').toLowerCase();
     const conv = Number(crRaw.conviction);
     const text = typeof crRaw.read_text === 'string' ? crRaw.read_text.trim() : '';
-    if (
-      ['bullish', 'bearish', 'neutral', 'mixed'].includes(lean) &&
-      Number.isFinite(conv) &&
-      text.length > 0
-    ) {
+    if (!['bullish', 'bearish', 'neutral', 'mixed'].includes(lean)) {
+      currentReadFailure = `invalid_lean:${lean.slice(0, 32)}`;
+    } else if (!Number.isFinite(conv)) {
+      currentReadFailure = `invalid_conviction:${String(crRaw.conviction).slice(0, 32)}`;
+    } else if (text.length === 0) {
+      currentReadFailure = 'empty_text';
+    } else {
       currentRead = {
         direction_lean: lean as CurrentRead['direction_lean'],
         conviction: Math.max(0, Math.min(100, Math.round(conv))),
@@ -519,6 +528,7 @@ function parseClaudeVerdict(raw: string): ClaudeVerdict | { error: string } {
     flags,
     pass_reason: typeof p.pass_reason === 'string' ? p.pass_reason.slice(0, 500) : null,
     current_read: currentRead,
+    current_read_failure: currentReadFailure,
   };
 }
 
@@ -547,6 +557,46 @@ async function writeSpecialistRead(
     }
   } catch (e) {
     console.warn(`[specialistRunner] ${args.ticker} current_read write threw:`, String(e));
+  }
+}
+
+// Diagnostic ledger captured per wakeup. Best-effort write — never throws.
+// Born from 2026-05-05 NVDA 4-day silent freeze. Closes the silent-failure
+// observability gap (writeSpecialistRead errors were console.warn-only).
+interface WakeupDiag {
+  parse_ok: boolean | null;
+  current_read_present: boolean | null;
+  current_read_failure: string | null;
+  claude_output_preview: string | null;
+}
+
+async function logWakeup(
+  supabase: SupabaseClient,
+  args: {
+    ticker: string;
+    reason: string;
+    result: SpecialistWakeupResult;
+    diag: WakeupDiag;
+  },
+): Promise<void> {
+  try {
+    await supabase.from('ct_specialist_wakeup_log').insert({
+      ticker: args.ticker,
+      reason: args.reason,
+      skip_reason: args.result.skip_reason ?? null,
+      events_considered: args.result.events_considered,
+      flags_written: args.result.flags_written,
+      parse_ok: args.diag.parse_ok,
+      current_read_present: args.diag.current_read_present,
+      current_read_failure: args.diag.current_read_failure,
+      claude_output_preview: args.diag.claude_output_preview,
+      cost_usd: args.result.cost_usd,
+      elapsed_ms: args.result.elapsed_ms,
+      error: args.result.error ?? null,
+    });
+  } catch (e) {
+    // Never let logging failure break the wakeup.
+    console.warn(`[specialistRunner] ${args.ticker} wakeup_log write threw:`, String(e));
   }
 }
 
@@ -1056,8 +1106,39 @@ async function countFlagsWrittenToday(
 // Main
 // ---------------------------------------------------------------------------
 
+// Public wrapper — catches every return path and writes one row to
+// ct_specialist_wakeup_log. Born from 2026-05-05 NVDA silent freeze; the
+// inner function's many returns previously lost their diagnostic state to
+// stderr-only console.warn. This wrapper makes silent failures visible at
+// the data layer (where warden + James can see them).
 export async function runSpecialistWakeup(
   args: SpecialistWakeupArgs,
+): Promise<SpecialistWakeupResult> {
+  const diag: WakeupDiag = {
+    parse_ok: null,
+    current_read_present: null,
+    current_read_failure: null,
+    claude_output_preview: null,
+  };
+  let result: SpecialistWakeupResult | undefined;
+  try {
+    result = await runSpecialistWakeupCore(args, diag);
+    return result;
+  } finally {
+    if (result) {
+      await logWakeup(args.supabase, {
+        ticker: args.ticker,
+        reason: args.reason,
+        result,
+        diag,
+      });
+    }
+  }
+}
+
+async function runSpecialistWakeupCore(
+  args: SpecialistWakeupArgs,
+  diag: WakeupDiag,
 ): Promise<SpecialistWakeupResult> {
   const started = Date.now();
   const { supabase, ticker, reason, forcedEventIds } = args;
@@ -1385,8 +1466,10 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
   baseResult.cost_usd = costUsd;
 
   // 15. Parse.
+  diag.claude_output_preview = responseText.slice(0, 500);
   const parsed = parseClaudeVerdict(responseText);
   if ('error' in parsed) {
+    diag.parse_ok = false;
     console.warn(`[specialistRunner] ${ticker} parse error:`, parsed.error, 'raw:', responseText.slice(0, 400));
     return {
       ...baseResult,
@@ -1396,6 +1479,9 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
       elapsed_ms: Date.now() - started,
     };
   }
+  diag.parse_ok = true;
+  diag.current_read_present = !!parsed.current_read;
+  diag.current_read_failure = parsed.current_read_failure ?? null;
 
   // 15b. Temporal-coherence validator (best-effort). Validates the narrative
   // strings (current_read + each flag's thesis/invalidation) against the
@@ -1521,7 +1607,21 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
         sourceFlowIds,
       });
     } else {
-      console.warn(`[specialistRunner] ${ticker} passed without current_read — prompt may be stale or response malformed`);
+      // Fix D fallback: write a placeholder row so freshness invariants pass
+      // and the parse failure is visible at the data layer. Diagnostic detail
+      // lives in ct_specialist_wakeup_log (full reason + Claude output preview).
+      console.warn(`[specialistRunner] ${ticker} passed without current_read — failure=${parsed.current_read_failure}`);
+      await writeSpecialistRead(supabase, {
+        ticker,
+        read: {
+          direction_lean: 'mixed',
+          conviction: 0,
+          read_text: `[parse_fail: ${parsed.current_read_failure ?? 'unknown'}] ${responseText.slice(0, 400)}`,
+        },
+        flagged: false,
+        flagId: null,
+        sourceFlowIds,
+      });
     }
     return {
       ...baseResult,
@@ -1658,7 +1758,20 @@ Decide: 0-3 flags OR pass cleanly. Return JSON only:
       sourceFlowIds,
     });
   } else {
-    console.warn(`[specialistRunner] ${ticker} flagged without current_read — prompt may be stale or response malformed`);
+    // Fix D fallback (flagged path): write placeholder so freshness holds.
+    // Diagnostic in ct_specialist_wakeup_log.
+    console.warn(`[specialistRunner] ${ticker} flagged without current_read — failure=${parsed.current_read_failure}`);
+    await writeSpecialistRead(supabase, {
+      ticker,
+      read: {
+        direction_lean: 'mixed',
+        conviction: 0,
+        read_text: `[parse_fail: ${parsed.current_read_failure ?? 'unknown'}] ${responseText.slice(0, 400)}`,
+      },
+      flagged: writtenIds.length > 0,
+      flagId: writtenIds[0] ?? null,
+      sourceFlowIds,
+    });
   }
 
   return {
