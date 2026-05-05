@@ -49,18 +49,19 @@ Per D2 audit's safety margin convention — threshold should be at LEAST 5pts be
 
 Don't drop below `min_value` (per `ct_config` row, typically 40).
 
-## ⚠️ Calibration note — known design tension (live as of 2026-05-05)
+## Calibration note — RESOLVED 2026-05-05 via severity demote
 
-The D2 Phase B PR surfaced that this invariant fires WARN on 5/10 tickers immediately post-deploy: QQQ (gap +5), SPY (0), NVDA (-2), MSFT (-2.5), META (-4). The `> -5` boundary chosen by the audit means "anything not fully clear of the buffer zone fires." Two interpretations:
+D2 Phase B's first run surfaced 5/10 tickers in the `> -5` boundary immediately post-deploy: QQQ (gap +5), SPY (0), NVDA (-2), MSFT (-2.5), META (-4). The `> -5` boundary was chosen by the D2 audit author as a forcing-function — keep operator attention on fragility tickers — but at `warn` severity that's the perma-yellow trap (`feedback_warden_threshold_calibration.md` 2026-05-05).
 
-1. **Forcing-function** (audit's stated intent): the warden becomes the prompt for ongoing re-tuning every time the regime shifts.
-2. **Permanent-yellow** (per `feedback_warden_threshold_calibration.md`): a perma-yellow invariant desensitizes the warden — operators stop reading the alerts.
+**Resolved (Path 3 from PR #17 review):** severity demoted `warn` → `info`. James's reasoning: "5 of 10 tickers WARN immediately on boot is the literal anti-pattern the lesson was captured against 24 hours ago. If we know in advance that the invariant will perma-yellow, running a 5-day experiment to re-confirm what we already documented produces no new information and 5 days of Slack alarm fatigue. Apply the captured lesson preemptively."
 
-If the invariant has been WARN for 5+ consecutive runs without anyone acting, that's the perma-yellow trap. Two corrective options:
-- **Loosen boundary:** change `(t.thr - s.p75) > -5` to `> -3` or `> 0` (only fires when truly at/above p75).
-- **Aggressive thresholds:** lower per-ticker thresholds further so they're properly buffered (e.g., NVDA → 47, MSFT → 52).
+What this preserves: dashboard surface for fragility tickers (forcing-function intent mostly intact, just at info-severity). Operator review cadence catches drift on next read. Re-tuning prompt remains.
 
-Either is a one-row UPDATE to `ct_invariants` or `ct_config`. Don't leave the invariant permanently yellow — adjust within 5 trading days if it doesn't naturally settle as a result of regime shifts.
+What this avoids: Slack alarm fatigue desensitizing operators before the invariant catches a real failure.
+
+**Optional follow-up (queued):** add a SECOND invariant at `warn` severity that fires only when `wakeup_threshold − trailing_5d_p75 > 0` (threshold drifted ABOVE p75 = actual silent-class-kill condition). Tight boundary, only fires on real failure mode. Pairs with this info-severity broad-fragility one. Consider after the info-severity surface proves operationally useful.
+
+If you're reading this runbook because someone DID flip severity back to warn and got Slack-alarmed: the right path is Option 1 (loosen boundary `> -5` → `> -3` or `> 0`) or Option 2 (aggressive thresholds: NVDA → 47, MSFT → 52). Don't leave warn perma-yellow — desensitization is the documented anti-pattern.
 
 ## Linked artifacts
 - D2 Phase A audit: `docs/audit/2026-05-05-d2-regime-threshold-recalibration-phase-a.md`
