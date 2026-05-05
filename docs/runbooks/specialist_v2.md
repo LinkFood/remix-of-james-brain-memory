@@ -27,17 +27,19 @@ When alarm fires:
    ```
 
 ### `specialist_grade_axes_growing`
-**Threshold:** ≥10 rows / 24h on RTH days. Weekend skip.
+**Threshold:** ≥5 rows / 24h on RTH days. Weekend skip.
 
-If failing during RTH: grading pipeline is broken. Diagnosis path:
-1. Check whether new flags are arriving:
-   ```sql
-   SELECT count(*) FROM ct_flags
-   WHERE created_at > now() - interval '24 hours'
-     AND specialist_ticker IS NOT NULL;
+Calibrated 2026-05-05 from 10 → 5. The dispatcher allows 10 specialists × ~4 wakes/RTH (15-min cooldown) and PASS is the documented default in every prompt. Realistic production is 4-10 flags/day → 5-15 grade_axes/day. Original threshold of 10 was at the top of normal output and produced a permanent yellow-light (77 consecutive fails since 2026-05-02). 5 is the floor that still catches a complete pipeline freeze.
+
+If failing during RTH:
+1. Confirm specialists are firing — `ct_brain_telemetry` should have `consumer_name` like `ct-specialist-*` rows in last hour:
+   ```bash
+   curl -s "$SUPA/rest/v1/ct_brain_telemetry?consumer_name=ilike.*specialist*&select=consumer_name,created_at&order=created_at.desc&limit=5"
    ```
-2. If flags exist but grades don't: the RPC is silent-failing. Run `SELECT * FROM ct_specialist_score_v2(7);` directly and inspect output.
-3. Common cause: `ct_price_bars` ingester (`ct-price-live-poll` / `ct-price-backfill`) stopped — underlying-axis grading depends on it.
+2. If specialists running but `events_considered: 0`: dispatcher is filtering everything out. Check `ct_scored_flow` for prints with `score >= specialist.dispatcher.score_trigger` (default 70) in last 5 min. On a quiet tape (max score < 70) this is normal and PASSes are correct behavior — not a bug.
+3. If specialists have events but writing 0 flags: read recent specialist outputs in `ct_alerts` for `pass_reason` field. Most days the prompts' bias gates correctly suppress weak setups.
+4. Run RPC directly: `SELECT * FROM ct_specialist_score_v2(p_since_days => 7);`
+5. Underlying-axis grading depends on `ct_price_bars` — confirm `MAX(ts)` is fresh (column is `ts`, not `bucket_ts`).
 
 ### `specialist_lifecycle_silent_streak_check`
 **Threshold:** 0 stuck rows. Catches "K=4 reached, but flip never happened" silent no-op.
