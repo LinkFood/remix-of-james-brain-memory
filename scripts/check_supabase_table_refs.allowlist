@@ -1,0 +1,22 @@
+# check_supabase_table_refs.sh allowlist — table names that look like orphans
+# but are NOT actually broken references. One name per line. Comments start
+# with #. Each entry MUST have a comment above it explaining WHY it's exempt.
+# Adding new entries requires James approval.
+#
+# Removing entries requires verifying the underlying issue is resolved.
+
+# `dumps` — referenced by delete-all-user-data + classify-content but absent
+# from PostgREST schema. Found by 2026-05-05 B4 audit while shipping the
+# distill-principles fix. Could be:
+#   - private/internal schema (PostgREST default exposes public only)
+#   - pre-PostgREST table that was renamed
+#   - dead reference
+# Pending separate diagnose-then-fix audit. Not a blocker for the
+# distill-principles fix.
+dumps
+
+# `messages` — referenced by calculate-importance but absent from PostgREST
+# schema despite migration `20251122051423` creating it in public. Possibly
+# RLS-filtered (PostgREST hides RLS-locked tables from anon role) or
+# schema-cache stale. Pending separate audit. Same status as `dumps`.
+messages
