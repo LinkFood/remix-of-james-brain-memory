@@ -108,6 +108,146 @@ A class-kill tool (CI grep, linter, schema-drift detector) classifies code into 
 
 ---
 
+## brief-author-premise-empirical-verification — pre-flag empirical claims as verify-in-Phase-A, not as premise
+
+A brief that embeds an empirical claim ("we get N events per cycle," "the cadence is X minutes," "tickers cluster as a class," "the response time is Y ms") performs an implicit measurement at the time of writing. That measurement may have been correct then, may have been wrong then, may have drifted since. **Phase A's first job is to verify those empirical claims against current state — not to treat them as premises.** When a Phase A skips this step, the audit's downstream conclusions inherit the wrongness silently.
+
+**Sub-pattern of `brief-author-premise-error`** — that pattern covers the brief proposing a wrong fix; this one specifically covers the brief embedding wrong empirical claims that the audit then carries forward as ground truth.
+
+**Diagnostic question for every Phase A:** *"Which empirical claims does this brief make? Have I verified each one against current state, or am I assuming the brief was right?"* If unverified — verify before any analysis that depends on the claim.
+
+**Brief-construction discipline (proposed):** every brief embedding empirical claims should explicitly tag them — e.g., *"Premises (verify in Phase A): cadence ≈ N min, event count ≈ M/cycle, threshold currently X."* Phase A confirms each before treating as load-bearing.
+
+### Instance — 2026-05-06 D2 brief embedded "10 wakeups/hour at 6-min cadence" — actual is 1/hour
+
+**The brief premise:** "Specialist wakeup is every 6 min during RTH = ~10 wakeups/hour per ticker. Brief expects ~10 attempts/hour at 6-min cadence."
+
+**Phase A measurement (per `docs/audit/2026-05-06-d2-escalation-A1-cadence-framing.md`):** Pulled `cron.job` directly via `get_cron_status` RPC. Each per-ticker specialist has its own cron at a unique staggered minute past the hour:
+
+```
+ct-specialist-spy       0  13-20 * * 1-5    (HH:00)
+ct-specialist-qqq       6  13-20 * * 1-5    (HH:06)
+ct-specialist-iwm      12  13-20 * * 1-5    (HH:12)
+ct-specialist-aapl     18  13-20 * * 1-5    (HH:18)
+ct-specialist-msft     24  13-20 * * 1-5    (HH:24)
+ct-specialist-googl    30  13-20 * * 1-5    (HH:30)
+ct-specialist-amzn     36  13-20 * * 1-5    (HH:36)
+ct-specialist-meta     42  13-20 * * 1-5    (HH:42)
+ct-specialist-nvda     48  13-20 * * 1-5    (HH:48)
+ct-specialist-tsla     54  13-20 * * 1-5    (HH:54)
+ct-specialist-dispatcher  */5  13-20 * * 1-5  (every 5 min — DISPATCHER, not per-ticker fire)
+```
+
+**Empirical max wakeups/ticker/RTH-hour = 1.** Hard ceiling. The brief likely conflated dispatcher cadence (5 min) with specialist cadence (60 min).
+
+**Conclusion that should have come out of the brief:** "Specialist wakeup is every hour per ticker. Single-RTH-hour acceptance criterion is necessarily 1-sample-per-ticker — too noisy for distribution-shape conclusions. Multi-day baseline required for meaningful sample size." That reframing led directly to the multi-day acceptance discipline (next sub-section).
+
+**Class diagnostic question for future Phase As:** *"Does the brief embed an empirical claim about how often / how much / how many? Did I verify the claim before reasoning from it?"*
+
+### Instance — 2026-05-06 morning MCP v1.1 brief embedded "8k token target" — actual ≈ 32k
+
+**The brief premise:** "Composed organ payload should fit ~8k tokens for terminal-Claude consumption."
+
+**Phase A measurement (per `docs/audit/2026-05-05-cotrader-mcp-v1-1-phase-a.md`):** Real-data composition produces ~32k tokens. Composition: `news_causality` 6k + `detector` 5k + `event_recency` 4k + `tape` 2k + others trivial.
+
+**Honest deviation acknowledgment:** the v1.1 ship documented this 8k vs 32k gap explicitly in the README rather than truncating to fit the brief's number. Brief premise was wrong; reality won.
+
+**Sibling pattern observation:** this session has produced TWO such instances (cadence + token target). When a brief embeds an empirical claim, the rate of those claims being subtly wrong has been ~50% this session. The discipline isn't "trust the brief author less" — it's "make the verification step explicit and standard."
+
+**Linked artifacts:**
+- Cadence Phase A: `docs/audit/2026-05-06-d2-escalation-A1-cadence-framing.md`
+- MCP v1.1 token Phase A: `docs/audit/2026-05-05-cotrader-mcp-v1-1-phase-a.md`
+- Companion sub-pattern (next): multi-day acceptance criterion
+
+---
+
+## single-sample-acceptance-window — single-day verification on low-cadence systems is structural noise
+
+When the system being verified produces ≤10 data points per day per measurement axis, single-day acceptance criteria are **structurally noisy.** A single sample falls anywhere in the underlying distribution; the right verification axis is multi-day cumulative, not within-window count.
+
+**This is the operational counterpart of `brief-author-premise-empirical-verification`.** That pattern says: verify the brief's empirical premises before reasoning from them. This one says: when the system's measurement cadence is sparse, verify acceptance over a window that allows the sample distribution to settle.
+
+**Decision rule (proposed):** if `expected_samples_per_acceptance_window < 10`, the acceptance window is too short. Extend to 3-5 trading days minimum, or restate acceptance in terms of distribution shape over a multi-day window (e.g., "p75 of conviction ≥ recalibrated_threshold over 7d").
+
+**Diagnostic question for future ship-acceptance briefs:** *"How many independent samples does my acceptance window produce? If ≤10, am I verifying noise or signal?"*
+
+### Instance — 2026-05-06 D2 single-day acceptance produced 1-sample-per-ticker artifacts
+
+**The acceptance criterion:** "Each of NVDA/MSFT/AAPL must have ≥1 fire within first hour of RTH at recalibrated thresholds 50/55/55."
+
+**The empirical reality:** specialist cron fires once per hour per ticker. First RTH hour = 1 wakeup per ticker. Each wakeup either fires (1 if conviction ≥ threshold) or doesn't (0). **Acceptance criterion was effectively a Bernoulli trial per ticker — a single coin flip determining D2 acceptance.**
+
+**Today's results:**
+- AAPL: 1 wakeup, conviction 76, fired. ✓
+- NVDA: 1 wakeup, conviction 42 < threshold 50, didn't fire. ✗ "ESCALATE"
+- MSFT: 1 wakeup, events_considered=0, didn't even score. ✗ "ESCALATE"
+
+**Multi-day re-read** (per A2):
+- NVDA 7-day p75=62 > threshold 50. **D2 recalibration was structurally adequate** — today was a single-sample low-mode artifact.
+- MSFT requires Phase A.5 (different cause) — multi-day evidence would have already surfaced this.
+
+**Conclusion:** D2 single-hour acceptance was technically correct under the brief's prescribed criterion, but produced an "ESCALATE" verdict that **multi-day re-reading would have nuanced or reversed** for NVDA. The escalation cost ~2-3 hours of Phase A.5 work that wouldn't have been needed under a 3-5-day acceptance window.
+
+**Future D-shape acceptance discipline:** restate as "fires per ticker per N RTH days at recalibrated threshold ≥ baseline" or "p75 of conviction at recalibrated threshold > threshold over 7d." Single-hour verification is reserved for systems with high cadence (≥10 samples per acceptance window per axis) — specialist scoring is not such a system.
+
+**Linked artifacts:**
+- D2 verification queries: `/Users/jameschellis/Documents/cowork-cotrader/scope/2026-05-06-d2-verification-queries.md`
+- A1 cadence Phase A: `docs/audit/2026-05-06-d2-escalation-A1-cadence-framing.md`
+- A2 NVDA 7-day distribution: `docs/audit/2026-05-06-d2-escalation-A2-nvda-conviction-distribution.md`
+
+**Class diagnostic question:** *"How many samples per ticker per acceptance window do I get? If 1, what's the multi-day equivalent acceptance criterion that captures the distribution rather than a single coin flip?"*
+
+---
+
+## symptom-level-grouping-hides-cause-level-differences — multiple tickers/components flagged together can have distinct underlying causes
+
+When an audit produces a finding that groups multiple entities (tickers, services, components) by a shared symptom — "these N things are all silent / failing / under-performing" — the implicit assumption is that they share a cause. Often they don't. Each entity's cause should be verified independently before treating the group as a single class.
+
+**Sub-pattern of `brief-author-premise-error`** — symptom-level grouping is itself a kind of premise that the brief carries forward as if it were a cause-level grouping.
+
+**Diagnostic question:** *"This finding groups N entities together. Have I verified each entity's cause independently, or am I assuming they share a cause because they share a symptom?"*
+
+### Instance — 2026-05-06 morning heatmap "5/8 missing" framed as one cause, was actually two compounding filters + sign-flip
+
+**The framing:** "/tape heatmap skips front-week buckets. 5/8 missing, smallest DTE shown is 5/15." Implicit causal model: one filter is dropping the 5/8 bucket.
+
+**Phase A measurement (per `docs/audit/2026-05-06-flow-heatmap-front-week-buckets-phase-a.md`):**
+- 5/8 IS in top-3 for 5 of 10 watchlist tickers (NVDA/MSFT/META/TSLA/QQQ).
+- 5/8 NOT in top-3 for 5 of 10 (AAPL/GOOGL/AMZN/SPY/IWM).
+- The "missing" pattern was true for half the watchlist.
+- Cause was **two compounding filters**: `p_include_0dte: false` (suppresses 0DTE flow) AND `DEFAULT_CAP=3` (only top-3 stacks).
+- Plus AAPL's 5/8 bucket FLIPPED SIGN with 0DTE included (-$733k bearish → +$922k bullish without).
+
+**One symptom (5/8 missing). Multiple causes (filter + cap + sign-flip risk on AAPL specifically).**
+
+### Instance — 2026-05-06 afternoon "4-ticker silent class" framed as one cause, was actually three classes
+
+**The framing:** "GOOGL/AMZN/META/MSFT silent specialists — different cause than threshold-bound NVDA/AAPL." Implicit: these 4 share a single upstream-event-starvation cause.
+
+**Phase A measurement (per `docs/audit/2026-05-06-d2-escalation-A3-silent-specialist-class.md`):**
+
+| ticker | class | cause |
+|---|---|---|
+| MSFT | C1 (double-failure) | event-starvation upstream + extreme threshold-fragility (gap -17) |
+| GOOGL | C2 (marginal) | gap +2 above threshold |
+| AMZN | C2 (marginal) | gap +2 above threshold |
+| META | C2.5 (mildly fragile) | gap -2 below threshold |
+
+**Plus per A3.K1**, MSFT's C1 framing was further refined — its upstream "starvation" is actually cron-window-vs-event-clustering misalignment, NOT MSFT-specific data starvation. So the C1 class is actually shared with all tickers (cron timing matters); MSFT is just the most-affected by the misalignment.
+
+**Three symptoms (no events / marginal / mildly fragile) hidden inside one "silent specialist class" framing.**
+
+**Operational pattern:** when a brief uses words like "silent class," "broken set," "underperforming group" — list each entity individually and verify the cause per-entity before treating as a class. The class label often pre-commits the audit to a single fix shape that doesn't fit each entity equally.
+
+**Linked artifacts:**
+- Heatmap Phase A: `docs/audit/2026-05-06-flow-heatmap-front-week-buckets-phase-a.md`
+- A3 silent-specialist Phase A: `docs/audit/2026-05-06-d2-escalation-A3-silent-specialist-class.md`
+- A3.K1 MSFT refinement: `docs/audit/2026-05-06-d2-escalation-A3K1-msft-upstream-investigation.md`
+
+**Class diagnostic question:** *"Does my finding group multiple entities under one label? If so — is that label a SYMPTOM (what's observed) or a CAUSE (verified mechanism)? If symptom, list each entity and verify cause per-entity before any structural fix."*
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
