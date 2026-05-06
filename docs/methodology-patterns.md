@@ -542,6 +542,43 @@ last_error: invariant queries must be a single statement (no mid-query semicolon
 
 ---
 
+## false-cause forcing function (class kill E discipline)
+
+When a fix PR proposes a cause, **enumerate orthogonal evidence** before treating the cause as load-bearing. When a hypothesis matches the shape of an adjacent memory entry (a `feedback_*.md` file, a prior incident retro, a known failure-class catalog entry), treat the match as a **narrowing heuristic, not a confirmation.** The matching shape biases the reasoner toward premature conclusion — making the verification step MORE important, not less.
+
+**Forcing function shape:** `.github/PULL_REQUEST_TEMPLATE.md` requires a Diagnosis section for fix PRs. Authors enumerate hypothesis + supporting evidence + adjacent memory matches + orthogonal verification + orthogonal evidence collected. Mechanical — can't ship a fix PR without filling it (or marking n/a for non-cause-dependent fixes).
+
+**Pair with `verify-the-warden's-own-framing` discipline:** that pattern fires at audit-time. This forcing function fires at PR-author time. Different temporal layers — together they catch false-cause inference at multiple stages of the workflow.
+
+### Instance — 2026-05-06 P0 service-role-key false-cause hypothesis (instance #11)
+
+The exact shape this forcing function exists to prevent:
+
+- **Symptom:** 18 edge functions returning 401 Unauthorized post-redeploy
+- **Adjacent memory match:** `feedback_service_role_key_rotation.md` documenting key-rotation as a known cause class
+- **Hypothesis-shaped-as-conclusion:** "must be service-role-key rotation" — adopted as load-bearing premise
+- **What caught it (Path 1, manual):** vault read produced empirical evidence that the rotation hypothesis was wrong. Actual cause was a `ReferenceError` from PR #25 (instance #11 captured in `docs/audit/2026-05-06-pr25-reference-error-incident-retro.md`)
+- **What would have shipped without verification:** Path 3 env-override, a non-fix that would have left the 18 functions still broken AND created vault/env divergence to clean up
+
+The PR template's Diagnosis section makes the orthogonal-verification step **mechanical** — the author MUST enumerate it before submitting. Same forcing-function shape as class kill A's CI gate but at the PR-author layer.
+
+### Companion: verify-before-applying discipline for memory-shape-matched hypotheses
+
+When a Phase A or PR's hypothesis matches an existing `feedback_*.md` entry's documented shape, **the verification step is mandatory regardless of how confident the match looks.** The matching shape is what creates the bias toward premature conclusion. The cheapest verification first — a single query, a vault read, a sample-data pull — catches the false-cause before fix ships.
+
+**Diagnostic question for every fix PR:** *"My hypothesis matches the shape of memory entry X. Have I verified the hypothesis with evidence orthogonal to the matching shape, or am I treating the match as confirmation?"*
+
+**Empirical validation pending:** the forcing function's effectiveness measured by future P0 incident counts. If next P0 catches a false-cause hypothesis at the PR template layer (Diagnosis section reveals missing orthogonal verification), that's structural validation. Until then, the forcing function is a structural discipline pending validation.
+
+### Linked artifacts
+
+- PR template ship: `.github/PULL_REQUEST_TEMPLATE.md` (this PR)
+- Original P0 incident retro: `docs/audit/2026-05-06-pr25-reference-error-incident-retro.md`
+- Methodology-errors-cascade catalog (full instance list including #11 + #15 + others)
+- Sibling discipline: `verify-the-warden's-own-framing` standard Phase A first step (Phase A-time application of the same orthogonal-verification principle)
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
