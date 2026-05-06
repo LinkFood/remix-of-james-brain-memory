@@ -26,6 +26,25 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Setup Deno
+        # Required for the Deno type-check step. Pinned major version; minor
+        # bumps are safe given allowlist tracks per-file error counts.
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Deno type check (supabase/functions)
+        # Class kill A from 2026-05-06 PR #27 incident retro. PR #25 introduced
+        # a ReferenceError on `consumerName` at claudeReadSurface.ts:1983 that
+        # the npx tsc step missed (supabase/functions is outside the src/
+        # tsconfig graph). This step runs `deno check` against every TS file
+        # under supabase/functions/ (except jac-watch-scheduler — npm: imports
+        # need nodeModulesDir setup), compares per-file error counts against
+        # scripts/check_deno_types.allowlist baseline, and fails on any new
+        # error in clean files OR regression in allowlisted files. See
+        # docs/audit/2026-05-06-pr25-reference-error-incident-retro.md.
+        run: bash scripts/check_deno_types.sh
+
       - name: Supabase table reference check
         # B4 class-kill from 2026-05-05 distill-principles silent no-op audit.
         # Catches functions that .from('<table>') against a name absent from

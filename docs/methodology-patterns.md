@@ -311,6 +311,51 @@ The `symptom-level-grouping-hides-cause-level-differences` pattern (codified abo
 
 ---
 
+## build-time-type-gate-not-applied-to-runtime-target — CI's TS check skips the runtime where the bug actually runs
+
+Frontend tooling (Vite, tsc) type-checks the `src/` tree. Production runtime code that lives outside the frontend tsconfig graph (Deno edge functions, isolated scripts, build tooling, etc.) escapes the type-check entirely. A bug class that the frontend's tsc would catch (use-before-declaration, missing import, type mismatch) reaches production unchecked.
+
+**Sibling but distinct from `silent-no-op write` and `false-cause inference`.** Those patterns are about runtime behaviors. This pattern is about a CI gate that *exists* but doesn't *cover* the surface where the bug landed. The gate is a partial gate; the runtime escapes.
+
+**Diagnostic question for every CI workflow review:** *"Does this gate apply to every runtime target the repo deploys? If we have N deploy surfaces (frontend, edge functions, scripts), do we have N type-check coverage gates? If not — which surface ships untypechecked?"*
+
+**Class kill shape:** add a per-runtime type-check gate. For Deno edge functions: `deno check supabase/functions/**/*.ts`. For frontend: `tsc --noEmit` against the frontend tsconfig. For Node scripts: `tsc --noEmit` against the script tsconfig. Each surface owns its check; CI fails on any.
+
+**Allowlist pattern (when the gate uncovers pre-existing technical debt):** lock current per-file error counts as baselines. New errors in clean files fail. Regressions in allowlisted files fail. Improvements (count drops below baseline) trigger a warning to amend the allowlist. Same shape as `scripts/check_supabase_table_refs.allowlist` (B4 class kill from 2026-05-05). Allowlist-then-trim is preferable to fix-first when the existing technical debt is large enough to delay the discipline-shipping work.
+
+### Instance — 2026-05-06 PR #25 ReferenceError reached production because Deno files were outside frontend tsconfig
+
+**The bug:** PR #25 added `...(consumerName ? { consumerName } : {})` at `supabase/functions/_shared/claudeReadSurface.ts:1983`. The variable `consumerName` was not declared in scope (declared only at line 2011 inside an inner async telemetry block). In Deno's strict ES modules, the read at line 1983 throws `ReferenceError: consumerName is not defined`.
+
+**Why CI didn't catch it:** the only TypeScript gate was `npx tsc --noEmit` against `tsconfig.app.json`, which scopes type-checking to `src/`. The supabase/functions/ tree was outside the compilation graph. `npm run build` (Vite) also restricted to `src/`. **The Deno runtime had zero type-check coverage in CI.**
+
+**Production impact (per PR #27 retro):** 18 redeployed brain-consumer functions silently dark from 12:14Z to ~15:00Z (~2h45m). Captain caught the failure via the /tape page; PR #26's one-line fix landed only after the production failure surfaced.
+
+**Empirical verification of the class kill:** locally reverting PR #26's fix and running `deno check supabase/functions/_shared/claudeReadSurface.ts` produces exactly:
+
+```
+TS2304 [ERROR]: Cannot find name 'consumerName'.
+TS18004 [ERROR]: No value exists in scope for the shorthand property 'consumerName'.
+```
+
+These are exactly the error class that should have failed CI before merge. Ship-time validation of `scripts/check_deno_types.sh` confirms 30 regressions (including the root in `_shared/claudeReadSurface.ts`) are detected when the bug is reverted.
+
+**The gate:** `scripts/check_deno_types.sh` — runs `deno check` against every TS file under `supabase/functions/` (except `jac-watch-scheduler` which has `npm:` imports requiring nodeModulesDir setup, deferred). Compares per-file error counts against `scripts/check_deno_types.allowlist` baseline. New errors in clean files OR regressions in allowlisted files fail CI.
+
+**Pre-existing technical debt at ship:** 170 type errors across 43 files. Mostly inherited from 7 root-cause errors in `_shared/*` (each consumer that imports a broken shared module sees the propagated error). Allowlisted at current per-file counts; future PRs cannot regress. Fixing the 170 is a separate cleanup project, not the discipline-shipping work.
+
+**Class diagnostic question for future workflow reviews:** *"Every time a new runtime target is added to the repo (new Deno function, new script, new framework), does CI have a type-check gate for that runtime? If not — when does the next PR-#25-class bug ship through it?"*
+
+**Linked artifacts:**
+- Phase A audit: `docs/audit/2026-05-06-pr25-reference-error-incident-retro.md`
+- Hotfix: PR #26 (`_shared/claudeReadSurface.ts:1962` — declared `consumerName` from `opts`)
+- Class kill A: this PR (`scripts/check_deno_types.sh` + allowlist + CI step)
+- Sibling pattern: B4 grep allowlist (`scripts/check_supabase_table_refs.allowlist`) — same allowlist-then-trim discipline applied to a different class
+
+**Sibling-pattern observation:** today's session shipped TWO discipline-prevention CI gates of similar shape: B4 grep (writes-to-nonexistent-table) and class-kill-A deno check (use-before-declaration / type-error class). Both follow the **per-runtime-target gate** principle: each surface owns a check; CI's gate must equal the runtime's surface. As more runtime targets land in the repo (MCP servers, future agent tooling), the same per-runtime-gate discipline should be applied at each addition.
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
