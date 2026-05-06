@@ -17,17 +17,59 @@ jobs:
           version: latest
 
       - name: Detect changed functions
+        # B-2 class-kill (2026-05-06 PR #40 Phase A). Replaces the legacy
+        # hardcoded 7-consumer subset with grep-based import-graph
+        # auto-discovery. Empirically: today's PR #25 changed
+        # `_shared/claudeReadSurface.ts` which has 18 direct importers, all
+        # ct-* brain consumers; the legacy 7-list missed all 18 (zero
+        # overlap). Auto-discover is drift-proof — adding a new function
+        # tomorrow that imports a `_shared/` module redeploys it
+        # automatically on next `_shared/` change.
+        #
+        # Transitive handling: 1-level transitive (target X + every
+        # `_shared/Y.ts` that imports X). Catches the claudeReadSurface→
+        # contextHelper case (claudeReadSurface imports contextHelper;
+        # if contextHelper.ts changes, functions importing
+        # claudeReadSurface are also affected and redeploy). Deeper
+        # transitive (X→Y→Z chains 2+ levels) is NOT handled — known
+        # limitation; rare in current codebase. If it bites, extend
+        # recursion or fall back to "deploy every function with any
+        # _shared/ import" when N levels of transitive get hit.
         id: changes
         run: |
           # Get changed files in the last commit
           CHANGED=$(git diff --name-only HEAD~1 HEAD -- supabase/functions/ 2>/dev/null || echo "")
 
-          # Extract unique function slugs (skip _shared)
+          # Direct function changes — extract slugs (skip _shared)
           SLUGS=$(echo "$CHANGED" | grep -oP 'supabase/functions/\K[^/]+' | grep -v '_shared' | sort -u | tr '\n' ' ')
 
-          # If _shared changed, deploy core functions
-          if echo "$CHANGED" | grep -q 'supabase/functions/_shared/'; then
-            SLUGS="$SLUGS jac-dispatcher jac-code-agent jac-research-agent jac-save-agent jac-search-agent assistant-chat smart-save"
+          # _shared/ changes — auto-discover importers via grep import-graph
+          CHANGED_SHARED=$(echo "$CHANGED" | grep '^supabase/functions/_shared/.*\.ts$' || true)
+          if [ -n "$CHANGED_SHARED" ]; then
+            for shared_path in $CHANGED_SHARED; do
+              shared_basename=$(basename "$shared_path" .ts)
+              echo "Auto-discovering importers of _shared/${shared_basename}.ts"
+
+              # 1-level transitive: every _shared/Y.ts that imports X.
+              # Functions that import Y are affected when X changes.
+              TRANSITIVE_SHARED=$(grep -rln "from '\./${shared_basename}" supabase/functions/_shared/ 2>/dev/null | xargs -n 1 basename 2>/dev/null | sed 's/\.ts$//' | sort -u)
+
+              # Targets to grep importers for
+              TARGETS="$shared_basename $TRANSITIVE_SHARED"
+
+              for target in $TARGETS; do
+                # Find function-level importers (skip files inside _shared/)
+                IMPORTERS=$(grep -rln "from '\.\./_shared/${target}" supabase/functions/ 2>/dev/null \
+                  | grep -v 'supabase/functions/_shared/' \
+                  | sed 's|^supabase/functions/||; s|/index\.ts$||; s|/[^/]*\.ts$||' \
+                  | sort -u)
+                if [ -n "$IMPORTERS" ]; then
+                  COUNT=$(echo "$IMPORTERS" | wc -l | tr -d ' ')
+                  echo "  via _shared/${target}.ts: $COUNT importer(s)"
+                  SLUGS="$SLUGS $IMPORTERS"
+                fi
+              done
+            done
             SLUGS=$(echo "$SLUGS" | tr ' ' '\n' | sort -u | tr '\n' ' ')
           fi
 
