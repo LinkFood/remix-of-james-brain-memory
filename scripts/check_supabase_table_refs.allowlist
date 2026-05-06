@@ -31,8 +31,13 @@
 # as a candidate at all, so the allowlist entry was removed (not just kept
 # perma-suppressed). See `docs/audit/2026-05-05-dumps-orphan-phase-a.md`.
 
-# `messages` — referenced by calculate-importance but absent from PostgREST
-# schema despite migration `20251122051423` creating it in public. Possibly
-# RLS-filtered (PostgREST hides RLS-locked tables from anon role) or
-# schema-cache stale. Pending separate audit. Same status as `dumps`.
-messages
+# [removed 2026-05-05 messages Phase B] `messages` was deliberately DROPPED
+# 2026-01-23 in the multi-provider-chat → brain-dump architecture pivot. The
+# 2 surviving references in calculate-importance/index.ts (SELECT line 75 +
+# UPDATE line 135) were both gated by `if (messageId)` — an unreached
+# branch in 103 days (smart-save always passes inline content; importance
+# scores write to entries.importance_score directly). Phase B B1 deleted
+# the dead branches; the orphan no longer exists. Allowlist comment that
+# previously read "Possibly RLS-filtered or schema-cache stale" was a
+# confident misdiagnosis (see header policy added in PR #20 amendment).
+# Audit: docs/audit/2026-05-05-messages-orphan-phase-a.md.
