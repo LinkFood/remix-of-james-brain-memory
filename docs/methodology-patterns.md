@@ -356,6 +356,52 @@ These are exactly the error class that should have failed CI before merge. Ship-
 
 ---
 
+## audit-verification-surface-mismatch — audit verifies layer adjacent to but not same as symptom layer
+
+A symptom report names a specific layer where the consumer sees the problem (UI surface, MCP organ output, /tape page, downstream consumer). The audit responding to the symptom verifies a *different* layer — usually upstream (producer table, cron status, ingestion pipeline). The audit's findings are technically correct at the layer it verified, but don't address the symptom layer. The conclusion ships as "resolved" while the consumer-visible symptom persists.
+
+**Sibling but distinct from `audit-frame-mismatch`** (top of file). That one catches *"system X is broken vs join is missing"* — same layer, different diagnosis. This one catches *"layer Y is healthy vs the symptom is at layer X"* — different layers entirely.
+
+**Sibling but distinct from `brief-author-premise-error`** (above). That catches *"the brief assumed wrong cause."* This catches *"the audit verified the wrong layer."* The brief may have been correctly framed; the audit drifted.
+
+**Diagnostic question for every Phase A:** *"My symptom report is at surface X. Have I verified at surface X, or only at upstream Y? If only at Y, my conclusion may be correct at Y but disconnected from the actual symptom at X."*
+
+**Class kill shape:** every Phase A's first step is *verify-the-audit-checks-the-symptom-layer.* This is **meta to `verify-the-warden's-own-framing`** — that one verifies the claim (is the metric correct?); this one verifies that the verification is happening at the right surface. Operationally: if the symptom is "consumer sees X," the Phase A pulls **the consumer's actual output**, not just upstream state. Producer-side verification is a sibling check, not a substitute for symptom-layer verification.
+
+### Instance — 2026-05-06 PR #31 verified ct_news_causality producer; trading session symptom was at MCP organ output
+
+**The symptom:** trading session 2026-05-06 13:45 ET reported `news_causality.causality` fields all null in cotrader MCP output for SPY (10/10 items literally null at the organ surface).
+
+**PR #31's audit (per `docs/audit/2026-05-06-punchlist-2-null-causality-phase-a.md`):** verified `ct_news_causality` producer table — found structured zeros (110 of 563 rows `moved=true` with real data, 453 of 563 `moved=false, flow_hits=0` structured zeros, **0 actually null**). Concluded "all null framing wrong, producer healthy, close as transient."
+
+**The verdict was correct at producer layer.** Producer was healthy. Cron firing every 15 min. Continuous writes for 19+ days.
+
+**But the consumer surface said null.** Trading session did NOT misread structured zero as null — they pulled MCP organ output where the value really WAS null. The audit's verdict didn't address that surface.
+
+**Phase A.7 (per `docs/audit/2026-05-06-phase-a-7-news-causality-projection-layer.md`) traced the projection layer:** `newsCausalityContext.ts:207` hardcodes `causality: EMPTY_CAUSALITY` (all-null) for every `ct_breaking_news` item by design — causality is third-layer in the architecture (firehose → analyses → causality), keyed only to `ct_news_analyses.id`. Breaking news firehose items NEVER get causality data. The helper's null projection is architecturally correct; the read shape conflates "by-design no causality possible" with "data missing" with "structured zero."
+
+**The discipline catch:** PR #31 audited the *producer* (correct at that layer); the symptom was at the *organ output* (different layer, different finding). PR #31's verdict + Phase A.7's bridge = both correct, but only together do they address the symptom. PR #31 alone closed the punchlist item prematurely; the trading session's **MCP-as-diagnostic-readout** pull is what reopened it.
+
+**Class diagnostic question for future audits:** *"Where does the consumer see the problem? Did I pull the consumer's actual output as part of my audit, or did I only verify upstream state? If only upstream — my finding is at the wrong layer. Re-do the audit at the symptom's actual surface."*
+
+**Linked artifacts:**
+- PR #31 (producer-layer verification): `docs/audit/2026-05-06-punchlist-2-null-causality-phase-a.md`
+- PR #34 / Phase A.7 (projection-layer bridge): `docs/audit/2026-05-06-phase-a-7-news-causality-projection-layer.md`
+- PR #32 (paired sub-pattern entry): `structured-zero-misread-as-null` — both patterns surfaced in same chain of investigations
+
+### Session-level observation (2026-05-06) — meta-discipline emerging
+
+This pattern surfaces a meta-discipline beyond `verify-the-warden's-own-framing`:
+
+- **`verify-the-warden's-own-framing`** verifies the *claim* (is the metric correct?). Caught 5 false premises today (cache_hit error column, P3 key-divergence, cadence 10/hour wrong, 4-ticker grouping, MSFT C1 framing).
+- **`audit-verification-surface-mismatch`** verifies the *audit*, recursively (is the verification at the right surface?). Caught PR #31's resolution-as-misframed verdict that didn't reach the consumer-surface symptom.
+
+Both disciplines compound. Each new Phase A inherits both: verify the claim AND verify the verification is at the right surface. **The symptom-surface check should fire FIRST**, before any upstream verification — because if the audit is at the wrong layer, the upstream finding is irrelevant to the symptom regardless of correctness.
+
+**Forcing function:** Phase A's opening step is "name the consumer's surface where the symptom appears, and pull data from that surface." If the symptom is "MCP returns null," pull MCP output. If symptom is "/tape page frozen," pull /tape page state (or its underlying read query). Producer-side verification is the SECOND step, not the first.
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
