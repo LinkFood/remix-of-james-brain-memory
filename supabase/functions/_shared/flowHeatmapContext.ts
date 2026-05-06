@@ -5,6 +5,8 @@ import type {
   HelperFetchContext,
   HelperOpts,
   HelperResult,
+  OrganMetadata,
+  OrganStatus,
 } from './contextHelper.ts';
 
 export interface FlowHeatmapStack {
@@ -251,6 +253,13 @@ const flowHeatmapHelper: ContextHelper<FlowHeatmapResult> = {
     const cfg = await loadConfig(ctx.supabase, consumerName);
     const effectiveCap = Math.max(1, opts.cap ?? cfg.cap);
 
+    const status: OrganStatus = rowCount === 0 ? 'no_signal_detected' : 'populated';
+    const organMetadata: OrganMetadata = {
+      as_of: data.generated_at,
+      source: `_shared/flowHeatmapContext.ts / ct_flow_heatmap_live (math_mode=${data.math_mode})`,
+      window: `trailing ${data.lookback_hours}h, max_expiry_days=${cfg.max_expiry_days}, top-${effectiveCap} stacks`,
+      status,
+    };
     return {
       data,
       meta: {
@@ -263,6 +272,7 @@ const flowHeatmapHelper: ContextHelper<FlowHeatmapResult> = {
         truncated: data.per_ticker.some((t) => t.stacks.length >= effectiveCap),
         warning: rowCount === 0 ? 'empty_result' : undefined,
       },
+      organMetadata,
     };
   },
 

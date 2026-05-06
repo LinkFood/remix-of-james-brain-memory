@@ -241,18 +241,20 @@ Pulled actual organ helper return shapes for `news_causality` (`_shared/newsCaus
 
 | # | Organ | Producer write | Per-item status | Warden invariant | Shipped |
 |---|---|---|---|---|---|
-| 1 | `news_causality` | ✅ | ✅ (firehose_only_no_causality / populated / pending_analysis) | queued — needs ct_brain_telemetry.organ_status column | 2026-05-07 |
-| 2 | `flow_heatmap` | pending | n/a (homogeneous-source) | queued | — |
-| 3 | `pulse` | pending | n/a | queued | — |
-| 4 | `specialist` | pending | tbd | queued | — |
-| 5 | `detector` | pending | tbd | queued | — |
-| 6 | `tape` | pending | n/a | queued | — |
-| 7 | `james_flags` | pending | n/a | queued | — |
-| 8 | `event_recency` | pending | tbd | queued | — |
-| 9 | `analogs` | pending | tbd | queued | — |
-| 10 | `specialist_recall` | pending | tbd | queued | — |
+| 1 | `news_causality` | ✅ | ✅ (firehose_only_no_causality / populated / pending_analysis) | unblocked (column live) | 2026-05-07 |
+| 2 | `flow_heatmap` | ✅ | n/a (homogeneous-source) | unblocked (column live) | 2026-05-08 |
+| 3 | `pulse` | pending | n/a | unblocked | — |
+| 4 | `specialist` | pending | tbd | unblocked | — |
+| 5 | `detector` | pending | tbd | unblocked | — |
+| 6 | `tape` | pending | n/a | unblocked | — |
+| 7 | `james_flags` | pending | n/a | unblocked | — |
+| 8 | `event_recency` | pending | tbd | unblocked | — |
+| 9 | `analogs` | pending | tbd | unblocked | — |
+| 10 | `specialist_recall` | pending | tbd | unblocked | — |
 
-**Per-organ warden invariants are deferred** until ct_brain_telemetry surfaces organ_status — currently telemetry persists only helper_name/version/audience/latency/cache_hit/error. Adding `organ_status TEXT` column + populating it from `result.organMetadata?.status` is its own structural ship (metadata-visibility-to-warden). Queue: post-Phase-2-organ-3 ship a single migration + claudeReadSurface.ts telemetry-write update + 10 invariants in one bundle.
+**ct_brain_telemetry.organ_status column shipped 2026-05-08** (migration `20260507000000_brain_telemetry_organ_status.sql`). Pre-flight bundled with organ #2. claudeReadSurface.ts populates `organ_status` from `result.organMetadata?.status` on every brain read. Per-organ metadata-completeness warden invariants are now unblocked — queued to bundle-ship at organ #3 (single migration adds 10 invariants, one per organ, gated on `helper_name=$organ AND organ_status IS NOT NULL` over a fresh window).
+
+**End-to-end Phase 2 acceptance verified 2026-05-08** via fresh-Deno orchestrator invocation: both organs show `organ_status='populated'` in `ct_brain_telemetry` rows where consumer_name='phase2-acceptance-verify' (audit trail).
 
 ---
 

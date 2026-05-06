@@ -2028,6 +2028,7 @@ export async function buildClaudeContext(
             output_size_bytes: outputBytes,
             cache_hit: !!m.cacheHit,
             error: m.warning ? `warning:${m.warning}` : null,
+            organ_status: o.result.organMetadata?.status ?? null,
           };
         }
         // Skipped outcome — record reason for visibility, latency=0.
@@ -2228,6 +2229,7 @@ async function buildSynthesisOnlyContext(
             output_size_bytes: outputBytes,
             cache_hit: !!m.cacheHit,
             error: m.warning ? `warning:${m.warning}` : null,
+            organ_status: o.result.organMetadata?.status ?? null,
           };
         }
         const reasonTag = o.skipped === 'error' && o.error
