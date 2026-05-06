@@ -334,7 +334,7 @@ serve(async (req) => {
       pullUpcomingEvents(supabase, sessionDate),
       pullTickerSnapshots(supabase, watchlist),
       pullYesterdayClosedTrades(supabase),
-      getFlowHeatmapContext(supabase, watchlist),
+      getFlowHeatmapContext(supabase, watchlist, { consumerName: 'ct-daily-brief' }),
     ]);
 
     // Temporal anchor — tool-use JSON consumer, so use the SHORT variant.
