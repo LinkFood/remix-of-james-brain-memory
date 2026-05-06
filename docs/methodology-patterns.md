@@ -542,6 +542,72 @@ last_error: invariant queries must be a single statement (no mid-query semicolon
 
 ---
 
+## pre-existing-bug-masked-by-defensive-fallback — defensive `|| true` / `2>/dev/null` swallows the bug it was meant to handle
+
+A defensive fallback is added to a step that might fail for legitimate reasons (e.g., file not found, command unavailable, pipeline error). The fallback returns a benign default (empty string, zero, "unknown"). Downstream code branches on the default as if it represented "nothing happened" rather than "something failed silently." Bug introduced upstream of the fallback is then invisible — the system proceeds as if everything is fine, when actually the upstream condition is not what the author intended.
+
+**Sibling but distinct from `silent-no-op-write`** (referenced via `feedback_silent_failure_detection_pattern.md`). That pattern catches *producer wrote nothing*; this pattern catches *defensive fallback in the consumer interpreted "wrote nothing" as "nothing to do."* Both are silent-failure shapes; this one is at the consumer's defensive-handling layer.
+
+**Sibling but distinct from `string-pattern-match-instead-of-real-parser`** (above). That pattern catches *parser uses wrong tool*; this pattern catches *defensive code uses the right tool but interprets failures as success-equivalent*.
+
+**Diagnostic question for any defensive fallback:** *"When this fallback fires, can the downstream code distinguish 'fallback fired because input was empty' from 'fallback fired because upstream failed'? If not, the fallback is masking failures rather than handling them."*
+
+**Class kill shape:** when adding a defensive fallback, also add an explicit signal to the consumer that the fallback fired. Either:
+
+- **Fail loud option:** remove the fallback. Let the upstream failure propagate. Surface the actual error.
+- **Tagged-fallback option:** use a sentinel value the downstream code can detect (e.g., `"FALLBACK_EMPTY"` instead of `""`). Downstream branches on the sentinel and surfaces the unusual state.
+- **Logged-fallback option:** keep the fallback but log/echo when it fires. Downstream code still sees empty/zero, but the log surfaces the abnormal state for forensic investigation.
+
+The bug is NOT the fallback itself — it's the consumer treating the fallback output identically to the legitimate-empty case.
+
+### Instance — 2026-05-06 PR #49 deploy-functions checkout fetch-depth=1 default + `2>/dev/null || echo ""` defensive
+
+**The bug:** `.github/workflows/deploy-functions.yml` had:
+
+```bash
+CHANGED=$(git diff --name-only HEAD~1 HEAD -- supabase/functions/ 2>/dev/null || echo "")
+```
+
+`actions/checkout@v4` defaulted to `fetch-depth: 1`. Only the current commit was checked out; `HEAD~1` did not exist. `git diff HEAD~1 HEAD` errored. The `2>/dev/null || echo ""` defensive caught the error and produced empty string. SLUGS computed as empty. Downstream steps:
+
+```yaml
+- name: Deploy functions
+  if: steps.changes.outputs.slugs != ''
+```
+
+Saw empty SLUGS, **skipped silently.** CI conclusion: success. Nothing actually deployed.
+
+**Why this surfaced today:** the bug had been silently passing CI for an unknown duration. Surfaced **at the moment** when B-1 / B-2 / B-3 (PRs #39 / #42 / #48) shipped — those checks all depend on the deploy step actually running. With the deploy step skipped, the new defenses had nothing to defend, and the workflow conclusion remained spuriously green.
+
+**Empirical evidence (PR #48 deploy run logs):**
+- Workflow triggered (path filter matched: `supabase/functions/**`)
+- Detect step ran, computed `Deploying:` (empty after the colon)
+- Deploy step `if` evaluated false, skipped
+- Probe step `if` evaluated false, skipped
+- Workflow conclusion: success
+
+The fact that NOTHING DEPLOYED was the spurious-success signal.
+
+**The fix (PR #49):** `actions/checkout@v4` with `fetch-depth: 2`. One-line YAML addition. Just enough git history for `HEAD~1` to exist. The `2>/dev/null || echo ""` fallback stays for now (defense against unanticipated git-state edge cases) but it's no longer masking the fetch-depth bug because there's no error for it to swallow.
+
+**Class diagnostic question for future workflow / script reviews:** *"Is there a defensive `|| true` / `2>/dev/null` / `.catch()` / try-catch returning a benign default? When it fires, does the downstream code branch on a value indistinguishable from the legitimate-empty case? If yes — the defensive fallback is potentially masking a bug."*
+
+**Sibling-pattern observation across today's session:** This is the **fourth string-pattern-or-defensive-fallback issue** today:
+- PR #23 cache_hit-error-column-purity (warden's `NOT LIKE` filter accretion)
+- PR #46 warden-SQL `;` regex flagging inline-comment semicolons
+- PR #20 morning B4 grep `.from()` regex couldn't tell Postgres `.from()` from Storage `.from()`
+- PR #49 (this) `2>/dev/null || echo ""` masking fetch-depth bug
+
+**Four same-shape catches in one session.** Pattern is *real-tool-or-fail-loud* — when handling structured input or potentially-failing operations, default to the real tool (parser, error propagation) rather than the brittle convenience (regex, defensive default). The structural fix path: replace string-match with parser; replace silent-default with explicit signal or fail-loud.
+
+**Linked artifacts:**
+- Hotfix: PR #49 — `.github/workflows/deploy-functions.yml` (`fetch-depth: 2` added)
+- Surfacing PR run: deploy run databaseId 25457538716 (PR #48 merge) — `Deploying:` empty, deploy + probe skipped
+- Sibling family: `string-pattern-match-instead-of-real-parser` (above)
+- Sibling family: `silent-no-op-write` class (referenced in `feedback_silent_failure_detection_pattern.md`)
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
