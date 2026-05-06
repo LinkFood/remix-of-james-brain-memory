@@ -192,6 +192,19 @@ function ThresholdBanner({ data }: { data: CostDashboardData }) {
   );
 }
 
+function SharedKeyNote() {
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3 flex items-start gap-3">
+      <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+      <div className="flex-1 text-xs text-amber-200/80">
+        <span className="font-semibold text-amber-300">Anthropic Console will read higher than this page.</span>
+        {' '}The same <code className="text-[11px]">ANTHROPIC_API_KEY</code> bills Duck Countdown
+        {' '}(separate project, ~90 crons) on the same invoice. Subtract DCD spend to compare.
+      </div>
+    </div>
+  );
+}
+
 function HeaderStats({ data }: { data: CostDashboardData }) {
   const trend = monthTrendArrow(data.totals.forecast_month, data.totals.last_month_total);
   const TrendIcon = trend.Icon;
@@ -586,6 +599,7 @@ export default function CostDashboard() {
       </header>
 
       <ThresholdBanner data={data} />
+      <SharedKeyNote />
       <HeaderStats data={data} />
       <CostPerOutcomeStats data={data} />
       <StackedCostChart timeline={data.timeline} sources={data.timelineSources} />

@@ -138,7 +138,23 @@ export function useTokenCounter(userId: string) {
     fetchAll();
   }, [fetchAll]);
 
-  // Realtime — refetch on either table changing.
+  // Polling — realtime INSERT events on ct_claude_usage are unreliable
+  // (same class as the agent_conversations gotcha), so a 30s tick is the
+  // primary refresh path. Also refetch on window focus.
+  useEffect(() => {
+    if (!userId) return;
+    const interval = setInterval(fetchAll, 30_000);
+    const onFocus = () => fetchAll();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [userId, fetchAll]);
+
+  // Realtime — best-effort fast path. agent_tasks INSERT for the user is
+  // reliable; ct_claude_usage INSERT often misses, which is why polling is
+  // load-bearing above.
   useEffect(() => {
     if (!userId) return;
     const channel: RealtimeChannel = supabase

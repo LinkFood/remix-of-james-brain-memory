@@ -49,6 +49,7 @@ import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent, ClaudeError } from '../_shared/anthropic.ts';
 import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 
 // ---------------------------------------------------------------------------
 // Brain integration (Phase 4 — synthesis layer migration).
@@ -201,6 +202,7 @@ Rules:
     (i.e., neither bull nor bear got their move).`;
 
 async function haikuVerdict(
+  supabase: SupabaseClient,
   debate: DebateRow,
   priceContext: { move_pct: number | null; ticks: number; horizon_hrs: number },
   brain: BrainSnapshot | null,
@@ -216,6 +218,7 @@ async function haikuVerdict(
     price_context: priceContext,
     brain_context: brain,
   };
+  const claudeCallStart = Date.now();
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.haiku,
@@ -223,6 +226,14 @@ async function haikuVerdict(
       messages: [{ role: 'user', content: JSON.stringify(payload) }],
       max_tokens: 250,
       temperature: 0.1,
+    });
+    logClaudeUsage(supabase, {
+      source: 'ct-debate-outcome-scorer',
+      model: CLAUDE_MODELS.haiku,
+      usage: res.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      mcp_calls: 0,
+      metadata: { debate_id: debate.id },
     });
     const raw = parseTextContent(res).trim();
     const stripped = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
@@ -310,7 +321,7 @@ async function scoreDebate(
 
   // Haiku fallback: no price data, or move was sub-threshold for a bull/bear pick.
   if (verdict == null) {
-    const h = await haikuVerdict(debate, {
+    const h = await haikuVerdict(supabase, debate, {
       move_pct: movePct,
       ticks: tickCount,
       horizon_hrs: horizonHrs,

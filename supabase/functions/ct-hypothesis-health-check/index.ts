@@ -18,10 +18,11 @@
  */
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
+import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseToolUse, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { buildClaudeContext, claudeSystemPromptPreamble, type ClaudeContext } from '../_shared/claudeReadSurface.ts';
 import { recordDecision } from '../_shared/decisionJournal.ts';
 import { getTemporalContext } from '../_shared/temporalContext.ts';
@@ -200,10 +201,12 @@ const VERDICT_TOOL = {
 } as const;
 
 async function judgeHypothesis(
+  supabase: SupabaseClient,
   h: HypothesisRow,
   marketState: Record<string, unknown> | null,
   systemPrompt: string,
 ): Promise<HaikuVerdict | null> {
+  const claudeCallStart = Date.now();
   try {
     const payload = {
       claim: h.claim,
@@ -221,6 +224,14 @@ async function judgeHypothesis(
       tool_choice: { type: 'tool', name: 'emit_verdict' },
       max_tokens: 500,
       temperature: 0.1,
+    });
+    logClaudeUsage(supabase, {
+      source: 'ct-hypothesis-health-check',
+      model: CLAUDE_MODELS.haiku,
+      usage: res.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      mcp_calls: 0,
+      metadata: { hypothesis_id: h.id },
     });
     const tool = parseToolUse(res);
     if (!tool || tool.name !== 'emit_verdict') return null;
@@ -402,7 +413,7 @@ serve(async (req) => {
   }
 
   for (const h of rows) {
-    const v = await judgeHypothesis(h, marketState, systemPrompt);
+    const v = await judgeHypothesis(supabase, h, marketState, systemPrompt);
     if (!v) {
       failed++;
       await recordDecision(supabase, {

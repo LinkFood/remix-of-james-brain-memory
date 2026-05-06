@@ -17,6 +17,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, CLAUDE_RATES, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
 import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
 import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
@@ -536,6 +537,7 @@ You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTE
   let modelUsed = CLAUDE_MODELS.haiku;
   let apiError: string | null = null;
 
+  const claudeCallStart = Date.now();
   try {
     const resp = await callClaude({
       model: CLAUDE_MODELS.haiku,
@@ -549,6 +551,14 @@ You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTE
     inputTokens = resp.usage?.input_tokens ?? 0;
     outputTokens = resp.usage?.output_tokens ?? 0;
     modelUsed = resp.model ?? modelUsed;
+    logClaudeUsage(supabase, {
+      source: 'ct-tape-reader',
+      model: modelUsed,
+      usage: resp.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      mcp_calls: 0,
+      metadata: { trigger_kind, session_date: tctx.session_date },
+    });
   } catch (e) {
     apiError = e instanceof ClaudeError ? `${e.status}: ${e.message}` : (e instanceof Error ? e.message : String(e));
     commentary = `[reader offline] ${apiError.slice(0, 200)}`;

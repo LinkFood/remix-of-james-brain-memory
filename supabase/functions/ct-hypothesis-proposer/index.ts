@@ -32,6 +32,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseToolUse, ClaudeError, calculateCost } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { getConfig } from '../_shared/configCache.ts';
 import { buildClaudeContext, claudeSystemPromptPreamble } from '../_shared/claudeReadSurface.ts';
 import { recordDecision } from '../_shared/decisionJournal.ts';
@@ -472,6 +473,7 @@ serve(async (req) => {
   let tokensIn = 0;
   let tokensOut = 0;
   let costUsd = 0;
+  const claudeCallStart = Date.now();
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.sonnet_46,
@@ -485,6 +487,14 @@ serve(async (req) => {
     tokensIn = res.usage?.input_tokens ?? 0;
     tokensOut = res.usage?.output_tokens ?? 0;
     costUsd = calculateCost(CLAUDE_MODELS.sonnet_46, res.usage ?? { input_tokens: 0, output_tokens: 0 });
+    logClaudeUsage(supabase, {
+      source: 'ct-hypothesis-proposer',
+      model: CLAUDE_MODELS.sonnet_46,
+      usage: res.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      mcp_calls: 0,
+      metadata: { brief_id: claudeCtx.activeBrief?.id ?? null },
+    });
     const tool = parseToolUse(res);
     if (!tool || tool.name !== 'propose_hypotheses') {
       throw new Error(`expected tool_use propose_hypotheses, got ${tool?.name ?? 'none'}`);

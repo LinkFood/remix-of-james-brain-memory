@@ -26,6 +26,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, CLAUDE_RATES, ClaudeError } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
 import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
@@ -1249,6 +1250,7 @@ End with a single closing sentence on the day's regime → tomorrow's setup.`;
   let modelUsed: string = CLAUDE_MODELS.sonnet_46;
   let apiError: string | null = null;
 
+  const claudeCallStart = Date.now();
   try {
     const resp = await callClaude({
       model: CLAUDE_MODELS.sonnet_46,
@@ -1262,6 +1264,14 @@ End with a single closing sentence on the day's regime → tomorrow's setup.`;
     inputTokens = resp.usage?.input_tokens ?? 0;
     outputTokens = resp.usage?.output_tokens ?? 0;
     modelUsed = resp.model ?? modelUsed;
+    logClaudeUsage(supabase, {
+      source: 'ct-eod-summary',
+      model: modelUsed,
+      usage: resp.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      mcp_calls: 0,
+      metadata: { session_date: sessionDate },
+    });
   } catch (e) {
     apiError = e instanceof ClaudeError ? `${e.status}: ${e.message}` : (e instanceof Error ? e.message : String(e));
     summaryText = `[EOD generation offline] ${apiError.slice(0, 200)}\n\nMarket stats: ${flags.length} flags, ${reads.length} reads, ${stacks.length} stacks. Net premium open→close: ${fmtUsd(mktPremOpen)} → ${fmtUsd(mktPremClose)}.`;

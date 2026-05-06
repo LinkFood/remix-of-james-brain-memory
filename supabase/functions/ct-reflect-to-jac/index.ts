@@ -22,6 +22,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { callClaude, CLAUDE_MODELS, parseTextContent } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { recordDecision } from '../_shared/decisionJournal.ts';
 
 const HIGH_SIGNAL_DECISION_TYPES = [
@@ -283,6 +284,7 @@ serve(async (req) => {
   let summary: string | null = null;
   let tokensIn = 0;
   let tokensOut = 0;
+  const claudeCallStart = Date.now();
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.haiku,
@@ -303,6 +305,14 @@ serve(async (req) => {
     summary = parseTextContent(res);
     tokensIn = res.usage?.input_tokens ?? 0;
     tokensOut = res.usage?.output_tokens ?? 0;
+    logClaudeUsage(supabase, {
+      source: 'ct-reflect-to-jac',
+      model: CLAUDE_MODELS.haiku,
+      usage: res.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      mcp_calls: 0,
+      metadata: { decisions_count: decisions.length },
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.warn(`[ct-reflect-to-jac] Haiku call failed: ${msg}`);

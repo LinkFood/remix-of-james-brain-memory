@@ -65,23 +65,32 @@ export const FORECAST_NOTE =
  * compute the "untracked" row.
  */
 export const KNOWN_INSTRUMENTED_SOURCES = [
-  'ct-watcher',
+  'ct-alert-post-mortem',
+  'ct-book-eod-close',
+  'ct-book-manager',
   'ct-chat',
   'ct-curiosity',
-  'ct-morning-brief',
-  'ct-midday-recap',
+  'ct-debate-outcome-scorer',
   'ct-eod-recap',
-  'ct-replay',
+  'ct-eod-summary',
+  'ct-hypothesis-health-check',
+  'ct-hypothesis-proposer',
+  'ct-lessons-curator',
+  'ct-mcp-verify',
+  'ct-midday-recap',
+  'ct-morning-brief',
   'ct-news-ingester',
   'ct-news-sentiment-backfill',
-  'ct-lessons-curator',
+  'ct-news-sweep',
   'ct-playbook-curator',
-  'ct-weekly-reflection',
-  'ct-book-manager',
-  'ct-book-eod-close',
-  'ct-alert-post-mortem',
-  'ct-trade-advisories',
   'ct-premarket-scan',
+  'ct-reflect-to-jac',
+  'ct-replay',
+  'ct-self-grader',
+  'ct-tape-reader',
+  'ct-trade-advisories',
+  'ct-watcher',
+  'ct-weekly-reflection',
 ] as const;
 
 /**
@@ -91,12 +100,10 @@ export const KNOWN_INSTRUMENTED_SOURCES = [
  * it naturally disappears from this list (move it up top).
  */
 export const KNOWN_UNTRACKED_SOURCES = [
+  'ct-bias-booth',
   'ct-claude-trade-open',
   'ct-claude-trade-reopen',
-  'ct-bias-booth',
   'ct-pre-bell-gauntlet',
-  'ct-mcp-verify',
-  'ct-self-grader',
 ] as const;
 
 // ---------------------------------------------------------------------------

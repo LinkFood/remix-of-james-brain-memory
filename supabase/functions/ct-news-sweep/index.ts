@@ -25,7 +25,7 @@
  */
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
+import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
 import { isServiceRoleRequest } from '../_shared/auth.ts';
 import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import {
@@ -35,6 +35,7 @@ import {
   parseTextContent,
   ClaudeError,
 } from '../_shared/anthropic.ts';
+import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { getWatchlist } from '../_shared/watchlist.ts';
 import { getConfig } from '../_shared/configCache.ts';
 import {
@@ -169,6 +170,7 @@ interface ClassifyOutcome {
 }
 
 async function classifyArticle(
+  supabase: SupabaseClient,
   result: TavilyResult,
   watchlist: string[],
   scopedTicker: string,
@@ -189,6 +191,7 @@ async function classifyArticle(
   let text = '';
   let tokensIn = 0;
   let tokensOut = 0;
+  const claudeCallStart = Date.now();
   try {
     const res = await callClaude({
       model: CLAUDE_MODELS.haiku,
@@ -200,6 +203,14 @@ async function classifyArticle(
     text = parseTextContent(res);
     tokensIn = res.usage?.input_tokens ?? 0;
     tokensOut = res.usage?.output_tokens ?? 0;
+    logClaudeUsage(supabase, {
+      source: 'ct-news-sweep',
+      model: CLAUDE_MODELS.haiku,
+      usage: res.usage,
+      duration_ms: Date.now() - claudeCallStart,
+      mcp_calls: 0,
+      metadata: { ticker: scopedTicker, url: result.url },
+    });
   } catch (e) {
     const rateLimited = e instanceof ClaudeError && e.status === 429;
     console.warn('[news-sweep] classifier error:',
@@ -404,7 +415,7 @@ serve(async (req) => {
 
       // 3. Classify + insert each fresh article.
       for (const article of fresh) {
-        const outcome = await classifyArticle(article, watchlist, ticker, brain);
+        const outcome = await classifyArticle(supabase, article, watchlist, ticker, brain);
         totalTokensIn += outcome.tokens_in;
         totalTokensOut += outcome.tokens_out;
         if (outcome.rate_limited) rateLimitHits += 1;
