@@ -4,6 +4,25 @@
 # Adding new entries requires James approval.
 #
 # Removing entries requires verifying the underlying issue is resolved.
+#
+# COMMENT POLICY (added 2026-05-05 per messages Phase A audit editorial note):
+# Allowlist comments must be EVIDENCE-BASED or HONEST-UNKNOWN. No
+# speculative hypotheses.
+#
+#   GOOD — evidence-based:
+#     # `dumps` — verified false-positive: 3 references are
+#     # supabase.storage.from('dumps') — Storage bucket calls, not table.
+#
+#   GOOD — honest-unknown:
+#     # `messages` — unknown — pending diagnose-only Phase A audit.
+#
+#   BAD — speculative hypothesis (premature framing misleads later audits):
+#     # `messages` — Possibly RLS-filtered or schema-cache stale.
+#
+# The 2026-05-05 messages audit found that "Possibly RLS-filtered" was a
+# confident misdiagnosis — actual cause was a deliberate 2026-01-23 table
+# drop. The hypothesis-as-comment misframed audit thinking 3 days later.
+# Don't repeat — write what you know, mark what you don't.
 
 # [removed 2026-05-05 dumps Phase B] `dumps` was a Supabase Storage bucket,
 # not a Postgres table. Phase A audit confirmed all 3 references are
