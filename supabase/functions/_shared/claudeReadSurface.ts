@@ -1959,6 +1959,7 @@ export async function buildClaudeContext(
       : new Set(opts.organs);
   const tickerFocus = opts.tickerFocus;
   const perOrganOpts = opts.perOrganOpts ?? {};
+  const consumerName = opts.consumerName;
 
   type OrganOutcome =
     | { name: HelperName; result: HelperResult<unknown> }
