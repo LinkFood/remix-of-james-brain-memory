@@ -37,8 +37,10 @@ has been silently no-op'ing. Re-add as Tier 2 after the writer is fixed.
   daily-brief, etc.) still get the full populated context.
 - **5-min in-process TTL cache** on stable organs: `regime`, `event_recency`,
   `analogs`, `specialist_recall`, `james_flags`. Volatile organs are always
-  fresh. Cache hits emit `ct_brain_telemetry` rows tagged `cache_hit:fresh_<sec>s`
-  so the warden + `get_brain_health` stay populated.
+  fresh. Cache hits emit `ct_brain_telemetry` rows with `cache_hit=true` and
+  `error=NULL` (the structured boolean column carries the signal; the `error`
+  column is reserved for genuine failures only — see
+  `docs/audit/2026-05-06-brain-telemetry-real-errors-phase-a.md`).
 - **`organs?: string[]` subset selection.** Pass an explicit list to scope the
   fetch (e.g., `organs=['regime','specialist_recall']` for a sub-second
   response). Unknown names: warn-and-fetch-recognized unless ALL provided are

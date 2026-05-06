@@ -17,9 +17,12 @@
 // Volatile organs (always fresh, never cached):
 //   - flow_heatmap, pulse, detector, tape, news_causality, specialist
 //
-// On cache hit, the MCP emits a telemetry row tagged
-// `error='cache_hit:fresh_<sec>s'` so the warden + get_brain_health stay
-// populated (Option A per James 2026-05-05). Preserves supervisor visibility.
+// On cache hit, the MCP emits a telemetry row with `cache_hit=true` (the
+// structured boolean column). The `error` column stays NULL — reserved for
+// genuine failures only. Per the 2026-05-06 cache_hit-error-column-purity
+// Phase A finding: `error` was being polluted with `cache_hit:fresh_<sec>s`
+// strings, which the warden's NOT-LIKE-warning/skipped filter then surfaced
+// as critical "real errors." Class kill: keep the column semantically pure.
 
 import type { HelperResult } from '../../../supabase/functions/_shared/contextHelper.ts';
 
