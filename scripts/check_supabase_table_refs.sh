@@ -65,13 +65,26 @@ if [[ "${LIVE_COUNT}" -lt 10 ]]; then
   exit 1
 fi
 
-# Grep every .from('<table>') reference in supabase/functions/. Capture the
-# table name. De-dupe.
+# Extract every .from('<table>') reference in supabase/functions/.
+# v1.1 (2026-05-05) — filter out `.storage.from('<bucket>')` calls. Storage
+# bucket references are not Postgres tables; the original regex over-matched
+# and produced false-positives (the `dumps` orphan that triggered this Phase
+# B). The filter handles both shapes:
+#   1. Same-line:        `supabase.storage.from('bucket')`
+#   2. Multi-line chain: `serviceClient.storage\n        .from('bucket')`
+# The awk tracks the previous line per-file (reset on FNR==1) and skips the
+# current .from(...) if the previous line ends with `.storage`.
 REFS_FILE=$(mktemp)
 trap 'rm -f "${LIVE_TABLES_FILE}" "${REFS_FILE}"' EXIT
 
-grep -rhE "\.from\(['\"]([a-zA-Z_][a-zA-Z0-9_]*)['\"]\)" supabase/functions/ \
-  | sed -E "s/.*\.from\(['\"]([a-zA-Z_][a-zA-Z0-9_]*)['\"]\).*/\1/" \
+AWK_SCRIPT="$(dirname "$0")/_extract_table_refs.awk"
+if [[ ! -f "${AWK_SCRIPT}" ]]; then
+  echo "ERROR: missing companion ${AWK_SCRIPT}" >&2
+  exit 1
+fi
+
+find supabase/functions -name '*.ts' -print0 \
+  | xargs -0 awk -f "${AWK_SCRIPT}" \
   | sort -u \
   > "${REFS_FILE}"
 

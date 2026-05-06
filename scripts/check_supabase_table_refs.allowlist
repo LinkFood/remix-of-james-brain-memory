@@ -5,15 +5,12 @@
 #
 # Removing entries requires verifying the underlying issue is resolved.
 
-# `dumps` — referenced by delete-all-user-data + classify-content but absent
-# from PostgREST schema. Found by 2026-05-05 B4 audit while shipping the
-# distill-principles fix. Could be:
-#   - private/internal schema (PostgREST default exposes public only)
-#   - pre-PostgREST table that was renamed
-#   - dead reference
-# Pending separate diagnose-then-fix audit. Not a blocker for the
-# distill-principles fix.
-dumps
+# [removed 2026-05-05 dumps Phase B] `dumps` was a Supabase Storage bucket,
+# not a Postgres table. Phase A audit confirmed all 3 references are
+# `supabase.storage.from('dumps')`. The script's awk extractor was tightened
+# to filter `.storage.from(...)` references — `dumps` is no longer detected
+# as a candidate at all, so the allowlist entry was removed (not just kept
+# perma-suppressed). See `docs/audit/2026-05-05-dumps-orphan-phase-a.md`.
 
 # `messages` — referenced by calculate-importance but absent from PostgREST
 # schema despite migration `20251122051423` creating it in public. Possibly
