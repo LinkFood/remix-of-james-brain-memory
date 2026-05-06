@@ -96,9 +96,71 @@ export interface HelperOpts {
 // ---------------------------------------------------------------------------
 
 /**
+ * Read-Layer Integrity Bundle Phase 1 (2026-05-06) — consumer-facing organ
+ * metadata. Distinct from `HelperResult.meta` which is internal telemetry
+ * (latencyMs, cacheHit, etc.) for orchestrator persistence to
+ * ct_brain_telemetry. `OrganMetadata` is what the captain (or any consumer)
+ * reads to disambiguate organ output: when was this data computed
+ * (as_of), where did it come from (source), what time window does it
+ * cover (window), and what semantic state is the data in (status).
+ *
+ * Phase 1 ships type-only — helpers don't populate organMetadata yet.
+ * Phase 2 (per-organ producer updates, weeks of work) populates per
+ * helper's domain. Backward compat: consumers reading
+ * `result.organMetadata` see undefined until Phase 2 ships.
+ *
+ * Schema design rationale: see `docs/system-map/organ-metadata-schema.md`.
+ *
+ * Resolves four punchlist items in one structural ship:
+ *   - 🔴#1 SPY drift (window-semantics-drift) → window field
+ *   - 🔴#2 null causality (structured-zero-vs-null) → status field
+ *   - 🟡#5 observed_patterns(SPY) empty → likely status field
+ *   - 🟡#6 per-organ as_of meta-fix → as_of field
+ */
+export type OrganStatus =
+  | 'populated'                         // real signal present
+  | 'no_signal_detected'                // producer ran, found nothing
+  | 'balanced_flow_no_directional_signal' // volume but no directional read (IWM Phase A)
+  | 'firehose_only_no_causality'        // breaking_news items lack analysis-keyed data (PR #34 A.7)
+  | 'pending_analysis'                  // producer hasn't run for this row yet
+  | 'data_missing'                      // expected data missing — investigation candidate
+  | 'error'                             // producer fired but errored
+  | 'stale';                            // data older than freshness threshold for this organ
+
+export interface OrganMetadata {
+  /**
+   * ISO 8601 timestamp of when this organ's data was fetched/computed.
+   * Resolves 🟡#6 freshness ambiguity. Captain reads "as_of=2026-05-05T21:01Z"
+   * and immediately knows the organ output is stale, vs intraday.
+   */
+  as_of: string;
+  /**
+   * Identifier for the producer: table name, cron name, edge function
+   * name, or compound. Resolves the partial-source-divergence cause from
+   * 🔴#1 (Finnhub vs internal flow computation for SPY return).
+   */
+  source: string;
+  /**
+   * Time window this data covers — "close-to-close YYYY-MM-DD",
+   * "intraday open-to-close YYYY-MM-DD", "trailing Nh decayed",
+   * "trailing 15min", etc. Resolves the dominant cause of 🔴#1 (window
+   * semantics drift between morning_brief and eod_summary).
+   */
+  window: string;
+  /** Semantic state per OrganStatus enum. Resolves 🔴#2 + 🟡#5. */
+  status: OrganStatus;
+}
+
+/**
  * Every helper returns this shape. `data` is the typed payload; `meta`
  * carries telemetry the orchestrator persists to ct_brain_telemetry.
  * Helpers populate meta themselves so the orchestrator only does aggregation.
+ *
+ * `organMetadata` (Phase 1 of read-layer integrity bundle, 2026-05-06)
+ * is OPTIONAL during Phase 1 — helpers don't populate it yet. Phase 2
+ * per-organ updates land it incrementally. Consumers reading
+ * `result.organMetadata` should treat undefined as "metadata not yet
+ * provided by this organ" and fall back to current behavior.
  */
 export interface HelperResult<TResult> {
   data: TResult;
@@ -118,6 +180,12 @@ export interface HelperResult<TResult> {
     /** Optional warning string (e.g., 'rate_limit_partial', 'stale_data'). */
     warning?: string;
   };
+  /**
+   * Read-Layer Integrity Bundle Phase 1 (2026-05-06). Optional during
+   * transition; populated by helpers in Phase 2 (per-organ updates).
+   * Consumers default to current behavior when undefined.
+   */
+  organMetadata?: OrganMetadata;
 }
 
 // ---------------------------------------------------------------------------
