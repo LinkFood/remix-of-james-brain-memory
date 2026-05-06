@@ -14,8 +14,8 @@
 -- measurement protection), not against ADDITIVE new tables.
 --
 -- ct_brain_telemetry stays clean for organ telemetry (the original 11
--- helper_name values + cache_hit:fresh_<sec>s rows from v1.1's organ
--- cache).
+-- helper_name values + organ-cache hits from v1.1, identified by
+-- cache_hit=true with error=NULL after the 2026-05-06 column-purity fix).
 --
 -- Future: any new MCP server (jac-mcp, dcd-mcp) writes here too via the
 -- same shared helper at mcp/cotrader/lib/tool_telemetry.ts (renameable

@@ -10,8 +10,10 @@
 //     wall-clock).
 //   - Lever 2: 5-min in-process TTL cache for stable organs (regime,
 //     event_recency, analogs, specialist_recall, james_flags). Volatile organs
-//     always fetched fresh. Cache hits emit telemetry tagged
-//     `cache_hit:fresh_<sec>s` (Option A — preserves warden visibility).
+//     always fetched fresh. Cache hits emit telemetry rows with
+//     `cache_hit=true` (boolean column carries the signal; `error` column
+//     stays null — preserves the column's semantic purity per the
+//     2026-05-06 cache_hit-error-column-purity Phase A finding).
 //   - Lever 3: optional `organs?: string[]` scopes the brain read to a subset.
 //     Unknown names: warn-and-fetch-recognized unless ALL provided are unknown
 //     (then hard-fail).
@@ -119,8 +121,9 @@ async function emitCacheHitTelemetry(
   args: { organ: string; ticker: string; ageSec: number; ttlSec: number },
 ): Promise<void> {
   // Same shape as the rows buildClaudeContext writes per organ outcome.
-  // The `error` field carries the cache_hit signal — warden + get_brain_health
-  // can filter on it. Option A per James 2026-05-05.
+  // `cache_hit=true` is the structured signal. The `error` column stays NULL
+  // for cache hits — it's reserved for genuine failures only. Warden +
+  // get_brain_health read `cache_hit` directly.
   try {
     await supabase.from('ct_brain_telemetry').insert({
       helper_name: args.organ,
@@ -130,7 +133,6 @@ async function emitCacheHitTelemetry(
       latency_ms: 0,
       output_size_bytes: 0,
       cache_hit: true,
-      error: `cache_hit:fresh_${args.ageSec}s`,
     });
   } catch (_e) {
     // Telemetry must never block. Swallow.
