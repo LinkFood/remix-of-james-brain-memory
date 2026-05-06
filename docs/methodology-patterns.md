@@ -730,6 +730,109 @@ Three-layer framing holds empirically. Each layer catches what the others miss.
 
 ---
 
+## pre-existing-bug-masked-by-defensive-fallback — defensive `|| true` / `2>/dev/null` swallows the bug it was meant to handle
+
+A defensive fallback is added to a step that might fail for legitimate reasons (e.g., file not found, command unavailable, pipeline error). The fallback returns a benign default (empty string, zero, "unknown"). Downstream code branches on the default as if it represented "nothing happened" rather than "something failed silently." Bug introduced upstream of the fallback is then invisible — the system proceeds as if everything is fine, when actually the upstream condition is not what the author intended.
+
+**Sibling but distinct from `silent-no-op-write`** (referenced via `feedback_silent_failure_detection_pattern.md`). That pattern catches *producer wrote nothing*; this pattern catches *defensive fallback in the consumer interpreted "wrote nothing" as "nothing to do."* Both are silent-failure shapes; this one is at the consumer's defensive-handling layer.
+
+**Sibling but distinct from `string-pattern-match-instead-of-real-parser`** (above). That pattern catches *parser uses wrong tool*; this pattern catches *defensive code uses the right tool but interprets failures as success-equivalent*.
+
+**Diagnostic question for any defensive fallback:** *"When this fallback fires, can the downstream code distinguish 'fallback fired because input was empty' from 'fallback fired because upstream failed'? If not, the fallback is masking failures rather than handling them."*
+
+**Class kill shape:** when adding a defensive fallback, also add an explicit signal to the consumer that the fallback fired. Either:
+
+- **Fail loud option:** remove the fallback. Let the upstream failure propagate. Surface the actual error.
+- **Tagged-fallback option:** use a sentinel value the downstream code can detect (e.g., `"FALLBACK_EMPTY"` instead of `""`). Downstream branches on the sentinel and surfaces the unusual state.
+- **Logged-fallback option:** keep the fallback but log/echo when it fires. Downstream code still sees empty/zero, but the log surfaces the abnormal state for forensic investigation.
+
+The bug is NOT the fallback itself — it's the consumer treating the fallback output identically to the legitimate-empty case.
+
+### Instance — 2026-05-06 PR #49 deploy-functions checkout fetch-depth=1 default + `2>/dev/null || echo ""` defensive
+
+**The bug:** `.github/workflows/deploy-functions.yml` had:
+
+```bash
+CHANGED=$(git diff --name-only HEAD~1 HEAD -- supabase/functions/ 2>/dev/null || echo "")
+```
+
+`actions/checkout@v4` defaulted to `fetch-depth: 1`. Only the current commit was checked out; `HEAD~1` did not exist. `git diff HEAD~1 HEAD` errored. The `2>/dev/null || echo ""` defensive caught the error and produced empty string. SLUGS computed as empty. Downstream steps:
+
+```yaml
+- name: Deploy functions
+  if: steps.changes.outputs.slugs != ''
+```
+
+Saw empty SLUGS, **skipped silently.** CI conclusion: success. Nothing actually deployed.
+
+**Why this surfaced today:** the bug had been silently passing CI for an unknown duration. Surfaced **at the moment** when B-1 / B-2 / B-3 (PRs #39 / #42 / #48) shipped — those checks all depend on the deploy step actually running. With the deploy step skipped, the new defenses had nothing to defend, and the workflow conclusion remained spuriously green.
+
+**Empirical evidence (PR #48 deploy run logs):**
+- Workflow triggered (path filter matched: `supabase/functions/**`)
+- Detect step ran, computed `Deploying:` (empty after the colon)
+- Deploy step `if` evaluated false, skipped
+- Probe step `if` evaluated false, skipped
+- Workflow conclusion: success
+
+The fact that NOTHING DEPLOYED was the spurious-success signal.
+
+**The fix (PR #49):** `actions/checkout@v4` with `fetch-depth: 2`. One-line YAML addition. Just enough git history for `HEAD~1` to exist. The `2>/dev/null || echo ""` fallback stays for now (defense against unanticipated git-state edge cases) but it's no longer masking the fetch-depth bug because there's no error for it to swallow.
+
+**Class diagnostic question for future workflow / script reviews:** *"Is there a defensive `|| true` / `2>/dev/null` / `.catch()` / try-catch returning a benign default? When it fires, does the downstream code branch on a value indistinguishable from the legitimate-empty case? If yes — the defensive fallback is potentially masking a bug."*
+
+**Sibling-pattern observation across today's session:** This is the **fourth string-pattern-or-defensive-fallback issue** today:
+- PR #23 cache_hit-error-column-purity (warden's `NOT LIKE` filter accretion)
+- PR #46 warden-SQL `;` regex flagging inline-comment semicolons
+- PR #20 morning B4 grep `.from()` regex couldn't tell Postgres `.from()` from Storage `.from()`
+- PR #49 (this) `2>/dev/null || echo ""` masking fetch-depth bug
+
+**Four same-shape catches in one session.** Pattern is *real-tool-or-fail-loud* — when handling structured input or potentially-failing operations, default to the real tool (parser, error propagation) rather than the brittle convenience (regex, defensive default). The structural fix path: replace string-match with parser; replace silent-default with explicit signal or fail-loud.
+
+**Linked artifacts:**
+- Hotfix: PR #49 — `.github/workflows/deploy-functions.yml` (`fetch-depth: 2` added)
+- Surfacing PR run: deploy run databaseId 25457538716 (PR #48 merge) — `Deploying:` empty, deploy + probe skipped
+- Sibling family: `string-pattern-match-instead-of-real-parser` (above)
+- Sibling family: `silent-no-op-write` class (referenced in `feedback_silent_failure_detection_pattern.md`)
+
+---
+
+## false-cause forcing function (class kill E discipline)
+
+When a fix PR proposes a cause, **enumerate orthogonal evidence** before treating the cause as load-bearing. When a hypothesis matches the shape of an adjacent memory entry (a `feedback_*.md` file, a prior incident retro, a known failure-class catalog entry), treat the match as a **narrowing heuristic, not a confirmation.** The matching shape biases the reasoner toward premature conclusion — making the verification step MORE important, not less.
+
+**Forcing function shape:** `.github/PULL_REQUEST_TEMPLATE.md` requires a Diagnosis section for fix PRs. Authors enumerate hypothesis + supporting evidence + adjacent memory matches + orthogonal verification + orthogonal evidence collected. Mechanical — can't ship a fix PR without filling it (or marking n/a for non-cause-dependent fixes).
+
+**Pair with `verify-the-warden's-own-framing` discipline:** that pattern fires at audit-time. This forcing function fires at PR-author time. Different temporal layers — together they catch false-cause inference at multiple stages of the workflow.
+
+### Instance — 2026-05-06 P0 service-role-key false-cause hypothesis (instance #11)
+
+The exact shape this forcing function exists to prevent:
+
+- **Symptom:** 18 edge functions returning 401 Unauthorized post-redeploy
+- **Adjacent memory match:** `feedback_service_role_key_rotation.md` documenting key-rotation as a known cause class
+- **Hypothesis-shaped-as-conclusion:** "must be service-role-key rotation" — adopted as load-bearing premise
+- **What caught it (Path 1, manual):** vault read produced empirical evidence that the rotation hypothesis was wrong. Actual cause was a `ReferenceError` from PR #25 (instance #11 captured in `docs/audit/2026-05-06-pr25-reference-error-incident-retro.md`)
+- **What would have shipped without verification:** Path 3 env-override, a non-fix that would have left the 18 functions still broken AND created vault/env divergence to clean up
+
+The PR template's Diagnosis section makes the orthogonal-verification step **mechanical** — the author MUST enumerate it before submitting. Same forcing-function shape as class kill A's CI gate but at the PR-author layer.
+
+### Companion: verify-before-applying discipline for memory-shape-matched hypotheses
+
+When a Phase A or PR's hypothesis matches an existing `feedback_*.md` entry's documented shape, **the verification step is mandatory regardless of how confident the match looks.** The matching shape is what creates the bias toward premature conclusion. The cheapest verification first — a single query, a vault read, a sample-data pull — catches the false-cause before fix ships.
+
+**Diagnostic question for every fix PR:** *"My hypothesis matches the shape of memory entry X. Have I verified the hypothesis with evidence orthogonal to the matching shape, or am I treating the match as confirmation?"*
+
+**Empirical validation pending:** the forcing function's effectiveness measured by future P0 incident counts. If next P0 catches a false-cause hypothesis at the PR template layer (Diagnosis section reveals missing orthogonal verification), that's structural validation. Until then, the forcing function is a structural discipline pending validation.
+
+### Linked artifacts
+
+- PR template ship: `.github/PULL_REQUEST_TEMPLATE.md` (this PR)
+- Original P0 incident retro: `docs/audit/2026-05-06-pr25-reference-error-incident-retro.md`
+- Methodology-errors-cascade catalog (full instance list including #11 + #15 + others)
+- Sibling discipline: `verify-the-warden's-own-framing` standard Phase A first step (Phase A-time application of the same orthogonal-verification principle)
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
