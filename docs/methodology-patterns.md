@@ -248,6 +248,69 @@ When an audit produces a finding that groups multiple entities (tickers, service
 
 ---
 
+## structured-zero-misread-as-null — `0` / `false` semantically encodes "absence detected" but read side interprets as "data missing"
+
+Producer-side code correctly writes `0` / `false` / structured-empty values to indicate *"I checked the source and found nothing."* The read-side consumer (UI, organ, downstream service, captain reading the payload) sees those structured zeros and interprets them as *"data missing / null / broken / not yet computed."* The semantic gap is at the **read shape**, not at the producer or the data — both ends are operating correctly under their own contracts. The friction is that the read shape doesn't expose enough state to distinguish *"absence found"* from *"absence not yet measured"* from *"absence due to missing data."*
+
+**Sibling but distinct from `silent-no-op write` class.** Silent-no-op = producer never wrote (table absent / column wrong / cron disabled). Structured-zero-misread = producer wrote correctly, the value `0` is the truth, but the read shape can't carry the nuance.
+
+**Sibling but distinct from `field-name drift`.** That's read path expects column X, producer writes column Y, mismatch silent. Here all field names line up; the values are correct; the *interpretation* drifts.
+
+**Diagnostic question for every read-shape design:** *"When my read returns null / zero / false, which of these does it mean: (a) no signal exists in the source [absence found], (b) source not yet computed [absence not yet measured], (c) source missing entirely [absence due to data gap], (d) producer never wrote [silent-no-op]? If the read shape can't distinguish (a)-(d), the read shape needs an explicit status field."*
+
+**Class kill shape:** add a `status` enum to the read shape. Concrete shapes:
+
+```typescript
+// Bad — read can't tell why moved is false
+{ moved: false, flow_hits_15min: 0 }
+
+// Good — read knows why
+{ status: 'analyzed_no_flow_found', moved: false, flow_hits_15min: 0 }
+{ status: 'pending_analysis', moved: null, flow_hits_15min: null }
+{ status: 'source_missing', moved: null, flow_hits_15min: null, error: 'news_id not in ct_news_causality' }
+{ status: 'producer_never_ran', moved: null, ... }  // (the silent-no-op case captured explicitly)
+```
+
+The status field collapses (a)-(d) into named states the captain (or any consumer) can distinguish at read time. The values themselves stay the same; the disambiguation lives in the new field.
+
+**Pair-pattern with `brief-author-premise-empirical-verification`:** when a brief reports *"X is null in the read"*, Phase A's first job is to verify the empirical claim. Today's instance was the third confirmation in one session that *"absent-looking value"* may actually be *"correctly-computed-zero meaning absent"* — a different state. The forcing function compounds: verify the framing AND verify the read-shape semantics.
+
+### Instance — 2026-05-06 punchlist 🔴 #2 null causality framing-error close
+
+**The trading-session punchlist claim:** *"news_causality `.causality` fields all null in cotrader MCP output. Captain cannot trust news linkage to flow when the linking field is consistently empty."*
+
+**Phase A verification (per `docs/audit/2026-05-06-punchlist-2-null-causality-phase-a.md`):**
+- 7-day population: **563 rows** in `ct_news_causality`. `Prefer: count=exact` confirmed full population.
+- **Zero rows are actually null.** All 563 rows have structured values.
+- **110 rows (19.5%)** carry `moved=true` with non-zero `flow_hits_15min` and `flow_premium_15min` — real causality data.
+- **453 rows (80.5%)** carry `moved=false` with `flow_hits_15min=0`, `flow_premium_15min=0` — deliberate "no flow within 15min after news event" outputs.
+
+**The 80.5% are the structured zeros.** Not null. Not write failures. The producer (`ct-news-causality` cron `*/15 13-20 RTH weekdays`, last_run 17:00:01Z status=succeeded, continuous writes for 19+ days since 2026-04-17) is healthy and writing correctly.
+
+**Cause classification:** Cases A/B/C/D (silent-no-op-write sub-classes) — **NONE apply.**
+
+**The trading session likely sampled recent items that all happened to be `moved=false` and read the structured zeros as "null."** Conflated absence-detected with data-missing.
+
+**Fix shape:** none on the producer. The structural fix lives in the **read shape** — fold into 🟡#6 per-organ as_of meta-fix, adding `status: 'analyzed' | 'pending' | 'none_found'` to the `news_causality` organ output. Captain reads `status='analyzed'` + `moved=false` + `flow_hits=0` and knows: *the system checked and found no flow,* not *the system is broken.*
+
+**Class diagnostic question for future audits:** *"Before declaring a read-layer field 'null/missing/broken,' did I empirically verify the producer wrote the value? If yes, did I check whether the value is `0`/`false`/structured-empty rather than actually null? If the value is structured-zero, the framing is interpretation-error, not write-error."*
+
+**Linked artifacts:**
+- Phase A audit: `docs/audit/2026-05-06-punchlist-2-null-causality-phase-a.md`
+- Sibling Phase A (same session, same shape): `docs/audit/2026-05-06-punchlist-1-spy-drift-phase-a.md`
+- Pair-pattern: `brief-author-premise-empirical-verification` (above) — Phase A's first step verifies framing
+- Sibling pattern: `silent-no-op-write` class (referenced in `feedback_silent_failure_detection_pattern.md` memory entry) — distinct from this pattern in mechanism
+
+### Session-level observation (2026-05-06)
+
+The `symptom-level-grouping-hides-cause-level-differences` pattern (codified above) and this `structured-zero-misread-as-null` pattern share a deeper root: **the read shape doesn't expose enough state for the consumer to disambiguate.** A reader sees three values for "the same close" (🔴#1 SPY drift) and assumes they should match, because the read shape doesn't declare each value's window. A reader sees `moved=false, flow_hits=0` (🔴#2 null causality) and assumes it's broken, because the read shape doesn't declare whether the producer ran.
+
+**Both patterns are read-shape-poverty-class.** The structural class kill across both is per-organ metadata: every organ surface should declare `as_of`, `window`, `source`, `status`. With those four fields, both patterns become structurally impossible — the captain (or any consumer) reads the metadata and disambiguates without guessing.
+
+**Forcing function:** when designing or reviewing a read shape, ask explicitly *"What does a `null` / `0` / `false` mean here? Can the consumer distinguish 'measured absent' from 'not measured' from 'measurement broken'?"* If not — add the status field before the shape ships.
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
