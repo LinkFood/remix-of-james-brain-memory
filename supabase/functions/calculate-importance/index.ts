@@ -1,7 +1,17 @@
 /**
  * Calculate Importance Edge Function
- * 
+ *
  * Uses Anthropic Claude to calculate an importance score (0-10) for content.
+ *
+ * v1.1 (2026-05-05) — removed dead `messageId` branches per messages Phase A
+ * audit (DEAD_REFERENCE verdict). The `messages` table was deliberately
+ * dropped 2026-01-23 in the multi-provider-chat → brain-dump architecture
+ * pivot. The `messageId` branches in this function were unreached by all
+ * live callers (smart-save always passes inline content; importance scores
+ * are written to entries.importance_score directly). 0 invocations of the
+ * messageId branch in 103 days. See:
+ *   - docs/audit/2026-05-05-messages-orphan-phase-a.md
+ *   - PR #21 (audit) + this PR (B1 cleanup)
  */
 
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
@@ -9,11 +19,10 @@ import { handleCors, getCorsHeaders } from '../_shared/cors.ts';
 import { extractUserId } from '../_shared/auth.ts';
 import { checkRateLimit, getRateLimitHeaders, RATE_LIMIT_CONFIGS } from '../_shared/rateLimit.ts';
 import { successResponse, errorResponse, serverErrorResponse } from '../_shared/response.ts';
-import { sanitizeString, validateContentLength, parseJsonBody, isValidUUID } from '../_shared/validation.ts';
+import { sanitizeString, validateContentLength, parseJsonBody } from '../_shared/validation.ts';
 import { callClaude, parseToolUse, CLAUDE_MODELS, ClaudeError } from '../_shared/anthropic.ts';
 
 interface ImportanceRequest {
-  messageId?: string;
   content?: string;
   role?: string;
 }
@@ -58,31 +67,14 @@ Deno.serve(async (req) => {
       return errorResponse(req, parseError || 'Invalid request body', 400);
     }
 
-    const { messageId, content: rawContent, role } = body;
+    const { content: rawContent, role } = body;
 
-    if (!messageId && !rawContent) {
-      return errorResponse(req, 'Either messageId or content is required', 400);
+    if (!rawContent) {
+      return errorResponse(req, 'content is required', 400);
     }
 
-    let messageContent = rawContent ? sanitizeString(rawContent) : '';
-    let messageRole = role || 'user';
-
-    if (messageId) {
-      if (!isValidUUID(messageId)) {
-        return errorResponse(req, 'Invalid message ID format', 400);
-      }
-      const { data: message, error: fetchError } = await supabase
-        .from('messages')
-        .select('content, role')
-        .eq('id', messageId)
-        .single();
-      if (fetchError) {
-        console.error('Error fetching message:', fetchError);
-        return errorResponse(req, 'Message not found', 404);
-      }
-      messageContent = message.content;
-      messageRole = message.role;
-    }
+    const messageContent = sanitizeString(rawContent);
+    const messageRole = role || 'user';
 
     const validation = validateContentLength(messageContent, 50000);
     if (!validation.valid) {
@@ -129,16 +121,6 @@ Consider: Actionability, Information value, Context, Urgency, Impact.`;
     const reasoning = sanitizeString(result.reasoning || '');
 
     console.log(`Calculated importance: ${importanceScore}/10 - ${reasoning}`);
-
-    if (messageId) {
-      const { error: updateError } = await supabase
-        .from('messages')
-        .update({ importance_score: importanceScore })
-        .eq('id', messageId);
-      if (updateError) {
-        console.error('Error updating message:', updateError);
-      }
-    }
 
     return successResponse(req, { importance_score: importanceScore, reasoning, success: true }, 200, rateLimitResult);
 

@@ -97,7 +97,6 @@ Count: 8
 | `conversations` | ? | - | - | - | - | - | - | DEAD (empty + no producers) |
 | `deploy_environments` | 0 | - | - | - | - | - | - | DEAD (no producer, no rows) |
 | `deploy_operations` | 0 | - | - | - | - | - | - | DEAD (no producer, no rows) |
-| `messages` | ? | `calculate-importance` | - | - | calculate-importance | - | - | DORMANT (empty, has producer) |
 | `profiles` | 1 | `delete-all-user-data` | - | `20251122000000_bootstrap_profiles`, `20260222045347_84e7c966-fa11-40fa-a8c6-6` | calendar-reminder-check, ct-chat, ct-contract-poller, ct-cron-health-check, ct-curiosity, ct-daily-brief, +25 | - | - | DORMANT-LOW (few rows) |
 | `subscriptions` | 1 | - | - | `20260125075133_045aa7db-6fd0-4cf3-bff9-b`, `20260125075213_e238e10a-dc46-4ea4-87f6-f` | - | - | - | DORMANT (rows but no live producer in code) |
 | `user_api_keys` | ? | - | - | - | - | - | - | DEAD (empty + no producers) |
