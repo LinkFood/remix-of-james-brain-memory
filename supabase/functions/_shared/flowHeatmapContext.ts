@@ -17,7 +17,7 @@ export interface FlowHeatmapContext {
   per_ticker: Array<{ ticker: string; stacks: FlowHeatmapStack[] }>;
   generated_at: string;
   lookback_hours: number;
-  math_mode: 'aggressive_directional_decay';
+  math_mode: 'aggressive_directional_decay' | 'total' | 'net_signed' | 'aggressive_directional_raw' | 'voi_unusual';
 }
 
 /**
@@ -28,40 +28,159 @@ export interface FlowHeatmapContext {
 export type FlowHeatmapResult = FlowHeatmapContext;
 
 const HELPER_NAME = 'flow_heatmap';
-const HELPER_VERSION = 'v1';
-const DEFAULT_CAP = 3;
-const DEFAULT_LOOKBACK_HOURS = 168;
+const HELPER_VERSION = 'v2';
+
+// Audit-driven fallbacks — used only when ct_config lookup fails. These match
+// the captain-correct global defaults seeded by
+// 20260506120000_flow_heatmap_config_and_warden.sql so the runtime behavior
+// of an unconfigured deployment is the same as a freshly-migrated one.
+const FALLBACK_INCLUDE_0DTE = true;
+const FALLBACK_CAP = 6;
+const FALLBACK_MIN_PREMIUM = 100000;
+const FALLBACK_MAX_EXPIRY_DAYS = 180;
+const FALLBACK_LOOKBACK_HOURS = 168;
+const FALLBACK_MATH_MODE = 'aggressive_directional_decay';
+
+interface FlowHeatmapConfig {
+  include_0dte: boolean;
+  cap: number;
+  min_premium: number;
+  max_expiry_days: number;
+  lookback_hours: number;
+  math_mode: string;
+}
+
+interface CacheEntry {
+  config: FlowHeatmapConfig;
+  fetchedAt: number;
+}
+
+const CONFIG_TTL_MS = 60_000;
+const configCache = new Map<string, CacheEntry>();
+
+function fallbackConfig(): FlowHeatmapConfig {
+  return {
+    include_0dte: FALLBACK_INCLUDE_0DTE,
+    cap: FALLBACK_CAP,
+    min_premium: FALLBACK_MIN_PREMIUM,
+    max_expiry_days: FALLBACK_MAX_EXPIRY_DAYS,
+    lookback_hours: FALLBACK_LOOKBACK_HOURS,
+    math_mode: FALLBACK_MATH_MODE,
+  };
+}
+
+function unwrapJsonbValue(raw: unknown): unknown {
+  // ct_config_get returns the raw jsonb. Booleans/numbers come through as
+  // JS primitives, but strings come wrapped in quotes (e.g. '"foo"' as a
+  // string literal). PostgREST already parses jsonb → JS, so we just need
+  // to trust the type.
+  return raw;
+}
+
+async function readConfigKey(
+  supabase: SupabaseClient,
+  key: string,
+): Promise<unknown> {
+  try {
+    const { data, error } = await supabase.rpc('ct_config_get', { p_key: key });
+    if (error) return undefined;
+    return data === null ? undefined : unwrapJsonbValue(data);
+  } catch {
+    return undefined;
+  }
+}
+
+async function loadConfig(
+  supabase: SupabaseClient,
+  consumerName: string | undefined,
+): Promise<FlowHeatmapConfig> {
+  const cacheKey = consumerName ?? '__global__';
+  const now = Date.now();
+  const hit = configCache.get(cacheKey);
+  if (hit && now - hit.fetchedAt < CONFIG_TTL_MS) return hit.config;
+
+  const cfg = fallbackConfig();
+  const consumerPrefix = consumerName ? `flow_heatmap.consumer.${consumerName}.` : null;
+  const fields: Array<{ field: keyof FlowHeatmapConfig; cast: (v: unknown) => unknown }> = [
+    { field: 'include_0dte', cast: (v) => (typeof v === 'boolean' ? v : v === 'true') },
+    { field: 'cap', cast: (v) => (typeof v === 'number' ? v : Number(v)) },
+    { field: 'min_premium', cast: (v) => (typeof v === 'number' ? v : Number(v)) },
+    { field: 'max_expiry_days', cast: (v) => (typeof v === 'number' ? v : Number(v)) },
+    { field: 'lookback_hours', cast: (v) => (typeof v === 'number' ? v : Number(v)) },
+    { field: 'math_mode', cast: (v) => (typeof v === 'string' ? v : String(v)) },
+  ];
+
+  for (const { field, cast } of fields) {
+    let raw: unknown = undefined;
+    if (consumerPrefix) {
+      raw = await readConfigKey(supabase, `${consumerPrefix}${field}`);
+    }
+    if (raw === undefined) {
+      raw = await readConfigKey(supabase, `flow_heatmap.${field}`);
+    }
+    if (raw === undefined) continue;
+    const casted = cast(raw);
+    if (typeof cfg[field] === 'number' && Number.isNaN(casted as number)) continue;
+    (cfg as Record<keyof FlowHeatmapConfig, unknown>)[field] = casted;
+  }
+
+  configCache.set(cacheKey, { config: cfg, fetchedAt: now });
+  return cfg;
+}
+
+export interface GetFlowHeatmapContextOpts {
+  cap?: number;
+  consumerName?: string;
+}
 
 /**
  * Pulls top N expiry-week stacks per watchlist ticker by abs(value) using the
- * `aggressive_directional_decay` math mode and a 168h lookback. Compact enough
- * to drop into any Claude context payload as positioning regime input.
+ * configured math mode and lookback. Compact enough to drop into any Claude
+ * context payload as positioning regime input.
  *
  * Always returns a FlowHeatmapContext, never null. If the RPC fails, returns
  * an empty per_ticker array (defensive — never blocks the caller).
  *
- * `cap` (default 3) bounds stacks-per-ticker.
+ * Config resolution (per-consumer overrides → global defaults → audit-driven
+ * fallback constants):
+ *   1. `flow_heatmap.consumer.<consumerName>.<field>` (when consumerName set)
+ *   2. `flow_heatmap.<field>`
+ *   3. FALLBACK_* constants in this file
+ *
+ * The optional `cap`/`opts.cap` override applies AFTER config resolution
+ * (caller wins over config).
+ *
+ * Backward-compatible signature: 3rd arg accepts a number (legacy `cap`) or
+ * an opts object. Existing positional callers with `cap` still work.
  */
 export async function getFlowHeatmapContext(
   supabase: SupabaseClient,
   watchlist: string[],
-  cap: number = DEFAULT_CAP,
+  capOrOpts?: number | GetFlowHeatmapContextOpts,
 ): Promise<FlowHeatmapContext> {
-  const lookback = DEFAULT_LOOKBACK_HOURS;
+  const callerOpts: GetFlowHeatmapContextOpts =
+    typeof capOrOpts === 'number'
+      ? { cap: capOrOpts }
+      : (capOrOpts ?? {});
+
+  const cfg = await loadConfig(supabase, callerOpts.consumerName);
+  const cap = Math.max(1, callerOpts.cap ?? cfg.cap);
+
   const empty: FlowHeatmapContext = {
     per_ticker: [],
     generated_at: new Date().toISOString(),
-    lookback_hours: lookback,
-    math_mode: 'aggressive_directional_decay',
+    lookback_hours: cfg.lookback_hours,
+    math_mode: cfg.math_mode as FlowHeatmapContext['math_mode'],
   };
+
   try {
     const { data, error } = await supabase.rpc('ct_flow_heatmap_live', {
       p_tickers: watchlist,
-      p_math_mode: 'aggressive_directional_decay',
-      p_min_premium: 100000,
-      p_include_0dte: false,
-      p_max_expiry_days: 180,
-      p_lookback_hours: lookback,
+      p_math_mode: cfg.math_mode,
+      p_min_premium: cfg.min_premium,
+      p_include_0dte: cfg.include_0dte,
+      p_max_expiry_days: cfg.max_expiry_days,
+      p_lookback_hours: cfg.lookback_hours,
     });
     if (error || !Array.isArray(data)) return empty;
     const byTicker = new Map<string, FlowHeatmapStack[]>();
@@ -96,14 +215,13 @@ function countStacks(result: FlowHeatmapResult): number {
 
 /**
  * Default export: ContextHelper<FlowHeatmapResult> — the orchestrator-side
- * surface. Wraps `getFlowHeatmapContext`. Existing named-export consumers
- * (ct-daily-brief, ct-eod-summary, ct-eod-report, ct-watcher, ct-self-grader,
- * ct-trade-idea-generator, specialistRunner) keep working unchanged.
+ * surface. Wraps `getFlowHeatmapContext`. consumerName flows in via opts so
+ * per-consumer config overrides resolve.
  */
 const flowHeatmapHelper: ContextHelper<FlowHeatmapResult> = {
   name: HELPER_NAME,
   version: HELPER_VERSION,
-  defaultCap: DEFAULT_CAP,
+  defaultCap: FALLBACK_CAP,
   isExpensive: false,
   minRefreshSeconds: 60,
   dependencies: [],
@@ -115,7 +233,7 @@ const flowHeatmapHelper: ContextHelper<FlowHeatmapResult> = {
     opts: HelperOpts,
   ): Promise<HelperResult<FlowHeatmapResult>> {
     const startedAt = Date.now();
-    const cap = Math.max(1, opts.cap ?? DEFAULT_CAP);
+    const consumerName = typeof opts.consumerName === 'string' ? opts.consumerName : undefined;
 
     // Single-ticker focus collapses the watchlist for the underlying RPC,
     // matching the same defensive contract the named function provides.
@@ -123,8 +241,15 @@ const flowHeatmapHelper: ContextHelper<FlowHeatmapResult> = {
       ? [opts.tickerFocus]
       : Array.from(ctx.watchlist ?? []);
 
-    const data = await getFlowHeatmapContext(ctx.supabase, tickers, cap);
+    const data = await getFlowHeatmapContext(ctx.supabase, tickers, {
+      cap: opts.cap,
+      consumerName,
+    });
     const rowCount = countStacks(data);
+
+    // Resolve cap-as-applied for the truncated meta.
+    const cfg = await loadConfig(ctx.supabase, consumerName);
+    const effectiveCap = Math.max(1, opts.cap ?? cfg.cap);
 
     return {
       data,
@@ -135,9 +260,7 @@ const flowHeatmapHelper: ContextHelper<FlowHeatmapResult> = {
         rowCount,
         cacheHit: false,
         latencyMs: Date.now() - startedAt,
-        // We can't know with certainty whether the RPC truncated upstream;
-        // we only know that we asked for `cap` stacks per ticker.
-        truncated: data.per_ticker.some((t) => t.stacks.length >= cap),
+        truncated: data.per_ticker.some((t) => t.stacks.length >= effectiveCap),
         warning: rowCount === 0 ? 'empty_result' : undefined,
       },
     };
@@ -147,25 +270,26 @@ const flowHeatmapHelper: ContextHelper<FlowHeatmapResult> = {
     return {
       name: HELPER_NAME,
       version: HELPER_VERSION,
-      defaultCap: DEFAULT_CAP,
+      defaultCap: FALLBACK_CAP,
       expensive: false,
       minRefreshSeconds: 60,
       dependencies: [],
       audienceFilter: undefined,
       outputShape:
         'Top-N expiry-week stacks per watchlist ticker, sorted by |value| ' +
-        'descending, using aggressive_directional_decay math over a 168h lookback. ' +
+        'descending. All math/window/cap params resolve from ct_config.flow_heatmap.* ' +
+        '(per-consumer overrides → global defaults → audit-driven fallbacks). ' +
         'Defensive: empty per_ticker array on RPC failure.',
       exampleResult: {
         per_ticker: [
           {
             ticker: 'NVDA',
             stacks: [
-              { expiry_bucket_week: '2026-05-02', value: 1234567.89, source_alert_count: 18 },
+              { expiry_bucket_week: '2026-05-08', value: 19905987, source_alert_count: 158 },
             ],
           },
         ],
-        generated_at: '2026-04-30T18:00:00.000Z',
+        generated_at: '2026-05-06T12:00:00.000Z',
         lookback_hours: 168,
         math_mode: 'aggressive_directional_decay',
       } satisfies FlowHeatmapResult,
@@ -174,3 +298,10 @@ const flowHeatmapHelper: ContextHelper<FlowHeatmapResult> = {
 };
 
 export default flowHeatmapHelper;
+
+/**
+ * Test-only — clears the in-module config cache. Never call from production.
+ */
+export function _resetFlowHeatmapConfigCacheForTests(): void {
+  configCache.clear();
+}

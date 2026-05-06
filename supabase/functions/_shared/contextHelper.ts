@@ -79,6 +79,14 @@ export interface HelperOpts {
   cap?: number;
   /** Override `minRefreshSeconds` for staleness checks. */
   freshnessSeconds?: number;
+  /**
+   * Consumer identity for per-consumer config overrides. When set, helpers
+   * may look up `<helper>.consumer.<consumerName>.*` keys in `ct_config`
+   * before falling back to global `<helper>.*` defaults. Used by
+   * flowHeatmapHelper as of 2026-05-06; other helpers may adopt the same
+   * pattern.
+   */
+  consumerName?: string;
   /** Helper-specific overrides. Keys are documented per helper. */
   [key: string]: unknown;
 }

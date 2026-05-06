@@ -81,7 +81,7 @@ import { getTemporalContext } from './temporalContext.ts';
 // ---------------------------------------------------------------------------
 // Synthesis layer Phase 3 — brain organ helpers (composed via Promise.all)
 // ---------------------------------------------------------------------------
-import flowHeatmapHelper from './flowHeatmapContext.ts';
+import flowHeatmapHelper, { getFlowHeatmapContext } from './flowHeatmapContext.ts';
 import pulseHelper from './pulseContext.ts';
 import specialistHelper from './specialistContext.ts';
 import detectorHelper from './detectorContext.ts';
@@ -1894,39 +1894,25 @@ export async function buildClaudeContext(
 
   // --- flow heatmap top stacks per watchlist ticker ---
   // Compact "where positioning is stacking by future expiry" view per ticker.
-  // Specialists, morning brief, and EOD report all consume this as positioning context.
+  // ct-chat reads this as ctx.flowHeatmapPerTicker. Other consumers read the
+  // organ output at ctx.organs.flow_heatmap. Both go through getFlowHeatmapContext
+  // so params (include_0dte, cap, min_premium, lookback, math_mode) resolve from
+  // ct_config.flow_heatmap.* with consumer overrides — single source of truth
+  // post-2026-05-06 (see docs/audit/2026-05-06-flow-heatmap-front-week-buckets-phase-a.md).
   let flowHeatmapPerTicker: Array<{ ticker: string; stacks: Array<{ expiry_bucket_week: string; value: number; source_alert_count: number }> }> = [];
   try {
-    const { data, error } = await supabase.rpc('ct_flow_heatmap_live', {
-      p_tickers: watchlist,
-      p_math_mode: 'aggressive_directional_decay',
-      p_min_premium: 100000,
-      p_include_0dte: false,
-      p_max_expiry_days: 180,
+    const ctxResult = await getFlowHeatmapContext(supabase, watchlist, {
+      consumerName: opts.consumerName,
     });
-    if (error) {
-      if (!/does not exist|404|not found/i.test(error.message)) {
-        console.warn('[claudeReadSurface] ct_flow_heatmap_live:', error.message);
-      }
-    } else if (Array.isArray(data)) {
-      const byTicker = new Map<string, Array<{ expiry_bucket_week: string; value: number; source_alert_count: number }>>();
-      for (const row of data as Array<{ ticker: string; expiry_bucket_week: string; value: number; source_alert_count: number }>) {
-        if (!byTicker.has(row.ticker)) byTicker.set(row.ticker, []);
-        byTicker.get(row.ticker)!.push({
-          expiry_bucket_week: row.expiry_bucket_week,
-          value: Number(row.value),
-          source_alert_count: row.source_alert_count,
-        });
-      }
-      // Top 3 stacks per ticker by abs(value)
-      flowHeatmapPerTicker = Array.from(byTicker.entries()).map(([ticker, stacks]) => ({
-        ticker,
-        stacks: stacks
-          .sort((a, b) => Math.abs(b.value) - Math.abs(a.value))
-          .slice(0, 3),
-      }));
-    }
-  } catch (_e) { /* RPC may not exist yet */ }
+    flowHeatmapPerTicker = ctxResult.per_ticker.map((t) => ({
+      ticker: t.ticker,
+      stacks: t.stacks.map((s) => ({
+        expiry_bucket_week: s.expiry_bucket_week,
+        value: s.value,
+        source_alert_count: s.source_alert_count,
+      })),
+    }));
+  } catch (_e) { /* helper is defensive; falls through to empty */ }
 
   // -------------------------------------------------------------------------
   // Synthesis layer Phase 3 — compose 8 brain organs via Promise.all.
@@ -1990,8 +1976,11 @@ export async function buildClaudeContext(
         return { name, skipped: 'audience_filter' };
       }
       // Per-organ opts: tickerFocus from BrainOpts + helper-specific overrides.
+      // consumerName flows through so per-consumer config overrides resolve
+      // (flowHeatmapHelper as of 2026-05-06).
       const helperOpts: HelperOpts = {
         ...(tickerFocus ? { tickerFocus } : {}),
+        ...(consumerName ? { consumerName } : {}),
         ...(perOrganOpts[name] ?? {}),
       };
       try {
