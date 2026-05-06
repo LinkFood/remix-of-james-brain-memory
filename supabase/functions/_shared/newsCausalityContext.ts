@@ -13,6 +13,8 @@ import type {
   HelperFetchContext,
   HelperOpts,
   HelperResult,
+  OrganMetadata,
+  OrganStatus,
 } from './contextHelper.ts';
 
 export type NewsSource = 'ct_news_analyses' | 'ct_breaking_news';
@@ -47,6 +49,12 @@ export interface NewsItem {
   ingested_at: string;        // when our DB ingested it. ISO 8601.
   claude_take: string | null; // only on ct_news_analyses rows
   causality: NewsCausalityFields;
+  // Per-item status — heterogeneous-source organ refinement (Phase 2).
+  // breaking_news rows are by-design causality-less; analyses rows are
+  // either populated (causality joined) or pending_analysis (cron hasn't
+  // run for this row yet). Distinguishes 'data missing' from 'by design'
+  // at the projection layer — instance #15 of methodology-errors-cascade.
+  item_status: OrganStatus;
 }
 
 export interface NewsCausalityResult {
@@ -98,23 +106,39 @@ function normSentiment(s: string | null): NewsSentiment | null {
   return null;
 }
 
+function buildOrganMetadata(
+  asOf: string,
+  lookbackHours: number,
+  status: OrganStatus,
+): OrganMetadata {
+  return {
+    as_of: asOf,
+    source: 'ct_news_analyses + ct_breaking_news (causality joined from ct_news_causality)',
+    window: `trailing ${lookbackHours}h`,
+    status,
+  };
+}
+
 function emptyResult(
   startedAt: number,
   lookbackHours: number,
   warning?: string,
+  status: OrganStatus = 'no_signal_detected',
 ): HelperResult<NewsCausalityResult> {
+  const asOf = new Date().toISOString();
   return {
-    data: { items: [], per_ticker: {}, market_wide: [], generated_at: new Date().toISOString(), lookback_hours: lookbackHours },
+    data: { items: [], per_ticker: {}, market_wide: [], generated_at: asOf, lookback_hours: lookbackHours },
     meta: {
       helperName: HELPER_NAME,
       helperVersion: HELPER_VERSION,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: asOf,
       rowCount: 0,
       cacheHit: false,
       latencyMs: Date.now() - startedAt,
       truncated: false,
       ...(warning ? { warning } : {}),
     },
+    organMetadata: buildOrganMetadata(asOf, lookbackHours, status),
   };
 }
 
@@ -205,9 +229,11 @@ export async function getNewsCausalityContext(
         ingested_at: r.ingested_at,
         claude_take: null,
         causality: EMPTY_CAUSALITY,
+        item_status: 'firehose_only_no_causality',
       });
     }
     for (const r of analysisRows) {
+      const causality = causalityMap.get(r.id);
       items.push({
         id: r.id,
         source_table: 'ct_news_analyses',
@@ -222,7 +248,8 @@ export async function getNewsCausalityContext(
         event_at: r.news_timestamp ?? r.created_at,
         ingested_at: r.created_at,
         claude_take: r.claude_take,
-        causality: causalityMap.get(r.id) ?? EMPTY_CAUSALITY,
+        causality: causality ?? EMPTY_CAUSALITY,
+        item_status: causality ? 'populated' : 'pending_analysis',
       });
     }
 
@@ -244,21 +271,27 @@ export async function getNewsCausalityContext(
       }
     }
 
+    const asOf = new Date().toISOString();
     return {
-      data: { items: capped, per_ticker, market_wide, generated_at: new Date().toISOString(), lookback_hours: lookbackHours },
+      data: { items: capped, per_ticker, market_wide, generated_at: asOf, lookback_hours: lookbackHours },
       meta: {
         helperName: HELPER_NAME,
         helperVersion: HELPER_VERSION,
-        fetchedAt: new Date().toISOString(),
+        fetchedAt: asOf,
         rowCount: capped.length,
         cacheHit: false,
         latencyMs: Date.now() - startedAt,
         truncated,
         ...(warnings.length > 0 ? { warning: warnings.join(';') } : {}),
       },
+      organMetadata: buildOrganMetadata(
+        asOf,
+        lookbackHours,
+        capped.length > 0 ? 'populated' : 'no_signal_detected',
+      ),
     };
   } catch (err) {
-    return emptyResult(startedAt, lookbackHours, `exception:${err instanceof Error ? err.message : 'unknown_error'}`);
+    return emptyResult(startedAt, lookbackHours, `exception:${err instanceof Error ? err.message : 'unknown_error'}`, 'error');
   }
 }
 
@@ -284,7 +317,7 @@ const newsCausalityContextHelper: ContextHelper<NewsCausalityResult> = {
       minRefreshSeconds: 60,
       dependencies: [],
       outputShape:
-        'Recent news items unioned from ct_breaking_news + ct_news_analyses, ranked severity DESC then recency. Each item carries severity 1..5, sentiment, category, tickers_affected[], optional causality (flow/dp 15min hits + moved) when an analyses row matches ct_news_causality. Grouped per_ticker and market_wide.',
+        'Recent news items unioned from ct_breaking_news + ct_news_analyses, ranked severity DESC then recency. Each item carries severity 1..5, sentiment, category, tickers_affected[], optional causality (flow/dp 15min hits + moved) when an analyses row matches ct_news_causality, and item_status (OrganStatus enum: firehose_only_no_causality | populated | pending_analysis) for projection-layer disambiguation. Grouped per_ticker and market_wide. Organ-level organMetadata declares as_of/source/window/status.',
       exampleResult: { items: [], per_ticker: {}, market_wide: [], generated_at: '2026-04-30T18:30:00.000Z', lookback_hours: 6 },
     };
   },

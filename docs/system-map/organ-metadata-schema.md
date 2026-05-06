@@ -237,6 +237,23 @@ Pulled actual organ helper return shapes for `news_causality` (`_shared/newsCaus
 
 **Recommended Phase 2 first-organ pick:** `news_causality` — has the heterogeneous-source-organ design refinement need; building it first shapes the per-item status pattern for other organs.
 
+### Phase 2 progress marker
+
+| # | Organ | Producer write | Per-item status | Warden invariant | Shipped |
+|---|---|---|---|---|---|
+| 1 | `news_causality` | ✅ | ✅ (firehose_only_no_causality / populated / pending_analysis) | queued — needs ct_brain_telemetry.organ_status column | 2026-05-07 |
+| 2 | `flow_heatmap` | pending | n/a (homogeneous-source) | queued | — |
+| 3 | `pulse` | pending | n/a | queued | — |
+| 4 | `specialist` | pending | tbd | queued | — |
+| 5 | `detector` | pending | tbd | queued | — |
+| 6 | `tape` | pending | n/a | queued | — |
+| 7 | `james_flags` | pending | n/a | queued | — |
+| 8 | `event_recency` | pending | tbd | queued | — |
+| 9 | `analogs` | pending | tbd | queued | — |
+| 10 | `specialist_recall` | pending | tbd | queued | — |
+
+**Per-organ warden invariants are deferred** until ct_brain_telemetry surfaces organ_status — currently telemetry persists only helper_name/version/audience/latency/cache_hit/error. Adding `organ_status TEXT` column + populating it from `result.organMetadata?.status` is its own structural ship (metadata-visibility-to-warden). Queue: post-Phase-2-organ-3 ship a single migration + claudeReadSurface.ts telemetry-write update + 10 invariants in one bundle.
+
 ---
 
 ## Phase 3 plan (consumer reads — opt-in per consumer)
