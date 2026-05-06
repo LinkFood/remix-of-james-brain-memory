@@ -35,11 +35,27 @@ jobs:
           echo "Deploying: $SLUGS"
 
       - name: Deploy functions
+        # B-1 class-kill (2026-05-06 PR #27 retro). Removed the `|| echo "FAILED"`
+        # swallow that previously hid per-function deploy failures from CI exit.
+        # PR #25's deploy of 18 broken functions would have hard-failed CI under
+        # this contract; today's P0 (~40 min undetected) becomes deploy-time
+        # detected going forward. Pairs with class kill A (PR #33 deno check
+        # CI gate). Track all failures and exit non-zero if ANY function failed
+        # so the step status reflects per-function reality.
         if: steps.changes.outputs.slugs != ''
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
         run: |
+          FAILED=()
           for slug in ${{ steps.changes.outputs.slugs }}; do
             echo "Deploying $slug..."
-            supabase functions deploy "$slug" --no-verify-jwt --project-ref ${{ secrets.SUPABASE_PROJECT_REF }} || echo "FAILED: $slug"
+            if ! supabase functions deploy "$slug" --no-verify-jwt --project-ref ${{ secrets.SUPABASE_PROJECT_REF }}; then
+              echo "::error file=supabase/functions/$slug::deploy failed"
+              FAILED+=("$slug")
+            fi
           done
+          if [ ${#FAILED[@]} -gt 0 ]; then
+            echo ""
+            echo "::error::deploy step failing CI — ${#FAILED[@]} function(s) failed: ${FAILED[*]}"
+            exit 1
+          fi
