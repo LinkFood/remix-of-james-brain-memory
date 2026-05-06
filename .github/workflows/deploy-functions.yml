@@ -101,3 +101,59 @@ jobs:
             echo "::error::deploy step failing CI — ${#FAILED[@]} function(s) failed: ${FAILED[*]}"
             exit 1
           fi
+
+      - name: Post-deploy synthetic probe (B-3)
+        # B-3 class-kill (2026-05-06 PR #45 Phase A → Phase B in this PR).
+        # After deploy succeeds, invoke ct-deploy-probe with the just-
+        # deployed function list. Probe runs inside Supabase, uses vault
+        # SERVICE_ROLE_KEY to invoke each target function, verifies HTTP 200
+        # + telemetry row landed within window.
+        #
+        # Probe targets the 9 RTH-frequent brain consumers per B-4's covered
+        # set. Other deployed functions appear as NOT_CONFIGURED (logged,
+        # not failed) so the probe doesn't false-trip on event-driven
+        # consumers without telemetry-write paths.
+        #
+        # Skipped if SUPABASE_PROJECT_REF or SUPABASE_SERVICE_ROLE_KEY is
+        # unset (e.g., forks without secrets).
+        #
+        # SOFT-GATE v1: continue-on-error: true while the auth roundtrip is
+        # verified empirically (CI's SUPABASE_SERVICE_ROLE_KEY secret must
+        # match the vault key the probe uses to invoke target functions —
+        # this morning's investigation showed CLI keys don't match function
+        # envs, so the GH secret value is the unknown until first CI run).
+        # Once verified working across 3-5 deploys, follow-up PR removes
+        # continue-on-error to make the probe a hard gate.
+        if: steps.changes.outputs.slugs != '' && env.SUPABASE_PROJECT_REF != '' && env.SUPABASE_SERVICE_ROLE_KEY != ''
+        continue-on-error: true
+        env:
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          # Build JSON payload from space-separated slugs
+          SLUGS_JSON=$(echo '${{ steps.changes.outputs.slugs }}' | tr ' ' '\n' | grep -v '^$' | jq -R . | jq -s .)
+          PAYLOAD=$(jq -n --argjson fns "$SLUGS_JSON" '{function_names: $fns, wait_seconds_override: 30}')
+
+          echo "Probing deployed functions:"
+          echo "$PAYLOAD" | jq -c .
+
+          RESPONSE=$(curl -sS -X POST \
+            "https://${SUPABASE_PROJECT_REF}.supabase.co/functions/v1/ct-deploy-probe" \
+            -H "Authorization: Bearer ${SUPABASE_SERVICE_ROLE_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" \
+            --max-time 600 || echo '{"ok":false,"error":"probe_invocation_failed"}')
+
+          echo ""
+          echo "Probe response:"
+          echo "$RESPONSE" | jq . || echo "$RESPONSE"
+
+          OK=$(echo "$RESPONSE" | jq -r '.ok // false')
+          if [ "$OK" != "true" ]; then
+            FAILED_FNS=$(echo "$RESPONSE" | jq -r '.failed_functions[]?' 2>/dev/null | tr '\n' ' ')
+            echo ""
+            echo "::error::post-deploy probe failed for: ${FAILED_FNS:-unknown}"
+            exit 1
+          fi
+          echo ""
+          echo "✓ All probed functions PASS"

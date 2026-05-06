@@ -470,3 +470,6 @@ verify_jwt = false
 
 [functions.ct-regime-capture]
 verify_jwt = false
+
+[functions.ct-deploy-probe]
+verify_jwt = false
