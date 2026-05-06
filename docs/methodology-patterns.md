@@ -479,6 +479,69 @@ The brief's framed cause (NULL aggressor) doesn't exist. The math at the CASE ch
 
 ---
 
+## string-pattern-match-instead-of-real-parser — system parses structured input via regex/string-match where a real parser is needed
+
+A system accepts structured input (SQL, code, JSON, YAML, expressions) and validates / transforms / dispatches based on it. Instead of using a real parser for that input format, the system uses string-pattern matching (`grep`, `LIKE`, regex, `.includes()`, etc.). The matcher works correctly for the common case but misses edge cases that the real parser handles trivially: comments, string literals, escaped characters, nested structures, quote-aware tokenization.
+
+**Sibling but distinct from `tooling-classifier-false-positive`** (above). That pattern catches *"my classifier flagged valid code as broken"* — it's about the classifier's discriminator being too broad. This pattern catches *"my parser missed a structural feature that a real parser would have handled"* — it's about the wrong tool being used for the job entirely.
+
+**Sibling family also with `warden-filter-completeness-class`** (referenced via `feedback_warden_filter_completeness_class.md` memory entry from PR #23). That pattern catches *"semantic state in non-structural string field is brittle to prefix accretion."* This pattern is the parsing-side counterpart: even when the storage shape is structurally clean, the consumer that READS the structured field via string-match instead of a parser can still mis-handle edge cases.
+
+**Diagnostic question for any system that consumes structured input:** *"Am I parsing this with a real parser, or am I string-matching? If string-matching, which structural features (comments, strings, nesting, escaping) does my matcher miss compared to the real parser?"*
+
+**Class kill shape:** parse the structured input with the real parser at the boundary. For SQL: use PG's own parser (e.g., `pg_parse_query` extension or `EXPLAIN`-based validation). For TypeScript: use `tsc` or `deno check`. For YAML: use a real YAML library, not regex. The real parser handles edge cases by definition; string-match never will.
+
+**Pragmatic fix when structural fix is too costly:** scrub the input of characters that trip the matcher. This is a patch, not a class kill — it shifts the brittleness from *"matcher misses edge cases"* to *"input authors must avoid specific characters."* Both shapes accumulate (next case finds a new edge), so the structural fix should be the eventual destination.
+
+### Instance — 2026-05-06 PR #46 warden invariant SQL string-match flagged inline-comment semicolons
+
+**The bug:** PR #44 shipped `brain_consumer_freshness_rth` warden invariant. The SQL body contained inline comments inside a CTE VALUES clause:
+
+```sql
+covered_consumers(consumer_name, threshold_hours) AS (
+  VALUES
+    ('ct-tape-reader',             0.5),    -- cron */10 RTH
+    ('ct-curiosity',               2.0),    -- periodic; some gaps OK
+    ('ct-news-sweep',              2.0),    -- periodic; gaps OK
+    ('ct-alert-post-mortem',       4.0),    -- alert-driven; longer tolerance
+    ('ct-daily-brief',            26.0)     -- daily ~14 UTC; 26h covers 1 day + 2h slack
+)
+```
+
+**The error at first warden run (19:30Z):**
+```
+last_status: error
+last_error: invariant queries must be a single statement (no mid-query semicolon)
+```
+
+**The cause:** the warden's `ct-system-warden` edge function validates each invariant's `query_sql` for "single statement only" via string-pattern matching for `;`. It flagged the 4 semicolons in the inline comments (`some gaps OK`, etc.) as mid-query terminators, even though they're inside `--` comment lines that PG's parser would correctly skip.
+
+**The hotfix (PR #46):** UPDATE the invariant with the same logic, comment text rewritten to remove SQL-meaningful punctuation. Zero semicolons in stored `query_sql` post-fix. Pragmatic patch — the bug class returns next time someone writes a comment with `;` or any future punctuation the matcher trips on.
+
+**The structural fix (queued, separate Phase A → Phase B):**
+- Use PG's own parser to validate invariant SQL before storing
+- Implementation: add a `BEFORE INSERT/UPDATE` trigger on `ct_invariants` that wraps the SQL in `EXPLAIN` (or `PREPARE`) inside a savepoint and rolls back regardless. If PG raises a parse error, the trigger raises. If PG accepts it, the trigger commits.
+- The "single statement" check becomes `pg_query_parse(...)` returning exactly one statement node, not a regex on `;`.
+- This is the right tool for the job: PG itself decides what's valid SQL.
+
+**Class diagnostic question for future audits:** *"Is this system using string-match where a real parser is available? If yes — what edge case is going to trip it? If you can't enumerate the edge cases, you have proof that string-match is the wrong tool."*
+
+**Sibling-pattern observation across today's session:** This makes **THREE separate string-pattern-match issues** today:
+- Morning's PR #23 cache_hit-error-column-purity (warden filter `error NOT LIKE 'warning:%' AND NOT LIKE 'skipped:%'` — adding 4th `NOT LIKE` exclusion would have repeated the pattern, the structural fix was "don't put semantic state in error column")
+- Today's PR #46 (this) — warden's "single statement" check via `;` pattern-match instead of real parser
+- B4 CI grep at PR #20 morning (`.from('<TABLE>')` regex couldn't tell `.storage.from(...)` from PG `.from(...)` — patched via discriminator tightening; structural fix would be a real TS parser)
+
+**Three string-pattern-match issues** in one session points to a sustained pattern. The discipline going forward: when designing a new validator/parser/dispatcher that consumes structured input, default to a real parser over string-match. Cost is higher than regex but discipline is structural.
+
+**Linked artifacts:**
+- Initial ship: PR #44 — `supabase/migrations/20260506200000_b_4_brain_consumer_freshness_warden.sql`
+- Hotfix: PR #46 — `supabase/migrations/20260506201500_b_4_brain_consumer_freshness_warden_hotfix.sql`
+- Sibling pattern: `feedback_warden_filter_completeness_class.md` (memory entry from PR #23 morning class kill)
+- Sibling instance: `tooling-classifier-false-positive` section above (PR #20 dumps storage-vs-table discriminator tightening)
+- Future structural fix queued: warden invariant SQL parser-based validation Phase A (separate per-PR approval)
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
