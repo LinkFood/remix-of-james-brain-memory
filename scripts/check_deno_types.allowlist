@@ -1,0 +1,80 @@
+# check_deno_types.allowlist — pre-existing TypeScript errors as of 2026-05-06
+# class-kill A ship.
+#
+# Format: <relative_path> <error_count_baseline>
+# One file per line. Comments start with #.
+#
+# COMMENT POLICY (mirrors B4 grep allowlist):
+#   - Adding new entries requires James approval.
+#   - Removing entries: verify the underlying error is fixed (count → 0)
+#     before removing the entry.
+#   - Reducing baseline: when partial fix lowers count, update baseline
+#     to reflect new floor.
+#
+# Why these are allowlisted (not fixed):
+#   170 pre-existing TS errors across 43 files when class kill A shipped.
+#   Mostly inherited from 7 root-cause errors in _shared/* (each consumer
+#   that imports a broken shared module sees the propagated error). Fixing
+#   the 170 errors is a separate cleanup project, not the discipline-shipping
+#   work. Allowlist baselines lock today's count; future PRs can't regress
+#   any file's count without explicit allowlist amendment.
+#
+# Per-file baseline counts captured 2026-05-06 17:54Z, deno 2.7.14.
+
+# ---- _shared/ (root cause: 7 unique errors propagate to all consumers) ----
+
+# claudeReadSurface.ts — TS2578 unused @ts-expect-error at line 1054 +
+# TS2345 propagated from configCache.ts
+supabase/functions/_shared/claudeReadSurface.ts 2
+
+# specialistRunner.ts — TS2345 ClaudeContext type mismatch at line 1540
+# (ctx type union from claudeReadSurface vs contextHelper differs on
+# version/meta) + TS2322 quote string|undefined narrowing + 2 propagated
+supabase/functions/_shared/specialistRunner.ts 4
+
+# ---- Consumers (all inherit _shared/* errors via imports) ----
+
+supabase/functions/ct-alert-post-mortem/index.ts 3
+supabase/functions/ct-chat/index.ts 15
+supabase/functions/ct-contract-poller/index.ts 2
+supabase/functions/ct-curiosity/index.ts 2
+supabase/functions/ct-daily-brief/index.ts 3
+supabase/functions/ct-debate-outcome-scorer/index.ts 2
+supabase/functions/ct-edge-miner/index.ts 6
+supabase/functions/ct-eod-report/index.ts 2
+supabase/functions/ct-eod-specialist-narrative/index.ts 2
+supabase/functions/ct-eod-summary/index.ts 4
+supabase/functions/ct-event-calendar-ingester/index.ts 12
+supabase/functions/ct-flag-grader/index.ts 2
+supabase/functions/ct-flow-ingester/index.ts 2
+supabase/functions/ct-grader/index.ts 24
+supabase/functions/ct-hypothesis-health-check/index.ts 2
+supabase/functions/ct-hypothesis-proposer/index.ts 2
+supabase/functions/ct-iv-shift-watch/index.ts 2
+supabase/functions/ct-lessons-curator/index.ts 2
+supabase/functions/ct-news-sweep/index.ts 2
+supabase/functions/ct-playbook-curator/index.ts 6
+supabase/functions/ct-preset-apply/index.ts 2
+supabase/functions/ct-recall/index.ts 3
+supabase/functions/ct-self-grader/index.ts 2
+
+# Per-ticker specialists (all 10 inherit same 4 errors via specialistRunner.ts)
+supabase/functions/ct-specialist-aapl/index.ts 4
+supabase/functions/ct-specialist-amzn/index.ts 4
+supabase/functions/ct-specialist-googl/index.ts 4
+supabase/functions/ct-specialist-iwm/index.ts 4
+supabase/functions/ct-specialist-meta/index.ts 4
+supabase/functions/ct-specialist-msft/index.ts 4
+supabase/functions/ct-specialist-nvda/index.ts 4
+supabase/functions/ct-specialist-qqq/index.ts 4
+supabase/functions/ct-specialist-spy/index.ts 4
+supabase/functions/ct-specialist-tsla/index.ts 4
+
+supabase/functions/ct-tape-reader/index.ts 3
+supabase/functions/ct-tavily-news-watcher/index.ts 2
+supabase/functions/ct-trade-advisories/index.ts 3
+supabase/functions/ct-trade-idea-generator/index.ts 2
+supabase/functions/ct-watcher/index.ts 3
+supabase/functions/health-check/index.ts 2
+supabase/functions/jac-code-agent/index.ts 2
+supabase/functions/jac-web-search/index.ts 3
