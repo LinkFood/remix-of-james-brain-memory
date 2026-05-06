@@ -24,20 +24,23 @@ metric_value = 5
 message = "DRIFT WARN: QQQ:gap=5.0, SPY:gap=0.0, NVDA:gap=-2.0, MSFT:gap=-2.5, META:gap=-4.0"
 ```
 
-## ⚠️ Open design tension surfaced live
+## ⚠️ Open design tension — RESOLVED via Path 3 (severity demote)
 
-The invariant fires WARN on 5/10 tickers immediately post-D2. The `> -5` boundary means even just-tuned thresholds (NVDA -2, MSFT -2.5) don't fully clear the danger zone.
+PR #17 review surfaced that the invariant fires WARN on 5/10 tickers immediately post-D2. The `> -5` boundary means even just-tuned thresholds (NVDA -2, MSFT -2.5) don't fully clear the danger zone.
 
-This is either:
-- **Forcing-function as designed** — the warden prompts ongoing re-tuning each regime shift
-- **Permanent-yellow trap** per `feedback_warden_threshold_calibration.md` (perma-yellow desensitizes operators)
+**James's call (2026-05-05 23:56 UTC):** ship Path 3 (severity demote) preemptively, not the 5-day experiment. Reasoning: "5 of 10 tickers WARN immediately on boot is the literal anti-pattern the `feedback_warden_threshold_calibration.md` lesson was captured against 24 hours ago. If we know in advance the invariant will perma-yellow, running a 5-day experiment to re-confirm what we already documented produces no new information and 5 days of Slack alarm fatigue. Apply the captured lesson preemptively."
 
-Surfaced in PR body for James's call. Three corrective paths if perma-yellow turns out to bite:
-1. Loosen the boundary (`> -5` → `> -3` or `> 0`)
-2. Lower per-ticker thresholds further (NVDA → 47, MSFT → 52)
-3. Convert severity from `warn` → `info` so it's visible in dashboards but doesn't Slack
+**Live change:** PATCH `ct_invariants?name=eq.specialist_threshold_within_5pts_of_p75` set severity `warn` → `info`. Description updated to capture the rationale + reversibility note. Updated 2026-05-05T23:56:12Z.
 
-Each is a one-row UPDATE.
+What this preserves:
+- Dashboard surface for fragility tickers (forcing-function intent mostly intact)
+- Re-tuning prompt at info severity for periodic operator review
+- Invariant existence — when threshold drifts above p75 (actual silent-class-kill condition), we still want to know
+
+What this avoids:
+- Slack alarm fatigue desensitizing operators before the invariant catches a real failure
+
+**Optional follow-up (queued):** add a SECOND invariant at `warn` severity that fires ONLY when `wakeup_threshold − trailing_5d_p75 > 0` (threshold drifted ABOVE p75 = actual silent-class-kill condition). Tight boundary, only fires on real failure mode. Pairs with this info-severity broad-fragility one. Consider after the info-severity surface proves operationally useful.
 
 ## Acceptance criteria (per audit + James's brief)
 
