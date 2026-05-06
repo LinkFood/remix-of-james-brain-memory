@@ -402,6 +402,83 @@ Both disciplines compound. Each new Phase A inherits both: verify the claim AND 
 
 ---
 
+## brief-empirical-claim-undercount — brief reports a count; Phase A's recount finds the count is bigger
+
+A brief frames a problem with an empirical count: *"X of Y instances are affected,"* *"N functions need redeploy,"* *"M rows are missing."* Phase A re-counts empirically and finds the actual number is **larger** than the brief framed. The brief's narrower count drove a smaller-scope fix conception; Phase A's recount expands the scope and reframes the structural shape.
+
+**Sub-pattern of `brief-author-premise-empirical-verification`** (above). That pattern says *"verify the brief's empirical claims before treating as premise."* This one is the specific common failure mode: the brief **undercounts**. Overcount is theoretically possible but rare in practice — briefs tend to underestimate scope because the brief author hasn't yet done the full audit.
+
+**Diagnostic question for every Phase A:** *"Did the brief give me a count? Have I empirically re-counted? If the brief's number is 'about N' or 'roughly M' — re-count first, treat the brief's count as hypothesis-pending-verification."*
+
+**Forcing function:** any Phase A opening step that includes the words "verify the brief's empirical premises" should explicitly include re-counting. The cheapest possible operation is a `count(*)` query; the cost of skipping it is a wrong-scoped fix.
+
+### Instance — 2026-05-06 PR #40 B-2 _shared/ consumer detection — brief said 11 missing, Phase A found 18
+
+**The brief premise (per PR #37 class kill B Phase A):** "the workflow's `_shared/` change-detection deploys 7 hardcoded consumers; **11 of the 18 brain consumers are missing** from auto-deploy."
+
+**Phase A measurement (per `docs/audit/2026-05-06-b-2-shared-consumer-detection-phase-a.md`):**
+- Hardcoded list (deploy-functions.yml:30): 7 consumers — all JAC-side (jac-dispatcher, jac-code-agent, jac-research-agent, jac-save-agent, jac-search-agent, assistant-chat, smart-save).
+- Empirical `_shared/claudeReadSurface.ts` importers: **18 ct-* brain consumers**.
+- **Overlap between hardcoded-7 and actual-18: ZERO.** Hardcoded 7 don't import claudeReadSurface.ts at all.
+- Actual gap: **18 of 18 missing**, not 11.
+
+The brief framed "11 missing" — partial overcount of the hardcoded 7 against an assumed overlap with the 18. Reality: the two sets are disjoint. The hardcoded list wasn't an outdated subset of the consumer set; it was a legacy JAC-side fixture from before the brain-consumer surface existed.
+
+**The brief's Option (a) "expand to 18 hardcoded" recommendation** was too narrow. Phase A confirmed Option (b) auto-discover via grep import-graph as the structural fix — drift-proof, replaces the legacy 7-list entirely.
+
+**Class diagnostic question for future audits:** *"My brief gave me a count. Was the count empirically re-verified, or was it a structural-knowledge estimate? If the latter — re-count via `grep -rln` or `count(*)` before reasoning from it."*
+
+**Linked artifacts:**
+- Phase A audit: `docs/audit/2026-05-06-b-2-shared-consumer-detection-phase-a.md`
+- Phase B implementation: PR #42 (`.github/workflows/deploy-functions.yml`)
+- Sibling instance — PR #37 class kill B Phase A surfaced 2 deploy-mechanism defects beyond the brief's "missing probe" framing (instance #16, see `audit-frame-mismatch` family)
+
+---
+
+## brief-framed-wrong-computational-layer — brief names a cause hypothesis; Phase A finds the symptom is real but caused at a different computational layer
+
+A brief observes a symptom (e.g., "X is missing in MCP output") and proposes a cause hypothesis (e.g., "directional-signing CASE chain produces NULL aggressor"). Phase A's empirical investigation finds the symptom is real but the brief's framed cause is at the **wrong computational layer** — the math at the brief's named layer is correct, but the symptom emerges at a downstream/upstream layer the brief didn't consider.
+
+**Sub-pattern of `brief-author-premise-error`** (above). The brief proposed a fix shape based on the assumed cause; the cause was at a different layer entirely. Even if the fix-shape proposed for the brief's layer worked perfectly, it wouldn't address the symptom.
+
+**Sibling but distinct from `audit-verification-surface-mismatch`** (above). That pattern catches *audit verifies layer adjacent to symptom layer.* This one catches *brief frames cause at layer where the math is correct; the actual cause is at a different layer.* Both are about layer mismatches, but at different stages — the brief's framing vs the audit's verification surface.
+
+**Diagnostic question for every Phase A:** *"Did the brief frame the cause at a specific computational layer? Empirically replicate the math at that layer first. If the math is correct at that layer, the cause is at a different layer — find which one."*
+
+**Forcing function:** when a brief names a specific cause mechanism (CASE chain, threshold filter, RPC logic, projection step), Phase A's first step is **empirical replication of the math at that layer**. If the math is correct, the brief is pointing at the wrong layer. Search adjacent layers (read shape, downstream filter, upstream join, decay weight, etc.) for the actual cause.
+
+### Instance — 2026-05-06 PR #41 IWM front-week — brief said NULL aggressor; actual cause is balanced flow + strict filter
+
+**The brief premise (per PR #38 queue doc):** "directional-signing CASE chain produces NULL aggressor for IWM front-week" — implying the RPC's CASE chain at `ct_flow_heatmap_live` returns NULL for IWM rows because is_ask/is_bid are NULL and the fallback chain doesn't resolve.
+
+**Phase A measurement (per `docs/audit/2026-05-06-iwm-front-week-directional-signing-phase-a.md`):**
+- Replicated the RPC's CASE chain in Python over the actual IWM front-week sample (n=30).
+- All 30 rows have `alert_rule LIKE 'RepeatedHits%'`.
+- The CASE chain step 4 (`WHEN b.alert_rule LIKE 'RepeatedHits%' THEN 'ask'`) fires for all rows.
+- **Aggressor='ask' for all 30 rows. Zero NULL aggressor cases.** The math at the CASE chain layer is correct.
+- The actual cause: balanced calls-bullish + puts-bearish. Calls (ask-aggressive) sign positive; puts (ask-aggressive) sign negative. Net signed magnitude after decay weighting ≈ $19,958 — well below the `p_min_premium=100000` filter. **Bucket correctly hidden — there's volume but no actionable directional signal.**
+
+The brief's framed cause (NULL aggressor) doesn't exist. The math at the CASE chain is correct. The symptom (no IWM 5/8 bucket) emerges at the downstream **filter layer** ($100k min_premium against signed magnitude), not at the CASE chain.
+
+**Implication for fix shape:** the brief's cause-hypothesis fix would have been "fix the CASE chain to handle NULL aggressor." That fix would do nothing because no NULL aggressor exists. The actual fix shape is at the **read-layer integrity bundle** — add a `status: 'balanced_flow_no_directional_signal'` field to the OrganStatus enum so the captain knows when an organ correctly hides a bucket due to balanced flow vs when data is missing.
+
+**Class diagnostic question for future audits:** *"The brief points at a specific layer (X) as the cause. Have I replicated the math at layer X empirically? If the math is correct at X, the cause is at layer Y — and my fix needs to address Y, not X."*
+
+**Sibling-pattern observation:** this session's session-level methodology arc keeps surfacing layer-mismatches at audit:
+- Instance #15 (audit-verification-surface-mismatch): audit verifies adjacent layer to symptom
+- Instance #18 (this): brief frames cause at wrong computational layer
+- Instance #16 (deploy-mechanism-defects-uncovered): brief assumed layer worked; Phase A found N defects at that layer
+
+**Three different "wrong layer" failure modes**, all caught by audit-first discipline applied recursively. The forcing function is the same: empirical replication at every layer the brief or audit claims is correct, before treating that layer as resolved.
+
+**Linked artifacts:**
+- Phase A audit: `docs/audit/2026-05-06-iwm-front-week-directional-signing-phase-a.md`
+- Queue doc that activated this audit: `docs/audit/2026-05-06-iwm-front-week-directional-signing-queued.md` (PR #38)
+- Sibling pattern: `audit-verification-surface-mismatch` (above) — same family, different stage of the audit pipeline
+- Read-layer integrity bundle scope (the fix-shape destination): `/Users/jameschellis/Documents/cowork-cotrader/scope/2026-05-06-read-layer-integrity-bundle-scoping.md`
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
