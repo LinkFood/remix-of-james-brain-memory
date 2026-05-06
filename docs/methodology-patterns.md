@@ -542,6 +542,194 @@ last_error: invariant queries must be a single statement (no mid-query semicolon
 
 ---
 
+# Audit-First Verification Runbook (class kill D)
+
+**Purpose:** reusable procedure synthesizing the sub-patterns above into a single reference future Phase A authors apply at the opening step of every investigation. Pattern entries describe the *what*; this runbook describes the *how*.
+
+**When to apply:** every Phase A audit's opening move. No exceptions. Even when the finding looks obvious. Even under time pressure. Even when the audit is "just confirming what we already know." See Section 8 for cost-of-skip analysis.
+
+**Origin:** 2026-05-06 session caught 11 false premises before any fix shipped (instances #9 through #20, excluding rejected #14). The discipline that caught them — verify-the-warden's-own-framing applied recursively at three independent verification surfaces — is now codified here as standard procedure rather than re-derived ad hoc per audit.
+
+---
+
+## Section 1 — Mandatory opening step for every Phase A
+
+**Verify-the-warden's-own-framing first.** Before bucketing causes, proposing fixes, or expanding scope, verify the source-finding's own framing against ground truth. Three sub-steps applied in order:
+
+### 1a) Reproduce the finding empirically
+
+Don't trust the report. Re-pull the data the report was based on; confirm the symptom is current, not transient. The cheapest possible verification — a single query, a fresh MCP read, a vault read — runs first.
+
+### 1b) Verify the framing aligns with ground truth at the SAME LAYER as the reported symptom
+
+The `audit-verification-surface-mismatch` defense (sub-pattern above). If the punchlist says *"MCP organ output shows null,"* verify at MCP organ output layer — NOT just at producer table layer. The audit's verification surface must match the symptom's surface.
+
+**Forcing function:** name the consumer's surface where the symptom appears, and pull data from THAT surface as the first action. Producer-side verification is the SECOND step, not the first.
+
+### 1c) Verify the empirical claims hold without methodology artifacts
+
+Common methodology artifacts to check before treating any finding as load-bearing:
+
+- **Hidden row caps** (sub-pattern: `feedback_audit_query_hidden_row_caps.md`) — PostgREST default 1000-row response, RPC payload cap, edge function timeout. Use `Prefer: count=exact` + read `Content-Range` header.
+- **Sample bias** — single-day vs multi-day windows on low-cadence systems produce structurally noisy single-coin-flips (`single-sample-acceptance-window`).
+- **Schema drift** — column names, enum values, types may have changed. Check actual schema before reasoning about field semantics.
+- **Timezone bucketing** — UTC vs ET mismatch (`ET-vs-UTC-bucketing` family above). Caller-cadence by UTC; budget-vs-cap by ET; never silently mix.
+- **Apples-to-oranges comparisons** — different windows, different symbols, different units (today's PR #34 SPY drift instance).
+
+If any (1a)/(1b)/(1c) reveals state different from the finding's framing, **surface as the first finding and re-scope.** Don't proceed to cause analysis under wrong framing.
+
+---
+
+## Section 2 — Decision rule for bucketing (multi-entity findings)
+
+When a Phase A surfaces a multi-entity finding ("5 specialists are silent" / "10 SPY items are null" / "11 of 18 functions are missing from auto-deploy"), apply the **`symptom-level-grouping-hides-cause-level-differences`** discipline (sub-pattern above).
+
+**Decompose before classifying.** List each entity individually before treating the class label as cause. Verify per-entity:
+
+- Same symptom value or range?
+- Same upstream conditions?
+- Same downstream impact?
+
+If any per-entity check reveals differences, the finding is a class-of-multiple-causes, not one cause. **Decompose into per-cause framing before proposing fix shape.**
+
+Today's instances — class label "X" decomposed into N distinct sub-classes:
+- Heatmap "5/8 missing" → two compounding filters + AAPL sign-flip risk
+- "4-ticker silent class" → 3 distinct classes (C1/C2/C2.5)
+- MSFT-as-C1 (A3 framing) → cron-window-misalignment shared with all tickers (A3.K1 refinement)
+- "11 missing of 18" → 18 of 18 missing (instance #17 brief-empirical-claim-undercount)
+
+---
+
+## Section 3 — Decision rule for empirical claims in briefs
+
+When a brief embeds an empirical claim ("expected fire rate ≈ 10/hour," "total premium ≈ $30M," "p75 score ≈ 60," "11 functions missing"), pre-flag it as **`brief-author-premise-empirical-verification`** required (sub-pattern above).
+
+**Phase A must verify the claim against raw data before treating as load-bearing premise.**
+
+Today's session demonstrated this is non-negotiable:
+- Brief said "10 wakeups/hour at 6-min cadence." Actual: 1/hour at 60-min cadence (cron schedule per ticker).
+- Brief said "8k token target for MCP composed organ." Actual: ~32k tokens (5/5 v1.1 instance).
+- Brief said "11 of 18 brain consumers missing from auto-deploy." Actual: 18 of 18 missing (zero overlap with hardcoded 7).
+
+**Brief-author-premise-error rate this session: ~50% on briefs touching empirical claims.** Without the verification step, multiple Phase A's would have shipped fixes against wrong-cause assumptions.
+
+**Forcing function:** every count-claim, frequency-claim, distribution-claim re-counted via `grep -rln` / `count(*)` / direct query before reasoning from it.
+
+---
+
+## Section 4 — Decision rule for "absence-of-X" findings
+
+When a Phase A produces an "absence" finding (no rows present, no signal detected, no fires happening, X is missing), check for the **hidden-row-caps + sample-bias** family before treating absence as real:
+
+- **PostgREST default response cap** — 1000 rows. Use `Prefer: count=exact` to confirm result set size.
+- **Supabase RPC payload limits** — ~6MB JSON. Large RPCs return arrays may be silently truncated.
+- **Edge function timeouts** — 150s. Long-running aggregations return partial state.
+- **`.range()` pagination is ASC-default** — no `order=`, the rows seen are first-N, not most-recent.
+- **Sample window scope** — RTH-only vs 24h vs week-long produces different absence pictures.
+
+If any hidden cap is plausible, **re-run with explicit cap-handling before treating absence as real.** "Absent from sample" ≠ "absent from population."
+
+Today's instance: §5 specialist absence finding was a 1000-row cap artifact — narrowed window query showed 9 of 10 specialists firing nominally (instance #9).
+
+---
+
+## Section 5 — Decision rule for "null" findings on integer/boolean fields
+
+When a Phase A surfaces "field is null," distinguish four cases per the **`structured-zero-misread-as-null`** sub-class (above):
+
+| read value | meaning | semantic |
+|---|---|---|
+| `populated` | real data present | informative |
+| `no_signal_detected` | producer wrote `0`/`false` to indicate detected absence | **informative** ("we looked, found nothing") |
+| `not_yet_analyzed` | producer hasn't run for this row | uninformative |
+| `data_missing` | row exists but field is genuinely unpopulated | uninformative |
+
+The **null vs zero distinction matters**: zero means *we looked and found nothing*; null means *we don't know*.
+
+**Read-side semantic gap is fixable via per-organ status field**, not via producer change. See `audit-verification-surface-mismatch` sub-pattern + read-layer integrity bundle scope for the structural fix.
+
+---
+
+## Section 6 — Three-layer discipline-stack reference
+
+Today's session demonstrated the audit-first discipline operates at three independent verification surfaces, layered:
+
+| Layer | When it fires | Catches |
+|---|---|---|
+| **Verify-the-warden's-own-framing** | At Phase A opening step | Symptoms misframed at the source layer; sample-bias artifacts; methodology errors in producer/audit queries. Section 1 above. |
+| **Audit-verification-surface-mismatch** | Post-Phase-A, meta-check | Audit verified one layer (e.g., producer) but symptom is at different layer (e.g., consumer). Today's instance #15 (PR #34 A.7) caught PR #31's producer-only verification missing the consumer-surface symptom. |
+| **MCP-as-diagnostic-readout** | At consumer layer during normal use | Real symptoms surfacing post-resolution; structural gaps the audit didn't see. Trading-session pulls the MCP as an observability surface. Today's instance #15 was reopened by trading-session pull after PR #31 closed prematurely. |
+
+**Each layer catches what the previous layer missed by virtue of operating at a different verification surface.** Skip any one layer and at least one false-fix ships per session.
+
+Today's discipline-stack catch count: **9 catches at Phase A opening + 1 at meta-check + 1 at consumer layer = 11 total.** Plus 2 catches at PR-author layer (instance #11 P3 false-cause; instance #15 reopened) = **all 11 instances caught before fix.**
+
+---
+
+## Section 7 — Common false-cause shapes to watch for
+
+Pre-check Phase A framings against these recurring shapes from the methodology-errors-cascade catalog (full list as sub-patterns above):
+
+- **#9 Hidden row-caps producing false absence findings** (PostgREST 1000-cap)
+- **#10 Partial-frame symptoms from consumers** (heatmap "5/8 missing")
+- **#11 False-cause cascade based on memory-shape-matching** (P3 service-role-key)
+- **#12 Symptom-level grouping at multiple layers** ("4-ticker silent class")
+- **#13 Nested Phase A own-framing** (A3.K1 refining A3)
+- **#15 Audit-verification-surface-mismatch** (audit at adjacent layer to symptom)
+- **#16 Deploy-mechanism-defects-uncovered** (brief assumed surrounding system worked)
+- **#17 Brief-empirical-claim-undercount** (count too low, scope expands at Phase A)
+- **#18 Brief-framed-wrong-computational-layer** (math correct at named layer; cause at different layer)
+- **#19 String-pattern-match-instead-of-real-parser** (regex misses edge cases parser handles)
+- **#20 Pre-existing-bug-masked-by-defensive-fallback** (`|| true` swallows the bug it was meant to handle)
+
+Plus earlier-session shapes: D1 timing-vs-score-drift, v1.1 parallelization-vs-flat-fields, LB8 timezone-bucketing, Pulse-DORMANT-via-grep-heuristic.
+
+**If a Phase A's framing matches any of these shapes, the verification step is mandatory regardless of how confident the finding looks.**
+
+---
+
+## Section 8 — When to apply the runbook + cost-of-skip analysis
+
+**Apply at every Phase A audit's opening move.** Even when:
+- The finding looks obvious
+- Time pressure is high
+- The audit is "just confirming what we already know"
+- The cause hypothesis matches an adjacent memory entry exactly
+
+**Cost-of-apply:** small, ~5-30 min per audit depending on scope. The cheapest possible verification first — a query, a vault read, a sample-data pull.
+
+**Cost-of-skip (today's session, empirically measured):**
+- 11 non-fixes that would have shipped without the discipline (one per false premise caught at audit)
+- 1 P0-class incident that would have been left unfixed despite captain awareness (instance #11 service-role-key false hypothesis would have shipped Path 3 env-override; actual cause ReferenceError would have stayed broken)
+- Unbounded surface area of future-confusion accumulating (each non-fix that ships becomes a methodology error future authors must un-frame)
+
+**When in doubt: apply the discipline. The discipline is the moat.**
+
+---
+
+## Runbook recursion — applying the runbook to itself
+
+This runbook itself underwent verify-the-warden's-own-framing at the Phase A opening step:
+
+**1a) Reproduce the catch count empirically.** Brief stated "8 false premises caught today." Phase A enumerated instances #9 through #20 (excluding rejected #14) = 11 catches. **Brief-empirical-claim-undercount in real-time** (instance #17 surfaced again, recursively). Runbook reflects empirical 11, not brief's 8.
+
+**1b) Verify the three-layer discipline-stack framing.** Today's catches mapped to layers:
+- 9 catches at Phase A opening step (verify-the-warden's-own-framing)
+- 1 catch at meta-check (PR #34 A.7 audit-verification-surface-mismatch)
+- 1 catch at consumer layer (trading-session reopened PR #31 verdict)
+
+Three-layer framing holds empirically. Each layer catches what the others miss.
+
+**1c) Verify naming consistency.** All cross-referenced sub-patterns checked against current methodology-patterns.md entries — names match (`brief-author-premise-error`, `structured-zero-misread-as-null`, `audit-verification-surface-mismatch`, etc.).
+
+**Forcing function recursion:** the runbook describes practices; the runbook's writing applied those practices to its own claims. Recursion is correct, not over-engineered.
+
+---
+
+# End of Audit-First Verification Runbook
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
