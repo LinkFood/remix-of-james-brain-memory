@@ -11,6 +11,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # B-1/B-2 require git diff HEAD~1 HEAD to detect changed paths.
+          # Default fetch-depth=1 leaves HEAD~1 nonexistent and the diff
+          # silently returns empty (caught by 2>/dev/null || echo "" in
+          # the detect step). Result: SLUGS empty, Deploy+Probe skipped,
+          # CI passes spuriously without deploying anything. fetch-depth=2
+          # gives just enough history for the diff to work without pulling
+          # the full repo.
+          fetch-depth: 2
 
       - uses: supabase/setup-cli@v1
         with:
