@@ -5,13 +5,16 @@
 // Register with Claude Code: see mcp/cotrader/README.md.
 //
 // Tools:
-//   1. get_co_trader_context (v1.1 — byte-identical to current main, the
-//      composed brain context for a single watchlist ticker)
+//   1. get_co_trader_context (v1.1 — composed brain context per ticker)
 //   2. get_observed_patterns (v2 — forensic pattern catalog)
-//   3. get_morning_brief (v2 — JAC's daily 6 AM ET digest)
-//   4. get_eod_summary (v2 — Co-Trader EOD session summary, slim by default)
-//   5. get_warden_state (v2 — System Warden invariant snapshot via RPC)
-//   6. get_recent_james_flags (v2 — flags James personally starred from /tape)
+//   3. get_morning_brief (v2 — Co-Trader market brief at ct_daily_briefs;
+//      captain workflow entry — macro, conviction ideas, per-ticker reads)
+//   4. get_jac_brief (v2 — JAC's life-management self-review brief at
+//      brain_reports.morning_brief; renamed from get_morning_brief 2026-05-07
+//      per Path C scoping)
+//   5. get_eod_summary (v2 — Co-Trader EOD session summary, slim by default)
+//   6. get_warden_state (v2 — System Warden invariant snapshot via RPC)
+//   7. get_recent_james_flags (v2 — flags James personally starred from /tape)
 //
 // Tier-1 tool `get_brain_principles` was DROPPED per Phase A audit §9.1 —
 // `brain_principles` table doesn't exist; `distill-principles` cron has been
@@ -25,6 +28,7 @@ import { z } from 'npm:zod@3.25.76';
 import { getCoTraderContext } from './tools/get_co_trader_context.ts';
 import { getObservedPatterns } from './tools/get_observed_patterns.ts';
 import { getMorningBrief } from './tools/get_morning_brief.ts';
+import { getJacBrief } from './tools/get_jac_brief.ts';
 import { getEodSummary } from './tools/get_eod_summary.ts';
 import { getWardenState } from './tools/get_warden_state.ts';
 import { getRecentJamesFlags } from './tools/get_recent_james_flags.ts';
@@ -196,15 +200,72 @@ server.registerTool(
   'get_morning_brief',
   {
     description:
-      "Returns JAC's morning brief for a given ET date (default: today's brief " +
-      'if it has fired, else yesterday). The brief is the daily ~6 AM ET digest ' +
-      "compiled by the jac-morning-brief cron — today's schedule, this-week " +
-      'deadlines, what JAC did overnight, brain activity summary, heads-up items. ' +
-      'Use when the user asks about the morning brief, what JAC compiled this ' +
-      'morning, today\'s schedule per JAC, or "did I get my brief today." ' +
-      'Returns a single row with title, summary, body_markdown, and structured ' +
-      'metadata. READ-ONLY. Note: brief content may include personal scheduling ' +
-      'context — treat MCP transcripts as private journal.',
+      "Returns the Co-Trader market brief for a given ET session date (default: " +
+      "today). The brief is the captain workflow's market-context entry point " +
+      'compiled by the ct-daily-brief cron at ~11:00 UTC weekdays — macro_regime, ' +
+      'macro_narrative, overnight_action, breaking_events, watchlist_focus + ' +
+      'skip_today, high_conviction_ideas (with entry_range/stop/target/thesis), ' +
+      'and per_ticker_reads (stance/tape_view/event_reminders/alignment). ' +
+      'Use when the user asks about the morning brief, today\'s market setup, ' +
+      'high-conviction ideas, or watchlist focus for the session. Source table: ' +
+      'ct_daily_briefs. Distinct from get_jac_brief (life-management). ' +
+      'EXPLICIT ABSENCE: returns status="no_brief_today" with structured-empty ' +
+      'fields when no brief exists for the requested date — does NOT silently ' +
+      'fall back to yesterday. READ-ONLY.',
+    inputSchema: {
+      date: z
+        .string()
+        .optional()
+        .describe(
+          'Optional ET session date (YYYY-MM-DD). Default: today ET. If no ' +
+            'brief exists for the requested date, returns structured-empty ' +
+            '(status=no_brief_today) — never silently returns a different date.',
+        ),
+    },
+  },
+  async (args: { date?: string }) => {
+    const t0 = Date.now();
+    try {
+      const result = await getMorningBrief(args);
+      const totalMs = Date.now() - t0;
+      console.error(
+        `[cotrader-mcp] tool=get_morning_brief et_date=${result.meta.requestedEtDate} ` +
+          `status=${result.brief.status} total_ms=${totalMs}`,
+      );
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[cotrader-mcp] ERROR get_morning_brief msg=${msg}`);
+      return {
+        content: [{ type: 'text', text: `Error: ${msg}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool 4: get_jac_brief (renamed from get_morning_brief 2026-05-07 per Path C)
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  'get_jac_brief',
+  {
+    description:
+      "Returns JAC's life-management self-review brief for a given ET date " +
+      "(default: today's brief if it has fired, else yesterday). Compiled by " +
+      "the jac-morning-brief cron at ~10:00 UTC daily — today's schedule, " +
+      "overdue items, brain activity reflections, heads-up items. Source " +
+      'table: brain_reports filtered to report_type=morning_brief. Distinct ' +
+      'from get_morning_brief (Co-Trader market brief at ct_daily_briefs). ' +
+      'Use when the user asks about their personal schedule per JAC, overdue ' +
+      'items, or "what did JAC reflect on this morning." Returns single row ' +
+      'with title, summary, body_markdown, structured metadata. READ-ONLY. ' +
+      'Note: brief content may include personal scheduling context — treat ' +
+      'MCP transcripts as private journal.',
     inputSchema: {
       date: z
         .string()
@@ -218,10 +279,10 @@ server.registerTool(
   async (args: { date?: string }) => {
     const t0 = Date.now();
     try {
-      const result = await getMorningBrief(args);
+      const result = await getJacBrief(args);
       const totalMs = Date.now() - t0;
       console.error(
-        `[cotrader-mcp] tool=get_morning_brief et_date=${result.meta.requestedEtDate} ` +
+        `[cotrader-mcp] tool=get_jac_brief et_date=${result.meta.requestedEtDate} ` +
           `found=${result.meta.rowCount} total_ms=${totalMs}`,
       );
       return {
@@ -230,7 +291,7 @@ server.registerTool(
       };
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      console.error(`[cotrader-mcp] ERROR get_morning_brief msg=${msg}`);
+      console.error(`[cotrader-mcp] ERROR get_jac_brief msg=${msg}`);
       return {
         content: [{ type: 'text', text: `Error: ${msg}` }],
         isError: true,

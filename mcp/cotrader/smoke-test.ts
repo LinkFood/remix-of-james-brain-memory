@@ -26,6 +26,7 @@ import { getCoTraderContext } from './tools/get_co_trader_context.ts';
 import { _resetCacheForTests, cacheStats } from './lib/organ_cache.ts';
 import { getObservedPatterns } from './tools/get_observed_patterns.ts';
 import { getMorningBrief } from './tools/get_morning_brief.ts';
+import { getJacBrief } from './tools/get_jac_brief.ts';
 import { getEodSummary } from './tools/get_eod_summary.ts';
 import { getWardenState } from './tools/get_warden_state.ts';
 import { getRecentJamesFlags } from './tools/get_recent_james_flags.ts';
@@ -202,8 +203,8 @@ try {
   check('observed_patterns_happy_path', false, e instanceof Error ? e.message : String(e));
 }
 
-// ---- Test 7: get_morning_brief ----
-console.log('(test 7: get_morning_brief — default ET date)');
+// ---- Test 7: get_morning_brief (Co-Trader market brief at ct_daily_briefs) ----
+console.log('(test 7: get_morning_brief — Co-Trader market brief, default ET date)');
 try {
   const t0 = performance.now();
   const mb = await getMorningBrief({});
@@ -214,23 +215,55 @@ try {
     typeof mb.meta.requestedEtDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(mb.meta.requestedEtDate),
     `et_date=${mb.meta.requestedEtDate}`,
   );
+  // Brief is always a structured object; status='populated' or 'no_brief_today'.
   check(
-    'morning_brief_window_resolved',
-    typeof mb.meta.etWindowStartUtc === 'string' && typeof mb.meta.etWindowEndUtc === 'string',
-    `${mb.meta.etWindowStartUtc} → ${mb.meta.etWindowEndUtc}`,
+    'morning_brief_status_enum',
+    mb.brief.status === 'populated' || mb.brief.status === 'no_brief_today',
+    `status=${mb.brief.status}`,
   );
-  // Brief may legitimately be null on a freshly-passed midnight before the cron
-  // fires — both null and a row are valid happy paths. Verify at least the
-  // contract shape.
-  check(
-    'morning_brief_brief_field_typed',
-    mb.brief === null || (typeof mb.brief === 'object' && 'id' in (mb.brief as object)),
-    mb.brief ? `row id=${(mb.brief as { id: string }).id.slice(0, 8)}…` : 'no row (acceptable)',
-  );
+  // Explicit-absence contract: when no row, all top-level scalars are null;
+  // arrays empty. Don't fabricate.
+  if (mb.brief.status === 'no_brief_today') {
+    check(
+      'morning_brief_no_brief_explicit_absence',
+      mb.brief.brief_id === null && mb.brief.macro_narrative === null &&
+        mb.brief.focus_tickers.length === 0 && mb.brief.high_conviction_ideas.length === 0,
+      'all-null/empty per contract',
+    );
+  } else {
+    check(
+      'morning_brief_populated_shape',
+      typeof mb.brief.brief_id === 'string' && typeof mb.brief.brief_date === 'string',
+      `brief_id=${(mb.brief.brief_id ?? '').slice(0, 8)}… date=${mb.brief.brief_date}`,
+    );
+  }
   const mbTok = estimateTokens(JSON.stringify(mb));
   check('morning_brief_token_budget', mbTok <= V2_TOKEN_CAP, `~${mbTok} tokens (cap ${V2_TOKEN_CAP})`);
 } catch (e) {
   check('morning_brief_happy_path', false, e instanceof Error ? e.message : String(e));
+}
+
+// ---- Test 7b: get_jac_brief (renamed from old get_morning_brief) ----
+console.log('(test 7b: get_jac_brief — life brief at brain_reports.morning_brief)');
+try {
+  const t0 = performance.now();
+  const jb = await getJacBrief({});
+  const wall = Math.round(performance.now() - t0);
+  check('jac_brief_latency_under_cap', wall <= V2_LATENCY_CAP_MS, `${wall}ms (cap ${V2_LATENCY_CAP_MS}ms)`);
+  check(
+    'jac_brief_meta_shape',
+    typeof jb.meta.requestedEtDate === 'string' && typeof jb.meta.etWindowStartUtc === 'string',
+    `et_date=${jb.meta.requestedEtDate}`,
+  );
+  check(
+    'jac_brief_field_typed',
+    jb.brief === null || (typeof jb.brief === 'object' && 'id' in (jb.brief as object)),
+    jb.brief ? `row id=${(jb.brief as { id: string }).id.slice(0, 8)}…` : 'no row (acceptable)',
+  );
+  const jbTok = estimateTokens(JSON.stringify(jb));
+  check('jac_brief_token_budget', jbTok <= V2_TOKEN_CAP, `~${jbTok} tokens (cap ${V2_TOKEN_CAP})`);
+} catch (e) {
+  check('jac_brief_happy_path', false, e instanceof Error ? e.message : String(e));
 }
 
 // ---- Test 8: get_eod_summary (slim default) ----
