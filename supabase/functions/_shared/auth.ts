@@ -98,14 +98,16 @@ export function createServiceClient(): SupabaseClient | null {
  * (e.g., another edge function calling this one)
  */
 export function isServiceRoleRequest(request: Request): boolean {
-  const authHeader = request.headers.get('authorization');
-  if (!authHeader) return false;
-
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!serviceRoleKey) return false;
 
-  const expected = `Bearer ${serviceRoleKey}`;
-  return constantTimeEqual(authHeader, expected);
+  const apikey = request.headers.get('apikey');
+  if (apikey && constantTimeEqual(apikey, serviceRoleKey)) return true;
+
+  const authHeader = request.headers.get('authorization');
+  if (authHeader && constantTimeEqual(authHeader, `Bearer ${serviceRoleKey}`)) return true;
+
+  return false;
 }
 
 /**
