@@ -241,20 +241,22 @@ Pulled actual organ helper return shapes for `news_causality` (`_shared/newsCaus
 
 | # | Organ | Producer write | Per-item status | Warden invariant | Shipped |
 |---|---|---|---|---|---|
-| 1 | `news_causality` | ✅ | ✅ (firehose_only_no_causality / populated / pending_analysis) | unblocked (column live) | 2026-05-07 |
-| 2 | `flow_heatmap` | ✅ | n/a (homogeneous-source) | unblocked (column live) | 2026-05-08 |
-| 3 | `pulse` | pending | n/a | unblocked | — |
-| 4 | `specialist` | pending | tbd | unblocked | — |
-| 5 | `detector` | pending | tbd | unblocked | — |
-| 6 | `tape` | pending | n/a | unblocked | — |
-| 7 | `james_flags` | pending | n/a | unblocked | — |
-| 8 | `event_recency` | pending | tbd | unblocked | — |
-| 9 | `analogs` | pending | tbd | unblocked | — |
-| 10 | `specialist_recall` | pending | tbd | unblocked | — |
+| 1 | `news_causality` | ✅ | ✅ (firehose_only_no_causality / populated / pending_analysis) | ✅ active | 2026-05-07 |
+| 2 | `flow_heatmap` | ✅ | n/a (homogeneous-source) | ✅ active | 2026-05-08 |
+| 3 | `pulse` | ✅ | n/a (regime field already encodes per-ticker state) | ✅ active | 2026-05-09 |
+| 4 | `specialist` | pending | tbd | dormant (auto-engages on producer ship) | — |
+| 5 | `detector` | pending | tbd | dormant (auto-engages on producer ship) | — |
+| 6 | `tape` | pending | n/a | dormant (auto-engages on producer ship) | — |
+| 7 | `james_flags` | pending | n/a | dormant (auto-engages on producer ship) | — |
+| 8 | `event_recency` | pending | tbd | dormant (auto-engages on producer ship) | — |
+| 9 | `analogs` | pending | tbd | dormant (auto-engages on producer ship) | — |
+| 10 | `specialist_recall` | pending | tbd | dormant (auto-engages on producer ship) | — |
 
-**ct_brain_telemetry.organ_status column shipped 2026-05-08** (migration `20260507000000_brain_telemetry_organ_status.sql`). Pre-flight bundled with organ #2. claudeReadSurface.ts populates `organ_status` from `result.organMetadata?.status` on every brain read. Per-organ metadata-completeness warden invariants are now unblocked — queued to bundle-ship at organ #3 (single migration adds 10 invariants, one per organ, gated on `helper_name=$organ AND organ_status IS NOT NULL` over a fresh window).
+**ct_brain_telemetry.organ_status column shipped 2026-05-08** (migration `20260507000000_brain_telemetry_organ_status.sql`). claudeReadSurface.ts populates `organ_status` from `result.organMetadata?.status` on every brain read.
 
-**End-to-end Phase 2 acceptance verified 2026-05-08** via fresh-Deno orchestrator invocation: both organs show `organ_status='populated'` in `ct_brain_telemetry` rows where consumer_name='phase2-acceptance-verify' (audit trail).
+**Per-organ metadata-completeness warden invariants pair-shipped 2026-05-09** (migration `20260508010000_organ_metadata_completeness_invariants.sql`). 10 invariants in `organ_metadata` warden category, one per organ. Each gated on an EXISTS guard: dormant (returns metric_value=0) until the organ produces at least one row with organ_status set in last 24h, then auto-engages. After today's ship, **every Bundle Phase 2 organ ship is auto-covered by warden enforcement** — defense net effectively gains a 6th layer for organ-metadata integrity.
+
+**End-to-end Phase 2 acceptance verified each ship** via fresh-Deno orchestrator invocation pattern (`/tmp/verify_pulse_phase2.ts`, `/tmp/verify_phase2_organ_status.ts`). Acceptance criterion: `consumer_name='phase2-<organ>-verify'` row in `ct_brain_telemetry` shows `organ_status='populated'` for the target organ; companion organs unaffected.
 
 ---
 

@@ -20,6 +20,8 @@ import type {
   HelperFetchContext,
   HelperOpts,
   HelperResult,
+  OrganMetadata,
+  OrganStatus,
 } from './contextHelper.ts';
 
 export type PulseRegime = 'trending_up' | 'trending_down' | 'chop' | 'unknown';
@@ -190,6 +192,13 @@ const pulseHelper: ContextHelper<PulseResult> = {
     };
 
     const rowCount = Object.keys(per_ticker).length;
+    const status: OrganStatus = rowCount === 0 ? 'no_signal_detected' : 'populated';
+    const organMetadata: OrganMetadata = {
+      as_of: data.generated_at,
+      source: '_shared/pulseContext.ts / ct_flow_pulse_ticks',
+      window: `at-or-before ${atTime.toISOString()}, last 3 ticks per ticker`,
+      status,
+    };
 
     return {
       data,
@@ -203,6 +212,7 @@ const pulseHelper: ContextHelper<PulseResult> = {
         truncated: false,
         warning,
       },
+      organMetadata,
     };
   },
 
