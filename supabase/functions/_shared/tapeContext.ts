@@ -23,6 +23,8 @@ import type {
   HelperFetchContext,
   HelperOpts,
   HelperResult,
+  OrganMetadata,
+  OrganStatus,
 } from './contextHelper.ts';
 
 // ---------------------------------------------------------------------------
@@ -99,26 +101,38 @@ function toEntry(row: TapeRow): TapeCommentaryEntry {
   };
 }
 
+function buildOrganMetadata(asOf: string, status: OrganStatus): OrganMetadata {
+  return {
+    as_of: asOf,
+    source: '_shared/tapeContext.ts / ct_tape_commentary',
+    window: 'latest + N prior commentary rows, ordered by created_at DESC',
+    status,
+  };
+}
+
 function emptyResult(
   startedAt: number,
   warning?: string,
+  status: OrganStatus = 'no_signal_detected',
 ): HelperResult<TapeContextResult> {
+  const asOf = new Date().toISOString();
   return {
     data: {
       latest: null,
       prior: [],
-      generated_at: new Date().toISOString(),
+      generated_at: asOf,
     },
     meta: {
       helperName: HELPER_NAME,
       helperVersion: HELPER_VERSION,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: asOf,
       rowCount: 0,
       cacheHit: false,
       latencyMs: Date.now() - startedAt,
       truncated: false,
       ...(warning ? { warning } : {}),
     },
+    organMetadata: buildOrganMetadata(asOf, status),
   };
 }
 
@@ -151,7 +165,7 @@ export async function getTapeContext(
       .order('created_at', { ascending: false })
       .limit(totalNeeded);
 
-    if (error) return emptyResult(startedAt, `query_error:${error.message}`);
+    if (error) return emptyResult(startedAt, `query_error:${error.message}`, 'error');
     if (!Array.isArray(data) || data.length === 0) {
       return emptyResult(startedAt, 'no_rows');
     }
@@ -160,27 +174,29 @@ export async function getTapeContext(
     const latest = rows[0] ?? null;
     const prior = rows.slice(1);
     const truncated = requestedPrior > MAX_PRIOR;
+    const asOf = new Date().toISOString();
 
     return {
       data: {
         latest,
         prior,
-        generated_at: new Date().toISOString(),
+        generated_at: asOf,
       },
       meta: {
         helperName: HELPER_NAME,
         helperVersion: HELPER_VERSION,
-        fetchedAt: new Date().toISOString(),
+        fetchedAt: asOf,
         rowCount: rows.length,
         cacheHit: false,
         latencyMs: Date.now() - startedAt,
         truncated,
         ...(truncated ? { warning: 'cap_clamped_to_max_prior' } : {}),
       },
+      organMetadata: buildOrganMetadata(asOf, latest ? 'populated' : 'no_signal_detected'),
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown_error';
-    return emptyResult(startedAt, `exception:${msg}`);
+    return emptyResult(startedAt, `exception:${msg}`, 'error');
   }
 }
 
