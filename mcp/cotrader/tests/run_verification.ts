@@ -23,6 +23,7 @@ import { resolveAuth } from '../lib/auth.ts';
 import { getCoTraderContext } from '../tools/get_co_trader_context.ts';
 import { getMorningBrief } from '../tools/get_morning_brief.ts';
 import { getJacBrief } from '../tools/get_jac_brief.ts';
+import { getBrainPrinciples } from '../tools/get_brain_principles.ts';
 import { todayInET } from '../../../supabase/functions/_shared/clock.ts';
 
 type Status = 'PASS' | 'FAIL' | 'DRIFT';
@@ -317,6 +318,78 @@ try {
   });
 } catch (e) {
   record({ tool: 'get_jac_brief', name: 'no_row_date_null_brief', category: 5, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// ===========================================================================
+// Tool 4 — get_brain_principles
+// ===========================================================================
+console.log('\n[Tool: get_brain_principles]');
+
+// Snapshot ground truth FIRST
+const { data: gtPrincipleRows, count: gtPrincipleCount } = await supabase
+  .from('jac_principles')
+  .select('id, principle, confidence, retired_at, created_at', { count: 'exact' })
+  .is('retired_at', null)
+  .order('created_at', { ascending: false });
+const gtPrinciples = gtPrincipleRows ?? [];
+
+// T4.1 — callability: tool returns either populated or no_principles_yet
+try {
+  const r = await getBrainPrinciples({});
+  const validStatus = r.brief.status === 'populated' || r.brief.status === 'no_principles_yet';
+  record({
+    tool: 'get_brain_principles', name: 'callable_status_enum', category: 1,
+    status: validStatus ? 'PASS' : 'FAIL',
+    evidence: `status=${r.brief.status} count=${r.brief.total_count}`,
+  });
+} catch (e) {
+  record({ tool: 'get_brain_principles', name: 'callable_status_enum', category: 1, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// T4.2 — data fidelity: count + first id match DB ground truth
+try {
+  const r = await getBrainPrinciples({});
+  const countMatch = r.brief.total_count === gtPrinciples.length;
+  if (gtPrinciples.length > 0) {
+    const firstIdMatch = r.brief.principles[0]?.principle_id === gtPrinciples[0].id;
+    const firstTextMatch = r.brief.principles[0]?.text === gtPrinciples[0].principle;
+    record({
+      tool: 'get_brain_principles', name: 'data_fidelity_count_and_first_row', category: 3,
+      status: countMatch && firstIdMatch && firstTextMatch ? 'PASS' : 'DRIFT',
+      evidence: `tool_count=${r.brief.total_count} db_count=${gtPrinciples.length} id_match=${firstIdMatch} text_match=${firstTextMatch}`,
+    });
+  } else {
+    record({
+      tool: 'get_brain_principles', name: 'data_fidelity_count_and_first_row', category: 3,
+      status: r.brief.total_count === 0 && r.brief.status === 'no_principles_yet' ? 'PASS' : 'DRIFT',
+      evidence: `gt empty; tool count=${r.brief.total_count} status=${r.brief.status}`,
+    });
+  }
+} catch (e) {
+  record({ tool: 'get_brain_principles', name: 'data_fidelity_count_and_first_row', category: 3, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// T4.3 — explicit-absence contract: source_pattern returns null per Path C
+//        (DB has no descriptive failure-mode text field; don't fabricate from
+//        source_reflection_ids UUIDs)
+try {
+  const r = await getBrainPrinciples({});
+  if (r.brief.principles.length > 0) {
+    const firstSourcePattern = r.brief.principles[0].source_pattern;
+    const isNull = firstSourcePattern === null;
+    record({
+      tool: 'get_brain_principles', name: 'source_pattern_null_per_path_c', category: 5,
+      status: isNull ? 'PASS' : 'FAIL',
+      evidence: `source_pattern=${JSON.stringify(firstSourcePattern)} (null required per contract)`,
+    });
+  } else {
+    record({
+      tool: 'get_brain_principles', name: 'source_pattern_null_per_path_c', category: 5,
+      status: 'PASS', evidence: 'no principles to check; vacuous PASS',
+    });
+  }
+} catch (e) {
+  record({ tool: 'get_brain_principles', name: 'source_pattern_null_per_path_c', category: 5, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
 }
 
 // ===========================================================================

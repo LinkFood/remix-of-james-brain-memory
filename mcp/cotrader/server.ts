@@ -7,19 +7,24 @@
 // Tools:
 //   1. get_co_trader_context (v1.1 — composed brain context per ticker)
 //   2. get_observed_patterns (v2 — forensic pattern catalog)
-//   3. get_morning_brief (v2 — Co-Trader market brief at ct_daily_briefs;
-//      captain workflow entry — macro, conviction ideas, per-ticker reads)
-//   4. get_jac_brief (v2 — JAC's life-management self-review brief at
-//      brain_reports.morning_brief; renamed from get_morning_brief 2026-05-07
-//      per Path C scoping)
-//   5. get_eod_summary (v2 — Co-Trader EOD session summary, slim by default)
-//   6. get_warden_state (v2 — System Warden invariant snapshot via RPC)
-//   7. get_recent_james_flags (v2 — flags James personally starred from /tape)
+//   3. get_morning_brief (v2 — Co-Trader market brief at ct_daily_briefs)
+//   4. get_jac_brief (v2 — JAC's life self-review brief; renamed from
+//      get_morning_brief 2026-05-07 per Path C scoping)
+//   5. get_brain_principles (v2 — distilled behavior rules from
+//      jac_principles. Re-added 2026-05-07 — 5/5 audit comment claiming
+//      brain_principles table missing was stale; jac_principles is the
+//      canonical source and now populated.)
+//   6. get_eod_summary (v2 — Co-Trader EOD session summary, slim by default)
+//   7. get_warden_state (v2 — System Warden invariant snapshot via RPC)
+//   8. get_recent_james_flags (v2 — flags James personally starred from /tape)
 //
-// Tier-1 tool `get_brain_principles` was DROPPED per Phase A audit §9.1 —
-// `brain_principles` table doesn't exist; `distill-principles` cron has been
-// silently no-op'ing. Re-add as Tier 2 after the writer is fixed and rows
-// populate. See `docs/audit/2026-05-05-cotrader-mcp-v2-tier1-phase-a.md`.
+// 5/5 note (now stale): get_brain_principles was DROPPED per Phase A audit
+// §9.1 because `brain_principles` table didn't exist. Phase A 2026-05-07
+// confirmed `jac_principles` IS the canonical table (rows present;
+// distill-principles cron writing). Tool re-added today, sourced from
+// jac_principles. Same instance #35 lesson: verify table name before
+// locking design — and the lesson reverses cleanly when the underlying
+// state changes.
 
 import { McpServer } from 'npm:@modelcontextprotocol/sdk@1.29.0/server/mcp.js';
 import { StdioServerTransport } from 'npm:@modelcontextprotocol/sdk@1.29.0/server/stdio.js';
@@ -29,6 +34,7 @@ import { getCoTraderContext } from './tools/get_co_trader_context.ts';
 import { getObservedPatterns } from './tools/get_observed_patterns.ts';
 import { getMorningBrief } from './tools/get_morning_brief.ts';
 import { getJacBrief } from './tools/get_jac_brief.ts';
+import { getBrainPrinciples } from './tools/get_brain_principles.ts';
 import { getEodSummary } from './tools/get_eod_summary.ts';
 import { getWardenState } from './tools/get_warden_state.ts';
 import { getRecentJamesFlags } from './tools/get_recent_james_flags.ts';
@@ -301,7 +307,53 @@ server.registerTool(
 );
 
 // ---------------------------------------------------------------------------
-// Tool 4: get_eod_summary
+// Tool: get_brain_principles
+// ---------------------------------------------------------------------------
+
+server.registerTool(
+  'get_brain_principles',
+  {
+    description:
+      "Returns the captain's distilled behavior principles from " +
+      '`jac_principles` — codified failure modes and decision rules learned ' +
+      'from prior session reflections, written by the distill-principles ' +
+      'cron. Filters to active principles (retired_at IS NULL). Use when ' +
+      "evaluating whether a current setup pattern matches a previously- " +
+      "codified failure mode (e.g., 'do any of my principles flag this ' +
+      "GOOGL conviction idea?'). " +
+      'EXPLICIT ABSENCE: returns status="no_principles_yet" with empty ' +
+      'principles[] when no active rows exist — does NOT fabricate. ' +
+      'Doc field source_pattern returns null per Path C contract — DB has ' +
+      'no descriptive failure-mode text field; surface ' +
+      'source_reflection_ids array for callers wanting depth. READ-ONLY.',
+    inputSchema: {},
+  },
+  async () => {
+    const t0 = Date.now();
+    try {
+      const result = await getBrainPrinciples({});
+      const totalMs = Date.now() - t0;
+      console.error(
+        `[cotrader-mcp] tool=get_brain_principles status=${result.brief.status} ` +
+          `count=${result.brief.total_count} total_ms=${totalMs}`,
+      );
+      return {
+        content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        structuredContent: result as unknown as Record<string, unknown>,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[cotrader-mcp] ERROR get_brain_principles msg=${msg}`);
+      return {
+        content: [{ type: 'text', text: `Error: ${msg}` }],
+        isError: true,
+      };
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Tool: get_eod_summary
 // ---------------------------------------------------------------------------
 
 server.registerTool(
