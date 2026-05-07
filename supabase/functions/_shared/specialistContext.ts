@@ -21,6 +21,8 @@ import type {
   HelperFetchContext,
   HelperOpts,
   HelperResult,
+  OrganMetadata,
+  OrganStatus,
 } from './contextHelper.ts';
 
 // ---------------------------------------------------------------------------
@@ -31,15 +33,35 @@ export type DirectionLean = 'bullish' | 'bearish' | 'neutral' | 'mixed';
 
 export interface SpecialistRead {
   ticker: string;
-  read_text: string;
+  /** Null when ticker_status='pending_analysis' (specialist hasn't fired in window). */
+  read_text: string | null;
   direction_lean: DirectionLean | null;
   conviction: number | null; // 0-100
   flagged: boolean;
   flag_id: string | null;
-  updated_at: string; // ISO 8601
+  /** Null when ticker_status='pending_analysis'. */
+  updated_at: string | null;
+  /**
+   * Per-ticker semantic state (Bundle Phase 2 organ #9 ship 2026-05-07).
+   * Reachable today: 'populated' (row exists in window with read_text) or
+   * 'pending_analysis' (no row in window — specialist hasn't fired enough).
+   * 'no_signal_detected' and 'error' kept in OrganStatus enum but unreachable
+   * under current producer (specialistRunner ALWAYS writes read_text — even
+   * parse-fail paths emit a sentinel string). See instance #34
+   * (producer-instrumentation-gates-consumer-precision) at
+   * docs/audit/2026-05-07-organ-9-specialist-phase-a.md.
+   */
+  ticker_status: OrganStatus;
 }
 
 export interface SpecialistContextResult {
+  /**
+   * One entry per watchlist ticker (or per opts.tickerFocus). Bundle Phase 2
+   * 2026-05-07 changed shape from "tickers with rows only" to "all watchlist
+   * tickers, some with null content fields and ticker_status='pending_analysis'".
+   * Downstream consumers reading per_ticker should not assume populated-only —
+   * filter by ticker_status if they need only signal-bearing entries.
+   */
   per_ticker: SpecialistRead[];
   generated_at: string;
 }
@@ -62,22 +84,50 @@ interface SpecialistRow {
   updated_at: string;
 }
 
-function emptyResult(reason: string, latencyMs: number): HelperResult<SpecialistContextResult> {
+function buildOrganMetadata(asOf: string, status: OrganStatus): OrganMetadata {
+  return {
+    as_of: asOf,
+    source: '_shared/specialistContext.ts / ct_specialist_reads (latest per ticker)',
+    window: 'latest read per watchlist ticker; per-ticker enumeration includes pending tickers with null content',
+    status,
+  };
+}
+
+function emptyResult(
+  reason: string,
+  latencyMs: number,
+  status: OrganStatus = 'no_signal_detected',
+): HelperResult<SpecialistContextResult> {
+  const asOf = new Date().toISOString();
   return {
     data: {
       per_ticker: [],
-      generated_at: new Date().toISOString(),
+      generated_at: asOf,
     },
     meta: {
       helperName: HELPER_NAME,
       helperVersion: HELPER_VERSION,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: asOf,
       rowCount: 0,
       cacheHit: false,
       latencyMs,
       truncated: false,
       warning: reason,
     },
+    organMetadata: buildOrganMetadata(asOf, status),
+  };
+}
+
+function pendingEntry(ticker: string): SpecialistRead {
+  return {
+    ticker,
+    read_text: null,
+    direction_lean: null,
+    conviction: null,
+    flagged: false,
+    flag_id: null,
+    updated_at: null,
+    ticker_status: 'pending_analysis',
   };
 }
 
@@ -94,7 +144,7 @@ async function fetchSpecialistContext(
     : ctx.watchlist.map((t) => t.toUpperCase());
 
   if (tickers.length === 0) {
-    return emptyResult('empty_watchlist', Date.now() - start);
+    return emptyResult('empty_watchlist', Date.now() - start, 'error');
   }
 
   try {
@@ -108,16 +158,17 @@ async function fetchSpecialistContext(
       .order('updated_at', { ascending: false })
       .limit(overPull);
 
-    if (error) return emptyResult(`db_error:${error.message}`, Date.now() - start);
-    if (!Array.isArray(data) || data.length === 0) {
-      return emptyResult('no_rows', Date.now() - start);
-    }
+    if (error) return emptyResult(`db_error:${error.message}`, Date.now() - start, 'error');
 
-    // Keep latest row per ticker (rows are already ordered DESC by updated_at)
+    // Keep latest row per ticker (rows are already ordered DESC by updated_at).
+    // Bundle Phase 2 ship 2026-05-07: enumerate ALL requested tickers — emit
+    // pending_analysis entries with null content for tickers without rows in
+    // window. This makes per-ticker coverage explicit and lets consumers filter
+    // by ticker_status instead of inferring from missing-from-array.
     const latestByTicker = new Map<string, SpecialistRead>();
-    for (const row of data as SpecialistRow[]) {
+    for (const row of (data ?? []) as SpecialistRow[]) {
       if (latestByTicker.has(row.ticker)) continue;
-      if (!row.read_text) continue; // skip null reads defensively
+      if (!row.read_text) continue; // dead defensive — producer always writes read_text
       latestByTicker.set(row.ticker, {
         ticker: row.ticker,
         read_text: row.read_text,
@@ -126,34 +177,53 @@ async function fetchSpecialistContext(
         flagged: row.flagged ?? false,
         flag_id: row.flag_id,
         updated_at: row.updated_at,
+        ticker_status: 'populated',
       });
     }
 
-    const all = Array.from(latestByTicker.values()).sort(
-      (a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at),
-    );
-    const truncated = all.length > cap;
-    const per_ticker = all.slice(0, cap);
+    // Build full enumeration: populated rows where they exist, pending_analysis
+    // entries for tickers without rows in window.
+    const fullEnumeration: SpecialistRead[] = tickers.map((t) => {
+      const populated = latestByTicker.get(t);
+      return populated ?? pendingEntry(t);
+    });
+
+    // Sort: populated rows first (newest-first by updated_at), then pending.
+    const populated = fullEnumeration.filter((e) => e.ticker_status === 'populated');
+    const pending = fullEnumeration.filter((e) => e.ticker_status !== 'populated');
+    populated.sort((a, b) => Date.parse(b.updated_at!) - Date.parse(a.updated_at!));
+    const ordered = [...populated, ...pending];
+
+    // Cap applies to the populated subset (caller asked for top-N signal-
+    // bearing); pending entries are appended for full enumeration.
+    const cappedPopulated = populated.slice(0, cap);
+    const truncated = populated.length > cap;
+    const per_ticker = [...cappedPopulated, ...pending];
+
+    const asOf = new Date().toISOString();
+    const status: OrganStatus = populated.length > 0 ? 'populated' : 'pending_analysis';
 
     return {
       data: {
         per_ticker,
-        generated_at: new Date().toISOString(),
+        generated_at: asOf,
       },
       meta: {
         helperName: HELPER_NAME,
         helperVersion: HELPER_VERSION,
-        fetchedAt: new Date().toISOString(),
-        rowCount: per_ticker.length,
+        fetchedAt: asOf,
+        rowCount: populated.length,
         cacheHit: false,
         latencyMs: Date.now() - start,
         truncated,
       },
+      organMetadata: buildOrganMetadata(asOf, status),
     };
   } catch (e) {
     return emptyResult(
       `exception:${e instanceof Error ? e.message : String(e)}`,
       Date.now() - start,
+      'error',
     );
   }
 }
@@ -182,7 +252,7 @@ const specialistContextHelper: ContextHelper<SpecialistContextResult> = {
       minRefreshSeconds: 60,
       dependencies: [],
       outputShape:
-        'Per-ticker latest specialist read: read_text (2-3 sentence prose), direction_lean (bullish/bearish/neutral/mixed), conviction (0-100), flagged + flag_id, updated_at. One row per watchlist ticker (latest by updated_at).',
+        'Per-ticker latest specialist read: read_text (2-3 sentence prose), direction_lean, conviction (0-100), flagged + flag_id, updated_at, ticker_status (OrganStatus enum). Bundle Phase 2 (2026-05-07) shape: ALL watchlist tickers enumerated — populated entries first (newest-first by updated_at), pending_analysis entries (null content) for tickers without rows in window. Consumers should filter by ticker_status if signal-bearing only.',
       exampleResult: {
         per_ticker: [
           {
@@ -194,6 +264,17 @@ const specialistContextHelper: ContextHelper<SpecialistContextResult> = {
             flagged: false,
             flag_id: null,
             updated_at: '2026-04-30T19:42:11Z',
+            ticker_status: 'populated',
+          },
+          {
+            ticker: 'IWM',
+            read_text: null,
+            direction_lean: null,
+            conviction: null,
+            flagged: false,
+            flag_id: null,
+            updated_at: null,
+            ticker_status: 'pending_analysis',
           },
         ],
         generated_at: '2026-04-30T19:45:00Z',

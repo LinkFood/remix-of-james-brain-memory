@@ -249,8 +249,10 @@ Pulled actual organ helper return shapes for `news_causality` (`_shared/newsCaus
 | 6 | `event_recency` | ✅ | n/a (4-source union normalizes to single `RecencyEvent` shape) | ✅ active | 2026-05-07 |
 | 7 | `james_flags` | ✅ | n/a (homogeneous post-2026-04-27 unification) | ✅ active | 2026-05-07 |
 | 8 | `analogs` | ✅ | n/a (first organ to use `pending_analysis` enum case — producer cron `ct-session-analog build` hasn't fired) | ✅ active | 2026-05-07 |
-| 9 | `specialist` | pending | tbd | dormant (auto-engages on producer ship) | — |
-| 10 | `specialist_recall` | pending | tbd | dormant (auto-engages on producer ship) | — |
+| 9 | `specialist` | ✅ | ✅ (per-ticker `ticker_status` field; 2-state reachable today: populated / pending_analysis. Producer always writes per fire, so no_signal_detected unreachable per #34) | ✅ active | 2026-05-07 |
+| 10 | `specialist_recall` | ✅ | n/a (single-ticker organ — per-ticker granularity inapplicable per instance #38; organ-level metadata only) | ✅ active | 2026-05-07 |
+
+**🎉 Bundle Phase 2 STRUCTURALLY COMPLETE 2026-05-07.** All 10 organs surface `organMetadata.status` end-to-end through orchestrator + telemetry. Read-layer integrity bundle delivered. Defense-net 6th layer at full coverage via the 10 EXISTS-guard auto-warden invariants from migration `20260508010000_organ_metadata_completeness_invariants.sql`.
 
 **ct_brain_telemetry.organ_status column shipped 2026-05-08** (migration `20260507000000_brain_telemetry_organ_status.sql`). claudeReadSurface.ts populates `organ_status` from `result.organMetadata?.status` on every brain read.
 

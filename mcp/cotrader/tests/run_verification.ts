@@ -71,7 +71,7 @@ try {
 try {
   const r = await getCoTraderContext({ ticker: 'SPY' });
   const ctx = r.structured as { organs: Record<string, { organMetadata?: { status?: unknown } }> };
-  const phase2Organs = ['news_causality', 'flow_heatmap', 'pulse', 'tape', 'detector', 'event_recency', 'james_flags', 'analogs'];
+  const phase2Organs = ['news_causality', 'flow_heatmap', 'pulse', 'tape', 'detector', 'event_recency', 'james_flags', 'analogs', 'specialist', 'specialist_recall'];
   const populatedCount = phase2Organs.filter((o) => {
     const status = ctx.organs?.[o]?.organMetadata?.status;
     return typeof status === 'string' && status.length > 0;

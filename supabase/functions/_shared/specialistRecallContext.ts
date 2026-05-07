@@ -59,6 +59,8 @@ import type {
   HelperResult,
   HelperDescription,
   AudienceMode,
+  OrganMetadata,
+  OrganStatus,
 } from './contextHelper.ts';
 import {
   fetchV2Enrichment,
@@ -237,11 +239,38 @@ function computeStats(entries: RecallEntry[]): RecallStats {
   };
 }
 
+// Bundle Phase 2 organ #10 ship 2026-05-07. Single-ticker organ (per-ticker
+// granularity collapses to organ-level — there's no array to attach
+// ticker_status to, see audit doc 2026-05-07-organ-10-specialist-recall-
+// phase-a.md instance #38). organMetadata describes the ORGAN's state.
+//
+// CHRONOLOGICAL-VS-SEMANTIC contract boundary: this organ is currently
+// chronological recall (last N reads by updated_at DESC). Semantic recall
+// (vector similarity over embedded prior reads) is future work; the bundle
+// metadata-completeness invariant covers what's currently shipped. Future
+// semantic-recall PR must not regress the chronological-shape invariant.
+function buildOrganMetadata(
+  asOf: string,
+  ticker: string | null,
+  status: OrganStatus,
+): OrganMetadata {
+  return {
+    as_of: asOf,
+    source: '_shared/specialistRecallContext.ts / ct_specialist_reads + ct_flags + ct_flag_grades + ct_specialist_scoreboard_v2 (chronological recall — semantic not yet shipped; cotrader audience only)',
+    window: ticker
+      ? `last ${FLAGGED_CAP} flagged + last ${UNFLAGGED_CAP} unflagged-conviction-≥${UNFLAGGED_CONVICTION_FLOOR} within ${UNFLAGGED_LOOKBACK_DAYS}d for ${ticker}`
+      : 'no ticker focus (recall is per-entity)',
+    status,
+  };
+}
+
 function emptyResult(
   startedAt: number,
   ticker: string | null,
   warning?: string,
+  status: OrganStatus = 'no_signal_detected',
 ): HelperResult<SpecialistRecallResult> {
+  const asOf = new Date().toISOString();
   return {
     data: {
       ticker,
@@ -257,18 +286,19 @@ function emptyResult(
         current_streak_kind: 'none',
         current_streak_length: 0,
       },
-      generated_at: new Date().toISOString(),
+      generated_at: asOf,
     },
     meta: {
       helperName: HELPER_NAME,
       helperVersion: HELPER_VERSION,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: asOf,
       rowCount: 0,
       cacheHit: false,
       latencyMs: Date.now() - startedAt,
       truncated: false,
       ...(warning ? { warning } : {}),
     },
+    organMetadata: buildOrganMetadata(asOf, ticker, status),
   };
 }
 
@@ -284,8 +314,9 @@ export async function getSpecialistRecallContext(
   const ticker = opts.tickerFocus ? opts.tickerFocus.toUpperCase() : null;
 
   // tickerFocus is required — recall is per-entity, not market-wide.
+  // Contract violation, not data-state — map to 'error'.
   if (!ticker) {
-    return emptyResult(startedAt, null, 'no_ticker_focus');
+    return emptyResult(startedAt, null, 'no_ticker_focus', 'error');
   }
 
   try {
@@ -320,10 +351,10 @@ export async function getSpecialistRecallContext(
     const [flaggedRes, unflaggedRes] = await Promise.all([flaggedQ, unflaggedQ]);
 
     if (flaggedRes.error) {
-      return emptyResult(startedAt, ticker, `flagged_query_error:${flaggedRes.error.message}`);
+      return emptyResult(startedAt, ticker, `flagged_query_error:${flaggedRes.error.message}`, 'error');
     }
     if (unflaggedRes.error) {
-      return emptyResult(startedAt, ticker, `unflagged_query_error:${unflaggedRes.error.message}`);
+      return emptyResult(startedAt, ticker, `unflagged_query_error:${unflaggedRes.error.message}`, 'error');
     }
 
     const flaggedRows = (flaggedRes.data ?? []) as RawRead[];
@@ -417,27 +448,29 @@ export async function getSpecialistRecallContext(
       ...(v2.lifecycle ? { lifecycle: v2.lifecycle } : {}),
     };
 
+    const asOf = new Date().toISOString();
     return {
       data: {
         ticker,
         reads,
         stats,
-        generated_at: new Date().toISOString(),
+        generated_at: asOf,
       },
       meta: {
         helperName: HELPER_NAME,
         helperVersion: HELPER_VERSION,
-        fetchedAt: new Date().toISOString(),
+        fetchedAt: asOf,
         rowCount: reads.length,
         cacheHit: false,
         latencyMs: Date.now() - startedAt,
         truncated: false,
         ...(v2.warning ? { warning: v2.warning } : {}),
       },
+      organMetadata: buildOrganMetadata(asOf, ticker, 'populated'),
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return emptyResult(startedAt, ticker, `fetch_error:${msg}`);
+    return emptyResult(startedAt, ticker, `fetch_error:${msg}`, 'error');
   }
 }
 
