@@ -248,8 +248,8 @@ Pulled actual organ helper return shapes for `news_causality` (`_shared/newsCaus
 | 5 | `detector` | ✅ | n/a (`source` field is domain metadata, not data-quality status) | ✅ active | 2026-05-07 |
 | 6 | `event_recency` | ✅ | n/a (4-source union normalizes to single `RecencyEvent` shape) | ✅ active | 2026-05-07 |
 | 7 | `james_flags` | ✅ | n/a (homogeneous post-2026-04-27 unification) | ✅ active | 2026-05-07 |
-| 8 | `specialist` | pending | tbd | dormant (auto-engages on producer ship) | — |
-| 9 | `analogs` | pending | tbd | dormant (auto-engages on producer ship) | — |
+| 8 | `analogs` | ✅ | n/a (first organ to use `pending_analysis` enum case — producer cron `ct-session-analog build` hasn't fired) | ✅ active | 2026-05-07 |
+| 9 | `specialist` | pending | tbd | dormant (auto-engages on producer ship) | — |
 | 10 | `specialist_recall` | pending | tbd | dormant (auto-engages on producer ship) | — |
 
 **ct_brain_telemetry.organ_status column shipped 2026-05-08** (migration `20260507000000_brain_telemetry_organ_status.sql`). claudeReadSurface.ts populates `organ_status` from `result.organMetadata?.status` on every brain read.

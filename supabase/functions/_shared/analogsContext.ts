@@ -38,6 +38,8 @@ import type {
   HelperOpts,
   HelperResult,
   HelperDescription,
+  OrganMetadata,
+  OrganStatus,
 } from './contextHelper.ts';
 
 const HELPER_NAME = 'analogs';
@@ -115,28 +117,40 @@ async function fetchCurrentEmbedding(
 // Empty-result helper (defensive)
 // ---------------------------------------------------------------------------
 
+function buildOrganMetadata(asOf: string, status: OrganStatus): OrganMetadata {
+  return {
+    as_of: asOf,
+    source: '_shared/analogsContext.ts / search_ct_session_analogs(ct_session_embeddings)',
+    window: 'today\'s session embedding vs full corpus, top-N by cosine similarity',
+    status,
+  };
+}
+
 function emptyResult(
   startedAt: number,
   warning?: string,
   hasCurrentEmbedding = false,
+  status: OrganStatus = 'no_signal_detected',
 ): HelperResult<AnalogsResult> {
+  const asOf = new Date().toISOString();
   return {
     data: {
       analogs: [],
       aggregate: null,
-      generated_at: new Date().toISOString(),
+      generated_at: asOf,
       has_current_embedding: hasCurrentEmbedding,
     },
     meta: {
       helperName: HELPER_NAME,
       helperVersion: HELPER_VERSION,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: asOf,
       rowCount: 0,
       cacheHit: false,
       latencyMs: Date.now() - startedAt,
       truncated: false,
       ...(warning ? { warning } : {}),
     },
+    organMetadata: buildOrganMetadata(asOf, status),
   };
 }
 
@@ -160,9 +174,9 @@ export async function getAnalogsContext(
     // 1. Find today's persisted embedding.
     const current = await fetchCurrentEmbedding(supabase, sessionDate);
     if (!current) {
-      // No build for today yet — common when ct-session-analog cron hasn't
-      // fired or the table is freshly created. Defensive empty + warning.
-      return emptyResult(startedAt, 'no_current_embedding', false);
+      // Producer cron ct-session-analog hasn't fired for today — pending,
+      // not absent. Maps to OrganStatus.pending_analysis.
+      return emptyResult(startedAt, 'no_current_embedding', false, 'pending_analysis');
     }
 
     // 2. Vector search against past sessions, excluding today.
@@ -174,10 +188,10 @@ export async function getAnalogsContext(
       exclude_date: sessionDate,
     });
     if (error) {
-      return emptyResult(startedAt, `rpc_error:${error.message}`, true);
+      return emptyResult(startedAt, `rpc_error:${error.message}`, true, 'error');
     }
     if (!Array.isArray(data) || data.length === 0) {
-      return emptyResult(startedAt, 'no_matches', true);
+      return emptyResult(startedAt, 'no_matches', true, 'no_signal_detected');
     }
 
     // 3. Shape + aggregate.
@@ -205,26 +219,28 @@ export async function getAnalogsContext(
         }
       : null;
 
+    const asOf = new Date().toISOString();
     return {
       data: {
         analogs,
         aggregate,
-        generated_at: new Date().toISOString(),
+        generated_at: asOf,
         has_current_embedding: true,
       },
       meta: {
         helperName: HELPER_NAME,
         helperVersion: HELPER_VERSION,
-        fetchedAt: new Date().toISOString(),
+        fetchedAt: asOf,
         rowCount: analogs.length,
         cacheHit: false,
         latencyMs: Date.now() - startedAt,
         truncated: requestedCap > MAX_CAP,
       },
+      organMetadata: buildOrganMetadata(asOf, 'populated'),
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return emptyResult(startedAt, `fetch_error:${msg}`);
+    return emptyResult(startedAt, `fetch_error:${msg}`, false, 'error');
   }
 }
 
