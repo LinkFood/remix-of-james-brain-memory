@@ -245,8 +245,8 @@ Pulled actual organ helper return shapes for `news_causality` (`_shared/newsCaus
 | 2 | `flow_heatmap` | ✅ | n/a (homogeneous-source) | ✅ active | 2026-05-08 |
 | 3 | `pulse` | ✅ | n/a (regime field already encodes per-ticker state) | ✅ active | 2026-05-09 |
 | 4 | `tape` | ✅ | n/a (homogeneous-source — `ct_tape_commentary` single shape) | ✅ active | 2026-05-10 |
-| 5 | `specialist` | pending | tbd | dormant (auto-engages on producer ship) | — |
-| 6 | `detector` | pending | tbd | dormant (auto-engages on producer ship) | — |
+| 5 | `detector` | ✅ | n/a (`source` field is domain metadata, not data-quality status) | ✅ active | 2026-05-11 |
+| 6 | `specialist` | pending | tbd | dormant (auto-engages on producer ship) | — |
 | 7 | `james_flags` | pending | n/a | dormant (auto-engages on producer ship) | — |
 | 8 | `event_recency` | pending | tbd | dormant (auto-engages on producer ship) | — |
 | 9 | `analogs` | pending | tbd | dormant (auto-engages on producer ship) | — |

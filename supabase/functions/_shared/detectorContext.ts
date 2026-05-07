@@ -15,6 +15,8 @@ import type {
   HelperFetchContext,
   HelperOpts,
   HelperResult,
+  OrganMetadata,
+  OrganStatus,
 } from './contextHelper.ts';
 
 export type FlagDirection = 'bullish' | 'bearish' | 'neutral';
@@ -75,23 +77,43 @@ interface FlagRow {
     | null;
 }
 
-function emptyResult(reason: string, latencyMs: number, lookback: number): HelperResult<DetectorContextResult> {
+function buildOrganMetadata(
+  asOf: string,
+  lookbackHours: number,
+  status: OrganStatus,
+): OrganMetadata {
+  return {
+    as_of: asOf,
+    source: '_shared/detectorContext.ts / ct_flags + ct_detectors',
+    window: `trailing ${lookbackHours}h, top-N by recency`,
+    status,
+  };
+}
+
+function emptyResult(
+  reason: string,
+  latencyMs: number,
+  lookback: number,
+  status: OrganStatus = 'no_signal_detected',
+): HelperResult<DetectorContextResult> {
+  const asOf = new Date().toISOString();
   return {
     data: {
       flags: [],
       lookback_hours: lookback,
-      generated_at: new Date().toISOString(),
+      generated_at: asOf,
     },
     meta: {
       helperName: HELPER_NAME,
       helperVersion: HELPER_VERSION,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: asOf,
       rowCount: 0,
       cacheHit: false,
       latencyMs,
       truncated: false,
       warning: reason,
     },
+    organMetadata: buildOrganMetadata(asOf, lookback, status),
   };
 }
 
@@ -155,7 +177,7 @@ async function fetchDetectorContext(
       .order('created_at', { ascending: false })
       .limit(fetchLimit);
 
-    if (error) return emptyResult(`db_error:${error.message}`, Date.now() - start, lookbackHours);
+    if (error) return emptyResult(`db_error:${error.message}`, Date.now() - start, lookbackHours, 'error');
     if (!Array.isArray(data) || data.length === 0) {
       return emptyResult('no_rows', Date.now() - start, lookbackHours);
     }
@@ -204,26 +226,28 @@ async function fetchDetectorContext(
       }));
     }
 
+    const asOf = new Date().toISOString();
     return {
       data: {
         flags,
         per_ticker,
         lookback_hours: lookbackHours,
-        generated_at: new Date().toISOString(),
+        generated_at: asOf,
       },
       meta: {
         helperName: HELPER_NAME,
         helperVersion: HELPER_VERSION,
-        fetchedAt: new Date().toISOString(),
+        fetchedAt: asOf,
         rowCount: flags.length,
         cacheHit: false,
         latencyMs: Date.now() - start,
         truncated: truncatedTop,
       },
+      organMetadata: buildOrganMetadata(asOf, lookbackHours, 'populated'),
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return emptyResult(`exception:${msg}`, Date.now() - start, lookbackHours);
+    return emptyResult(`exception:${msg}`, Date.now() - start, lookbackHours, 'error');
   }
 }
 
