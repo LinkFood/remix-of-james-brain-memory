@@ -1,7 +1,8 @@
 {
   "tasks": {
     "start": "deno run --allow-all server.ts",
-    "smoke": "deno run --allow-all smoke-test.ts"
+    "smoke": "deno run --allow-all smoke-test.ts",
+    "verify": "deno run --allow-all tests/run_verification.ts"
   },
   "lock": false,
   "fmt": {
