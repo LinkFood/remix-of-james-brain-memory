@@ -31,6 +31,8 @@ import type {
   HelperFetchContext,
   HelperOpts,
   HelperResult,
+  OrganMetadata,
+  OrganStatus,
 } from './contextHelper.ts';
 
 // ---------------------------------------------------------------------------
@@ -104,10 +106,24 @@ function toEntry(row: CtFlagsRow): JamesFlagEntry {
   };
 }
 
+function buildOrganMetadata(
+  asOf: string,
+  lookbackHours: number,
+  status: OrganStatus,
+): OrganMetadata {
+  return {
+    as_of: asOf,
+    source: "_shared/jamesFlagsContext.ts / ct_flags WHERE source='james_star'",
+    window: `trailing ${lookbackHours}h, per-ticker capped`,
+    status,
+  };
+}
+
 function emptyResult(
   startedAt: number,
   lookbackHours: number,
   warning?: string,
+  status: OrganStatus = 'no_signal_detected',
 ): HelperResult<JamesFlagsResult> {
   const nowIso = new Date().toISOString();
   return {
@@ -126,6 +142,7 @@ function emptyResult(
       truncated: false,
       ...(warning ? { warning } : {}),
     },
+    organMetadata: buildOrganMetadata(nowIso, lookbackHours, status),
   };
 }
 
@@ -180,7 +197,7 @@ export async function getJamesFlagsContext(
       // is comfortably under PostgREST's 1000-row response cap.
       .limit(targetTickers.length * cap);
 
-    if (error) return emptyResult(startedAt, lookbackHours, `query_error:${error.message}`);
+    if (error) return emptyResult(startedAt, lookbackHours, `query_error:${error.message}`, 'error');
     if (!Array.isArray(data) || data.length === 0) {
       return emptyResult(startedAt, lookbackHours, 'no_rows');
     }
@@ -218,10 +235,11 @@ export async function getJamesFlagsContext(
         latencyMs: Date.now() - startedAt,
         truncated,
       },
+      organMetadata: buildOrganMetadata(nowIso, lookbackHours, total > 0 ? 'populated' : 'no_signal_detected'),
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown_error';
-    return emptyResult(startedAt, lookbackHours, `exception:${msg}`);
+    return emptyResult(startedAt, lookbackHours, `exception:${msg}`, 'error');
   }
 }
 

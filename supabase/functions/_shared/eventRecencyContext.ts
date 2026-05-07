@@ -46,6 +46,8 @@ import type {
   HelperFetchContext,
   HelperOpts,
   HelperResult,
+  OrganMetadata,
+  OrganStatus,
 } from './contextHelper.ts';
 import type { EventRecencyResult } from './eventRecencyTypes.ts';
 import { addCalendarDays, formatNyDate } from './eventRecencyDates.ts';
@@ -72,24 +74,44 @@ const UPCOMING_DAYS = 14;
 // Internal
 // ---------------------------------------------------------------------------
 
-function emptyResult(reason: string, latencyMs: number, sessionDate: string): HelperResult<EventRecencyResult> {
+function buildOrganMetadata(
+  asOf: string,
+  sessionDate: string,
+  status: OrganStatus,
+): OrganMetadata {
+  return {
+    as_of: asOf,
+    source: '_shared/eventRecencyContext.ts / ct_events + ct_earnings_moves + ct_breaking_news + ct_central_bank_rates',
+    window: `session_date=${sessionDate}, lookback 72h + happening_today + upcoming ${UPCOMING_DAYS}d`,
+    status,
+  };
+}
+
+function emptyResult(
+  reason: string,
+  latencyMs: number,
+  sessionDate: string,
+  status: OrganStatus = 'no_signal_detected',
+): HelperResult<EventRecencyResult> {
+  const asOf = new Date().toISOString();
   return {
     data: {
       session_date: sessionDate,
       per_ticker: [],
       market_wide: { just_happened: [], happening_today: [], upcoming: [] },
-      generated_at: new Date().toISOString(),
+      generated_at: asOf,
     },
     meta: {
       helperName: HELPER_NAME,
       helperVersion: HELPER_VERSION,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: asOf,
       rowCount: 0,
       cacheHit: false,
       latencyMs,
       truncated: false,
       warning: reason,
     },
+    organMetadata: buildOrganMetadata(asOf, sessionDate, status),
   };
 }
 
@@ -104,7 +126,7 @@ async function fetchEventRecency(
   const start = Date.now();
   const sessionDate = ctx.sessionDate;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(sessionDate)) {
-    return emptyResult('invalid_session_date', Date.now() - start, sessionDate || '');
+    return emptyResult('invalid_session_date', Date.now() - start, sessionDate || '', 'error');
   }
 
   const perTickerCap = Math.max(1, opts.cap ?? DEFAULT_CAP);
@@ -146,28 +168,35 @@ async function fetchEventRecency(
       ) +
       mwJh.capped.length + mwHt.capped.length + mwUp.capped.length;
 
+    const asOf = new Date().toISOString();
     return {
       data: {
         session_date: sessionDate,
         per_ticker,
         market_wide: { just_happened: mwJh.capped, happening_today: mwHt.capped, upcoming: mwUp.capped },
-        generated_at: new Date().toISOString(),
+        generated_at: asOf,
       },
       meta: {
         helperName: HELPER_NAME,
         helperVersion: HELPER_VERSION,
-        fetchedAt: new Date().toISOString(),
+        fetchedAt: asOf,
         rowCount: totalRows,
         cacheHit: false,
         latencyMs: Date.now() - start,
         truncated,
       },
+      organMetadata: buildOrganMetadata(
+        asOf,
+        sessionDate,
+        totalRows > 0 ? 'populated' : 'no_signal_detected',
+      ),
     };
   } catch (e) {
     return emptyResult(
       `exception:${e instanceof Error ? e.message : String(e)}`,
       Date.now() - start,
       sessionDate,
+      'error',
     );
   }
 }
