@@ -24,6 +24,10 @@ import { getCoTraderContext } from '../tools/get_co_trader_context.ts';
 import { getMorningBrief } from '../tools/get_morning_brief.ts';
 import { getJacBrief } from '../tools/get_jac_brief.ts';
 import { getBrainPrinciples } from '../tools/get_brain_principles.ts';
+import { getObservedPatterns } from '../tools/get_observed_patterns.ts';
+import { getEodSummary } from '../tools/get_eod_summary.ts';
+import { getWardenState } from '../tools/get_warden_state.ts';
+import { getRecentJamesFlags } from '../tools/get_recent_james_flags.ts';
 import { todayInET } from '../../../supabase/functions/_shared/clock.ts';
 
 type Status = 'PASS' | 'FAIL' | 'DRIFT';
@@ -390,6 +394,211 @@ try {
   }
 } catch (e) {
   record({ tool: 'get_brain_principles', name: 'source_pattern_null_per_path_c', category: 5, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// ===========================================================================
+// Tool 5 — get_observed_patterns
+// ===========================================================================
+console.log('\n[Tool: get_observed_patterns]');
+
+// T5.1 — callability with default filters
+try {
+  const r = await getObservedPatterns({});
+  record({
+    tool: 'get_observed_patterns', name: 'callable_default_filter', category: 1,
+    status: Array.isArray(r.patterns) ? 'PASS' : 'FAIL',
+    evidence: `rows=${r.patterns.length} latency=${r.meta.latencyMs}ms warnings=${r.meta.warnings.length}`,
+  });
+} catch (e) {
+  record({ tool: 'get_observed_patterns', name: 'callable_default_filter', category: 1, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// T5.2 — data fidelity: tool result first id matches direct DB query first id
+try {
+  const r = await getObservedPatterns({ limit: 5 });
+  const { data } = await supabase
+    .from('ct_observed_patterns')
+    .select('id').in('status', ['validated', 'observed'])
+    .order('last_validated_at', { ascending: false, nullsFirst: false })
+    .order('captured_at', { ascending: false }).limit(1);
+  const dbFirstId = data?.[0]?.id ?? null;
+  const toolFirstId = r.patterns[0]?.id ?? null;
+  const match = (toolFirstId === dbFirstId) || (toolFirstId === null && dbFirstId === null);
+  record({
+    tool: 'get_observed_patterns', name: 'data_fidelity_first_row', category: 3,
+    status: match ? 'PASS' : 'DRIFT',
+    evidence: `tool_id=${toolFirstId} db_id=${dbFirstId}`,
+  });
+} catch (e) {
+  record({ tool: 'get_observed_patterns', name: 'data_fidelity_first_row', category: 3, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// T5.3 — default filter excludes deprecated
+try {
+  const r = await getObservedPatterns({});
+  const noDeprecated = r.patterns.every((p) => p.status !== 'deprecated');
+  record({
+    tool: 'get_observed_patterns', name: 'default_filter_excludes_deprecated', category: 4,
+    status: noDeprecated ? 'PASS' : 'FAIL',
+    evidence: `applied_status=${r.meta.appliedFilters.status.join(',')} deprecated_in_result=${r.patterns.filter((p) => p.status === 'deprecated').length}`,
+  });
+} catch (e) {
+  record({ tool: 'get_observed_patterns', name: 'default_filter_excludes_deprecated', category: 4, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// ===========================================================================
+// Tool 6 — get_eod_summary
+// ===========================================================================
+console.log('\n[Tool: get_eod_summary]');
+
+// T6.1 — callability with default (most-recent-available) date
+try {
+  const r = await getEodSummary({});
+  const ok = typeof r.meta.requestedSessionDate === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(r.meta.requestedSessionDate);
+  record({
+    tool: 'get_eod_summary', name: 'callable_default_session', category: 1,
+    status: ok ? 'PASS' : 'FAIL',
+    evidence: `session=${r.meta.requestedSessionDate} summary_found=${r.meta.summaryRowFound} report_found=${r.meta.reportRowFound}`,
+  });
+} catch (e) {
+  record({ tool: 'get_eod_summary', name: 'callable_default_session', category: 1, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// T6.2 — 1:1 join: when summary present, no >1 row from either table for that session
+try {
+  const r = await getEodSummary({});
+  if (r.meta.summaryRowFound) {
+    const session = r.meta.requestedSessionDate;
+    const [{ count: sCount }, { count: rCount }] = await Promise.all([
+      supabase.from('ct_eod_summaries').select('id', { count: 'exact', head: true }).eq('session_date', session),
+      supabase.from('ct_eod_reports').select('id', { count: 'exact', head: true }).eq('session_date', session),
+    ]);
+    const oneToOne = (sCount ?? 0) <= 1 && (rCount ?? 0) <= 1;
+    record({
+      tool: 'get_eod_summary', name: 'one_to_one_join', category: 3,
+      status: oneToOne ? 'PASS' : 'DRIFT',
+      evidence: `session=${session} summary_rows=${sCount} report_rows=${rCount}`,
+    });
+  } else {
+    record({
+      tool: 'get_eod_summary', name: 'one_to_one_join', category: 3,
+      status: 'PASS', evidence: 'no summary today; vacuous PASS',
+    });
+  }
+} catch (e) {
+  record({ tool: 'get_eod_summary', name: 'one_to_one_join', category: 3, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// T6.3 — absent date: payload=null + warning, no fabrication
+try {
+  const r = await getEodSummary({ date: '2025-01-01' });
+  const isStructuredEmpty = r.payload === null && r.meta.summaryRowFound === false && r.meta.reportRowFound === false;
+  record({
+    tool: 'get_eod_summary', name: 'absent_date_structured_empty', category: 5,
+    status: isStructuredEmpty ? 'PASS' : 'FAIL',
+    evidence: `payload=${r.payload === null ? 'null' : 'present'} summary_found=${r.meta.summaryRowFound} report_found=${r.meta.reportRowFound}`,
+  });
+} catch (e) {
+  record({ tool: 'get_eod_summary', name: 'absent_date_structured_empty', category: 5, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// ===========================================================================
+// Tool 7 — get_warden_state
+// ===========================================================================
+console.log('\n[Tool: get_warden_state]');
+
+// T7.1 — RPC callability
+try {
+  const r = await getWardenState({});
+  record({
+    tool: 'get_warden_state', name: 'rpc_callable', category: 1,
+    status: r.warden !== null ? 'PASS' : 'FAIL',
+    evidence: `latency=${r.meta.latencyMs}ms failure_count=${r.meta.failureCount}`,
+  });
+} catch (e) {
+  record({ tool: 'get_warden_state', name: 'rpc_callable', category: 1, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// T7.2 — schema compliance: totals + by_category + failures all present
+try {
+  const r = await getWardenState({});
+  const w = r.warden as Record<string, unknown> | null;
+  const hasAll = w !== null &&
+    typeof w.totals === 'object' &&
+    Array.isArray(w.by_category) &&
+    Array.isArray(w.failures);
+  record({
+    tool: 'get_warden_state', name: 'schema_compliance_three_keys', category: 2,
+    status: hasAll ? 'PASS' : 'FAIL',
+    evidence: w ? `keys=${Object.keys(w).join(',')}` : 'warden=null',
+  });
+} catch (e) {
+  record({ tool: 'get_warden_state', name: 'schema_compliance_three_keys', category: 2, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// T7.3 — data fidelity: totals.total_enabled equals direct count of enabled invariants
+try {
+  const r = await getWardenState({});
+  const w = r.warden as { totals?: { total_enabled?: number } } | null;
+  const wardenCount = w?.totals?.total_enabled ?? null;
+  const { count: dbCount } = await supabase
+    .from('ct_invariants').select('name', { count: 'exact', head: true })
+    .eq('enabled', true);
+  const match = wardenCount !== null && wardenCount === dbCount;
+  record({
+    tool: 'get_warden_state', name: 'data_fidelity_total_enabled', category: 3,
+    status: match ? 'PASS' : 'DRIFT',
+    evidence: `warden=${wardenCount} db=${dbCount}`,
+  });
+} catch (e) {
+  record({ tool: 'get_warden_state', name: 'data_fidelity_total_enabled', category: 3, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// ===========================================================================
+// Tool 8 — get_recent_james_flags
+// ===========================================================================
+console.log('\n[Tool: get_recent_james_flags]');
+
+// T8.1 — callability with default 24h window (empty result is correct — latest james_star is 4/24)
+try {
+  const r = await getRecentJamesFlags({});
+  record({
+    tool: 'get_recent_james_flags', name: 'callable_default_window', category: 1,
+    status: Array.isArray(r.flags) ? 'PASS' : 'FAIL',
+    evidence: `rows=${r.flags.length} latency=${r.meta.latencyMs}ms (empty acceptable — latest 4/24)`,
+  });
+} catch (e) {
+  record({ tool: 'get_recent_james_flags', name: 'callable_default_window', category: 1, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// T8.2 — source filter applied: every returned row has source='james_star'
+try {
+  const r = await getRecentJamesFlags({ hours: 168 });
+  const allMatch = r.flags.every((f) => f.source === 'james_star');
+  record({
+    tool: 'get_recent_james_flags', name: 'source_filter_applied', category: 4,
+    status: allMatch ? 'PASS' : 'FAIL',
+    evidence: `all_rows_james_star=${allMatch} sample=${r.flags.length}`,
+  });
+} catch (e) {
+  record({ tool: 'get_recent_james_flags', name: 'source_filter_applied', category: 4, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
+}
+
+// T8.3 — universe-lock: returned instruments are all in 10-ticker universe
+try {
+  const r = await getRecentJamesFlags({ hours: 168 });
+  const UNIVERSE = ['NVDA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'QQQ', 'SPY', 'IWM'];
+  const allInUniverse = r.flags.every((f) => UNIVERSE.includes(f.instrument));
+  record({
+    tool: 'get_recent_james_flags', name: 'universe_lock_respected', category: 4,
+    status: allInUniverse ? 'PASS' : 'DRIFT',
+    evidence: r.flags.length === 0
+      ? 'no_rows_to_check (vacuous PASS)'
+      : `instruments=${r.flags.map((f) => f.instrument).join(',')}`,
+  });
+} catch (e) {
+  record({ tool: 'get_recent_james_flags', name: 'universe_lock_respected', category: 4, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
 }
 
 // ===========================================================================

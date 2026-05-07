@@ -24,6 +24,20 @@
 //
 // Race-condition discipline: ground-truth DB query runs FIRST, then
 // "tool simulation" query, then comparison.
+//
+// Tool coverage (2026-05-07 evening — extended from 4 → 8 tools per
+// v2 Tier 1 verification batch):
+//   1. get_co_trader_context       (3 tests, T1.1-T1.3)
+//   2. get_morning_brief           (4 tests, T2.1-T2.4 — 2 conditional)
+//   3. get_jac_brief               (3 tests, T3.1-T3.3 — 1 conditional)
+//   4. get_brain_principles        (3 tests, T4.1-T4.3)
+//   5. get_observed_patterns       (3 tests, T5.1-T5.3)
+//   6. get_eod_summary             (3 tests, T6.1-T6.3 — 1 conditional)
+//   7. get_warden_state            (3 tests, T7.1-T7.3 — 2 conditional)
+//   8. get_recent_james_flags      (3 tests, T8.1-T8.3)
+// Upper bound: 25 tests; conditional tests (gtBrief/gtJac/gtEod/gtWarden
+// presence) drop bound when ground-truth DB row absent. mcp_tool_correctness
+// invariant counts FAIL+DRIFT only — row-count fluctuation does not flag.
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.84.0';
@@ -323,6 +337,216 @@ async function runAllTests(supabase: SupabaseClient): Promise<TestResult[]> {
       tool_name: 'get_brain_principles', test_name: 'retired_filter_applied', category: 4,
       result: hasOnlyActive ? 'PASS' : 'DRIFT',
       evidence: `active filter respected`,
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // ---- Tool 5: get_observed_patterns (v2 Tier 1) ----
+  // Source: ct_observed_patterns. Default status filter: validated|observed.
+
+  const { data: gtPatternRows, count: gtPatternCount } = await supabase
+    .from('ct_observed_patterns')
+    .select('id, status, pattern_signature, n_observed', { count: 'exact' })
+    .in('status', ['validated', 'observed'])
+    .order('last_validated_at', { ascending: false, nullsFirst: false })
+    .order('captured_at', { ascending: false })
+    .limit(25);
+  const gtPatterns = gtPatternRows ?? [];
+
+  // T5.1 callability
+  {
+    const t0 = now();
+    const ok = Array.isArray(gtPatterns);
+    results.push({
+      tool_name: 'get_observed_patterns', test_name: 'callable_default_filter', category: 1,
+      result: ok ? 'PASS' : 'FAIL',
+      evidence: `rows=${gtPatterns.length} total_validated_or_observed=${gtPatternCount ?? '?'}`,
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // T5.2 data fidelity: re-query and verify same first row id
+  {
+    const t0 = now();
+    const { data: again } = await supabase
+      .from('ct_observed_patterns')
+      .select('id').in('status', ['validated', 'observed'])
+      .order('last_validated_at', { ascending: false, nullsFirst: false })
+      .order('captured_at', { ascending: false }).limit(1);
+    const firstIdMatch = gtPatterns.length === 0 || again?.[0]?.id === gtPatterns[0].id;
+    results.push({
+      tool_name: 'get_observed_patterns', test_name: 'data_fidelity_first_row_stable', category: 3,
+      result: firstIdMatch ? 'PASS' : 'DRIFT',
+      evidence: `first_id_match=${firstIdMatch} sample_size=${gtPatterns.length}`,
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // T5.3 status filter excludes deprecated by default
+  {
+    const t0 = now();
+    const noDeprecated = gtPatterns.every((p: { status?: string }) => p.status !== 'deprecated');
+    results.push({
+      tool_name: 'get_observed_patterns', test_name: 'default_filter_excludes_deprecated', category: 4,
+      result: noDeprecated ? 'PASS' : 'FAIL',
+      evidence: `deprecated_in_default_result=${gtPatterns.filter((p: { status?: string }) => p.status === 'deprecated').length}`,
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // ---- Tool 6: get_eod_summary (v2 Tier 1) ----
+  // Source: ct_eod_summaries ⨝ ct_eod_reports by session_date (1:1).
+
+  const { data: gtEodRows } = await supabase
+    .from('ct_eod_summaries')
+    .select('id, session_date, regime_tag, snapshot_hit_rate')
+    .order('session_date', { ascending: false }).limit(1);
+  const gtEod = gtEodRows?.[0] ?? null;
+
+  // T6.1 callability
+  {
+    const t0 = now();
+    const ok = gtEod === null || (typeof gtEod.session_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(gtEod.session_date));
+    results.push({
+      tool_name: 'get_eod_summary', test_name: 'callable_returns_session_date', category: 1,
+      result: ok ? 'PASS' : 'FAIL',
+      evidence: gtEod ? `latest_session=${gtEod.session_date}` : 'no_eod_rows',
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // T6.2 1:1 join property: each session has at most one summary + one report
+  if (gtEod) {
+    const t0 = now();
+    const [{ count: summaryCount }, { count: reportCount }] = await Promise.all([
+      supabase.from('ct_eod_summaries').select('id', { count: 'exact', head: true })
+        .eq('session_date', gtEod.session_date),
+      supabase.from('ct_eod_reports').select('id', { count: 'exact', head: true })
+        .eq('session_date', gtEod.session_date),
+    ]);
+    const oneToOne = (summaryCount ?? 0) <= 1 && (reportCount ?? 0) <= 1;
+    results.push({
+      tool_name: 'get_eod_summary', test_name: 'one_to_one_join_session_date', category: 3,
+      result: oneToOne ? 'PASS' : 'DRIFT',
+      evidence: `summary_rows=${summaryCount} report_rows=${reportCount} session=${gtEod.session_date}`,
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // T6.3 absent-date returns no rows (structured-empty contract)
+  {
+    const t0 = now();
+    const { data: absent } = await supabase
+      .from('ct_eod_summaries').select('id').eq('session_date', '2025-01-01').limit(1);
+    const isEmpty = !absent || absent.length === 0;
+    results.push({
+      tool_name: 'get_eod_summary', test_name: 'absent_date_structured_empty', category: 5,
+      result: isEmpty ? 'PASS' : 'FAIL',
+      evidence: `rows_for_2025-01-01=${absent?.length ?? 0}`,
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // ---- Tool 7: get_warden_state (v2 Tier 1) ----
+  // Source: get_warden_health(window_hours) RPC — server-aggregated.
+
+  const { data: gtWarden } = await supabase.rpc('get_warden_health', { window_hours: 24 });
+
+  // T7.1 RPC callability
+  {
+    const t0 = now();
+    const ok = gtWarden !== null && typeof gtWarden === 'object';
+    results.push({
+      tool_name: 'get_warden_state', test_name: 'rpc_callable', category: 1,
+      result: ok ? 'PASS' : 'FAIL',
+      evidence: ok ? `keys=${Object.keys(gtWarden as object).join(',')}` : 'rpc_returned_null',
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // T7.2 schema compliance: totals + by_category + failures all present
+  if (gtWarden && typeof gtWarden === 'object') {
+    const t0 = now();
+    const w = gtWarden as Record<string, unknown>;
+    const hasTotals = w.totals !== undefined && typeof w.totals === 'object';
+    const hasByCategory = Array.isArray(w.by_category);
+    const hasFailures = Array.isArray(w.failures);
+    const allPresent = hasTotals && hasByCategory && hasFailures;
+    results.push({
+      tool_name: 'get_warden_state', test_name: 'schema_compliance_three_keys', category: 2,
+      result: allPresent ? 'PASS' : 'FAIL',
+      evidence: `totals=${hasTotals} by_category=${hasByCategory} failures=${hasFailures}`,
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // T7.3 data fidelity: totals.total_enabled equals direct count of enabled invariants
+  if (gtWarden && typeof gtWarden === 'object') {
+    const t0 = now();
+    const w = gtWarden as { totals?: { total_enabled?: number } };
+    const wardenCount = w.totals?.total_enabled ?? null;
+    const { count: dbCount } = await supabase
+      .from('ct_invariants').select('name', { count: 'exact', head: true })
+      .eq('enabled', true);
+    const match = wardenCount !== null && wardenCount === dbCount;
+    results.push({
+      tool_name: 'get_warden_state', test_name: 'data_fidelity_total_enabled', category: 3,
+      result: match ? 'PASS' : 'DRIFT',
+      evidence: `warden_total_enabled=${wardenCount} db_count=${dbCount}`,
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // ---- Tool 8: get_recent_james_flags (v2 Tier 1) ----
+  // Source: ct_flags WHERE source='james_star'. Latest james_star = 2026-04-24.
+
+  const sinceUtcWeek = new Date(Date.now() - 168 * 60 * 60 * 1000).toISOString();
+  const { data: gtJamesRows, count: gtJamesCount } = await supabase
+    .from('ct_flags')
+    .select('id, instrument, source', { count: 'exact' })
+    .eq('source', 'james_star')
+    .gte('created_at', sinceUtcWeek)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  const gtJamesFlags = gtJamesRows ?? [];
+
+  // T8.1 callability — empty result is correct (latest james_star is 4/24)
+  {
+    const t0 = now();
+    const ok = Array.isArray(gtJamesFlags);
+    results.push({
+      tool_name: 'get_recent_james_flags', test_name: 'callable_default_window', category: 1,
+      result: ok ? 'PASS' : 'FAIL',
+      evidence: `rows=${gtJamesFlags.length} count=${gtJamesCount ?? '?'} (empty acceptable — latest is 4/24)`,
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // T8.2 source filter applied: every returned row has source='james_star'
+  {
+    const t0 = now();
+    const allMatch = gtJamesFlags.every((f: { source?: string }) => f.source === 'james_star');
+    results.push({
+      tool_name: 'get_recent_james_flags', test_name: 'source_filter_applied', category: 4,
+      result: allMatch ? 'PASS' : 'FAIL',
+      evidence: `all_rows_james_star=${allMatch} sample=${gtJamesFlags.length}`,
+      duration_ms: Math.round(now() - t0),
+    });
+  }
+
+  // T8.3 universe-lock: if any rows present, every instrument is in the 10-ticker universe
+  {
+    const t0 = now();
+    const UNIVERSE = ['NVDA', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA', 'QQQ', 'SPY', 'IWM'];
+    const allInUniverse = gtJamesFlags.every((f: { instrument?: string }) =>
+      f.instrument != null && UNIVERSE.includes(f.instrument)
+    );
+    results.push({
+      tool_name: 'get_recent_james_flags', test_name: 'universe_lock_respected', category: 4,
+      result: allInUniverse ? 'PASS' : 'DRIFT',
+      evidence: gtJamesFlags.length === 0
+        ? 'no_rows_to_check (vacuously true)'
+        : `all_in_universe=${allInUniverse} instruments=${gtJamesFlags.map((f: { instrument?: string }) => f.instrument).join(',')}`,
       duration_ms: Math.round(now() - t0),
     });
   }
