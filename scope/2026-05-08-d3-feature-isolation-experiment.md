@@ -42,87 +42,87 @@ Three pairs chosen for diagnostic asymmetry. Each has a prediction under each H0
 
 ## 3. Candidate features
 
-Enumerated from `_shared/specialistRunner.ts:1243-1282` (the parallel input bundle) plus `tickerQuantCard.ts` and `flowHeatmapContext.ts`. Five-to-eight candidates with rationale, ordered by hypothesized explanatory power.
+Enumerated from `_shared/specialistRunner.ts:1243-1282` (parallel input bundle) plus `tickerQuantCard.ts` and `flowHeatmapContext.ts`. Eight candidates with one-line rationale, ordered by hypothesized explanatory power.
 
-**F1 — `flow_pulse.is_unusual` (boolean).** From `loadFlowPulse`, RPC `ct_flow_pulse`, 6h window. Trips when call:put ratio is 2x or 0.5x the 30-day baseline. **Rationale:** prime H0-B suspect — it is a binary regime flag with a fixed effect on the specialist's prompt ("⚠ UNUSUAL direction skew" string). If conviction jumps a fixed magnitude when this trips, this is the single dominant feature.
+**F1 — `flow_pulse.is_unusual` (boolean).** From `loadFlowPulse` / `ct_flow_pulse`, 6h. Trips when call:put ratio is 2x or 0.5x 30d baseline. *Prime H0-B suspect:* binary flag with a fixed prompt-level effect ("⚠ UNUSUAL direction skew").
 
-**F2 — `flow_heatmap.stacks[].value` for the front week (continuous, signed).** From `flowHeatmapContext`, 168h aggressive-directional decay. **Rationale:** continuous feature; if conviction shows a clean linear relationship to front-week stack magnitude, that argues against H0-B (no flip) and toward H0-C with this as a primary input.
+**F2 — `flow_heatmap.stacks[].value` front-week (continuous, signed).** From `flowHeatmapContext`, 168h aggressive-directional decay. *Continuous; clean linear relationship to conviction would argue against H0-B (no flip) and toward H0-C as primary input.*
 
-**F3 — `tickerContext.regime` (categorical: positive_gamma / negative_gamma / neutral).** From `ct_ticker_snapshots.regime`. **Rationale:** three-state categorical with sharp prompt-level effects; classic H0-B candidate. Negative-gamma days may systematically push conviction higher because every prompt section reads "regime: negative_gamma" and the specialist treats it as a force-multiplier.
+**F3 — `tickerContext.regime` (positive_gamma / negative_gamma / neutral).** From `ct_ticker_snapshots.regime`. *Three-state categorical with sharp prompt-level effects; classic H0-B candidate. Negative-gamma days may systematically push conviction up.*
 
-**F4 — `news_count` and `news.severity` (count + max severity).** From `newsItemsForTicker` cap=8. **Rationale:** SPY (single mode, lower) has the densest macro-wide news; NVDA (clear bimodal) has sharper per-ticker news clustering. If news *density* (continuous) explains the middle-band fill in QQQ/GOOGL/META, that's H0-C evidence.
+**F4 — `news_count` + `news.severity` (count + max severity).** From `newsItemsForTicker` cap=8. *SPY has dense macro-wide news (single mode); NVDA has sharper per-ticker clustering (bimodal). News density may explain the middle-band fill in QQQ/GOOGL/META — H0-C evidence.*
 
-**F5 — `event_recency.whatJustHappened` non-empty (boolean).** From `ctx.preamble.whatJustHappened`. **Rationale:** binary "is there a recent material event" gate. If conviction systematically clusters higher when this is non-empty, H0-B. The brief's tape-reader continuity suggests this is a strong signal-amplifier.
+**F5 — `event_recency.whatJustHappened` non-empty (boolean).** From `ctx.preamble.whatJustHappened`. *Binary "is there a recent material event" gate; conviction clustering higher when non-empty is H0-B-flavored.*
 
-**F6 — `signature_alarms.recent_count` (count, 0/1/2+).** From `loadRecentSignatureAlarms`. **Rationale:** signature-watcher alarms are the v2 detector portfolio's binary "this pattern fired" surface. Mostly zero, occasionally one. Three-bin variable that can act flip-like (0 vs ≥1) or graded (0/1/2+). NVDA bimodality is plausibly downstream of signature alarms firing or not.
+**F6 — `signature_alarms.recent_count` (0/1/2+).** From `loadRecentSignatureAlarms`. *Detector-portfolio "pattern fired" surface; can act flip-like (0 vs ≥1) or graded. NVDA bimodality plausibly downstream.*
 
-**F7 — `dte_eligibility.has_0dte_today` (boolean).** From `buildSystemContextHeader` (dteEligibility). **Rationale:** Mag7 + IBIT + AVGO have Mon/Wed/Fri 0DTE; SPY/QQQ/IWM are daily; non-Mag7 single-names are weekly. Day-of-week interaction makes this a per-ticker feature with day-conditional distribution — classic H0-C generator.
+**F7 — `dte_eligibility.has_0dte_today` (boolean).** From `buildSystemContextHeader` (dteEligibility). *Mag7+IBIT+AVGO MWF; SPY/QQQ/IWM daily; non-Mag7 weekly. Day-of-week interaction → per-ticker conditional distribution; classic H0-C generator.*
 
-**F8 — `specialist_recall.last_flag_outcome` (categorical: WIN/LOSS/EXPIRED_*/none).** From `specialistRecallContext`. **Rationale:** the specialist sees its own prior outcomes; a recent WIN may push conviction up via prompt anchoring. Confound check rather than primary hypothesis (the recall property is too new for 7 days of stable behavior, but worth measuring to rule out as a cause of the bimodality).
+**F8 — `specialist_recall.last_flag_outcome` (WIN/LOSS/EXPIRED_*/none).** From `specialistRecallContext`. *Confound check rather than primary hypothesis — recall property too new for stable 7-day behavior, but measure to rule out as a bimodality cause.*
 
 ---
 
 ## 4. Experimental design
 
-**Read window:** 14 days rolling, refreshed nightly. Anchored to the cross-watchlist evidence pull but extended forward to address sample-size constraints (see §6).
+**Read window:** 14 days rolling, refreshed nightly. Anchored to the 2026-05-07 evidence pull, extended forward to clear sample-size bars (see §6).
 
-**Per-wakeup feature snapshot.** For every row in `ct_specialist_reads`, reconstruct the F1–F8 feature vector by querying the same upstream tables the specialist read at wakeup time. Sources:
-- F1: `ct_flow_alerts` aggregated through `ct_flow_pulse(p_window_min=>360, p_ticker=>X)` evaluated at `updated_at - epsilon`.
-- F2: front-week `flow_heatmap` stack via the same RPC the helper uses, anchored to `updated_at`.
-- F3: `ct_ticker_snapshots.regime` row nearest to `updated_at`.
-- F4: `news_causality` row count + max severity in the 6h window prior to `updated_at`.
-- F5: `ct_events` row presence in the 72h window prior to `updated_at`.
-- F6: `ct_signature_alarms` count for ticker in 6h window prior.
+**Per-wakeup feature snapshot.** For every `ct_specialist_reads` row, reconstruct the F1–F8 vector from the same upstream tables the specialist read at wakeup time:
+- F1: `ct_flow_pulse(p_window_min=>360, p_ticker=>X)` at `updated_at - epsilon`.
+- F2: front-week `flow_heatmap` stack via the helper's RPC, anchored to `updated_at`.
+- F3: `ct_ticker_snapshots.regime` row nearest `updated_at`.
+- F4: `news_causality` row count + max severity in 6h prior to `updated_at`.
+- F5: `ct_events` presence in 72h prior.
+- F6: `ct_signature_alarms` count for ticker, 6h prior.
 - F7: deterministic from ticker + `updated_at::date`.
-- F8: most recent `ct_flag_grades` row prior to `updated_at` for `specialist_ticker = X`.
+- F8: most recent `ct_flag_grades` for `specialist_ticker = X` prior to `updated_at`.
 
-**Reconstructibility check:** F1, F2, F4, F5, F6 are time-bucketed and may have drifted (UW backfills, news-causality re-grading). Run a Phase A on a 24h window first to confirm reconstruction error is below 5% on a held-out validation set (10 wakeups with cached prompt snapshots).
+**Reconstructibility check.** F1, F2, F4, F5, F6 are time-bucketed and may have drifted (UW backfills, news-causality re-grading). Phase A on a 24h window first; confirm reconstruction error <5% on a held-out validation set (10 wakeups with cached prompt snapshots).
 
-**Statistical method.** Two-stage:
+**Statistical method (two-stage):**
 
-*Stage 1 — per-ticker univariate stratification.* For each ticker with N≥25 (8 of 10 tickers), split conviction by each binary/categorical feature and compare distributions. Test: Hartigan's dip test on each stratum's conviction distribution. If a stratum is unimodal where the parent is bimodal, that feature is implicated. Continuous features (F2, F4) get binned into terciles for this stage.
+*Stage 1 — per-ticker univariate stratification.* For each ticker with N≥25 (8 of 10), split conviction by each binary/categorical feature; Hartigan's dip test on each stratum. A stratum that's unimodal where the parent is bimodal implicates the feature. Continuous features (F2, F4) binned into terciles.
 
-*Stage 2 — multi-feature regression on bimodality membership.* Define a binary "mode" label per row: 1 if conviction ≥ 55, 0 if ≤ 45, drop the middle band. Per-ticker logistic regression of mode on F1–F8. Report McFadden's R² per ticker. Compare R² distributions across tickers. The variance of single-feature contributions across the 8 tickers with N≥25 is the H0-B vs H0-C discriminator.
+*Stage 2 — multi-feature regression on mode membership.* Binary mode label: 1 if conviction ≥ 55, 0 if ≤ 45, drop middle band. Per-ticker logistic regression of mode on F1–F8. Report McFadden's R² per ticker. Variance of single-feature contributions across 8 well-powered tickers is the H0-B vs H0-C discriminator.
 
-**Sample size required.** Hartigan's dip test needs N≥30 to detect mode separation at α=0.05 with reasonable power for the bimodality effect size we're seeing (visible mode separation ~15-20 conviction points). Of the 10 tickers, only SPY/TSLA/QQQ/IWM/AMZN clear that bar today; AAPL/META/GOOGL are at N=25 (marginal); MSFT/NVDA at N≤13 (insufficient). Per-stratum tests halve N at minimum; this is the binding constraint.
+**Sample size.** Hartigan's dip test needs N≥30 to detect mode separation at α=0.05 with reasonable power for the observed effect size (mode separation ~15-20 conviction points). Today: SPY/TSLA/QQQ/IWM/AMZN clear; AAPL/META/GOOGL marginal at N=25; MSFT/NVDA insufficient at N≤13. Per-stratum tests halve N — binding constraint.
 
-**To clear N≥30 per ticker:** wait ~3 trading days for AAPL/META/GOOGL/MSFT to accrete to ~35-50; NVDA needs ~10 trading days at current ~1.7 reads/day. Either accept a 2-week experiment window or accept lower power for MSFT/NVDA (and report H0-C-on-those-two as inconclusive rather than rejected).
+**Clearing N≥30:** AAPL/META/GOOGL accrete to 35-50 in ~3 trading days; NVDA needs ~10 trading days at ~1.7/day. Accept lower power for MSFT/NVDA — report H0-C-on-those-two as inconclusive rather than rejected.
 
 **Confound checks.**
-- *Vol regime:* repeat each per-ticker test conditioned on `iv_rank ∈ {low/mid/high}`. If the bimodality survives all three buckets, vol is not the explanation.
-- *Day-of-week:* MWF-vs-TTh split for Mag7; All-days for ETFs. Tests for 0DTE-availability artifacts (F7 confound).
-- *News-event clustering:* exclude wakeups within 2h of a severity≥3 news event; rerun. If bimodality vanishes, news clustering is the explanation (H0-C-flavored, but feature-attributable).
-- *Specialist-prompt drift:* `ct_specialist_prompts.updated_at` over the 14-day window. Any prompt edit during the window is a regime change; segment around the edit timestamp.
+- *Vol regime:* condition on `iv_rank ∈ {low/mid/high}`; bimodality surviving all three buckets rules out vol.
+- *Day-of-week:* MWF-vs-TTh split for Mag7; tests for F7 0DTE-availability artifacts.
+- *News-event clustering:* exclude wakeups within 2h of severity≥3 news event; rerun. Bimodality vanishing → news clustering is feature-attributable cause.
+- *Specialist-prompt drift:* `ct_specialist_prompts.updated_at` over the window. Any edit is a regime change; segment around the edit timestamp.
 
-**Output of experiment.** Per-ticker table: bimodality dip-test p-value, top 3 features by univariate stratum-effect, multi-feature logistic R², feature contribution table. Cross-ticker meta-table: which features have consistent vs heterogeneous effects.
+**Output.** Per-ticker table: dip-test p-value, top 3 features by univariate stratum-effect, multi-feature logistic R², feature-contribution table. Cross-ticker meta-table: features with consistent vs heterogeneous effects.
 
 ---
 
 ## 5. Decision tree from results
 
-**Result class 1 — single feature dominates (top-1 feature R² > 0.40 in ≥7 of 10 tickers, with the same feature ranked top-1 across them).** H0-B survives, H0-A and H0-C are rejected. → Option B opens up: fix the dominant feature so it produces continuous output rather than a flip. Threshold for the "≥7 of 10" bar is set by acknowledging two tickers (MSFT, NVDA) will be statistically weak; we need the 8 well-powered tickers to converge.
+**Class 1 — single feature dominates (top-1 R² > 0.40 in ≥7 of 10 tickers, same feature ranked top-1).** H0-B survives, A and C rejected. → **Option B opens:** fix the dominant feature so it produces continuous output rather than a flip. The 7-of-10 bar acknowledges MSFT/NVDA statistical weakness; we need the 8 well-powered tickers to converge.
 
-**Result class 2 — multiple correlated features with R² spread across 3+ features each contributing 10–20%, with feature ranking varying by ticker.** H0-C survives, H0-A and H0-B are rejected. → Option C opens up: the structural fix is feature stratification (per-ticker conviction is interpreted in the context of which feature combination produced it) plus per-stratum score adjustment. Implementation is heavier than B; this is the "hybrid" path.
+**Class 2 — multiple correlated features, R² spread across 3+ features each contributing 10–20%, ranking varies by ticker.** H0-C survives, A and B rejected. → **Option C opens:** feature stratification (per-ticker conviction interpreted by which feature combination produced it) plus per-stratum score adjustment. Heavier than B.
 
-**Result class 3 — no per-ticker feature combination explains mode membership at R² > 0.20.** H0-A re-opens. The bimodality is a structural property of the score function combinator that is unreachable from the input feature distribution. → Option A re-opens: admit bimodality is real, redesign the score function from the combinator outward (this is the "redesign the score function" interpretation of A from the original D3 brief).
+**Class 3 — no feature combination explains mode membership at R² > 0.20 anywhere.** H0-A re-opens; bimodality is unreachable from input features. → **Option A re-opens:** redesign the score function from the combinator outward.
 
-**Result class 4 — mixed: one feature dominates for 4-5 tickers, multiple-feature for the rest.** Option C with ticker-class differentiation (some tickers get B-style fix, others get C-style stratification). This is the genuinely hybrid path the original brief contemplated.
+**Class 4 — mixed: one feature dominates 4-5 tickers, multiple-feature for the rest.** → Option C with ticker-class differentiation (some tickers get B-style fix, others get C-style stratification). The genuinely hybrid path.
 
-**Threshold rationale.** R² ≥ 0.40 for "single feature dominates" is the standard decision-tree split point; below 0.40 there's ambiguity that argues for the heavier C path. The 7-of-10 ticker bar is calibrated to the 8 well-powered tickers (allowing one of them to disagree); MSFT/NVDA are excluded from the bar because their power is insufficient to discriminate.
+**Threshold rationale.** R² ≥ 0.40 is the standard decision split; below 0.40 the ambiguity argues the heavier C path. The 7-of-10 bar lets one well-powered ticker disagree; MSFT/NVDA excluded because their power can't discriminate.
 
 ---
 
 ## 6. Cost estimate
 
-**Sample-size cost.** Today's 7-day N has SPY 40, TSLA 36, QQQ 32, IWM 30, AMZN 29 above the N≥30 bar. AAPL/META/GOOGL at 25 reach the bar in ~3 trading days. MSFT (13) and NVDA (12) reach 30 in ~10-15 trading days at current accretion rate. **Implication:** the experiment is gated on a 14-day rolling window, not a one-shot pull. Statistical power on MSFT and NVDA will remain marginal even at the end of the window; their results should be reported as effect-direction-only, not significance-tested.
+**Sample-size cost.** Today: SPY 40, TSLA 36, QQQ 32, IWM 30, AMZN 29 clear N≥30. AAPL/META/GOOGL at 25 reach the bar in ~3 trading days. MSFT (13) and NVDA (12) reach 30 in ~10-15 trading days. Experiment gated on 14-day rolling window, not a one-shot pull. MSFT/NVDA power stays marginal at window end; report effect-direction-only, not significance-tested.
 
-**Feature reconstruction cost.** Per-wakeup snapshot reconstruction across F1–F8 for ~500 wakeups (14 days × ~35 reads/day average) is ~8 RPC calls per wakeup = 4,000 RPC calls. Run as a one-shot batch script, not as an edge function. Estimated 30 minutes wall time.
+**Feature reconstruction cost.** ~500 wakeups × ~8 RPC calls = ~4,000 RPCs. One-shot batch script (analysis-mode, Tenet 26), ~30 min wall time.
 
-**Statistical analysis cost.** Per-ticker dip tests + logistic regressions are negligible compute. Half a day of analyst-mode work in terminal-Claude (this is analysis-mode, not autonomous-mode — Tenet 26).
+**Statistical analysis cost.** Dip tests + logistic regressions negligible compute. ~½ day of terminal-Claude analyst work.
 
-**Implementation effort for the experiment itself.** Scripted feature-reconstruction job (~200 LOC), Hartigan dip-test wrapper, logistic regression per ticker, output table generator. Estimate 1-2 days of focused work. Does **not** include any architectural fix — the experiment's output picks the fork; implementation is sized in the original D3 brief (1-2 weeks A, 2-4 weeks B, ~6 weeks C).
+**Implementation effort.** Reconstruction script (~200 LOC), Hartigan dip-test wrapper, logistic regression per ticker, output table generator. 1-2 days of focused work. Does **not** include the architectural fix — experiment picks the fork; A/B/C implementation cost is sized in the original D3 brief (1-2w A, 2-4w B, ~6w C).
 
-**MSFT bottleneck surfaced.** MSFT N=13/week is the single biggest constraint. The experiment cannot give a strong MSFT verdict in the 14-day window. Two options: (a) accept inconclusive MSFT, design the fork using the 8 well-powered tickers; (b) extend MSFT-only window to 30 days, treating MSFT as a separate analysis with delayed verdict. Recommend (a) — MSFT Phase A.6 is parallel-tracked anyway.
+**MSFT bottleneck.** MSFT N=13/week is the single biggest constraint; can't give a strong MSFT verdict in the 14-day window. Options: (a) accept inconclusive MSFT, design fork from 8 well-powered tickers; (b) extend MSFT-only window to 30 days, delayed verdict. Recommend (a) — MSFT Phase A.6 is parallel-tracked.
 
 ---
 
