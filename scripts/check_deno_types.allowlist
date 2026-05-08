@@ -98,3 +98,10 @@ mcp/cotrader/smoke-test.ts 5
 mcp/cotrader/tools/get_co_trader_context.ts 2
 mcp/cotrader/tools/get_eod_summary.ts 2
 mcp/cotrader/tests/run_verification.ts 4
+
+# JAC kernel emission layer Phase 1 (2026-05-08). Errors are inherited from
+# _shared/claudeReadSurface.ts (TS2578 unused @ts-expect-error) and
+# _shared/configCache.ts (TS2345 RPC param-type) — same shape as
+# ct-eod-summary and other consumers of those shared modules. Allowlist
+# baseline is propagation count; this file's own logic is clean.
+supabase/functions/jac-compose-emission/index.ts 2

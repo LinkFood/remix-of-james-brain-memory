@@ -366,6 +366,15 @@ verify_jwt = false
 [functions.ct-oi-backfill-historical]
 verify_jwt = false
 
+[functions.jac-compose-emission]
+verify_jwt = false
+
+[functions.jac-emit]
+verify_jwt = false
+
+[functions.jac-emission-detector]
+verify_jwt = false
+
 [functions.ct-flag-grader]
 verify_jwt = false
 
