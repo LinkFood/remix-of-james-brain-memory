@@ -76,6 +76,11 @@ export type DteKey = 'all' | 'short' | 'long';
 export interface ButterflyPoint {
   time: string;
   bucket_time: string;
+  /** Numeric x-axis value: Date.parse(bucket_time) for live data. Overlays
+      get rebased to today's date with the same HH:MM so prior sessions land
+      on today's session axis. Numeric XAxis fixes the categorical-string
+      collision that broke OVERLAY rendering pre-iter-#2. */
+  x_ms: number;
   // Mode 'bb' (cumulative): top_bb >= 0 (cum bull), bottom_bb <= 0 (cum bear, mirrored).
   top_bb: number;
   bottom_bb: number;
@@ -97,6 +102,11 @@ export interface ButterflyPoint {
 export interface FourSeriesPoint {
   time: string;
   bucket_time: string;
+  /** Numeric x-axis value: Date.parse(bucket_time) for live data. Overlays
+      get rebased to today's date with the same HH:MM so prior sessions land
+      on today's session axis. Numeric XAxis fixes the categorical-string
+      collision that broke OVERLAY rendering pre-iter-#2. */
+  x_ms: number;
   cum_all_call: number;
   cum_all_put: number;
   cum_next_call: number;
@@ -192,6 +202,56 @@ function todayNyIsoDate(): string {
   return nyDateKey(new Date().toISOString());
 }
 
+/**
+ * Format a numeric x_ms value (Date.parse output) as a tick label. Used by
+ * Recharts XAxis tickFormatter when XAxis type='number'.
+ *
+ * Single-day mode: returns "1:35 PM" style (NY-tz).
+ * Multi-day mode: returns "5/4 1:35 PM" style so day boundaries are readable.
+ */
+function formatXMsTick(xMs: number, multiDay: boolean): string {
+  if (!Number.isFinite(xMs)) return '';
+  return multiDay ? fmtTimeWithDate(new Date(xMs).toISOString()) : fmtTime(new Date(xMs).toISOString());
+}
+
+/**
+ * Rebase a series' x_ms timestamps onto today's NY-tz session date so an
+ * overlay (prior-session ghost) lands at the same numeric x as today's
+ * matching HH:MM. Without this, prior-day timestamps live on different
+ * absolute ms values than today's data and the OVERLAY rendering shows the
+ * ghost lines clipped onto the wrong portion of the axis.
+ *
+ * The rebase preserves HH:MM (NY-tz) — only the date portion shifts to
+ * today's NY-tz calendar date. Pre-market / post-market portions of the
+ * prior session continue to land outside the live RTH window the same way
+ * today's pre/post would.
+ */
+function rebaseSeriesToToday<T extends { bucket_time: string; x_ms: number }>(series: T[]): T[] {
+  if (series.length === 0) return series;
+  const todayDate = todayNyIsoDate(); // YYYY-MM-DD in NY-tz
+  return series.map((p) => {
+    const d = new Date(p.bucket_time);
+    // Extract NY-tz HH:MM from the original bucket_time, then synthesize a
+    // new ISO at today's NY-tz date with the same HH:MM. Avoids DST drift
+    // because we treat the wall-clock as the canonical anchor.
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/New_York',
+      hour12: false,
+      hour: '2-digit',
+      minute: '2-digit',
+    }).formatToParts(d);
+    const h = parseInt(parts.find((x) => x.type === 'hour')?.value ?? '0', 10);
+    const m = parseInt(parts.find((x) => x.type === 'minute')?.value ?? '0', 10);
+    // Build a UTC timestamp by anchoring at today's NY-tz midnight then
+    // adding hours/minutes. Skip tz precision — what matters is that all
+    // overlays share the same epoch-day so they collapse onto today's
+    // numeric axis.
+    const todayMidnightUtcMs = Date.parse(`${todayDate}T00:00:00-04:00`);
+    const rebasedMs = todayMidnightUtcMs + (h * 60 + m) * 60_000;
+    return { ...p, x_ms: rebasedMs };
+  });
+}
+
 function yesterdayNyIsoDate(): string {
   // 24h-back probe is good enough; nyDateKey collapses DST drift to date.
   return nyDateKey(new Date(Date.now() - 24 * 60 * 60_000).toISOString());
@@ -231,6 +291,7 @@ export function buildButterfly(
         const sentinel: SentinelPoint = {
           time: '',
           bucket_time: p.bucket_time,
+          x_ms: Date.parse(p.bucket_time),
           top_bb: null,
           bottom_bb: null,
           top_bb_abs: null,
@@ -247,6 +308,7 @@ export function buildButterfly(
     out.push({
       time: multiDay ? fmtTimeWithDate(p.bucket_time) : fmtTime(p.bucket_time),
       bucket_time: p.bucket_time,
+      x_ms: Date.parse(p.bucket_time),
       top_bb: cumBull,
       bottom_bb: -cumBear,
       top_bb_abs: cumBull,
@@ -328,6 +390,7 @@ export function buildLiveCp4Series(
         const sentinel: SentinelFour = {
           time: '',
           bucket_time: ts,
+          x_ms: Date.parse(ts),
           cum_all_call: null,
           cum_all_put: null,
           cum_next_call: null,
@@ -348,6 +411,7 @@ export function buildLiveCp4Series(
     out.push({
       time: multiDay ? fmtTimeWithDate(ts) : fmtTime(ts),
       bucket_time: ts,
+      x_ms: Date.parse(ts),
       cum_all_call: cumAllCall,
       cum_all_put: cumAllPut,
       cum_next_call: cumNextCall,
@@ -396,13 +460,16 @@ interface ButterflyBbProps {
   data: ButterflyPoint[];
   height?: number;
   overlays?: BbOverlay[];
+  /** Multi-day Past mode — affects XAxis tick labels (date prefix) and
+      domain. Default false (single-day live or single-day historical). */
+  multiDay?: boolean;
 }
 
 /**
  * Mode 'bb' renderer — cumulative bull/bear areas mirrored around 0.
  * Untouched from the original implementation modulo the trimmed point shape.
  */
-function ButterflyBb({ data, height = 280, overlays = [] }: ButterflyBbProps) {
+function ButterflyBb({ data, height = 280, overlays = [], multiDay = false }: ButterflyBbProps) {
   const fillTopId = 'butterfly-top-bb';
   const fillBottomId = 'butterfly-bottom-bb';
 
@@ -440,10 +507,14 @@ function ButterflyBb({ data, height = 280, overlays = [] }: ButterflyBbProps) {
           </defs>
           <CartesianGrid stroke="#ffffff08" strokeDasharray="2 4" />
           <XAxis
-            dataKey="time"
+            dataKey="x_ms"
+            type="number"
+            domain={['dataMin', 'dataMax']}
+            allowDecimals={false}
             stroke="#71717a"
             tick={{ fontSize: 10, fontFamily: 'monospace' }}
             minTickGap={36}
+            tickFormatter={(v: number) => formatXMsTick(v, multiDay)}
           />
           <YAxis
             stroke="#71717a"
@@ -462,7 +533,7 @@ function ButterflyBb({ data, height = 280, overlays = [] }: ButterflyBbProps) {
             return (
               <ReferenceLine
                 key={`bb-cross-${c.bucket_time}`}
-                x={c.time}
+                x={c.x_ms}
                 stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
                 strokeOpacity={isLarge ? 0.95 : isSmall ? 0.4 : 0.75}
                 strokeWidth={isLarge ? 2 : isSmall ? 1 : 1.25}
@@ -487,6 +558,9 @@ function ButterflyBb({ data, height = 280, overlays = [] }: ButterflyBbProps) {
               fontFamily: 'monospace',
             }}
             labelStyle={{ color: '#a1a1aa' }}
+            labelFormatter={(_v: number, payload: ReadonlyArray<{ payload?: { time?: string } }> | undefined) =>
+              payload?.[0]?.payload?.time ?? ''
+            }
             formatter={(value: number, name: string) => {
               const isTop = name === 'top_bb';
               const label = isTop ? 'Bulls' : 'Bears';
@@ -555,6 +629,9 @@ interface ButterflyCpProps {
   data: FourSeriesPoint[];
   height?: number;
   overlays?: CpOverlay[];
+  /** Multi-day Past mode — affects XAxis tick labels (date prefix). Default
+      false (single-day live or single-day historical). */
+  multiDay?: boolean;
 }
 
 /**
@@ -584,8 +661,9 @@ type SessionPhase = 'open_hour' | 'midday' | 'mid_afternoon' | 'close_hour' | 'p
 
 interface PhaseSpan {
   phase: SessionPhase;
-  x1: string;
-  x2: string;
+  /** Numeric x-axis values (ms since epoch) for ReferenceArea x1/x2. */
+  x1: number;
+  x2: number;
   fill: string;
   fillOpacity: number;
 }
@@ -611,12 +689,12 @@ const PHASE_FILL: Record<SessionPhase, { fill: string; fillOpacity: number }> = 
   post_close:    { fill: '#52525b', fillOpacity: 0.04 },
 };
 
-function computePhaseSpans<T extends { time: string; bucket_time: string }>(data: readonly T[]): PhaseSpan[] {
+function computePhaseSpans<T extends { x_ms: number; bucket_time: string }>(data: readonly T[]): PhaseSpan[] {
   if (data.length < 2) return [];
   const out: PhaseSpan[] = [];
   let runPhase: SessionPhase | null = null;
-  let runStart: string | null = null;
-  let runEnd: string | null = null;
+  let runStart: number | null = null;
+  let runEnd: number | null = null;
   for (const p of data) {
     const ph = classifyPhase(p.bucket_time);
     if (ph !== runPhase) {
@@ -624,9 +702,9 @@ function computePhaseSpans<T extends { time: string; bucket_time: string }>(data
         out.push({ phase: runPhase, x1: runStart, x2: runEnd, ...PHASE_FILL[runPhase] });
       }
       runPhase = ph;
-      runStart = p.time;
+      runStart = p.x_ms;
     }
-    runEnd = p.time;
+    runEnd = p.x_ms;
   }
   if (runPhase !== null && runStart !== null && runEnd !== null) {
     out.push({ phase: runPhase, x1: runStart, x2: runEnd, ...PHASE_FILL[runPhase] });
@@ -634,7 +712,7 @@ function computePhaseSpans<T extends { time: string; bucket_time: string }>(data
   return out;
 }
 
-function ButterflyCp({ data, height = 280, overlays = [] }: ButterflyCpProps) {
+function ButterflyCp({ data, height = 280, overlays = [], multiDay = false }: ButterflyCpProps) {
   // Cross-event detection — primary cross only (cum_all_call vs cum_all_put).
   // Computed at render-time inside useMemo. Linear scan, O(n), cheap.
   const crosses = useMemo<CrossEvent[]>(() => findCpCrosses(data), [data]);
@@ -694,10 +772,14 @@ function ButterflyCp({ data, height = 280, overlays = [] }: ButterflyCpProps) {
             />
           ))}
           <XAxis
-            dataKey="time"
+            dataKey="x_ms"
+            type="number"
+            domain={['dataMin', 'dataMax']}
+            allowDecimals={false}
             stroke="#71717a"
             tick={{ fontSize: 10, fontFamily: 'monospace' }}
             minTickGap={36}
+            tickFormatter={(v: number) => formatXMsTick(v, multiDay)}
           />
           <YAxis
             stroke="#71717a"
@@ -720,7 +802,7 @@ function ButterflyCp({ data, height = 280, overlays = [] }: ButterflyCpProps) {
             return (
               <ReferenceLine
                 key={`cp-cross-${c.bucket_time}`}
-                x={c.time}
+                x={c.x_ms}
                 stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
                 strokeOpacity={isLarge ? 0.95 : isSmall ? 0.4 : 0.8}
                 strokeWidth={isLarge ? 2 : isSmall ? 1 : 1.25}
@@ -745,6 +827,9 @@ function ButterflyCp({ data, height = 280, overlays = [] }: ButterflyCpProps) {
               fontFamily: 'monospace',
             }}
             labelStyle={{ color: '#a1a1aa' }}
+            labelFormatter={(_v: number, payload: ReadonlyArray<{ payload?: { time?: string } }> | undefined) =>
+              payload?.[0]?.payload?.time ?? ''
+            }
             formatter={(value: number, name: string) => {
               const display = `${value < 0 ? '−' : '+'}${formatPulseDollars(Math.abs(value))}`;
               return [display, seriesLabel(name)];
@@ -990,8 +1075,13 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
       .map((q, i) => ({
         date: q.date,
         // Build cumsum series identically to live data; multiDay=false because
-        // each prior day is a single-session pull.
-        data: buildLiveCp4Series(q.points, /* skipPreMarket */ true, undefined, /* multiDay */ false),
+        // each prior day is a single-session pull. Rebase x_ms onto today's
+        // session so the ghost lines align with today's numeric XAxis — the
+        // iter-#2 fix for the categorical-string collision (where today's
+        // "1:35 PM" and 5/4's "1:35 PM" merged as one axis category).
+        data: rebaseSeriesToToday(
+          buildLiveCp4Series(q.points, /* skipPreMarket */ true, undefined, /* multiDay */ false),
+        ),
         opacity: Math.max(0.06, top - i * step),
       }));
   }, [overlayQueries]);
@@ -1258,9 +1348,9 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
           </span>
         </div>
       ) : mode === 'cp' ? (
-        <ButterflyCp data={cpData} height={280} overlays={cpOverlays} />
+        <ButterflyCp data={cpData} height={280} overlays={cpOverlays} multiDay={multiDay} />
       ) : (
-        <ButterflyBb data={bbData} height={280} />
+        <ButterflyBb data={bbData} height={280} multiDay={multiDay} />
       )}
 
       <div className="mt-1 text-[9.5px] text-muted-foreground/70">
