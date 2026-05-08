@@ -167,20 +167,52 @@ UW MCP is **write-path only** (ingester crons). Consumers never call UW at runti
 
 **Operational reference:** `docs/SYNTHESIS_LAYER.md` — read first when working on consumers or organs. Design rationale and decision log: `docs/SYNTHESIS_LAYER_ARCHITECTURE.md`.
 
-### Pickup state (read on a fresh session — last updated 2026-05-01 ~05:00 UTC)
+### Pickup state (read on a fresh session — last updated 2026-05-07 ~23:55 UTC)
 
-- **All 17 brain consumers redeployed.** Telemetry instrumented on every Claude-facing surface. Last 24h `get_brain_health(24)` shows 10 distinct consumers reporting (others fire on slower cadences and will appear as their crons hit).
-- **Specialist Recall property live** (commit `afbcfd7`) — 10th brain organ `specialistRecallContext.ts`. Each per-ticker specialist now sees its last 5 flagged + last 5 unflagged-conv-≥50 reads on the ticker before deciding. Three-state outcome rendering. audienceFilter cotrader-only. First live exercise tomorrow morning RTH 13:00–13:54 UTC.
-- **End State — Captain Into The Storm** governing image landed in CLAUDE.md ## peer to Thesis. Long-form companion `docs/END_STATE_VISION.md`. **Runtime preamble wire deferred to 2026-05-15** to keep the recall-property C1 hit-rate experiment falsifiable. Don't wire captain framing into preamble before then.
-- **Ticker coherence validator live** (`tickerCoherenceValidator.ts`, commit `54ccaaf`). Kills the data-fabrication hallucination class. ct-chat post-validated; off-universe mentions flagged in `ct_chat_tokens.validator_warnings` and counted by `chat_off_universe_mentions_24h` warden invariant.
-- **Budget views ET-bucketed** (commit `67c4a19`). UW + Tavily badges no longer drop to zero at UTC midnight.
-- **`ct-session-analog` was 404 in prod** until manual deploy 2026-04-30 night. First real `ct_session_embeddings` row builds at tonight's (Friday 2026-05-01) 21:30 UTC fire. Until then `analogs` organ correctly warns `no_current_embedding`.
-- **Phase 7 capture path** is design-only — don't build without James input.
-- **Warden state (13/15 passing, 0 erroring, 0 critical):** the 2 remaining warns are expected to self-heal in tomorrow's RTH —
-  - `brain_telemetry_insert_rate_24h` = 99 (threshold ≥100). RTH crons firing tomorrow morning push past threshold.
-  - `uw_caller_set_on_recent_calls` = 65.6% (info, threshold ≥80%). Bulk-redeployed all 22 UW ingesters; rolling-1000-call sample heals as fresh tagged calls displace null-caller history.
-- **Verification routines scheduled** (visible at https://claude.ai/code/routines): C2 prompt-diff @ 2026-05-01 14:00 UTC, synthesis-layer 72h health @ 2026-05-04 14:00 UTC, C3 warden week-1 @ 2026-05-08 14:00 UTC, C1+C4+C5 14-day acceptance @ 2026-05-15 14:00 UTC.
-- **Read-first memory for tomorrow's pickup:** `~/.claude/projects/-Users-jameschellis/memory/project_co_trader_pickup_2026_05_01_session_watch.md`.
+**Bundle Phase 2 STRUCTURALLY COMPLETE 10/10.** Every brain organ writes `organMetadata` + per-item status. Wed→Thu arc: `f776ccc` flow_heatmap → `165e08d` news_causality → `fe14131` detector → `2e08cb6` event_recency + james_flags (5/10 → 7/10) → `88a96ca` analogs (first non-tabular; first to use `pending_analysis` enum) → `aaeaf4a` specialist + specialist_recall (10/10 closed). Phase A audits pre-ship at `fa4c154` + `d65aa2a`.
+
+**Defense net at 7 layers** (was 5 Wed end-of-day; Thu added 2):
+- L5 — `brain_consumer_freshness_rth` warden invariant (Wed PR #44 + hotfix #46)
+- L6 — `organ_metadata_completeness_*` ×10 warden invariants (one per organ)
+- L7 — MCP tool verification continuously enforced (`3609322` Phase 2 + `0c5b40e` extended to all 8 tools)
+
+**Cotrader MCP captain bridge expanded 1→8 tools.** Terminal-Claude has full read access to brain organs via cotrader-mcp. Carve-outs across `c16e126` (verification layer Phase 1) + `35efd4f` (`get_brain_principles`) + `d63eed4` (`get_co_trader_morning_brief`).
+
+**Two production incidents structurally resolved 2026-05-07:**
+- **Service-role gateway-rewrite class-kill:** `fa0eaab` (`isServiceRoleRequest` checks `apikey` header — sb_secret_v2 gateway rewrites `Authorization` to ES256 JWT before reaching Deno) + `9ca5af5` (`_ct_post`/`_ct_post_with_body`) + `649a12c` (`invoke_edge_function`). 154 cron updates total. Memory: `feedback_supabase_gateway_rewrites_authorization.md`.
+- **Cotrader morning brief wrong-table-targeting** fix `d63eed4` — was reading wrong canonical table; now reads `ct_daily_briefs`.
+
+**Class-kill C Phase B** (`16aaeb3` + hotfix `c9c4bc4`) — 9 24/7 brain-consumer-freshness invariants shipped. Phase A cut from brief's "23-40" estimate to actual 9; brief framed coverage as if nothing existed; warden's 45 invariants already covered most of it. Three brief claims didn't survive empirical state verification.
+
+**PR #54 Path C closure** — `eaf04dd` (`docs/runbooks/ct_invariants_sql_authoring.md`) + `da7d224` (instance #41 — warden parser semicolon-blindness on string literals). Pre-commit hook YAGNI-deferred per <1/month rate estimate (subsequently disproven; see PR #57).
+
+**Tonight's four ships (2026-05-07 evening):**
+- `8b64f34` — `consumer_freshness_hypothesis_proposer_24x7` threshold 120→270 (cadence-anchored after Phase A.2 audit of all 9 24/7 invariants; only burst-shape mis-calibration in the cohort)
+- **PR #56** — methodology-pattern entry `cadence-anchored-thresholds-for-burst-cron-consumers` codified in `docs/methodology-patterns.md`
+- **PR #57** — docs-PR discipline restored structurally via `.github/workflows/docs-pr-discipline.yml` + `docs/governance/pr-only-on-docs.md` (after 3 same-day violations: `16aaeb3` mixed code+docs / `eaf04dd` / `da7d224`)
+- **PR #59** — defense-net Layer 1 coverage gap closed (cascade #42). Class-kill A's `deno check` gate covered `supabase/functions/` only; tonight's `mcp/cotrader/server.ts:322` typo (unbalanced quote → unterminated string literal) slipped past — surfaced as MCP daemon spawn failure on `/mcp reconnect`. PR #59 extends `find` to `mcp/` + `scripts/d3_experiment/` and incidentally restored CI to green on main (had been red since `0c5b40e` from `ct-mcp-verification-runner` slipping past allowlisting at PR review).
+
+**Cascade catalog: 22 new instances since Wed end-of-day** — grew from #20 to #42. ~25 sub-classes codified in `docs/methodology-patterns.md`. Notable today: #29 (back-anchorability — F3 reads `ct_gex_timeseries` append-only, NOT `ct_ticker_snapshots` overwrite), #40 (specialist freshness measurement-shape; queued post-RTH/post-D2.2-verdict), #41 (warden parser semicolon-blindness on string literals).
+
+**Permanent methodology adjustment locked: brief-author-state-vs-intent rule.** Briefs assert intent (the desired outcome), NOT formula (don't pre-specify the math). Phase A identifies the metric's underlying distribution shape; the formula follows the shape. Codified in PR #56's methodology entry. Sibling to `brief-author-premise-error` and `brief-framed-wrong-computational-layer` — same family of brief-author-layer premise mistakes.
+
+**Active windows — DO NOT ship structural changes on the measured surfaces:**
+- **D2.2 acceptance** 2026-05-07 → 2026-05-12 (verdict 5/13). GOOGL/AMZN/META threshold 60→55. MSFT excluded.
+- **D3 14-day feature-isolation experiment** — Day 1 (validation tag) = 55 rows; Day 2 (`window-day-02-2026-05-07`) = 40 rows captured tonight, 0 errors, all 10 tickers ≥2 rows. 12 nights remaining. Window locks Tue 2026-05-26 (Memorial Day pushes day 14 one weekday past naive count). Manual nightly per Tenet 26 — analysis-mode stays terminal-Claude, no edge function shim.
+
+**Warden state post-tonight:** 53/54 passing, 0 critical, 1 expected info-level warn (`specialist_threshold_within_5pts_of_p75`).
+
+**Queued post-RTH or post-windows:**
+- Specialist freshness invariant measurement-shape refactor (cascade #40; post-D2.2-verdict 5/14 OR post-RTH today ≥20:00 UTC if appetite holds)
+- PR #54 warden-SQL-parser Phase A trigger (Path A pre-strip-comments recommended)
+- D3 scoping continuous evolution + IWM front-week Phase B + B-3 soft→hard gate transition (after 3-5 deploys verified) + MSFT Phase A.6 cron-window + Messages orphan audit + Drop-table CI lint Phase A
+
+**Governance state (new, 2026-05-07):**
+- Docs-PR discipline CI-enforced via `.github/workflows/docs-pr-discipline.yml` (PR #57)
+- Canonical in-repo reference: `docs/governance/pr-only-on-docs.md`
+- All `docs/**` changes go via PR. **Mixed code+docs commits also need PR per the rule** — even if the primary content is a migration, if the same commit touches `docs/`, the entire commit goes via PR.
+
+**Read-first memory for next session pickup:** `~/.claude/projects/-Users-jameschellis/memory/project_co_trader_session_wrap_2026_05_06.md` (Wed wrap canonical; Thu wrap will follow at session-end).
 
 ## System Warden (shipped 2026-05-01)
 
