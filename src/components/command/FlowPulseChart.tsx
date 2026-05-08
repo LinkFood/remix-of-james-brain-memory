@@ -52,6 +52,8 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import {
   useFlowPulseChart,
   useNetPremiumExpirySplit,
+  useNetPremiumExpirySplitMulti,
+  lastNWeekdaysNy,
   formatPulseDollars,
   type FlowPulseChartPoint,
   type FlowPulseDateRange,
@@ -371,16 +373,32 @@ export function buildLiveCp4Series(
   return out;
 }
 
+/**
+ * Comparison overlay payload — one entry per prior-session ghost layer.
+ * Opacity is precomputed by the parent so each renderer just consumes.
+ */
+export interface CpOverlay {
+  date: string;
+  data: FourSeriesPoint[];
+  opacity: number;
+}
+export interface BbOverlay {
+  date: string;
+  data: ButterflyPoint[];
+  opacity: number;
+}
+
 interface ButterflyBbProps {
   data: ButterflyPoint[];
   height?: number;
+  overlays?: BbOverlay[];
 }
 
 /**
  * Mode 'bb' renderer — cumulative bull/bear areas mirrored around 0.
  * Untouched from the original implementation modulo the trimmed point shape.
  */
-function ButterflyBb({ data, height = 280 }: ButterflyBbProps) {
+function ButterflyBb({ data, height = 280, overlays = [] }: ButterflyBbProps) {
   const fillTopId = 'butterfly-top-bb';
   const fillBottomId = 'butterfly-bottom-bb';
 
@@ -466,6 +484,37 @@ function ButterflyBb({ data, height = 280 }: ButterflyBbProps) {
               return [display, label];
             }}
           />
+          {/* Comparison overlay — ghost prior-session bull/bear outlines.
+              Stroke-only (no fill) to avoid stacking gradients muddying the
+              live areas. Rendered FIRST so today's areas draw on top. */}
+          {overlays.map((ov) => [
+            <Area
+              key={`ov-${ov.date}-top`}
+              type="monotone"
+              data={ov.data}
+              dataKey="top_bb"
+              stroke="#34d399"
+              strokeWidth={1}
+              strokeOpacity={ov.opacity}
+              fill="none"
+              isAnimationActive={false}
+              dot={false}
+              activeDot={false}
+            />,
+            <Area
+              key={`ov-${ov.date}-bottom`}
+              type="monotone"
+              data={ov.data}
+              dataKey="bottom_bb"
+              stroke="#fb7185"
+              strokeWidth={1}
+              strokeOpacity={ov.opacity}
+              fill="none"
+              isAnimationActive={false}
+              dot={false}
+              activeDot={false}
+            />,
+          ])}
           <Area
             type="monotone"
             dataKey="top_bb"
@@ -495,6 +544,7 @@ function ButterflyBb({ data, height = 280 }: ButterflyBbProps) {
 interface ButterflyCpProps {
   data: FourSeriesPoint[];
   height?: number;
+  overlays?: CpOverlay[];
 }
 
 /**
@@ -507,7 +557,7 @@ interface ButterflyCpProps {
  * Y-domain is symmetric ± max magnitude across all 4 series so the zero line
  * stays the visual midpoint and crossovers read cleanly.
  */
-function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
+function ButterflyCp({ data, height = 280, overlays = [] }: ButterflyCpProps) {
   // Cross-event detection — primary cross only (cum_all_call vs cum_all_put).
   // Computed at render-time inside useMemo. Linear scan, O(n), cheap.
   const crosses = useMemo<CrossEvent[]>(() => findCpCrosses(data), [data]);
@@ -599,6 +649,36 @@ function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
               return [display, seriesLabel(name)];
             }}
           />
+          {/* Comparison overlay — ghost prior-session curves rendered first
+              so today's live curves draw on top. Each Line carries its own
+              `data` array (Recharts supports per-series data) so prior
+              timestamps align to the same XAxis category strings as today. */}
+          {overlays.map((ov) => [
+            <Line
+              key={`ov-${ov.date}-call-all`}
+              type="monotone"
+              data={ov.data}
+              dataKey="cum_all_call"
+              stroke="#34d399"
+              strokeWidth={1.25}
+              strokeOpacity={ov.opacity}
+              isAnimationActive={false}
+              dot={false}
+              activeDot={false}
+            />,
+            <Line
+              key={`ov-${ov.date}-put-all`}
+              type="monotone"
+              data={ov.data}
+              dataKey="cum_all_put"
+              stroke="#fda4af"
+              strokeWidth={1.25}
+              strokeOpacity={ov.opacity}
+              isAnimationActive={false}
+              dot={false}
+              activeDot={false}
+            />,
+          ])}
           <Line
             type="monotone"
             dataKey="cum_all_call"
@@ -738,6 +818,9 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
   const [range, setRange] = useState<RangeKey>('today');
   const [mode, setMode] = useState<ModeKey>('cp');
   const [dte, setDte] = useState<DteKey>('all');
+  // Comparison-overlay setting — ghost N prior-session curves behind today's
+  // live curves. 'off' = no overlay (default; current behavior unchanged).
+  const [overlayN, setOverlayN] = useState<0 | 1 | 3 | 5>(0);
 
   // Historical date-range state. When `dateRange` is set, the chart shows
   // a past session (single day or multi-day span) instead of the live tape.
@@ -785,6 +868,32 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
     () => buildButterfly(bbQuery.points, dte, /* multiDay */ multiDay),
     [bbQuery.points, dte, multiDay],
   );
+
+  // Comparison-overlay data fetch. CP-mode only in v1 — BB-mode prior-day
+  // pulls require ct_flow_pulse_chart's p_until migration (pending TODO in
+  // useFlowPulseChart). Disabled in past mode (overlay is for live tape
+  // analog reading).
+  const overlayDays = useMemo<string[]>(() => {
+    if (overlayN === 0 || isPast || mode !== 'cp') return [];
+    return lastNWeekdaysNy(overlayN);
+  }, [overlayN, isPast, mode]);
+  const overlayQueries = useNetPremiumExpirySplitMulti(ticker, overlayDays);
+  const cpOverlays = useMemo<CpOverlay[]>(() => {
+    if (overlayQueries.length === 0) return [];
+    // Stagger opacity from most-recent (highest) down to oldest (lowest).
+    // For N=1: 0.35; N=3: 0.40/0.28/0.16; N=5: 0.40/0.32/0.24/0.16/0.08.
+    const top = 0.40;
+    const step = overlayQueries.length === 1 ? 0 : (top - 0.06) / (overlayQueries.length - 1);
+    return overlayQueries
+      .filter((q) => q.points.length > 0)
+      .map((q, i) => ({
+        date: q.date,
+        // Build cumsum series identically to live data; multiDay=false because
+        // each prior day is a single-session pull.
+        data: buildLiveCp4Series(q.points, /* skipPreMarket */ true, undefined, /* multiDay */ false),
+        opacity: Math.max(0.06, top - i * step),
+      }));
+  }, [overlayQueries]);
 
   const headline = useMemo(() => {
     return mode === 'cp' ? buildHeadlineCp(cpData) : buildHeadlineBb(bbData);
@@ -852,6 +961,34 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
                 )}
               >
                 {r === 'today' ? 'Today' : r === '1h' ? '1h' : '30m'}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Comparison-overlay pills — ghost N prior sessions behind today's
+            live curves. CP mode only in v1 (BB-mode overlays gated on
+            ct_flow_pulse_chart p_until migration). Hidden in past mode. */}
+        {!isPast && mode === 'cp' && (
+          <div className="flex items-center gap-1" title="Ghost prior sessions behind today's live curves">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70 mr-1">overlay</span>
+            {([
+              { v: 0, label: 'Off' },
+              { v: 1, label: '+1d' },
+              { v: 3, label: '+3d' },
+              { v: 5, label: '+5d' },
+            ] as const).map(({ v, label }) => (
+              <button
+                key={v}
+                onClick={() => setOverlayN(v)}
+                className={cn(
+                  'text-[10px] font-mono px-2 py-0.5 rounded transition-colors',
+                  overlayN === v
+                    ? 'bg-primary/10 text-primary'
+                    : 'bg-muted/20 text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {label}
               </button>
             ))}
           </div>
@@ -1018,7 +1155,7 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
           </span>
         </div>
       ) : mode === 'cp' ? (
-        <ButterflyCp data={cpData} height={280} />
+        <ButterflyCp data={cpData} height={280} overlays={cpOverlays} />
       ) : (
         <ButterflyBb data={bbData} height={280} />
       )}

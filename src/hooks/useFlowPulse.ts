@@ -16,7 +16,7 @@
  */
 
 import { useEffect, useMemo } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 
 export interface FlowPulseRow {
@@ -531,6 +531,102 @@ export function useNetPremiumExpirySplit(
     isLoading: query.isLoading,
     isError: query.isError,
   };
+}
+
+/**
+ * Result shape for a single prior-day fetch in the comparison-overlay multi-hook.
+ */
+export interface PriorDayResult {
+  /** YYYY-MM-DD identifier for the prior session (NY tz). */
+  date: string;
+  /** Cumsum points for that prior session, identical shape to live data. */
+  points: NetPremiumExpirySplitPoint[];
+  isLoading: boolean;
+  isError: boolean;
+}
+
+/**
+ * useNetPremiumExpirySplitMulti — fetch today + N prior sessions in one hook.
+ *
+ * Powers the comparison overlay: ghost prior-session cumsum curves behind
+ * today's live cumsum curves. Each prior day is a single full-session pull
+ * (13:30 → 20:00 UTC anchored, NY-tz date-bounded), staticly cached
+ * (staleTime: Infinity). No Realtime subscription — historical data is
+ * stable.
+ *
+ * Uses React Query's useQueries so the consumer can pass a variable number
+ * of prior days without violating rules-of-hooks.
+ *
+ * Caller passes pre-computed YYYY-MM-DD strings — see lastNWeekdaysNy() for
+ * the standard "last N RTH sessions" generator.
+ */
+export function useNetPremiumExpirySplitMulti(
+  ticker: string | undefined,
+  priorDays: readonly string[],
+): PriorDayResult[] {
+  const queries = useQueries({
+    queries: priorDays.map((date) => ({
+      queryKey: [
+        'net-premium-expiry-split-prior',
+        ticker ?? 'MARKET',
+        date,
+      ] as const,
+      staleTime: Infinity,
+      refetchInterval: false as const,
+      retry: false,
+      queryFn: async (): Promise<NetPremiumExpirySplitPoint[]> => {
+        const params: Record<string, unknown> = {
+          p_ticker: ticker ?? null,
+          p_since: dateRangeAnchorToIso(date, '13:30'),
+          p_until: dateRangeAnchorToIso(date, '20:00'),
+        };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data, error } = await (supabase.rpc as any)('ct_net_premium_expiry_split', params);
+        if (error) throw error;
+        return (Array.isArray(data) ? data : []) as NetPremiumExpirySplitPoint[];
+      },
+    })),
+  });
+
+  return queries.map((q, i) => ({
+    date: priorDays[i],
+    points: (q.data as NetPremiumExpirySplitPoint[] | undefined) ?? [],
+    isLoading: q.isLoading,
+    isError: q.isError,
+  }));
+}
+
+/**
+ * Generate the last N completed RTH session dates (NY tz, YYYY-MM-DD).
+ * Excludes Saturday + Sunday. Returns dates in DESCENDING order (most-recent
+ * first) so callers can take a prefix for "last 1" / "last 3" / "last 5".
+ *
+ * Caveat: doesn't account for US market holidays — Christmas, July 4th, etc.
+ * For those days the overlay will fetch and find no data; the result reads
+ * as an empty session (no curves drawn). Acceptable in v1; promote to a
+ * holiday-aware helper if captain wants the overlay to skip them.
+ */
+export function lastNWeekdaysNy(n: number): string[] {
+  const out: string[] = [];
+  const todayUtc = new Date();
+  // Probe today's NY-tz date string.
+  const todayNy = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/New_York',
+  }).format(todayUtc);  // 'YYYY-MM-DD'
+  // Walk back from yesterday — today's session may still be live, exclude.
+  const cursor = new Date(`${todayNy}T12:00:00Z`);
+  cursor.setUTCDate(cursor.getUTCDate() - 1);
+  while (out.length < n) {
+    const dow = cursor.getUTCDay(); // 0=Sun .. 6=Sat
+    if (dow !== 0 && dow !== 6) {
+      const ymd = cursor.toISOString().slice(0, 10);
+      out.push(ymd);
+    }
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+    // Safety: cap loops at 30 walkbacks to handle edge cases.
+    if (out.length === 0 && cursor.getUTCFullYear() < todayUtc.getUTCFullYear() - 1) break;
+  }
+  return out;
 }
 
 /**
