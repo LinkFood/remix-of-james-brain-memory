@@ -182,7 +182,17 @@ async function ingestNope(
       ticker,
       tick_timestamp: (r.timestamp as string | undefined) ?? (r.tick_timestamp as string | undefined) ?? new Date().toISOString(),
       nope: numOrNull(r.nope ?? r.value),
-      underlying_price: numOrNull(r.underlying_price ?? r.price),
+      // Substrate audit 2026-05-07: UW /api/stock/{T}/nope payload does NOT
+      // include `underlying_price` or `price` keys (verified by raw JSONB
+      // inspection: shape is {nope, put_vol, call_vol, nope_fill, put_delta,
+      // stock_vol, timestamp, call_delta, put_fill_delta, call_fill_delta}).
+      // The previous expression `numOrNull(r.underlying_price ?? r.price)`
+      // was a silent no-op — wrote NULL on every row for ~weeks. Set
+      // explicitly to null until Phase 2A vendor abstraction wires a real
+      // spot source. Brain consumers (claudeReadSurface) and frontend
+      // (useCoTraderData) already type the column as `number | null` and
+      // tolerate null end-to-end — no runtime change.
+      underlying_price: null,
       raw: r,
     })).filter(r => r.tick_timestamp);
     const { error, count } = await supabase
@@ -255,7 +265,14 @@ async function ingestGreekFlow(
         net_put_vega: nPutV,
         total_delta_flow: totalDelta,
         total_vega_flow: totalVega,
-        underlying_price: numOrNull(r.underlying_price ?? r.price),
+        // Substrate audit 2026-05-07: UW /api/stock/{T}/greek-flow payload
+        // does NOT include `underlying_price` or `price` keys. Empirical
+        // 7-day NULL rate: 19,728 / 19,728 rows (100%). The previous
+        // expression `numOrNull(r.underlying_price ?? r.price)` was a silent
+        // no-op. Set explicitly to null until Phase 2A vendor abstraction
+        // wires a real spot source. ct-watcher and useCoTraderData read
+        // this column with explicit `number | null` typing; null tolerated.
+        underlying_price: null,
         raw: r,
       };
     }).filter(r => r.tick_timestamp);
@@ -460,7 +477,17 @@ async function ingestNetPremiumTicks(
       net_put_premium: numOrNull(r.net_put_premium),
       net_call_volume: numOrNull(r.net_call_volume),
       net_put_volume: numOrNull(r.net_put_volume),
-      underlying_price: numOrNull(r.underlying_price ?? r.price),
+      // Substrate audit 2026-05-07: UW /api/stock/{T}/net-prem-ticks payload
+      // does NOT include `underlying_price` or `price` keys (raw shape:
+      // {date, net_delta, tape_time, put_volume, call_volume, net_put_volume,
+      // net_call_volume, net_put_premium, net_call_premium,
+      // {put,call}_volume_{ask,bid}_side}). Previous expression
+      // `numOrNull(r.underlying_price ?? r.price)` was a silent no-op
+      // (100% NULL across 5,329 rows / 7d). Set explicitly to null until
+      // Phase 2A vendor abstraction wires a real spot source. claudeReadSurface,
+      // ct-watcher, and useCoTraderData all type this column as
+      // `number | null` and tolerate null end-to-end.
+      underlying_price: null,
       raw: r,
     })).filter(r => r.tick_timestamp);
 
