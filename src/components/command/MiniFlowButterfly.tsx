@@ -23,6 +23,7 @@ import {
   LineChart,
   ReferenceLine,
   ResponsiveContainer,
+  XAxis,
   YAxis,
 } from 'recharts';
 import { Card } from '@/components/ui/card';
@@ -40,6 +41,11 @@ import {
   type ModeKey,
   type DteKey,
 } from './FlowPulseChart';
+import {
+  findCpCrosses,
+  findBbCrosses,
+  type CrossEvent,
+} from '@/lib/flowButterflyCrosses';
 
 interface Props {
   ticker: string;
@@ -65,6 +71,13 @@ export function MiniFlowButterfly({ ticker, range, mode, dte = 'all' }: Props) {
   const bbData = useMemo(
     () => buildButterfly(bbQuery.points, dte, /* multiDay */ false),
     [bbQuery.points, dte],
+  );
+
+  // Cross-event detection — primary cross only. Compact panels render markers
+  // without labels (colored dashed vertical line); labels live on the full chart.
+  const crosses = useMemo<CrossEvent[]>(
+    () => (mode === 'cp' ? findCpCrosses(cpData) : findBbCrosses(bbData)),
+    [mode, cpData, bbData],
   );
 
   const isLoading = mode === 'cp' ? cpQuery.isLoading : bbQuery.isLoading;
@@ -127,8 +140,21 @@ export function MiniFlowButterfly({ ticker, range, mode, dte = 'all' }: Props) {
         ) : mode === 'cp' ? (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={cpData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              {/* Hidden XAxis so ReferenceLine x={time} can resolve. */}
+              <XAxis dataKey="time" hide />
               <YAxis hide domain={['dataMin', 'dataMax']} />
               <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.2} strokeWidth={1} />
+              {/* Compact cross markers — colored dashed line, no label. */}
+              {crosses.map((c) => (
+                <ReferenceLine
+                  key={`mini-cp-cross-${c.bucket_time}`}
+                  x={c.time}
+                  stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
+                  strokeOpacity={0.7}
+                  strokeWidth={1}
+                  strokeDasharray="2 2"
+                />
+              ))}
               <Line type="monotone" dataKey="cum_all_call" stroke="hsl(150 70% 60%)" strokeWidth={1.25} dot={false} isAnimationActive={false} />
               <Line type="monotone" dataKey="cum_all_put" stroke="hsl(350 75% 60%)" strokeWidth={1.25} dot={false} isAnimationActive={false} />
               <Line type="monotone" dataKey="cum_next_call" stroke="hsl(150 70% 60%)" strokeWidth={1} strokeDasharray="2 2" dot={false} isAnimationActive={false} />
@@ -138,8 +164,20 @@ export function MiniFlowButterfly({ ticker, range, mode, dte = 'all' }: Props) {
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={bbData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+              {/* Hidden XAxis so ReferenceLine x={time} can resolve. */}
+              <XAxis dataKey="time" hide />
               <YAxis hide domain={['dataMin', 'dataMax']} />
               <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.2} strokeWidth={1} />
+              {crosses.map((c) => (
+                <ReferenceLine
+                  key={`mini-bb-cross-${c.bucket_time}`}
+                  x={c.time}
+                  stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
+                  strokeOpacity={0.7}
+                  strokeWidth={1}
+                  strokeDasharray="2 2"
+                />
+              ))}
               <Area type="monotone" dataKey="top_bb" stroke="hsl(150 70% 60%)" fill="hsl(150 70% 60%)" fillOpacity={0.25} strokeWidth={1.25} isAnimationActive={false} />
               <Area type="monotone" dataKey="bottom_bb" stroke="hsl(350 75% 60%)" fill="hsl(350 75% 60%)" fillOpacity={0.25} strokeWidth={1.25} isAnimationActive={false} />
             </AreaChart>
