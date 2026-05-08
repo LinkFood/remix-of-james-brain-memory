@@ -33,7 +33,7 @@ import {
   ChevronDown,
   LineChart as LineChartIcon,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Area,
   AreaChart,
@@ -694,6 +694,13 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [draftStart, setDraftStart] = useState<string>(yesterdayNyIsoDate());
   const [draftEnd, setDraftEnd] = useState<string>(yesterdayNyIsoDate());
+
+  // BB-mode is live-only (RPC lacks p_until). When user enters past mode while
+  // BB is selected, force back to CP so they don't see a broken view. The BB
+  // mode pill is also hidden in past mode for the same reason.
+  useEffect(() => {
+    if (dateRange && mode === 'bb') setMode('cp');
+  }, [dateRange, mode]);
   const isPast = !!dateRange;
   const multiDay = !!(dateRange && dateRange.start !== dateRange.end);
 
@@ -799,6 +806,30 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
                 )}
               >
                 {r === 'today' ? 'Today' : r === '1h' ? '1h' : '30m'}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Mode pills — Calls/Puts (default, live signed) vs Bulls/Bears
+            (cumulative directional aggregation). Hidden in past mode because
+            ct_flow_pulse_chart RPC has no p_until param yet — BB-historical
+            ships when that migration lands (TODO in useFlowPulseChart). */}
+        {!isPast && (
+          <div className="flex items-center gap-1">
+            {(['cp', 'bb'] as const).map((m) => (
+              <button
+                key={m}
+                onClick={() => setMode(m)}
+                className={cn(
+                  'text-[10px] font-mono px-2 py-0.5 rounded transition-colors',
+                  mode === m
+                    ? 'bg-primary/10 text-primary'
+                    : 'bg-muted/20 text-muted-foreground hover:text-foreground',
+                )}
+                title={m === 'cp' ? 'Calls vs Puts (live signed)' : 'Bulls vs Bears (cumulative directional)'}
+              >
+                {m === 'cp' ? 'C/P' : 'B/B'}
               </button>
             ))}
           </div>
@@ -911,8 +942,9 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
         )}
       </div>
 
-      {/* Mode tabs — Bulls vs Bears hidden until it's migrated to the live
-          signed path. Showing a broken option produced noise in testing. */}
+      {/* Mode tabs render above (in the toolbar row alongside time-range pills).
+          BB is enabled in live mode only — past-mode bb is gated on
+          ct_flow_pulse_chart accepting p_until (see useFlowPulseChart TODO). */}
 
       {/* Headline + cp-mode legend on the same row when both apply */}
       {hasDataForMode && !showDirectionalEmpty && (headline.text || mode === 'cp') && (
