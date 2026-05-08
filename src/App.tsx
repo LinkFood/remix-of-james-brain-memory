@@ -44,6 +44,7 @@ import EodReport from "./pages/EodReport";
 import MorningBrief from "./pages/MorningBrief";
 import Alarms from "./pages/Alarms";
 import Heatmap from "./pages/Heatmap";
+import Butterflies from "./pages/Butterflies";
 import { ChatPanel } from "./components/command/ChatPanel";
 import { CommandPalette } from "./components/CommandPalette";
 import { useEffect, useState } from "react";
@@ -97,6 +98,7 @@ const TrackedRoutes = () => {
       <Route path="/morning-brief" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/morning-brief"><MorningBrief /></RouteBoundary></AuthLayout>} />
       <Route path="/alarms" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/alarms"><Alarms /></RouteBoundary></AuthLayout>} />
       <Route path="/heatmap" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/heatmap"><Heatmap /></RouteBoundary></AuthLayout>} />
+      <Route path="/butterflies" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/butterflies"><Butterflies /></RouteBoundary></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
       <Route path="/dashboard" element={<AuthLayout><RouteBoundary route="/dashboard"><Dashboard /></RouteBoundary></AuthLayout>} />
