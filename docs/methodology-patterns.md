@@ -833,6 +833,69 @@ When a Phase A or PR's hypothesis matches an existing `feedback_*.md` entry's do
 
 ---
 
+## cadence-anchored-thresholds-for-burst-cron-consumers — bimodal-burst metrics need cadence math, not statistical (p90/median) recipes
+
+When a freshness/staleness invariant measures a consumer that writes on a deterministic cron cadence, the underlying metric is **bimodal-burst**, not continuous-distribution. Many rows arrive in the same second (within-burst inter-arrival ≈ 0); the only meaningful gap is the inter-burst gap, which equals the cron interval. Statistical recipes (`p90`, `median`, `1.5 × median`, rolling percentiles) all collapse to ~0 on this shape because they're dominated by within-burst zeros — using them to set a freshness threshold either silences the invariant entirely (threshold=0 → every healthy second fires nothing) or anchors it nonsensically near zero.
+
+The right threshold is **cadence-anchored**: `cron_interval + 1 warden tick buffer`. The cron interval is the true empirical maximum age in healthy state; the warden tick buffer (typically 30 min for a 30-min warden cadence) gives one-tick slack so a single missed cron run trips the invariant on the next warden sample without false-firing on cadence-edge moments.
+
+**Why this matters:** the wrong instrument silences a bug class structurally. Either (a) the threshold is set below cadence and fires every tick on healthy operation (desensitization-class — see `feedback_warden_threshold_calibration.md` 2026-05-05 calibrate-DOWN case), or (b) the threshold is computed from p90/median and collapses to 0 (silenced-class — invariant exists but never fires). Both shapes defeat the warden's purpose.
+
+**Sub-pattern: phase-keyed thresholds sidestep the burst trap by design.** When the producer's cadence varies across phases (rth / off-hours / weekend / dead-of-night), encoding a different threshold per phase in the SQL `CASE phase.p WHEN ... THEN N` directly mirrors the cadence shape. Two of the 9 24/7 brain-consumer-freshness invariants from commit 16aaeb3 (`consumer_freshness_daily_brief_24x7`, `consumer_freshness_news_sweep_24x7`) use this design and never hit the burst trap. Worth considering for any new freshness invariant where producer cadence is non-uniform across phases.
+
+**Sibling but distinct from `brief-author-premise-error`** (above). That pattern catches *brief proposes a fix shape based on assumed cause; cause is wrong.* This pattern is the formula-recipe variant: *brief pre-specifies a statistical formula for threshold setting; the formula is wrong-instrument for the metric's distribution shape.* The structural fix at the brief-author layer is the same — briefs assert intent (*"recalibrate above empirical healthy baseline"*), not formula (*"use p90 of last 7d"*). Phase A identifies the metric's distribution shape first; the math follows the shape, not the other way around.
+
+**Sibling but distinct from `brief-framed-wrong-computational-layer`** (above). That pattern catches *brief frames cause at wrong layer; math at named layer is correct.* This one catches *brief specifies a statistical recipe; recipe assumes wrong distribution shape.* Both are brief-author-premise variants — different thing the brief got wrong.
+
+**Diagnostic question for every threshold-calibration brief:** *"What's the underlying metric's distribution shape? (a) bimodal-burst from deterministic cron — use cadence + warden tick buffer; (b) continuous from request rate / latency / ratio — use p90 + safety margin; (c) count-of-events with seasonality — use rolling-window percentile per season-bucket. Which shape matches my metric, and does my recipe match the shape?"*
+
+**Class kill shape:** before specifying any threshold-calibration formula, Phase A's first step is **identify the metric's distribution shape empirically**. Pull 7-day telemetry, group rows into bursts by gap >1min boundary, and compute inter-burst median. If inter-burst median > 0 and within-burst median ≈ 0 — bimodal-burst, use cadence math. If the inter-arrival distribution is unimodal continuous — use statistical recipe. The shape comes first, the formula comes second.
+
+### Instance — 2026-05-07 hypothesis_proposer 120 → 270 (Class B Phase B follow-on)
+
+**The brief premise:** "Recalibrate hypothesis_proposer threshold above empirical healthy baseline. Threshold = `max(p90 of last 7 days, 1.5× median)`. Justify the multiplier in migration comment."
+
+**Phase A.1 measurement (per `feedback_warden_threshold_calibration.md` burst-shape sub-pattern):**
+- Pulled 7-day `ct_brain_telemetry` for `consumer_name='ct-hypothesis-proposer'`: 176 rows.
+- Inter-arrival distribution: median 0.0 min, p90 1.1 min, p95 240.0 min. Ten gaps crossed 120 min (the current threshold), all 240.0–240.1 min — **bimodal-burst signature**.
+- Cron cadence: every 4h on UTC 11:00 / 15:00 / 19:00 (within active hours; 4h gap during RTH between 11:00→15:00 and 15:00→19:00 burst pairs).
+- `ct_invariant_log` empirical confirmation: today's RTH window 17:30Z=150min (FAIL), 18:00Z=180min (FAIL), 18:30Z=210min (FAIL), 19:00Z=240min (FAIL), 19:30Z=30min (PASS, burst arrived). Threshold 120 fires ~8× per RTH day on healthy operation.
+
+**The brief's recipe applied:** `max(p90, 1.5×median)` = `max(1.1, 0.0)` = **1.1 min**. Setting threshold to 1.1 min would silence the invariant entirely (every within-burst measurement passes; every between-burst gap fires permanently — desensitization-class). The recipe is wrong-instrument for the shape.
+
+**Phase A.2 audit of all 9 24/7 brain-consumer-freshness invariants from commit 16aaeb3:**
+
+| Consumer | Inter-burst cadence | Current threshold | Margin | 48h fires post-deploy | Classification |
+|---|---|---|---|---|---|
+| ct-alert-post-mortem | 30 min | 240 (uniform) | 8.0× | 0 | continuous-shape, calibrated |
+| ct-curiosity | 30 min | 120 (uniform) | 4.0× | 0 | continuous-shape, calibrated |
+| ct-daily-brief | 450 min | 1500/1560 (phase-keyed) | 3.3× | 0 | designed-phased |
+| ct-hypothesis-health-check | 15 min | 60 (uniform) | 4.0× | 0 | continuous-shape, calibrated |
+| **ct-hypothesis-proposer** | **240 min** | **120 (uniform)** | **0.5×** | **4 (max=240)** | **burst-shape, mis-calibrated** |
+| ct-news-sweep | 30 min | 120/480/720 (phase-keyed) | 4.0× | 0 | designed-phased |
+| ct-self-grader | 120 min | 240 (uniform) | 2.0× | 0 | continuous-shape, calibrated |
+| ct-tape-reader | 10 min | 30 (uniform) | 3.0× | 0 | continuous-shape, calibrated |
+| ct-watcher | 15 min | 60 (uniform) | 4.0× | 0 | continuous-shape, calibrated |
+
+**Only `hypothesis_proposer` is mis-calibrated.** The other 8 sit at 2-8× margin above empirical cadence with zero false fires. Single-purpose ship per Phase A.2 audit, not blanket multi-target migration.
+
+**Resolution:** threshold 120 → 270 = cron cadence (240) + warden tick buffer (30). Migration `20260510010000_hypothesis_proposer_threshold_recalibration.sql`, commit `8b64f34`. Validation window: 2026-05-08 RTH 13:00-20:00 UTC — old threshold's 8-fire-per-RTH-day pattern should be zero fires.
+
+**Class diagnostic question for future audits:** *"Before recommending a threshold-calibration formula, did Phase A identify the metric's distribution shape? If the shape is bimodal-burst, the formula is `cron_interval + warden_tick_buffer` — not p90 / median / rolling percentiles. The math follows the shape."*
+
+**Sibling-pattern observation across this session's audit-arc:** the brief specified a recipe (`max(p90, 1.5×median)`) that pre-committed to a continuous-distribution assumption. Phase A's first move was to verify the shape, not execute the recipe. The structural fix at the brief-author layer: **briefs assert intent (recalibrate to silence false fires) and ask Phase A to identify the underlying shape; briefs do NOT pre-specify formulas.** The formula is downstream of the shape diagnosis. Same family as `brief-author-premise-error` and `brief-framed-wrong-computational-layer` — different premise the brief got wrong (formula-vs-shape, not cause-vs-effect or layer-vs-layer).
+
+**Linked artifacts:**
+- Migration: `supabase/migrations/20260510010000_hypothesis_proposer_threshold_recalibration.sql`
+- Commit: `8b64f34` — fix(warden): hypothesis_proposer threshold 120→270 (cadence-anchored)
+- Updated memory entry: `feedback_warden_threshold_calibration.md` (sub-pattern: burst-shape consumers added)
+- Sibling 16aaeb3: feat(warden): class-kill C Phase B rescoped — 9 24/7 brain-consumer invariants
+- Phase-keyed sibling examples in same family: `consumer_freshness_daily_brief_24x7`, `consumer_freshness_news_sweep_24x7`
+- Sibling pattern: `brief-author-premise-error` (above) — same family, different premise shape
+- Sibling pattern: `brief-framed-wrong-computational-layer` (above) — same family, different premise shape
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
