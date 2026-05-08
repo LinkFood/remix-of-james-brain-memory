@@ -20,6 +20,24 @@
 
 export type CrossDirection = 'bullish' | 'bearish';
 
+/**
+ * Magnitude tertile per PR #64 empirical pass (15 RTH days × 10 tickers ×
+ * 434 graded crosses):
+ *   small ≤ $164,123 — noise (~50% NextClose hit)
+ *   mid   ≤ $510,149 — bullish-midday cell hits 71.9%
+ *   large > $510,149 — bearish reverse-hit 77.8%, the contrarian-buy cell
+ */
+export type CrossTertile = 's' | 'm' | 'L';
+
+const TERTILE_MID_CEIL = 164_123;
+const TERTILE_LARGE_CEIL = 510_149;
+
+export function magnitudeTertile(mag: number): CrossTertile {
+  if (mag <= TERTILE_MID_CEIL) return 's';
+  if (mag <= TERTILE_LARGE_CEIL) return 'm';
+  return 'L';
+}
+
 export interface CrossEvent {
   /** Display label from the data point (e.g. "9:32 AM"). */
   time: string;
@@ -29,6 +47,8 @@ export interface CrossEvent {
   direction: CrossDirection;
   /** Absolute gap |a-b| at the cross moment, in dollars. */
   magnitude: number;
+  /** Magnitude tertile per empirical thresholds. Drives visual hierarchy. */
+  tertile: CrossTertile;
 }
 
 interface CpPoint {
@@ -61,11 +81,13 @@ export function findCpCrosses<T extends CpPoint>(data: readonly T[]): CrossEvent
     const flipped = (prevDiff <= 0 && diff > 0) || (prevDiff >= 0 && diff < 0);
     const both_zero = prevDiff === 0 && diff === 0;
     if (flipped && !both_zero) {
+      const magnitude = Math.abs(diff);
       out.push({
         time: d.time,
         bucket_time: d.bucket_time,
         direction: diff > 0 ? 'bullish' : 'bearish',
-        magnitude: Math.abs(diff),
+        magnitude,
+        tertile: magnitudeTertile(magnitude),
       });
     }
     prevDiff = diff;
@@ -93,11 +115,13 @@ export function findBbCrosses<T extends BbPoint>(data: readonly T[]): CrossEvent
       const flipped = (prev <= 0 && diff > 0) || (prev >= 0 && diff < 0);
       const both_zero = prev === 0 && diff === 0;
       if (flipped && !both_zero) {
+        const magnitude = Math.abs(diff);
         out.push({
           time: d.time,
           bucket_time: d.bucket_time,
           direction: diff > 0 ? 'bullish' : 'bearish',
-          magnitude: Math.abs(diff),
+          magnitude,
+          tertile: magnitudeTertile(magnitude),
         });
       }
     }

@@ -84,7 +84,7 @@ export function FlowButterflySection() {
           <div className="flex items-center gap-2 flex-wrap text-[10px] font-mono">
             <div className="flex items-center gap-1">
               <span className="uppercase tracking-wider text-muted-foreground">window</span>
-              {(['today', '1h', '30m'] as const).map((r) => (
+              {(['today', '1h', '30m', '15m', '10m', '5m'] as const).map((r) => (
                 <button
                   key={r}
                   onClick={() => setAllRange(r)}
