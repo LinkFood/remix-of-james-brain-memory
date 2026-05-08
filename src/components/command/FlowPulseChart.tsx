@@ -477,6 +477,10 @@ function ButterflyBb({ data, height = 280, overlays = [], multiDay = false }: Bu
   // Sentinel rows (multi-day boundary nulls) skip gracefully.
   const crosses = useMemo<CrossEvent[]>(() => findBbCrosses(data), [data]);
 
+  // Day bands for multi-day Past mode (iter-#3 polish). Single-day BB mode
+  // doesn't get phase shading in this iteration.
+  const daySpans = useMemo<DaySpan[]>(() => computeDaySpans(data), [data]);
+
   const domain = useMemo<[number, number]>(() => {
     if (data.length === 0) return [-1, 1];
     let max = 0;
@@ -506,6 +510,18 @@ function ButterflyBb({ data, height = 280, overlays = [], multiDay = false }: Bu
             </linearGradient>
           </defs>
           <CartesianGrid stroke="#ffffff08" strokeDasharray="2 4" />
+          {/* Day bands underlay (multi-day Past mode only). Drawn FIRST so
+              areas + lines paint on top. */}
+          {multiDay && daySpans.map((sp, i) => (
+            <ReferenceArea
+              key={`bb-day-${i}-${sp.date}`}
+              x1={sp.x1}
+              x2={sp.x2}
+              fill={sp.fill}
+              fillOpacity={sp.fillOpacity}
+              ifOverflow="hidden"
+            />
+          ))}
           <XAxis
             dataKey="x_ms"
             type="number"
@@ -689,6 +705,61 @@ const PHASE_FILL: Record<SessionPhase, { fill: string; fillOpacity: number }> = 
   post_close:    { fill: '#52525b', fillOpacity: 0.04 },
 };
 
+/**
+ * Day span helper — for multi-day Past mode, returns one span per session
+ * day so the chart can render alternating subtle background bands. Sentinel
+ * rows (cum_*_=null at day boundaries) are skipped — bucket_time still
+ * carries the new day's timestamp on the sentinel, so day classification
+ * jumps cleanly. Each span carries the NY-tz date label for use in the
+ * tooltip / legend if needed.
+ */
+interface DaySpan {
+  date: string;       // YYYY-MM-DD NY-tz
+  x1: number;
+  x2: number;
+  fill: string;
+  fillOpacity: number;
+}
+
+function computeDaySpans<T extends { x_ms: number; bucket_time: string }>(data: readonly T[]): DaySpan[] {
+  if (data.length < 2) return [];
+  const out: DaySpan[] = [];
+  let runDate: string | null = null;
+  let runStart: number | null = null;
+  let runEnd: number | null = null;
+  let bandIndex = 0;
+  for (const p of data) {
+    const day = nyDateKey(p.bucket_time);
+    if (day !== runDate) {
+      if (runDate !== null && runStart !== null && runEnd !== null) {
+        const isAlternate = bandIndex % 2 === 1;
+        out.push({
+          date: runDate,
+          x1: runStart,
+          x2: runEnd,
+          fill: '#71717a',
+          fillOpacity: isAlternate ? 0.05 : 0.02,
+        });
+        bandIndex += 1;
+      }
+      runDate = day;
+      runStart = p.x_ms;
+    }
+    runEnd = p.x_ms;
+  }
+  if (runDate !== null && runStart !== null && runEnd !== null) {
+    const isAlternate = bandIndex % 2 === 1;
+    out.push({
+      date: runDate,
+      x1: runStart,
+      x2: runEnd,
+      fill: '#71717a',
+      fillOpacity: isAlternate ? 0.05 : 0.02,
+    });
+  }
+  return out;
+}
+
 function computePhaseSpans<T extends { x_ms: number; bucket_time: string }>(data: readonly T[]): PhaseSpan[] {
   if (data.length < 2) return [];
   const out: PhaseSpan[] = [];
@@ -717,10 +788,15 @@ function ButterflyCp({ data, height = 280, overlays = [], multiDay = false }: Bu
   // Computed at render-time inside useMemo. Linear scan, O(n), cheap.
   const crosses = useMemo<CrossEvent[]>(() => findCpCrosses(data), [data]);
 
-  // Phase spans — empirical session-phase shading underlays the chart.
-  // Multi-day sentinel rows (with malformed bucket_time) classify to
-  // post_close / pre_open and render as faint gray; not load-bearing.
+  // Phase spans — empirical session-phase shading underlays single-day
+  // charts. Per PR #64 § A.4 (open/midday/PM/close).
   const phaseSpans = useMemo<PhaseSpan[]>(() => computePhaseSpans(data), [data]);
+
+  // Day bands — for multi-day Past mode, alternating subtle background per
+  // session day so day boundaries are readable beyond just the sentinel
+  // gap-rendering. Renders INSTEAD of phase spans in multi-day mode (single
+  // chart shouldn't carry both layers — too visually noisy).
+  const daySpans = useMemo<DaySpan[]>(() => computeDaySpans(data), [data]);
 
   // Y-domain tight around actual data range with zero always visible so the
   // reference line means something. Symmetric-around-zero wasted ~60% of the
@@ -758,19 +834,31 @@ function ButterflyCp({ data, height = 280, overlays = [], multiDay = false }: Bu
       <ResponsiveContainer>
         <LineChart data={data} margin={{ top: 28, right: 8, bottom: 4, left: 0 }}>
           <CartesianGrid stroke="#ffffff08" strokeDasharray="2 4" />
-          {/* Empirical session-phase shading — drawn FIRST so data lines
-              draw on top. Subtle fills (4-6% opacity) so eye reads pattern
-              without losing the data. Per PR #64 § A.4. */}
-          {phaseSpans.map((sp, i) => (
-            <ReferenceArea
-              key={`phase-${i}-${sp.phase}-${sp.x1}`}
-              x1={sp.x1}
-              x2={sp.x2}
-              fill={sp.fill}
-              fillOpacity={sp.fillOpacity}
-              ifOverflow="hidden"
-            />
-          ))}
+          {/* Empirical session-phase shading (single-day) OR alternating
+              day bands (multi-day Past). Drawn FIRST so data lines draw
+              on top. Subtle fills so eye reads structure without losing
+              the data. Per PR #64 § A.4 + iter-#3 polish. */}
+          {multiDay
+            ? daySpans.map((sp, i) => (
+                <ReferenceArea
+                  key={`day-${i}-${sp.date}`}
+                  x1={sp.x1}
+                  x2={sp.x2}
+                  fill={sp.fill}
+                  fillOpacity={sp.fillOpacity}
+                  ifOverflow="hidden"
+                />
+              ))
+            : phaseSpans.map((sp, i) => (
+                <ReferenceArea
+                  key={`phase-${i}-${sp.phase}-${sp.x1}`}
+                  x1={sp.x1}
+                  x2={sp.x2}
+                  fill={sp.fill}
+                  fillOpacity={sp.fillOpacity}
+                  ifOverflow="hidden"
+                />
+              ))}
           <XAxis
             dataKey="x_ms"
             type="number"
@@ -1207,6 +1295,39 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
           <PopoverContent align="start" className="w-auto p-3 space-y-2">
             <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
               View past session
+            </div>
+            {/* Quick-pick presets (iter-#3) — one-tap range selection for
+                the most common lookback windows. Each picks N most-recent
+                weekday sessions ending yesterday. */}
+            <div className="flex items-center gap-1 flex-wrap pb-1 border-b border-border/30">
+              {([
+                { label: '1d', n: 1 },
+                { label: '3d', n: 3 },
+                { label: '5d', n: 5 },
+                { label: '10d', n: 10 },
+              ] as const).map((p) => (
+                <button
+                  key={p.label}
+                  onClick={() => {
+                    // lastNWeekdaysNy may include today's date if it's a
+                    // weekday. Past-mode is for completed sessions only,
+                    // so pull N+1 and drop today.
+                    const todayKey = todayNyIsoDate();
+                    const days = lastNWeekdaysNy(p.n + 1).filter((d) => d !== todayKey).slice(-p.n);
+                    if (days.length === 0) return;
+                    const start = days[0];
+                    const end = days[days.length - 1];
+                    setDraftStart(start);
+                    setDraftEnd(end);
+                    setDateRange({ start, end });
+                    setPickerOpen(false);
+                  }}
+                  className="text-[10px] font-mono px-2 py-0.5 rounded bg-muted/30 text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors"
+                  title={`View last ${p.n} trading day${p.n > 1 ? 's' : ''}`}
+                >
+                  {p.label}
+                </button>
+              ))}
             </div>
             <div className="flex items-center gap-2">
               <label className="text-[10px] font-mono text-muted-foreground w-10">From</label>

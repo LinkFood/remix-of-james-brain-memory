@@ -117,7 +117,7 @@ export function MiniFlowButterfly({ ticker, range, mode, dte = 'all' }: Props) {
       : 'text-muted-foreground';
 
   return (
-    <Card className="p-2 h-[180px] flex flex-col">
+    <Card className="p-2 h-[200px] flex flex-col">
       <div className="flex items-baseline justify-between mb-1 px-1">
         <span className="text-xs font-mono font-semibold tracking-wider">{ticker}</span>
         <span className={cn('text-[10px] font-mono tabular-nums', biasColor)}>
@@ -145,17 +145,32 @@ export function MiniFlowButterfly({ ticker, range, mode, dte = 'all' }: Props) {
               <XAxis dataKey="x_ms" type="number" domain={['dataMin', 'dataMax']} hide />
               <YAxis hide domain={['dataMin', 'dataMax']} />
               <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.2} strokeWidth={1} />
-              {/* Compact cross markers — colored dashed line, no label. */}
-              {crosses.map((c) => (
-                <ReferenceLine
-                  key={`mini-cp-cross-${c.bucket_time}`}
-                  x={c.x_ms}
-                  stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
-                  strokeOpacity={0.7}
-                  strokeWidth={1}
-                  strokeDasharray="2 2"
-                />
-              ))}
+              {/* Compact cross markers — stroke weight + opacity scale with
+                  tertile (s/m/L) per iter-#3 polish. Tiny letter at top
+                  matches the full chart's [s/m/L] chip without crowding the
+                  mini panel. */}
+              {crosses.map((c) => {
+                const isLarge = c.tertile === 'L';
+                const isSmall = c.tertile === 's';
+                return (
+                  <ReferenceLine
+                    key={`mini-cp-cross-${c.bucket_time}`}
+                    x={c.x_ms}
+                    stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
+                    strokeOpacity={isLarge ? 0.95 : isSmall ? 0.4 : 0.7}
+                    strokeWidth={isLarge ? 1.6 : isSmall ? 0.8 : 1}
+                    strokeDasharray={isLarge ? '3 2' : isSmall ? '2 4' : '2 2'}
+                    label={{
+                      value: c.tertile,
+                      position: 'top',
+                      fill: c.direction === 'bullish' ? '#34d399' : '#fb7185',
+                      fontSize: 9,
+                      fontFamily: 'monospace',
+                      offset: 2,
+                    }}
+                  />
+                );
+              })}
               <Line type="monotone" dataKey="cum_all_call" stroke="hsl(150 70% 60%)" strokeWidth={1.25} dot={false} isAnimationActive={false} />
               <Line type="monotone" dataKey="cum_all_put" stroke="hsl(350 75% 60%)" strokeWidth={1.25} dot={false} isAnimationActive={false} />
               <Line type="monotone" dataKey="cum_next_call" stroke="hsl(150 70% 60%)" strokeWidth={1} strokeDasharray="2 2" dot={false} isAnimationActive={false} />
@@ -170,16 +185,28 @@ export function MiniFlowButterfly({ ticker, range, mode, dte = 'all' }: Props) {
               <XAxis dataKey="x_ms" type="number" domain={['dataMin', 'dataMax']} hide />
               <YAxis hide domain={['dataMin', 'dataMax']} />
               <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.2} strokeWidth={1} />
-              {crosses.map((c) => (
-                <ReferenceLine
-                  key={`mini-bb-cross-${c.bucket_time}`}
-                  x={c.x_ms}
-                  stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
-                  strokeOpacity={0.7}
-                  strokeWidth={1}
-                  strokeDasharray="2 2"
-                />
-              ))}
+              {crosses.map((c) => {
+                const isLarge = c.tertile === 'L';
+                const isSmall = c.tertile === 's';
+                return (
+                  <ReferenceLine
+                    key={`mini-bb-cross-${c.bucket_time}`}
+                    x={c.x_ms}
+                    stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
+                    strokeOpacity={isLarge ? 0.95 : isSmall ? 0.4 : 0.7}
+                    strokeWidth={isLarge ? 1.6 : isSmall ? 0.8 : 1}
+                    strokeDasharray={isLarge ? '3 2' : isSmall ? '2 4' : '2 2'}
+                    label={{
+                      value: c.tertile,
+                      position: 'top',
+                      fill: c.direction === 'bullish' ? '#34d399' : '#fb7185',
+                      fontSize: 9,
+                      fontFamily: 'monospace',
+                      offset: 2,
+                    }}
+                  />
+                );
+              })}
               <Area type="monotone" dataKey="top_bb" stroke="hsl(150 70% 60%)" fill="hsl(150 70% 60%)" fillOpacity={0.25} strokeWidth={1.25} isAnimationActive={false} />
               <Area type="monotone" dataKey="bottom_bb" stroke="hsl(350 75% 60%)" fill="hsl(350 75% 60%)" fillOpacity={0.25} strokeWidth={1.25} isAnimationActive={false} />
             </AreaChart>
