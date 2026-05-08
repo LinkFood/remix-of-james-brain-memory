@@ -78,3 +78,23 @@ supabase/functions/ct-watcher/index.ts 3
 supabase/functions/health-check/index.ts 2
 supabase/functions/jac-code-agent/index.ts 2
 supabase/functions/jac-web-search/index.ts 3
+
+# ---- ct-mcp-verification-runner (added 2026-05-07 in 0c5b40e/3609322 ship) ----
+# Slipped past PR review with TS2578 + TS2345 — same shape as other inheritors.
+# CI was red on main from 0c5b40e through 8b64f34 because this file was never
+# allowlisted at merge time. Closes that gap as part of the Layer 1 coverage
+# extension (instance #42).
+supabase/functions/ct-mcp-verification-runner/index.ts 2
+
+# ---- mcp/ targets (Layer 1 coverage extension 2026-05-07, instance #42) ----
+# Pre-existing strictness errors at extension time. Same shape as supabase/
+# functions inheritance — Supabase client GenericStringError → Record<unknown>
+# conversions + unused @ts-expect-error directives + RPC param-type mismatches.
+# Not blocking deno run; would block deno check. Allowlisted at current
+# baseline per the existing class-kill-A pattern; cleanup is downstream PR.
+# Per-file baseline counts captured 2026-05-07 23:55Z, deno 2.7.14.
+
+mcp/cotrader/smoke-test.ts 5
+mcp/cotrader/tools/get_co_trader_context.ts 2
+mcp/cotrader/tools/get_eod_summary.ts 2
+mcp/cotrader/tests/run_verification.ts 4
