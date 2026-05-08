@@ -1,8 +1,17 @@
 #!/bin/bash
-# check_deno_types.sh — class-kill A from 2026-05-06 PR #27 incident retro.
+# check_deno_types.sh — class-kill A from 2026-05-06 PR #27 incident retro,
+# extended 2026-05-07 to cover all Deno targets in the repo (instance #42 of
+# the cascade catalog: defense-net-layer-coverage-gap; sub-class of
+# build-time-type-gate-not-applied-to-all-runtime-targets).
 #
-# Runs `deno check` on every TypeScript file under supabase/functions/
-# (except jac-watch-scheduler — has npm: imports requiring nodeModulesDir).
+# Runs `deno check` on every TypeScript file under:
+#   - supabase/functions/    (edge functions; original scope)
+#   - mcp/                   (cotrader MCP server + tools + lib + tests)
+#   - scripts/d3_experiment/ (Deno-shape analysis scripts; esm.sh imports)
+#
+# Excludes:
+#   - supabase/functions/jac-watch-scheduler/ (npm: imports need nodeModulesDir)
+#
 # Fails CI if any new error appears in a clean file OR if an existing
 # allowlisted file's error count grows above its baseline.
 #
@@ -116,7 +125,7 @@ while IFS= read -r f; do
     IMPROVEMENTS+=("$f (was $baseline, now $count — UPDATE allowlist)")
   fi
   # Equal count: silently OK
-done < <(find supabase/functions -name '*.ts' -not -path '*/jac-watch-scheduler/*')
+done < <(find supabase/functions mcp scripts/d3_experiment -name '*.ts' -not -path '*/jac-watch-scheduler/*')
 
 echo ""
 echo "[check_deno_types] Summary:"
