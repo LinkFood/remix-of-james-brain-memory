@@ -33,6 +33,7 @@ import Edge from "./pages/Edge";
 import Pulse from "./pages/Pulse";
 import Flags from "./pages/Flags";
 import Tape from "./pages/Tape";
+import TapeV2 from "./pages/TapeV2";
 import TapeReader from "./pages/TapeReader";
 import Specialists from "./pages/Specialists";
 import Detectors from "./pages/Detectors";
@@ -87,6 +88,7 @@ const TrackedRoutes = () => {
       <Route path="/pulse" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/pulse"><Pulse /></RouteBoundary></AuthLayout>} />
       <Route path="/flags" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/flags"><Flags /></RouteBoundary></AuthLayout>} />
       <Route path="/tape" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/tape"><Tape /></RouteBoundary></AuthLayout>} />
+      <Route path="/tape-v2" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/tape-v2"><TapeV2 /></RouteBoundary></AuthLayout>} />
       <Route path="/tape-reader" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/tape-reader"><TapeReader /></RouteBoundary></AuthLayout>} />
       <Route path="/specialists" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/specialists"><Specialists /></RouteBoundary></AuthLayout>} />
       <Route path="/detectors" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/detectors"><Detectors /></RouteBoundary></AuthLayout>} />
