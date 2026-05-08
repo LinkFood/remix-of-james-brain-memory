@@ -60,11 +60,12 @@ import {
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
 
-type RangeKey = 'today' | '1h' | '30m';
-type ModeKey = 'cp' | 'bb';        // Calls/Puts vs Bullish/Bearish
-type DteKey = 'all' | 'short' | 'long';
+// Exported for reuse by MiniFlowButterfly (multi-panel grid view at /butterflies).
+export type RangeKey = 'today' | '1h' | '30m';
+export type ModeKey = 'cp' | 'bb';        // Calls/Puts vs Bullish/Bearish
+export type DteKey = 'all' | 'short' | 'long';
 
-interface ButterflyPoint {
+export interface ButterflyPoint {
   time: string;
   bucket_time: string;
   // Mode 'bb' (cumulative): top_bb >= 0 (cum bull), bottom_bb <= 0 (cum bear, mirrored).
@@ -85,7 +86,7 @@ interface ButterflyPoint {
  * All four are signed running sums — they can rise above zero, fall below it,
  * and cross each other when the regime flips.
  */
-interface FourSeriesPoint {
+export interface FourSeriesPoint {
   time: string;
   bucket_time: string;
   cum_all_call: number;
@@ -99,7 +100,7 @@ interface Props {
   onTickerChange?: (t: string | null) => void;
 }
 
-function rangeToMin(r: RangeKey): number | undefined {
+export function rangeToMin(r: RangeKey): number | undefined {
   if (r === '1h') return 60;
   if (r === '30m') return 30;
   return undefined;
@@ -191,7 +192,7 @@ function pickField(p: FlowPulseChartPoint, side: 'calls' | 'puts' | 'bullish' | 
   return typeof v === 'number' && Number.isFinite(v) ? v : 0;
 }
 
-function buildButterfly(
+export function buildButterfly(
   points: FlowPulseChartPoint[],
   dte: DteKey,
   multiDay: boolean = false,
@@ -258,7 +259,7 @@ function buildButterfly(
  * Aggregation: single ticker → one row per ts; MARKET → defensive group-by-ts.
  * Sort by timestamp first, then integrate forward.
  */
-function buildLiveCp4Series(
+export function buildLiveCp4Series(
   points: NetPremiumExpirySplitPoint[],
   skipPreMarket: boolean,
   trailingMinutes?: number,

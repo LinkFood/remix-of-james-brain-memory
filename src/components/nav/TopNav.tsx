@@ -71,6 +71,7 @@ const NAV_GROUPS: NavGroup[] = [
       { path: '/', label: 'Flags' },
       { path: '/alarms', label: 'Alarms' },
       { path: '/heatmap', label: 'Heatmap' },
+      { path: '/butterflies', label: 'Butterflies' },
       { path: '/pulse', label: 'Pulse' },
       { path: '/specialists', label: 'Specialists' },
       { path: '/detectors', label: 'Detectors' },
