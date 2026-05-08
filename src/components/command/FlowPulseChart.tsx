@@ -40,6 +40,7 @@ import {
   CartesianGrid,
   Line,
   LineChart,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -68,7 +69,7 @@ import {
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
 
 // Exported for reuse by MiniFlowButterfly (multi-panel grid view at /butterflies).
-export type RangeKey = 'today' | '1h' | '30m';
+export type RangeKey = 'today' | '1h' | '30m' | '15m' | '10m' | '5m';
 export type ModeKey = 'cp' | 'bb';        // Calls/Puts vs Bullish/Bearish
 export type DteKey = 'all' | 'short' | 'long';
 
@@ -110,6 +111,9 @@ interface Props {
 export function rangeToMin(r: RangeKey): number | undefined {
   if (r === '1h') return 60;
   if (r === '30m') return 30;
+  if (r === '15m') return 15;
+  if (r === '10m') return 10;
+  if (r === '5m') return 5;
   return undefined;
 }
 
@@ -423,7 +427,7 @@ function ButterflyBb({ data, height = 280, overlays = [] }: ButterflyBbProps) {
   return (
     <div style={{ width: '100%', height }}>
       <ResponsiveContainer>
-        <AreaChart data={data} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+        <AreaChart data={data} margin={{ top: 28, right: 8, bottom: 4, left: 0 }}>
           <defs>
             <linearGradient id={fillTopId} x1="0" x2="0" y1="0" y2="1">
               <stop offset="0%" stopColor="#10b981" stopOpacity={0.55} />
@@ -449,25 +453,31 @@ function ButterflyBb({ data, height = 280, overlays = [] }: ButterflyBbProps) {
             width={72}
           />
           <ReferenceLine y={0} stroke="#a1a1aa" strokeOpacity={0.6} strokeDasharray="1 3" />
-          {/* Cross-event annotations — bull magnitude vs bear magnitude flip. */}
-          {crosses.map((c) => (
-            <ReferenceLine
-              key={`bb-cross-${c.bucket_time}`}
-              x={c.time}
-              stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
-              strokeOpacity={0.8}
-              strokeWidth={1.25}
-              strokeDasharray="3 2"
-              label={{
-                value: `${c.direction === 'bullish' ? '↗' : '↘'} ${formatPulseDollars(c.magnitude)}`,
-                position: 'top',
-                fill: c.direction === 'bullish' ? '#34d399' : '#fb7185',
-                fontSize: 10,
-                fontFamily: 'monospace',
-                offset: 4,
-              }}
-            />
-          ))}
+          {/* Cross-event annotations — bull magnitude vs bear magnitude flip.
+              Stroke weight + opacity scale with empirical tertile (s/m/L) so
+              eye reads magnitude before reading the label. */}
+          {crosses.map((c) => {
+            const isLarge = c.tertile === 'L';
+            const isSmall = c.tertile === 's';
+            return (
+              <ReferenceLine
+                key={`bb-cross-${c.bucket_time}`}
+                x={c.time}
+                stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
+                strokeOpacity={isLarge ? 0.95 : isSmall ? 0.4 : 0.75}
+                strokeWidth={isLarge ? 2 : isSmall ? 1 : 1.25}
+                strokeDasharray={isLarge ? '4 2' : isSmall ? '2 4' : '3 2'}
+                label={{
+                  value: `${c.direction === 'bullish' ? '↗' : '↘'} ${formatPulseDollars(c.magnitude)} [${c.tertile}]`,
+                  position: 'top',
+                  fill: c.direction === 'bullish' ? '#34d399' : '#fb7185',
+                  fontSize: 10,
+                  fontFamily: 'monospace',
+                  offset: 4,
+                }}
+              />
+            );
+          })}
           <Tooltip
             contentStyle={{
               background: '#0a0a0a',
@@ -557,10 +567,82 @@ interface ButterflyCpProps {
  * Y-domain is symmetric ± max magnitude across all 4 series so the zero line
  * stays the visual midpoint and crossovers read cleanly.
  */
+/**
+ * Phase span helper — classifies session phase per the empirical pass
+ * (PR #64 design doc § A.4). Phases are defined as minutes since 13:30 UTC
+ * (RTH bell):
+ *   open_hour      0-59     — decent signal
+ *   midday         60-239   — high-signal cell (71.9% mid-bull, 69.2% large-bear contrarian)
+ *   mid_afternoon  240-329  — collapses toward noise
+ *   close_hour     330+     — noisy / EOD positioning unwind
+ *
+ * Returns one span per consecutive same-phase run of data points. Each span
+ * carries the categorical `time` strings to feed Recharts ReferenceArea
+ * x1/x2. Empty for non-RTH or single-point datasets.
+ */
+type SessionPhase = 'open_hour' | 'midday' | 'mid_afternoon' | 'close_hour' | 'pre_open' | 'post_close';
+
+interface PhaseSpan {
+  phase: SessionPhase;
+  x1: string;
+  x2: string;
+  fill: string;
+  fillOpacity: number;
+}
+
+function classifyPhase(iso: string): SessionPhase {
+  const d = new Date(iso);
+  const utcMin = d.getUTCHours() * 60 + d.getUTCMinutes();
+  const sinceBell = utcMin - (13 * 60 + 30);
+  if (sinceBell < 0) return 'pre_open';
+  if (sinceBell < 60) return 'open_hour';
+  if (sinceBell < 240) return 'midday';
+  if (sinceBell < 330) return 'mid_afternoon';
+  if (sinceBell < 390) return 'close_hour';
+  return 'post_close';
+}
+
+const PHASE_FILL: Record<SessionPhase, { fill: string; fillOpacity: number }> = {
+  pre_open:      { fill: '#52525b', fillOpacity: 0.04 },
+  open_hour:     { fill: '#f59e0b', fillOpacity: 0.06 },
+  midday:        { fill: '#10b981', fillOpacity: 0.05 },
+  mid_afternoon: { fill: '#71717a', fillOpacity: 0.04 },
+  close_hour:    { fill: '#f43f5e', fillOpacity: 0.06 },
+  post_close:    { fill: '#52525b', fillOpacity: 0.04 },
+};
+
+function computePhaseSpans<T extends { time: string; bucket_time: string }>(data: readonly T[]): PhaseSpan[] {
+  if (data.length < 2) return [];
+  const out: PhaseSpan[] = [];
+  let runPhase: SessionPhase | null = null;
+  let runStart: string | null = null;
+  let runEnd: string | null = null;
+  for (const p of data) {
+    const ph = classifyPhase(p.bucket_time);
+    if (ph !== runPhase) {
+      if (runPhase !== null && runStart !== null && runEnd !== null) {
+        out.push({ phase: runPhase, x1: runStart, x2: runEnd, ...PHASE_FILL[runPhase] });
+      }
+      runPhase = ph;
+      runStart = p.time;
+    }
+    runEnd = p.time;
+  }
+  if (runPhase !== null && runStart !== null && runEnd !== null) {
+    out.push({ phase: runPhase, x1: runStart, x2: runEnd, ...PHASE_FILL[runPhase] });
+  }
+  return out;
+}
+
 function ButterflyCp({ data, height = 280, overlays = [] }: ButterflyCpProps) {
   // Cross-event detection — primary cross only (cum_all_call vs cum_all_put).
   // Computed at render-time inside useMemo. Linear scan, O(n), cheap.
   const crosses = useMemo<CrossEvent[]>(() => findCpCrosses(data), [data]);
+
+  // Phase spans — empirical session-phase shading underlays the chart.
+  // Multi-day sentinel rows (with malformed bucket_time) classify to
+  // post_close / pre_open and render as faint gray; not load-bearing.
+  const phaseSpans = useMemo<PhaseSpan[]>(() => computePhaseSpans(data), [data]);
 
   // Y-domain tight around actual data range with zero always visible so the
   // reference line means something. Symmetric-around-zero wasted ~60% of the
@@ -596,8 +678,21 @@ function ButterflyCp({ data, height = 280, overlays = [] }: ButterflyCpProps) {
   return (
     <div style={{ width: '100%', height }}>
       <ResponsiveContainer>
-        <LineChart data={data} margin={{ top: 8, right: 8, bottom: 4, left: 0 }}>
+        <LineChart data={data} margin={{ top: 28, right: 8, bottom: 4, left: 0 }}>
           <CartesianGrid stroke="#ffffff08" strokeDasharray="2 4" />
+          {/* Empirical session-phase shading — drawn FIRST so data lines
+              draw on top. Subtle fills (4-6% opacity) so eye reads pattern
+              without losing the data. Per PR #64 § A.4. */}
+          {phaseSpans.map((sp, i) => (
+            <ReferenceArea
+              key={`phase-${i}-${sp.phase}-${sp.x1}`}
+              x1={sp.x1}
+              x2={sp.x2}
+              fill={sp.fill}
+              fillOpacity={sp.fillOpacity}
+              ifOverflow="hidden"
+            />
+          ))}
           <XAxis
             dataKey="time"
             stroke="#71717a"
@@ -616,25 +711,31 @@ function ButterflyCp({ data, height = 280, overlays = [] }: ButterflyCpProps) {
           />
           <ReferenceLine y={0} stroke="#a1a1aa" strokeOpacity={0.6} strokeDasharray="1 3" />
           {/* Cross-event annotations — vertical line + label per cross.
-              Bullish (calls rose above puts) = emerald; bearish = rose. */}
-          {crosses.map((c) => (
-            <ReferenceLine
-              key={`cp-cross-${c.bucket_time}`}
-              x={c.time}
-              stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
-              strokeOpacity={0.8}
-              strokeWidth={1.25}
-              strokeDasharray="3 2"
-              label={{
-                value: `${c.direction === 'bullish' ? '↗' : '↘'} ${formatPulseDollars(c.magnitude)}`,
-                position: 'top',
-                fill: c.direction === 'bullish' ? '#34d399' : '#fb7185',
-                fontSize: 10,
-                fontFamily: 'monospace',
-                offset: 4,
-              }}
-            />
-          ))}
+              Bullish (calls rose above puts) = emerald; bearish = rose.
+              Stroke weight + opacity scale with empirical tertile (s/m/L)
+              so eye reads magnitude before reading the label. */}
+          {crosses.map((c) => {
+            const isLarge = c.tertile === 'L';
+            const isSmall = c.tertile === 's';
+            return (
+              <ReferenceLine
+                key={`cp-cross-${c.bucket_time}`}
+                x={c.time}
+                stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
+                strokeOpacity={isLarge ? 0.95 : isSmall ? 0.4 : 0.8}
+                strokeWidth={isLarge ? 2 : isSmall ? 1 : 1.25}
+                strokeDasharray={isLarge ? '4 2' : isSmall ? '2 4' : '3 2'}
+                label={{
+                  value: `${c.direction === 'bullish' ? '↗' : '↘'} ${formatPulseDollars(c.magnitude)} [${c.tertile}]`,
+                  position: 'top',
+                  fill: c.direction === 'bullish' ? '#34d399' : '#fb7185',
+                  fontSize: 10,
+                  fontFamily: 'monospace',
+                  offset: 4,
+                }}
+              />
+            );
+          })}
           <Tooltip
             contentStyle={{
               background: '#0a0a0a',
@@ -946,10 +1047,12 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
         </select>
 
         {/* Live windowing tabs — hidden in past mode (a past date implies an
-            entire session, not a trailing tail). */}
+            entire session, not a trailing tail). Tighter windows (15m / 10m
+            / 5m) added 2026-05-08 so captain can read individual cross
+            events when flow lands every 2-5 min. */}
         {!isPast && (
           <div className="flex items-center gap-1">
-            {(['today', '1h', '30m'] as const).map((r) => (
+            {(['today', '1h', '30m', '15m', '10m', '5m'] as const).map((r) => (
               <button
                 key={r}
                 onClick={() => setRange(r)}
@@ -960,7 +1063,7 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
                     : 'bg-muted/20 text-muted-foreground hover:text-foreground',
                 )}
               >
-                {r === 'today' ? 'Today' : r === '1h' ? '1h' : '30m'}
+                {r === 'today' ? 'Today' : r}
               </button>
             ))}
           </div>
@@ -1137,7 +1240,7 @@ export function FlowPulseChart({ ticker, onTickerChange }: Props) {
           <span className="text-[12px] text-muted-foreground italic">
             {isPast && dateRange
               ? `No flow between ${dateRange.start} and ${dateRange.end}`
-              : `No flow in ${range === '30m' ? 'last 30 min' : range === '1h' ? 'last hour' : 'today’s session'}`}
+              : `No flow in ${range === 'today' ? 'today’s session' : range === '1h' ? 'last hour' : `last ${range}`}`}
           </span>
           <span className="text-[10px] text-muted-foreground/70">
             {isPast

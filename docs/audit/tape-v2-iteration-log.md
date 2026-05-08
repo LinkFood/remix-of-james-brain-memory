@@ -56,3 +56,27 @@ Captain first reaction: "good bones, needs work, alot of small different things.
 **PR / commit:** #73 (squash 8e1ca4c)
 
 ---
+
+## 2026-05-08 — Flow Butterfly iteration #1: quick alpha wins
+
+**What changed:** Four bundled visual upgrades to the Flow Butterfly chart (shared across `/tape`, `/tape-v2`, and `/butterflies`):
+
+1. **Cross label cutoff fixed.** `LineChart`/`AreaChart` `margin.top` 8 → 28 in both `ButterflyCp` and `ButterflyBb`. Cross magnitude labels (`↗ $4.9M`) at `position: 'top'` with `offset: 4` no longer clip against the chart container's top edge.
+2. **Tighter time windows.** `RangeKey` extended `'today' | '1h' | '30m'` → `'today' | '1h' | '30m' | '15m' | '10m' | '5m'`. `rangeToMin` covers the new keys. Toolbar tabs in `FlowPulseChart`, `FlowButterflySection` (ALL mode), and `Butterflies.tsx` all extended. Captain reads individual cross events when prints land every 2-5 min.
+3. **Magnitude tertile chip + stroke styling per cross.** `flowButterflyCrosses.ts` now classifies each `CrossEvent` into `s` / `m` / `L` per the empirical thresholds from PR #64 design pass (small ≤ $164,123 = noise; mid ≤ $510,149 = bullish-midday cell hits 71.9%; large > $510,149 = bearish reverse-hit 77.8%). Cross labels render as `↗ $4.9M [L]`. Stroke style scales with tertile: large = bold/full opacity/`4 2` dash; mid = current; small = hairline/40% opacity/`2 4` dash. Eye reads magnitude tier before reading the label.
+4. **Empirical session-phase shading underlay (ButterflyCp only in v1).** `computePhaseSpans()` helper classifies each data point's `bucket_time` into `open_hour` / `midday` / `mid_afternoon` / `close_hour` per PR #64 § A.4. Renders `ReferenceArea` per consecutive-same-phase run with subtle 4–6% fill — amber for open, emerald for midday (high-signal cell), slate for mid_afternoon, rose for close. Captain reads phase without computing minutes-since-bell.
+
+**Why:** Captain pain points from screenshots 2026-05-08 (3:51, 3:53, 3:54, 4:03 PM) plus alpha-tightness — the empirical pass found magnitude tertile + session phase are the two strongest signal-conditioning axes. Surfacing them visually moves the captain's read from "compute filter in head" to "see filter on chart."
+
+**End-state:**
+- Cross labels render fully visible (no clipping).
+- Range tabs offer Today / 1h / 30m / 15m / 10m / 5m. Captain picks tighter windows during high-flow moments.
+- Each cross visually encodes magnitude tier via stroke + label `[s]` / `[m]` / `[L]` chip.
+- ButterflyCp chart background carries faint phase-shading bands (amber=open, emerald=midday, slate=PM, rose=close) showing the empirical signal-rich vs noisy phases.
+- All four changes propagate to `/tape` as well (shared FlowPulseChart) — bug fixes are a feature there, not a regression.
+
+**Deferred to iteration #2 (overlay alignment fix) and #3 (ALL-mode + Past-mode polish):** captain's other flagged issues from same screenshots — overlays out-of-axis, ALL mode visual density, Past-mode lookback polish.
+
+**PR / commit:** TBD on push
+
+---
