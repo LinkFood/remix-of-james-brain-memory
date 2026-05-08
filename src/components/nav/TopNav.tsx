@@ -66,6 +66,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Trade',
     items: [
       { path: '/tape', label: 'Tape' },
+      { path: '/tape-v2', label: 'Tape v2' },
       { path: '/edge', label: 'Edge' },
       { path: '/tape-reader', label: 'Tape Reader' },
       { path: '/', label: 'Flags' },
