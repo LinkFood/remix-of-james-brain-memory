@@ -77,6 +77,32 @@ Captain first reaction: "good bones, needs work, alot of small different things.
 
 **Deferred to iteration #2 (overlay alignment fix) and #3 (ALL-mode + Past-mode polish):** captain's other flagged issues from same screenshots — overlays out-of-axis, ALL mode visual density, Past-mode lookback polish.
 
+**PR / commit:** #75 (squash 08e3fb6)
+
+---
+
+## 2026-05-08 — Flow Butterfly iteration #2: overlay alignment structural fix
+
+**What changed:** XAxis switched from categorical `time` strings to numeric `x_ms` (epoch ms via `Date.parse(bucket_time)`) on `ButterflyCp`, `ButterflyBb`, and `MiniFlowButterfly`. New `rebaseSeriesToToday()` helper shifts each overlay's `x_ms` values onto today's NY-tz session date while preserving HH:MM. `CrossEvent` and `PhaseSpan` types both carry `x_ms` now. `FourSeriesPoint` and `ButterflyPoint` types both carry `x_ms`. Tooltip `labelFormatter` reads `time` string from the payload (not from the numeric axis value). XAxis `tickFormatter` calls `formatXMsTick(v, multiDay)` so multi-day still shows date prefixes.
+
+**Why:** Pre-iter-#2, the XAxis used `dataKey="time"` in default categorical mode. `fmtTime()` returns labels like `"1:35 PM"` with no date prefix. Today's `1:35 PM` and 5/4's `1:35 PM` collapsed into the same axis category — Recharts then merged today's data and overlay data onto colliding categories with non-deterministic ordering. Visible symptom (captain screenshot 4:03:53 PM): x-axis labels out of chronological order (`1:35 PM, 2:40 PM, 3:45 PM, 2:05 PM…`); ghost overlays clipped onto the wrong axis range.
+
+**End-state:**
+- Single-day live + historical: each point's `x_ms = Date.parse(bucket_time)`. Numeric XAxis. Tick labels render as time strings via `formatXMsTick`.
+- Overlays: `rebaseSeriesToToday()` shifts each prior session's `x_ms` to today's date with same HH:MM. Today's `1:35 PM = 5/4's 1:35 PM` rebased = same numeric `x_ms`. Ghost lines collapse cleanly onto today's axis.
+- Multi-day Past mode: each session's bucket_time has a different date, so numeric `x_ms` differs naturally. XAxis order is correct chronologically. `formatXMsTick(v, multiDay=true)` adds date prefix to ticks.
+- Cross markers: `<ReferenceLine x={c.x_ms} />` — numeric, aligned.
+- Phase shading: `<ReferenceArea x1={sp.x1} x2={sp.x2} />` — numeric, aligned.
+- Tooltip: hover shows the original time string from the data payload (not the numeric x_ms value).
+- MiniFlowButterfly inherits the same pattern (its hidden XAxis also numeric).
+
+**Files touched:**
+- `src/components/command/FlowPulseChart.tsx` — type defs, builders emit `x_ms`, new `rebaseSeriesToToday()` + `formatXMsTick()` helpers, ButterflyBb/Cp XAxis numeric + tickFormatter + labelFormatter + multiDay prop, `cpOverlays` rebases each overlay
+- `src/lib/flowButterflyCrosses.ts` — `CpPoint` / `BbPoint` add `x_ms`, `CrossEvent` adds `x_ms`, both finders propagate
+- `src/components/command/MiniFlowButterfly.tsx` — hidden XAxis switches to numeric `x_ms` + ReferenceLine x= numeric
+
+**Deferred to iteration #3:** ALL-mode polish (per-panel y-axis unification toggle + cross magnitude micro-glyph) + Past-mode polish (day bands + quick-pick presets + per-day mini-summary chips).
+
 **PR / commit:** TBD on push
 
 ---

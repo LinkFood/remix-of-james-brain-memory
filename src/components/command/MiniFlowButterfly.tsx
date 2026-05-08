@@ -140,15 +140,16 @@ export function MiniFlowButterfly({ ticker, range, mode, dte = 'all' }: Props) {
         ) : mode === 'cp' ? (
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={cpData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-              {/* Hidden XAxis so ReferenceLine x={time} can resolve. */}
-              <XAxis dataKey="time" hide />
+              {/* Numeric XAxis on x_ms (epoch ms) — same axis convention as
+                  the full FlowPulseChart since iter-#2. Hidden visually. */}
+              <XAxis dataKey="x_ms" type="number" domain={['dataMin', 'dataMax']} hide />
               <YAxis hide domain={['dataMin', 'dataMax']} />
               <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.2} strokeWidth={1} />
               {/* Compact cross markers — colored dashed line, no label. */}
               {crosses.map((c) => (
                 <ReferenceLine
                   key={`mini-cp-cross-${c.bucket_time}`}
-                  x={c.time}
+                  x={c.x_ms}
                   stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
                   strokeOpacity={0.7}
                   strokeWidth={1}
@@ -164,14 +165,15 @@ export function MiniFlowButterfly({ ticker, range, mode, dte = 'all' }: Props) {
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={bbData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
-              {/* Hidden XAxis so ReferenceLine x={time} can resolve. */}
-              <XAxis dataKey="time" hide />
+              {/* Numeric XAxis on x_ms (epoch ms) — same axis convention as
+                  the full FlowPulseChart since iter-#2. Hidden visually. */}
+              <XAxis dataKey="x_ms" type="number" domain={['dataMin', 'dataMax']} hide />
               <YAxis hide domain={['dataMin', 'dataMax']} />
               <ReferenceLine y={0} stroke="hsl(var(--muted-foreground))" strokeOpacity={0.2} strokeWidth={1} />
               {crosses.map((c) => (
                 <ReferenceLine
                   key={`mini-bb-cross-${c.bucket_time}`}
-                  x={c.time}
+                  x={c.x_ms}
                   stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
                   strokeOpacity={0.7}
                   strokeWidth={1}

@@ -43,6 +43,10 @@ export interface CrossEvent {
   time: string;
   /** ISO timestamp of the bar at which the cross becomes true. */
   bucket_time: string;
+  /** Numeric x-axis value (Date.parse(bucket_time)) for use as ReferenceLine
+      x= prop with numeric XAxis. Added 2026-05-08 iter-#2 to fix overlay
+      alignment. */
+  x_ms: number;
   /** bullish = call/bull series rose above put/bear; bearish = opposite. */
   direction: CrossDirection;
   /** Absolute gap |a-b| at the cross moment, in dollars. */
@@ -54,6 +58,7 @@ export interface CrossEvent {
 interface CpPoint {
   time: string;
   bucket_time: string;
+  x_ms: number;
   cum_all_call: number;
   cum_all_put: number;
 }
@@ -61,6 +66,7 @@ interface CpPoint {
 interface BbPoint {
   time: string;
   bucket_time: string;
+  x_ms: number;
   top_bb_abs: number | null;
   bottom_bb_abs: number | null;
 }
@@ -85,6 +91,7 @@ export function findCpCrosses<T extends CpPoint>(data: readonly T[]): CrossEvent
       out.push({
         time: d.time,
         bucket_time: d.bucket_time,
+        x_ms: d.x_ms,
         direction: diff > 0 ? 'bullish' : 'bearish',
         magnitude,
         tertile: magnitudeTertile(magnitude),
@@ -119,6 +126,7 @@ export function findBbCrosses<T extends BbPoint>(data: readonly T[]): CrossEvent
         out.push({
           time: d.time,
           bucket_time: d.bucket_time,
+          x_ms: d.x_ms,
           direction: diff > 0 ? 'bullish' : 'bearish',
           magnitude,
           tertile: magnitudeTertile(magnitude),
