@@ -57,6 +57,11 @@ import {
   type FlowPulseDateRange,
   type NetPremiumExpirySplitPoint,
 } from '@/hooks/useFlowPulse';
+import {
+  findCpCrosses,
+  findBbCrosses,
+  type CrossEvent,
+} from '@/lib/flowButterflyCrosses';
 
 const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA'];
 
@@ -379,6 +384,10 @@ function ButterflyBb({ data, height = 280 }: ButterflyBbProps) {
   const fillTopId = 'butterfly-top-bb';
   const fillBottomId = 'butterfly-bottom-bb';
 
+  // Cross-event detection — bull-area magnitude vs bear-area magnitude.
+  // Sentinel rows (multi-day boundary nulls) skip gracefully.
+  const crosses = useMemo<CrossEvent[]>(() => findBbCrosses(data), [data]);
+
   const domain = useMemo<[number, number]>(() => {
     if (data.length === 0) return [-1, 1];
     let max = 0;
@@ -422,6 +431,25 @@ function ButterflyBb({ data, height = 280 }: ButterflyBbProps) {
             width={72}
           />
           <ReferenceLine y={0} stroke="#a1a1aa" strokeOpacity={0.6} strokeDasharray="1 3" />
+          {/* Cross-event annotations — bull magnitude vs bear magnitude flip. */}
+          {crosses.map((c) => (
+            <ReferenceLine
+              key={`bb-cross-${c.bucket_time}`}
+              x={c.time}
+              stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
+              strokeOpacity={0.8}
+              strokeWidth={1.25}
+              strokeDasharray="3 2"
+              label={{
+                value: `${c.direction === 'bullish' ? '↗' : '↘'} ${formatPulseDollars(c.magnitude)}`,
+                position: 'top',
+                fill: c.direction === 'bullish' ? '#34d399' : '#fb7185',
+                fontSize: 10,
+                fontFamily: 'monospace',
+                offset: 4,
+              }}
+            />
+          ))}
           <Tooltip
             contentStyle={{
               background: '#0a0a0a',
@@ -480,6 +508,10 @@ interface ButterflyCpProps {
  * stays the visual midpoint and crossovers read cleanly.
  */
 function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
+  // Cross-event detection — primary cross only (cum_all_call vs cum_all_put).
+  // Computed at render-time inside useMemo. Linear scan, O(n), cheap.
+  const crosses = useMemo<CrossEvent[]>(() => findCpCrosses(data), [data]);
+
   // Y-domain tight around actual data range with zero always visible so the
   // reference line means something. Symmetric-around-zero wasted ~60% of the
   // canvas on one-way sessions where everything lives in the positive half.
@@ -533,6 +565,26 @@ function ButterflyCp({ data, height = 280 }: ButterflyCpProps) {
             width={72}
           />
           <ReferenceLine y={0} stroke="#a1a1aa" strokeOpacity={0.6} strokeDasharray="1 3" />
+          {/* Cross-event annotations — vertical line + label per cross.
+              Bullish (calls rose above puts) = emerald; bearish = rose. */}
+          {crosses.map((c) => (
+            <ReferenceLine
+              key={`cp-cross-${c.bucket_time}`}
+              x={c.time}
+              stroke={c.direction === 'bullish' ? '#10b981' : '#f43f5e'}
+              strokeOpacity={0.8}
+              strokeWidth={1.25}
+              strokeDasharray="3 2"
+              label={{
+                value: `${c.direction === 'bullish' ? '↗' : '↘'} ${formatPulseDollars(c.magnitude)}`,
+                position: 'top',
+                fill: c.direction === 'bullish' ? '#34d399' : '#fb7185',
+                fontSize: 10,
+                fontFamily: 'monospace',
+                offset: 4,
+              }}
+            />
+          ))}
           <Tooltip
             contentStyle={{
               background: '#0a0a0a',
