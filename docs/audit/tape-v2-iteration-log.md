@@ -103,6 +103,31 @@ Captain first reaction: "good bones, needs work, alot of small different things.
 
 **Deferred to iteration #3:** ALL-mode polish (per-panel y-axis unification toggle + cross magnitude micro-glyph) + Past-mode polish (day bands + quick-pick presets + per-day mini-summary chips).
 
+**PR / commit:** #76 (squash; merged 2026-05-08 20:34Z)
+
+---
+
+## 2026-05-08 — Flow Butterfly iteration #3: ALL-mode + Past-mode polish
+
+**What changed:** Three bundled polish items closing out the Flow Butterfly iteration sequence.
+
+1. **Cross magnitude micro-glyph in MiniFlowButterfly.** Mini cross markers now carry a tiny `s` / `m` / `L` letter at the top of the dashed line (matching the full chart's `[s/m/L]` chip). Stroke weight + opacity scale with tertile (large=1.6 / 0.95; mid=1 / 0.7; small=0.8 / 0.4). Card height bumped 180 → 200 px to give the new label clearance. Eye reads tertile in the 10-up grid without needing a tooltip.
+2. **Day bands in multi-day Past mode.** New `computeDaySpans()` helper emits one alternating subtle ReferenceArea per session day (5% / 2% gray fills). Renders in BOTH `ButterflyCp` and `ButterflyBb` when `multiDay=true`. Phase-shading underlay disables in multi-day mode (mixing layers was visually noisy); single-day modes keep phase-shading as before.
+3. **Quick-pick date presets.** New row of `1d / 3d / 5d / 10d` preset buttons in the Past-mode date picker popover, above the From/To inputs. Each pick computes the N most-recent NY-tz weekday sessions ending yesterday (drops today since Past is for completed sessions only), commits the range, and closes the popover.
+
+**Why:** Captain pain points from screenshots 2026-05-08 (4:03:17 ALL mode, 4:04:30 Past mode lookback). Quick-picks remove the typing-two-YYYY-MM-DD friction the captain flagged. Day bands resolve the "look back bays need fixed" cluttered visual.
+
+**End-state:**
+- ALL mode: 10-up grid panels carry tertile-encoded cross markers with `s` / `m` / `L` micro-glyphs. Captain reads magnitude tier on each panel without expanding to the full chart. Per-panel y-axis preserved (per /butterflies design philosophy of "read pattern shape, not magnitude across") — unified y-scale toggle deferred until captain asks.
+- Past mode multi-day: alternating subtle gray bands separate session days clearly. Per-day reads stay independent (each session resets cumsum to zero per the existing sentinel-row mechanism) but the visual separation is now obvious.
+- Date picker: `1d / 3d / 5d / 10d` quick-picks in popover header; manual From/To still works for arbitrary ranges.
+
+**Files touched:**
+- `src/components/command/FlowPulseChart.tsx` — `computeDaySpans()` + `DaySpan` interface; ButterflyCp + ButterflyBb render day bands when multiDay (instead of phase shading); quick-pick preset buttons in date popover
+- `src/components/command/MiniFlowButterfly.tsx` — cross markers carry tertile-aware stroke + tiny `s/m/L` label; card height 180 → 200
+
+**Iteration sequence closeout:** This wraps the Flow Butterfly bundle. Captain validates iter-#1 + iter-#2 + iter-#3 cumulatively on `/tape-v2` and `/tape`. Next direction at captain's call — likely the Rank 1 detector + grader autonomous build (per PR #64 design pass) which builds the 30-day grading corpus that unlocks "inline hit-rate per cross" alpha.
+
 **PR / commit:** TBD on push
 
 ---
