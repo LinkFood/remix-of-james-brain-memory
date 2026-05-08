@@ -186,10 +186,11 @@ UW MCP is **write-path only** (ingester crons). Consumers never call UW at runti
 
 **PR #54 Path C closure** — `eaf04dd` (`docs/runbooks/ct_invariants_sql_authoring.md`) + `da7d224` (instance #41 — warden parser semicolon-blindness on string literals). Pre-commit hook YAGNI-deferred per <1/month rate estimate (subsequently disproven; see PR #57).
 
-**Tonight's three ships (2026-05-07 evening):**
+**Tonight's four ships (2026-05-07 evening):**
 - `8b64f34` — `consumer_freshness_hypothesis_proposer_24x7` threshold 120→270 (cadence-anchored after Phase A.2 audit of all 9 24/7 invariants; only burst-shape mis-calibration in the cohort)
 - **PR #56** — methodology-pattern entry `cadence-anchored-thresholds-for-burst-cron-consumers` codified in `docs/methodology-patterns.md`
 - **PR #57** — docs-PR discipline restored structurally via `.github/workflows/docs-pr-discipline.yml` + `docs/governance/pr-only-on-docs.md` (after 3 same-day violations: `16aaeb3` mixed code+docs / `eaf04dd` / `da7d224`)
+- **PR #59** — defense-net Layer 1 coverage gap closed (cascade #42). Class-kill A's `deno check` gate covered `supabase/functions/` only; tonight's `mcp/cotrader/server.ts:322` typo (unbalanced quote → unterminated string literal) slipped past — surfaced as MCP daemon spawn failure on `/mcp reconnect`. PR #59 extends `find` to `mcp/` + `scripts/d3_experiment/` and incidentally restored CI to green on main (had been red since `0c5b40e` from `ct-mcp-verification-runner` slipping past allowlisting at PR review).
 
 **Cascade catalog: 22 new instances since Wed end-of-day** — grew from #20 to #42. ~25 sub-classes codified in `docs/methodology-patterns.md`. Notable today: #29 (back-anchorability — F3 reads `ct_gex_timeseries` append-only, NOT `ct_ticker_snapshots` overwrite), #40 (specialist freshness measurement-shape; queued post-RTH/post-D2.2-verdict), #41 (warden parser semicolon-blindness on string literals).
 
