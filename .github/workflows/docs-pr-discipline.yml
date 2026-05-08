@@ -1,0 +1,75 @@
+name: docs-pr-discipline
+
+# Enforces "PR-only on docs/" governance: every change to a file under docs/
+# must arrive on main via a PR, not a direct push. See
+# docs/governance/pr-only-on-docs.md for the rule + rationale.
+#
+# Mechanism: on every push to main, this workflow diffs the push range
+# (before..after), checks if any docs/** file changed, and if so verifies
+# the head commit is associated with a PR (via the GitHub commits/SHA/pulls
+# API). Direct pushes touching docs/ fail the workflow with a red ❌ on the
+# commit. PR-merged commits (squash, rebase, or merge-commit) pass because
+# GitHub associates the merge commit to the source PR.
+#
+# This is a DETECT gate, not a BLOCK gate — the push has already landed by
+# the time CI runs. The red ❌ + clear error message is the deterrent. Solo
+# dev + Claude collaborator → naming-and-shaming is enough; if violation
+# rate persists, escalate to branch protection.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  docs-pr-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs/ changes in push range
+        id: detect
+        run: |
+          BEFORE='${{ github.event.before }}'
+          AFTER='${{ github.event.after }}'
+          # First push to a fresh branch sets BEFORE to all-zeros; treat as no-op.
+          if [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            echo "Initial branch push — discipline N/A."
+            echo "docs_changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          FILES=$(git diff --name-only "$BEFORE" "$AFTER" -- 'docs/' 2>/dev/null || echo "")
+          if [ -z "$FILES" ]; then
+            echo "No docs/ changes in $BEFORE..$AFTER — discipline N/A."
+            echo "docs_changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_changed=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "$FILES" > docs_files.txt
+            echo "docs/ files changed:"
+            sed 's/^/  - /' docs_files.txt
+          fi
+
+      - name: Verify head commit is associated with a PR
+        if: steps.detect.outputs.docs_changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SHA='${{ github.sha }}'
+          REPO='${{ github.repository }}'
+          PR_COUNT=$(gh api "repos/$REPO/commits/$SHA/pulls" --jq 'length')
+          if [ "$PR_COUNT" = "0" ]; then
+            echo "::error title=docs-PR discipline violated::Direct push to main touched docs/ files with no associated PR."
+            echo ""
+            echo "Rule: docs/governance/pr-only-on-docs.md — every file under docs/ ships via PR."
+            echo ""
+            echo "Files violating discipline:"
+            sed 's/^/  - /' docs_files.txt
+            echo ""
+            echo "Resolution: revert this commit, branch + open a PR, merge via GitHub."
+            exit 1
+          fi
+          echo "Commit $SHA is associated with $PR_COUNT PR(s) — discipline upheld."

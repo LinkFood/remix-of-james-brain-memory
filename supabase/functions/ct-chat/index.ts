@@ -1078,6 +1078,13 @@ function shapeChatPayload(
       : null,
     flow_heatmap_per_ticker: ctx.flowHeatmapPerTicker,
 
+    // Previous close anchor per watchlist ticker — explicit labeled "before"
+    // value for any % change calculation. Sourced from ct_price_bars 1m bars
+    // strictly before today's RTH open (13:30 UTC). organMetadata-shape per
+    // entry: {value, as_of, source, status}. Resolves the 2026-05-07 GOOGL
+    // chat incident — LLM no longer guesses anchor from inline rationale text.
+    prev_close_by_ticker: ctx.prevCloseByTicker,
+
     // Synthesis-layer telemetry — surfaced so we can see at-a-glance which
     // organs filled and which sat empty for this turn.
     organ_meta: Object.fromEntries(
