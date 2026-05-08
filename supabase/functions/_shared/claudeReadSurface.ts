@@ -95,6 +95,7 @@ import analogsHelper from './analogsContext.ts';
 import specialistRecallHelper from './specialistRecallContext.ts';
 import type { SpecialistRecallResult } from './specialistRecallContext.ts';
 import regimeHelper from './regimeContext.ts';
+import { loadPrevCloseByTicker, type PrevCloseByTicker } from './prevCloseContext.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -552,6 +553,13 @@ export interface ClaudeContext {
   // Flow positioning heatmap — top expiry-week stacks per watchlist ticker
   // (aggressive_directional_decay math, default 7d lookback, min $100K)
   flowHeatmapPerTicker: Array<{ ticker: string; stacks: Array<{ expiry_bucket_week: string; value: number; source_alert_count: number }> }>;
+
+  // Previous close anchor per watchlist ticker — explicit, labeled "before"
+  // value for any % change computation. Sourced from ct_price_bars 1m bars
+  // strictly before today's RTH open (13:30 UTC). organMetadata-shape per
+  // entry: {value, as_of, source, status}. Resolves the 2026-05-07 GOOGL
+  // chat incident — LLM no longer guesses anchor from inline rationale text.
+  prevCloseByTicker: PrevCloseByTicker;
 
   // Extended tape — market-wide flow + dark pool + sentiment
   recentFlowAlerts: FlowAlertCompact[];
@@ -1914,6 +1922,15 @@ export async function buildClaudeContext(
     }));
   } catch (_e) { /* helper is defensive; falls through to empty */ }
 
+  // Previous close anchor per watchlist ticker — explicit labeled "before"
+  // value so the LLM doesn't have to pick an anchor from inline rationale
+  // strings. Resolves the 2026-05-07 GOOGL chat incident. organMetadata-
+  // shape per entry. Helper is defensive — never throws.
+  let prevCloseByTicker: PrevCloseByTicker = {};
+  try {
+    prevCloseByTicker = await loadPrevCloseByTicker(supabase, watchlist);
+  } catch (_e) { /* defensive — empty record on error */ }
+
   // -------------------------------------------------------------------------
   // Synthesis layer Phase 3 — compose 8 brain organs via Promise.all.
   //
@@ -2114,6 +2131,7 @@ export async function buildClaudeContext(
     centralBankState,
     indicatorEventsLast7d,
     flowHeatmapPerTicker,
+    prevCloseByTicker,
     watchlist,
     advisoryChatContext,
     chatIsAdvisory,
@@ -2262,6 +2280,14 @@ async function buildSynthesisOnlyContext(
     ? formatWhatJustHappened(eventRecencyOrgan.data, tctx.session_date)
     : '';
 
+  // Synthesis-only path also surfaces prev_close so cotrader MCP and other
+  // MCP-style consumers see the explicit anchor (resolves 2026-05-07 GOOGL
+  // chat incident class for any consumer routed through this path).
+  let prevCloseByTicker: PrevCloseByTicker = {};
+  try {
+    prevCloseByTicker = await loadPrevCloseByTicker(supabase, watchlist);
+  } catch (_e) { /* defensive */ }
+
   return {
     // === Empty defaults for the legacy flat fields ===
     latestHeartbeat: null,
@@ -2309,6 +2335,7 @@ async function buildSynthesisOnlyContext(
     centralBankState: null,
     indicatorEventsLast7d: [],
     flowHeatmapPerTicker: [],
+    prevCloseByTicker,
     advisoryChatContext: '',
     chatIsAdvisory: false,
     autonomyMode: 'execute',
