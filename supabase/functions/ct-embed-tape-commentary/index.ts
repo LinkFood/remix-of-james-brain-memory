@@ -63,14 +63,13 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
 
-  // Fetch un-embedded rows. Newest-first so we keep recent semantic
-  // substrate fresh during backfill instead of starting from day 1.
+  // Atomic claim via FOR UPDATE SKIP LOCKED RPC. Concurrent callers get
+  // disjoint slices; sentinel-zero-vector marks claimed rows so subsequent
+  // calls skip them. Newest-first so backfill keeps recent substrate fresh.
+  // See migration 20260510100000.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error: selectErr } = await (supabase.from('ct_tape_commentary' as never) as any)
-    .select('id,created_at,session_date,commentary,market_tide,vix_level,flow_ids,flag_ids')
-    .is('embedding', null)
-    .order('created_at', { ascending: false })
-    .limit(requested);
+  const { data, error: selectErr } = await (supabase as any)
+    .rpc('claim_unembedded_tape_commentary', { p_batch_size: requested });
 
   if (selectErr) {
     return new Response(JSON.stringify({ ok: false, error: selectErr.message }),
