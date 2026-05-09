@@ -18,10 +18,11 @@
 
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { Brain, Calendar, Clock, Zap, Sparkles } from 'lucide-react';
+import { Brain, Calendar, Clock, Zap, Sparkles, Layers } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useTapeReader } from '@/hooks/useTapeReader';
 import { useSpecialistsTileRow, type SpecialistTile } from '@/hooks/useSpecialistsTileRow';
+import { useSemanticTapeRecall, type SemanticTapeMatch } from '@/hooks/useSemanticTapeRecall';
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - Date.parse(iso);
@@ -58,9 +59,25 @@ function arrowFor(direction: SpecialistTile['direction']): string {
   return '−';
 }
 
+function shortDay(iso: string): string {
+  // "2026-05-05T14:32:00Z" -> "5/5 14:32 ET"
+  const d = new Date(iso);
+  const m = d.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', timeZone: 'America/New_York' });
+  const t = d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/New_York' });
+  return `${m} ${t}`;
+}
+
+function matchTideClass(tide: SemanticTapeMatch['market_tide']): string {
+  if (tide === 'bullish') return 'text-emerald-300';
+  if (tide === 'bearish') return 'text-red-300';
+  if (tide === 'flat') return 'text-blue-300';
+  return 'text-muted-foreground';
+}
+
 export function ClaudesRead() {
   const { latest } = useTapeReader({ priorCount: 0 });
   const { data: specialistTiles } = useSpecialistsTileRow();
+  const { matches: semanticMatches, isLoading: recallLoading } = useSemanticTapeRecall({ matchCount: 5 });
 
   // Top 3 specialist reads by conviction, requiring a populated read.
   const topSpecialists = (specialistTiles ?? [])
@@ -150,9 +167,51 @@ export function ClaudesRead() {
         </div>
       )}
 
-      {/* iter #2 hint */}
-      <div className="mt-3 pt-2 border-t border-border/30 text-[9px] font-mono text-muted-foreground/60 uppercase tracking-wider">
-        iter #2 · semantic recall over historical reads (5 most-similar past reads + NextClose outcomes)
+      {/* Semantic recall — 5 most-similar prior tape reads.
+          Phase 4 of audit-driven loop: iter #2 hint becomes reality.
+          Substrate: Phase 1 ct_tape_commentary embedding + match_*
+          RPC. Captain reads "today is similar to Y at HH:MM" — pattern
+          recall over setup-shape, not chronological scrolling. */}
+      <div className="mt-3 pt-3 border-t border-border/30">
+        <div className="flex items-center gap-1.5 mb-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
+          <Layers className="w-3 h-3" />
+          Today most resembles · semantic recall
+        </div>
+        {recallLoading ? (
+          <div className="text-[10px] text-muted-foreground/60 italic">loading prior analogs...</div>
+        ) : semanticMatches.length === 0 ? (
+          <div className="text-[10px] text-muted-foreground/60 italic">
+            No prior reads above similarity threshold yet — gate fills as more sessions embed.
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {semanticMatches.map((m) => (
+              <div
+                key={m.id}
+                className="flex items-start gap-2 text-[10px] font-mono px-2 py-1.5 rounded bg-muted/15 border border-muted/30"
+              >
+                <div className="flex items-center gap-2 shrink-0 w-32">
+                  <span className="text-foreground/90">{shortDay(m.created_at)}</span>
+                  <span className={cn('uppercase', matchTideClass(m.market_tide))}>
+                    {m.market_tide ?? '—'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0 w-20 text-muted-foreground">
+                  <span>vix {m.vix_level != null ? m.vix_level.toFixed(1) : '—'}</span>
+                </div>
+                <div className="flex items-center gap-1 shrink-0 w-16 text-muted-foreground">
+                  <span>f{m.flag_id_count}/p{m.flow_id_count}</span>
+                </div>
+                <div className="flex-1 min-w-0 text-foreground/80 truncate">
+                  {m.commentary.replace(/\s+/g, ' ').slice(0, 140)}
+                </div>
+                <div className="shrink-0 text-primary/70 font-semibold">
+                  {(m.similarity * 100).toFixed(0)}%
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </Card>
   );
