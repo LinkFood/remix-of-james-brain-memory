@@ -43,6 +43,15 @@ const WATCHLIST = ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META',
 
 interface Props {
   onTickerClick?: (ticker: string) => void;
+  /**
+   * Render the embedded FlowPulseChartPanel (the big MARKET / TICKER chart
+   * underneath the per-ticker table). Default true preserves the legacy
+   * /tape behavior. /tape-v2 passes false because FlowButterflySection
+   * already owns the MARKET / TICKER / ALL chart surface — without this
+   * suppression, the page paints two stacked Flow Butterfly charts (one
+   * here, one inside FlowButterflySection). Iter #4 fix.
+   */
+  showChartPanel?: boolean;
 }
 
 type WindowKey = 'today' | '1h' | '30m';
@@ -71,7 +80,7 @@ function windowLabel(k: WindowKey): string {
   return 'last 30m';
 }
 
-export function FlowPulse({ onTickerClick }: Props) {
+export function FlowPulse({ onTickerClick, showChartPanel = true }: Props) {
   // Window selector. "Today" = RTH-open-to-now dynamic minutes. 1h = 60. 30m = 30.
   const [windowKey, setWindowKey] = useState<WindowKey>('today');
   // Chart panel's selected ticker (separate from the table's onTickerClick
@@ -376,10 +385,12 @@ export function FlowPulse({ onTickerClick }: Props) {
             OTM/ITM counts under each side. "vs 30d" is today's C:P ratio relative to 30-day baseline. Refreshes every 30s.
           </div>
         </Card>
-        <FlowPulseChartPanel
-          ticker={chartTicker ?? undefined}
-          onTickerChange={setChartTicker}
-        />
+        {showChartPanel && (
+          <FlowPulseChartPanel
+            ticker={chartTicker ?? undefined}
+            onTickerChange={setChartTicker}
+          />
+        )}
         </>
       )}
     </div>

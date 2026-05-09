@@ -481,6 +481,21 @@ function ButterflyBb({ data, height = 280, overlays = [], multiDay = false }: Bu
   // doesn't get phase shading in this iteration.
   const daySpans = useMemo<DaySpan[]>(() => computeDaySpans(data), [data]);
 
+  // Iter #4 sparse-data guard. Render placeholder instead of misleading
+  // single-segment line when narrow window (5m / 10m) has only a few prints.
+  if (data.length > 0 && data.length < 3) {
+    return (
+      <div style={{ width: '100%', height }} className="flex flex-col items-center justify-center gap-1 text-center px-4">
+        <span className="text-[12px] text-muted-foreground italic">
+          low density — only {data.length} data point{data.length === 1 ? '' : 's'} in window
+        </span>
+        <span className="text-[10px] text-muted-foreground/70">
+          Try a wider window (15m / 30m / 1h) for a meaningful pattern.
+        </span>
+      </div>
+    );
+  }
+
   const domain = useMemo<[number, number]>(() => {
     if (data.length === 0) return [-1, 1];
     let max = 0;
@@ -787,6 +802,21 @@ function ButterflyCp({ data, height = 280, overlays = [], multiDay = false }: Bu
   // Cross-event detection — primary cross only (cum_all_call vs cum_all_put).
   // Computed at render-time inside useMemo. Linear scan, O(n), cheap.
   const crosses = useMemo<CrossEvent[]>(() => findCpCrosses(data), [data]);
+
+  // Iter #4 sparse-data guard. Render placeholder instead of misleading
+  // single-segment line when narrow window (5m / 10m) has only a few prints.
+  if (data.length > 0 && data.length < 3) {
+    return (
+      <div style={{ width: '100%', height }} className="flex flex-col items-center justify-center gap-1 text-center px-4">
+        <span className="text-[12px] text-muted-foreground italic">
+          low density — only {data.length} data point{data.length === 1 ? '' : 's'} in window
+        </span>
+        <span className="text-[10px] text-muted-foreground/70">
+          Try a wider window (15m / 30m / 1h) for a meaningful pattern.
+        </span>
+      </div>
+    );
+  }
 
   // Phase spans — empirical session-phase shading underlays single-day
   // charts. Per PR #64 § A.4 (open/midday/PM/close).

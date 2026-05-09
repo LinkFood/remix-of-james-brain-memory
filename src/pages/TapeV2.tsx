@@ -71,7 +71,12 @@ export default function TapeV2() {
           <AlarmBanner />
           <TapeReaderArc />
           <SpecialistsTileRow />
-          <FlowPulse onTickerClick={setActiveTicker} />
+          {/* showChartPanel=false suppresses FlowPulse's embedded
+              FlowPulseChartPanel because FlowButterflySection (rendered
+              just below) already owns the MARKET / TICKER / ALL chart
+              surface. Without this, /tape-v2 paints two stacked Flow
+              Butterfly charts. Iter #4 fix. */}
+          <FlowPulse onTickerClick={setActiveTicker} showChartPanel={false} />
           <FlowButterflySection />
           <OvernightPositioning
             onTickerClick={setActiveTicker}
