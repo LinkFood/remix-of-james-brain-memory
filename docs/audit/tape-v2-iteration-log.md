@@ -527,3 +527,37 @@ Real signal: Benzinga clearly the dominant news volume source; NVDA the most-mov
 **Phase A flag (not fixed in this PR):** InstallPrompt.tsx uses raw `window.location.pathname` instead of `useLocation()` from react-router. Works in practice (component re-renders on route nav because parent re-renders), but it's a subtle reactivity correctness gap — if the install event fires after a route change without parent re-render, the guard could read a stale path. Single-purpose discipline holds: PR-C is the suppress fix, the `useLocation()` switch is a separate cleanup if/when it actually bites.
 
 **PR / commit:** PR-C in 5/9 evening bundle.
+
+---
+
+## 2026-05-09 — Phase 5 PR-B: News Causality Matrix below-threshold cell clarity
+
+**What changed:** `src/components/alpha/NewsCausalityMatrix.tsx` — `MatrixCell` no-row branch swapped from a flat em-dash placeholder to an explicit `n<min` badge with hover explainer, plus a legend line distinguishing "below sample-size floor" from a 0% hit rate. No data layer or RPC change — frontend-only disambiguation.
+
+**Why:** Captain's 5/9 afternoon visual validation flagged the Trades source row as anomalous: GOOGL 67%, MSFT 48%, NVDA 43%, AAPL 50%, AMZN 0%, META 0%, TSLA 25%. Phase A finding (c) — HAVING-filter renders below-threshold cells as ambiguous em-dash, captain reads as 0% hit rate. Empirical verification:
+
+```
+Tradex 7d watchlist (raw ct_news_causality):
+  NVDA  total=7  moved=3  hit=42.9%   → RPC returns, renders 43
+  AAPL  total=8  moved=4  hit=50.0%   → RPC returns, renders 50
+  MSFT  total=5  moved=2  hit=40.0%   → RPC returns, renders 40
+  GOOGL total=3  moved=2  hit=66.7%   → RPC returns, renders 67
+  AMZN  total=2  moved=0  hit= 0.0%   → BELOW p_min_n=3 → em-dash → mis-read
+  META  total=12 moved=1  hit= 8.3%   → RPC returns, renders 8 (genuine low)
+  TSLA  total=4  moved=1  hit=25.0%   → RPC returns, renders 25
+  QQQ/SPY/IWM total=0                 → no rows at all
+```
+
+AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the distinction between "no coverage" / "below threshold" / "actual 0%." Two of those mean different things and one (actual 0%) wasn't even in play. RPC + data layer are both correct.
+
+**Cascade instance surfaced:** the family **placeholder-glyph-collapses-three-states**. A single em-dash collapsed (a) "no rows at all," (b) "rows exist but below n_min," and (c) "rows exist and hit rate is 0%" into one visual. Sibling to other catalogued ambiguity-collapse classes — flagging for engine-room methodology-patterns.md follow-up.
+
+**End-state:** Below-floor cells render as a small dashed-border `n<min` badge instead of em-dash. Hover surfaces "Below sample-size floor for the lookback window. Not enough news from this source on this ticker yet to produce a stable hit-rate cell. Not 0% — unknown." Legend line explicitly calls out the badge meaning. Captain reads coverage gap at a glance and can no longer mistake it for a 0% hit rate.
+
+**Single-purpose:** PR is ONLY the Trades-row anomaly resolution. No matrix layout overhaul, no other source rows, no other consumers, no migration.
+
+**Files touched:** 2 — 1 component edit, 1 iteration log entry.
+
+**Build state:** vite build passes clean (4161 modules). UI captain-validates post-deploy.
+
+**PR / commit:** TBD (PR-B in the bundle).
