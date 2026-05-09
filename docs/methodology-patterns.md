@@ -896,6 +896,46 @@ The right threshold is **cadence-anchored**: `cron_interval + 1 warden tick buff
 
 ---
 
+## docs-PR-merge-doesnt-imply-migration-applied — schema_migrations PRIMARY KEY collisions silently no-op
+
+When a migration file's timestamp prefix collides with an already-applied migration on the remote `supabase_migrations.schema_migrations` table, the git merge succeeds (different filenames; no file conflict) but the apply silently no-ops (PRIMARY KEY conflict on version). The migration file lives on main as a load-bearing record but its SQL never ran.
+
+**Why this matters:** trust in "PR is merged" implies "fix is live." For migrations that share a timestamp prefix with another already-applied migration, that implication breaks. The fix sits in main, captain assumes prod is fixed, but the cron table / RPC / schema is unchanged.
+
+### Instance — 2026-05-09 morning slate-clean: ct-flow-ingester apikey fix
+
+**The setup:** PR #70 (`fix/ct-flow-ingester-cron-apikey-fix-2026-05-08`) authored 2026-05-08 evening to add `apikey` header to 3 ct-flow-ingester crons after the 5/07 service-role-key gateway-rewrite incident. Migration filename: `20260510040000_ct_flow_ingester_cron_apikey_fix.sql`. PR sat open over the weekend.
+
+**The collision:** PR #79 / #80 (Flow Butterfly Phase 1) shipped 2026-05-08 with migration `20260510040000_ct_butterfly_cross_events.sql` — SAME timestamp prefix. PR #79/#80 applied to remote. `schema_migrations` row with `version=20260510040000` was inserted.
+
+**The merge:** PR #70 merged 2026-05-09 11:09 UTC during morning slate-clean. Git merge succeeded (different filenames; no file conflict). Vercel deploy succeeded.
+
+**The silent no-op:** Vercel doesn't run migrations. Subsequent `supabase db push` attempts INSERT into `schema_migrations(version=20260510040000, ...)` — fails on PRIMARY KEY. The apikey fix never ran. Cron table on remote DB still has the buggy Authorization-only headers.
+
+**Detection:** `npx supabase migration list` showed:
+```
+20260510040000 | 20260510040000 | 2026-05-10 04:00:00     <- butterfly (applied)
+20260510040000 |                | 2026-05-10 04:00:00     <- apikey-fix (NOT applied)
+```
+
+Two local rows with the same timestamp; one with no remote pair. **That's the smell.**
+
+**Fix:** ship a fresh-timestamp re-application (`20260510090000_ct_flow_ingester_cron_apikey_reapply.sql`) with identical idempotent body. The DROP-then-CREATE cron pattern is safe to re-run; if the bug isn't live it's a no-op.
+
+**Process fix to prevent recurrence:** before merging any migration PR, run `npx supabase migration list` and confirm the migration's version doesn't already appear on Remote with a different filename. Or — pre-merge, add a CI check that scans staged migrations for timestamp collisions vs `git ls-tree origin/main supabase/migrations/`.
+
+**Diagnostic question for future:** *"Does this migration's timestamp prefix already exist in remote `schema_migrations`?"* If yes — even if the filename differs — the apply will silently fail. Bump the timestamp before merge.
+
+**Companion class:** `phantom-schema-migrations-record` (PR #80 incident 5/8 — opposite direction: schema_migrations recorded a row but the table didn't actually exist). Both classes share root: trusting `schema_migrations` is dangerous when the migration system's invariants (one row per version, applied = SQL ran) get violated.
+
+**Linked artifacts:**
+- Original PR (silent no-op): #70 `fix/ct-flow-ingester-cron-apikey-fix-2026-05-08`
+- Re-apply migration: `supabase/migrations/20260510090000_ct_flow_ingester_cron_apikey_reapply.sql`
+- Companion phantom-record incident: PR #80 5/8
+- Slate-clean session that surfaced this: 2026-05-09 morning
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
