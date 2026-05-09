@@ -631,3 +631,20 @@ AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the 
 **PR:** #102 (single-purpose, no auto-merge — captain validates visually post-deploy on /alpha).
 
 **Next:** captain validates compressed /alpha live. If captain disagrees with either decision after seeing the live result, iter #2.7 reverts the specific call. Decisions locked per current vision-state but not irreversible.
+
+---
+
+## 2026-05-09 evening — top-nav: /alpha exposed in Trade dropdown
+
+**What changed:** `src/components/nav/TopNav.tsx` — added `{ path: '/alpha', label: 'Alpha' }` to the `Trade` group's items array, positioned right after `Tape v2`. Single-line addition. Mobile nav inherits via shared `NAV_GROUPS` constant.
+
+**Why:** Iter #2.6 captain validation post-Vercel-deploy needs nav access; previously `/alpha` was direct-URL-only. Position (b) from brief — iter progression `Tape → Tape v2 → Alpha` reads as the natural surface evolution.
+
+**End-state:** `/alpha` reachable from Trade dropdown in desktop NavBar + mobile Sheet menu. No other surface modifications.
+
+**Discipline:**
+- Single-purpose: ONE entry added, no other dropdowns or routes touched.
+- Page consolidation question (/alpha vs /tape-v2 vs /tape) still captain's call — exposing /alpha doesn't commit to consolidation; consolidation pick later.
+- page-multiplication-violates-no-silos compliant — adds a route to an already-rendered dropdown, doesn't ship a new surface.
+
+**PR:** #103 (single-purpose).
