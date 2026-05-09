@@ -651,6 +651,44 @@ AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the 
 
 ---
 
+## 2026-05-09 evening — Alpha v2 iter #3 PR-B: /heatmap alpha-class GEX visual primitives
+
+**What changed:** /heatmap now surfaces the forward-looking dealer-positioning thinking-structure on top of the existing flow positioning grid. Three visual primitives shipped, all sourced from `useGexInference` (the frontend twin of PR-A's `_shared/gexInferenceContext.ts` brain organ):
+
+1. **`GexBanner`** — market-wide aggregate strip rendered ABOVE `HeatmapToolbar`. Consensus-direction badge (BROAD POS γ / BROAD NEG γ / MIXED / NO SIGNAL) · tickers above-flip / below-flip / at-flip counts · median Δ-flip pct · cohort coverage · freshness clock. Bloomberg-strip identity (font-mono, 10px, single line, `Card` host).
+
+2. **`GexDirectionStrips`** — 10 dense per-ticker rows rendered BETWEEN toolbar and flow grid. Each row: ticker · POS γ / NEG γ / FLAT badge · spot · γ flip · ↑/↓/− arrow · Δ-flip pct · call wall · put floor · top-3 pin attractors (magnitude-scaled glyphs, sign-coded green/red). Dense numerical strip; no scroll, single line per ticker.
+
+3. **`GexFlipOverlay`** — per-ticker structural-levels rail rendered ABOVE the strikes-by-expiry grid when `view='per_ticker'`. Each row = ticker · spot · ±5% rail with γ-flip dashed marker + call-wall / put-floor blocks + spot anchor + Δ-flip pct on the right edge. Resolves brief tension ("horizontal line on each strike row" vs "DO NOT touch per-ticker view's existing rendering") by composing as a sibling rail over the grid rather than mutating the grid; per Tenet 24 (surfaces compose, they don't merge).
+
+**Existing surfaces preserved:** `HeatmapToolbar` (math mode / baseline / view / drill / lookback / 0DTE / min premium / color anchor) — UNTOUCHED. `FlowHeatmapGrid` (combined view), `FlowHeatmapPerTicker` (per-ticker view), `FlowHeatmapDrill` (cell drill panel) — UNTOUCHED. Wiring only edits to `Heatmap.tsx` (3 imports, 3 render slots).
+
+**Data path chosen:** new hook `useGexInference.ts` reads `ct_gex_timeseries` directly via PostgREST (RLS `ct_gex_authread … FOR SELECT TO authenticated USING (true)` from migration `20260416000010`). Same kernel math as PR-A's helper (signed-interpolated zero crossing, top-3 pin attractors, 0.1% at-flip ε, 1.0 dealer-flat threshold, 7-of-10 broad-consensus threshold, 72h snapshot lookback, 200-strike per-ticker cap). RTH-gated refetch matching `useGexRadar` precedent — 30s during US RTH, paused after close. No new RPC, no new edge function — this is a UI-mode read (Tenet 26: "Will James glance at this in browser?" → UI page; no service for what's structurally a read-side projection).
+
+**Iter #3.5 cross-reference:** the kernel math is intentionally co-located client-side for v1 ship; iter #3.5 (the 5 inline-inference edge function refactor onto the brain organ) is the right place to hoist a shared `_shared/gexInferenceTypes.ts` + central kernel module. Until then `useGexInference.ts` documents its sync obligation in its header.
+
+**Discipline gates run:**
+- Engine-room write-time checklist: state-vs-intent ✓ (intent: surface forward-looking dealer positioning on /heatmap; formula: PR-A-equivalent kernel against `ct_gex_timeseries`), no calendar anchors, cross-catalog parity ✓ (Cowork-side note: this PR consumes PR-A's structural-numeric output without narrative mutation per the firewall contract D3), substrate-target verification ✓ (`ct_gex_timeseries` confirmed live via REST query 2026-05-09; `ct_gex_snapshots` correctly avoided per cascade #29 back-anchorability), page-multiplication ✓ (no new route — additions are ON TOP of `/heatmap`, so no Tenet 24 silo concern).
+- Single-purpose: ONLY `/heatmap` visual primitives + GEX hook + iter log entry. No `/alpha` edits. No toolbar changes. No edits to FlowHeatmap*. No 5-inline-inference edge fn touched. No `ct_specialist_reads` / `specialistRecallContext` touched (Tenet 26).
+- `npx tsc --noEmit`: clean.
+- `npm run build`: clean (4164 modules, +3 vs prior 4161 baseline, 3.46s).
+
+**Files touched:** 5 — 3 new components (`GexBanner.tsx`, `GexDirectionStrips.tsx`, `GexFlipOverlay.tsx`), 1 new hook (`useGexInference.ts`), 1 page edit (`Heatmap.tsx`), 1 iteration log entry.
+
+**Visual primitives shipped (positions):**
+- `GexBanner` — above `HeatmapToolbar` (line 188 of `Heatmap.tsx`, post-edit)
+- `GexDirectionStrips` — between toolbar and flow grid (line 195)
+- `GexFlipOverlay` — above the per-ticker strike grid, conditional on `toolbar.view === 'per_ticker'` (line 202)
+
+**Cascade catalog instances surfaced:**
+- Brief said "horizontal line at gamma_flip_strike on each strike's row visualization" while also saying "DO NOT touch per-ticker view's existing rendering." Resolved structurally by composing alongside rather than into the grid. Same family as cascade #37 (state-vs-intent: brief expressed intent — "show γ flip in per-ticker context"; brief's formula — "horizontal line on each row" — would have required mutating an explicitly-protected component). Recording here so iter #3.5 / future briefs treat per-component-mutation lines as INTENT, not literal shape.
+
+**Cross-catalog parity flags for captain:** none new. PR composes additively on PR-A's brain organ; the firewall contract (D3 audience) is enforced server-side by PR-A; the frontend hook reads live `ct_gex_timeseries` directly (RLS-gated by `authenticated` role — same trust boundary as the existing `useFlowHeatmap*` family).
+
+**PR / commit:** PR-B in iter #3 stack. PR-C (`/alpha` snapshot composition) follows. Captain reviews — no auto-merge. Vercel deploy + visual validation post-merge.
+
+---
+
 ## 2026-05-09 — Alpha v2 iter #3 PR-A: GEX Inference brain organ (substrate compute layer)
 
 **What changed:** New brain organ `_shared/gexInferenceContext.ts` (the 13th — slots in alongside `flow_butterfly` as the 12th and `regime` as the 11th). `HelperName` union extended with `'gex_inference'`. Helper wired into BOTH helper arrays in `_shared/claudeReadSurface.ts` (slim + standard variants), mirroring the `flow_butterfly` precedent.
@@ -711,3 +749,19 @@ AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the 
 **5x bar:** `/tape` and `/tape-v2` have no compressed GEX board; the closest precedent is `/edge` showing one-ticker-at-a-time. This surface puts 10 tickers' dealer positioning + flip direction + walls in one grid the captain reads at a glance. Direct visual analog of an institutional dealer-net dashboard, deployed for one trader.
 
 **PR / commit:** PR-C in iter #3 stack. Captain validates visually post-Vercel deploy on `/alpha` — no auto-merge.
+
+---
+
+## 2026-05-09 evening — iter #3 PR-B rebase: hook conflict resolved per (α)
+
+**What changed during rebase of PR-B on main (post-#105 PR-C merge):** PR-B and PR-C both authored `src/hooks/useGexInference.ts` independently. Same data shape, different signatures (PR-C: `tickers: string[]` arg + `GexInferenceResponse` wrapper + edge function transport; PR-B: `UseGexInferenceArgs` object + `GexInferenceResult` wrapper + direct table query with re-implemented kernel math). Conflict surfaced at rebase time.
+
+**Captain decision (α):** drop PR-B's hook; PR-B's 3 components consume PR-C's hook (already on main). Single-source kernel preserved — math lives once in `_shared/gexInferenceContext.ts`, exposed via `ct-gex-inference` edge function, surfaced to UI via the single hook.
+
+**Mechanical resolution:** `git checkout --ours src/hooks/useGexInference.ts` during rebase took main's version. PR-B's 3 components (`GexBanner.tsx`, `GexDirectionStrips.tsx`, `GexFlipOverlay.tsx`) compiled against PR-C's hook with zero edits — both versions exposed identical type names (`DealerNetDirection`, `PriceVsFlip`, `ConsensusDirection`, `PinAttractor`, `GexInferencePerTicker`) and the components' `useGexInference()` calls used the no-args default that both signatures support. **No component edits needed.** `npx tsc --noEmit` clean; `npm run build` clean (4164 modules, 3.68s).
+
+**Iter #3.5 reduces:** original `(β) refactor 5 inline GEX callers` queue stays. The "consolidate 4 → 1 GEX math kernel" item collapses to "consolidate 5 → 1" — the 4th drift site (PR-B's hook re-implementation) didn't ship to main.
+
+**Cascade catalog instance surfaced:** new pattern `parallel-agents-create-same-file-with-different-signatures`. Codified in `docs/methodology-patterns.md` (this PR). Cross-catalog parallel codification at Cowork-side `memory/patterns.md` per cross-catalog rule (captain pastes from PR description).
+
+**PR:** #106 (PR-B in iter #3 stack, rebased on main with hook conflict resolved per α; force-push triggers new CI run; merge once clean).

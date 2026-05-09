@@ -1153,6 +1153,48 @@ Captain caught the drift after observing repeated "Sunday becomes [X]" framings 
 
 ---
 
+## parallel-agents-create-same-file-with-different-signatures
+
+**Pattern:** When two parallel agents (worktree-isolated, dispatched simultaneously) each receive a brief that requires creating a shared resource (a hook, helper, RPC, or component file) — and the brief doesn't pre-specify the exact API — both agents land on a "reasonable" but different signature for the same file. When their PRs both merge or rebase, the file is created twice with diverging APIs. The merge surfaces the conflict; the resolution requires either dropping one version (and ensuring callers compile against the survivor) or maintaining both versions as drift.
+
+**Structural shape:** parallel composition where the SHAPE of a shared resource isn't predetermined leaves room for divergent author judgment. Each agent makes a reasonable local choice; the global outcome is multiple sources of truth for the same logical resource. Sibling pattern to `Cowork↔engine-room cross-catalog rule` and `compose-with-the-kernel` — both about ensuring single-source-of-truth at composition boundaries.
+
+**Discipline rule:** when dispatching parallel agents that may need a shared resource:
+1. **Pre-author the shared API in the brief** — define the exact function signature, return type name, and import surface BEFORE either agent starts. Both agents bind to the contract; neither authors it from scratch.
+2. **OR sequence the dispatch** — first agent ships the shared resource, then second agent dispatches against it once the first is on main. Substrate-before-surface pattern.
+3. **OR pre-existing kernel** — if a shared kernel already exists (e.g., a brain organ that both surfaces compose against), point both briefs at it explicitly with paste-ready import statements.
+
+**Diagnostic question for parallel dispatches:** *"Is there a shared resource both agents will create? If yes, who authors its API — the brief (pre-defined) or the first agent (sequenced)? If neither, expect signature divergence at merge."*
+
+### Instance — 2026-05-09 evening iter #3 PR-B + PR-C parallel dispatch
+
+PR-B (/heatmap alpha-class redesign) and PR-C (/alpha snapshot card) dispatched in parallel after PR-A (substrate brain organ at `_shared/gexInferenceContext.ts`) merged. Both briefs needed a frontend hook to consume PR-A's helper output. Neither brief pre-specified the hook's API signature.
+
+PR-C shipped `useGexInference(tickers: string[] = DEFAULT_WATCHLIST)` returning `GexInferenceResponse` via `ct-gex-inference` edge function (thin wrapper around PR-A's helper).
+
+PR-B shipped `useGexInference(args: UseGexInferenceArgs = {})` returning `GexInferenceResult` via direct PostgREST query against `ct_gex_timeseries` with kernel math RE-IMPLEMENTED in the hook.
+
+PR-C merged first (`#105` → `0e931b0`). PR-B's rebase surfaced the file conflict. Captain locked resolution path (α): drop PR-B's hook, PR-B's 3 components compile against PR-C's hook (single-source kernel preserved).
+
+**Lucky outcome:** both hooks happened to expose identical type names (`DealerNetDirection`, `PriceVsFlip`, `ConsensusDirection`, `PinAttractor`, `GexInferencePerTicker`) and PR-B's components called `useGexInference()` with no args (compatible with both signatures). Component edits required: zero. `tsc --noEmit` clean post-rebase.
+
+**Unlucky outcome would have been:** components keyed to PR-B's specific args object or `GexInferenceResult` wrapper name → component edits required mid-rebase, potentially substantial. Or worse: silent semantic divergence (e.g., one hook computes flip differently than the other) → math drift on /heatmap vs /alpha until iter #3.5.
+
+**Class diagnostic question for future parallel dispatches:** *"If both agents hit the same shared-resource decision, do they make the same call, or different calls? If different, what's the cost of resolution at merge time — zero edits, mechanical edits, or structural rewrite?"*
+
+**Sibling patterns:**
+- `compose-with-the-kernel` — same family at the kernel-vs-application boundary. Parallel agents authoring application-side hooks may each compose differently with the kernel (or worse, re-implement it locally) without explicit briefing.
+- `Cowork↔engine-room cross-catalog rule` — same family at the catalog boundary. Two surfaces (Cowork memory, engine-room methodology) need parallel codification or they drift.
+
+**Canonical articulation (Cowork-side):** Parallel entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` to be added by captain post-merge per the cross-catalog rule. Paste-ready text in PR #106 description.
+
+**Linked artifacts:**
+- PR #105 (PR-C, merged `0e931b0`) — shipped the surviving `useGexInference` hook signature.
+- PR #106 (PR-B, rebased post-#105) — dropped its own hook version, components consumed PR-C's hook.
+- Iteration log entry at `docs/audit/tape-v2-iteration-log.md` `## 2026-05-09 evening — iter #3 PR-B rebase: hook conflict resolved per (α)`.
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:

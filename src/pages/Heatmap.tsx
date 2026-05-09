@@ -25,6 +25,9 @@ import {
 import { FlowHeatmapGrid, type HeatmapCell } from '@/components/heatmap/FlowHeatmapGrid';
 import { FlowHeatmapPerTicker } from '@/components/heatmap/FlowHeatmapPerTicker';
 import { FlowHeatmapDrill } from '@/components/heatmap/FlowHeatmapDrill';
+import { GexBanner } from '@/components/heatmap/GexBanner';
+import { GexDirectionStrips } from '@/components/heatmap/GexDirectionStrips';
+import { GexFlipOverlay } from '@/components/heatmap/GexFlipOverlay';
 import { useFlowHeatmapLive, useFlowHeatmapLiveWithDelta } from '@/hooks/useFlowHeatmap';
 
 function relSeconds(iso: string | null | undefined): string {
@@ -183,7 +186,20 @@ export default function Heatmap() {
           </div>
         </header>
 
+        {/* Iter #3 PR-B alpha-class primitive #1 — market-wide GEX consensus.
+            Reads useGexInference; doesn't depend on flow rows. */}
+        <GexBanner />
+
         <HeatmapToolbar value={toolbar} onChange={setToolbar} />
+
+        {/* Iter #3 PR-B alpha-class primitive #2 — per-ticker dealer-positioning
+            thinking-structure rows. Sits above the existing flow grid; does
+            NOT replace it. */}
+        <GexDirectionStrips />
+
+        {/* Iter #3 PR-B alpha-class primitive #3 — gamma-flip / walls rail
+            for the per-ticker view. Renders above the per-ticker grid only. */}
+        {toolbar.view === 'per_ticker' && <GexFlipOverlay />}
 
         {isLoading && !rows ? (
           <Card className="p-8 text-center text-sm text-muted-foreground">
