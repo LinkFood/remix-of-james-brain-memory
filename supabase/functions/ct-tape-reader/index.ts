@@ -21,6 +21,7 @@ import { logClaudeUsage } from '../_shared/claudeUsageLog.ts';
 import { getTemporalContext, tagIsoTimestamp } from '../_shared/temporalContext.ts';
 import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
 import { buildClaudeContext } from '../_shared/claudeReadSurface.ts';
+import { voyageEmbed } from '../_shared/ctEmbed.ts';
 import type {
   DetectorContextResult,
   DetectorFlag,
@@ -620,6 +621,39 @@ You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTE
     .select('id,created_at')
     .single();
 
+  // --- Embed at write-time (Phase 1, fusion ground-truth audit Section B) -
+  // Build rich_text that clusters by regime/state, not just prose. Pattern:
+  //   "TAPE_COMMENTARY | tide:bullish vix:18.50 flags:3 flow:12 | session:2026-05-09\n<commentary>"
+  // Voyage call is ~700ms; UPDATE is ~50ms. Function already runs ~5s for
+  // Claude; embedding adds <1s. Fire safely — never throw.
+  let embedOk = false;
+  let embedError: string | null = null;
+  if (inserted?.id && commentary && !apiError) {
+    const richText = [
+      `TAPE_COMMENTARY | tide:${marketTide} vix:${vixLevel != null ? vixLevel.toFixed(2) : 'na'} flags:${flags.length} flow:${scored.length} | session:${tctx.session_date}`,
+      commentary,
+    ].join('\n');
+    try {
+      const embedding = await voyageEmbed(richText, 'document');
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error: updateErr } = await (supabase.from('ct_tape_commentary' as never) as any)
+        .update({
+          embedding: embedding as unknown as string,
+          rich_text: richText,
+        })
+        .eq('id', inserted.id);
+      if (updateErr) {
+        embedError = updateErr.message;
+        console.warn('[ct-tape-reader] embed update failed:', updateErr.message);
+      } else {
+        embedOk = true;
+      }
+    } catch (e) {
+      embedError = e instanceof Error ? e.message : String(e);
+      console.warn('[ct-tape-reader] voyageEmbed failed (non-blocking):', embedError);
+    }
+  }
+
   return new Response(JSON.stringify({
     ok: !apiError,
     trigger_kind,
@@ -641,6 +675,10 @@ You now receive pre-computed aggregates — [MARKET FLOW PULSE], [STACKING PATTE
       ok: validatorOk,
       contradiction_count: validatorContradictions.length,
       critical_count: validatorContradictions.filter(c => c.severity === 'critical').length,
+    },
+    embed: {
+      ok: embedOk,
+      error: embedError,
     },
   }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 });
