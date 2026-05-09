@@ -484,3 +484,30 @@ Real signal: Benzinga clearly the dominant news volume source; NVDA the most-mov
 **Time:** ~25 min from "Phase 4 done" to ship-ready.
 
 **Next:** Phase 6 — Regime Flip Journal. Renders `ct_regime_history` transitions on /pulse (or as another /alpha section) with trigger annotations. Last visible-5x phase before Phase 7 unlocks 2026-05-13 post-D2.2-verdict.
+
+---
+
+## 2026-05-09 evening — PR-D: migration-timestamp-collision CI class-kill
+
+**What changed:** New CI workflow `.github/workflows/migration-timestamp-check.yml` that fails any `pull_request` adding a `supabase/migrations/*.sql` whose 14-digit timestamp prefix already exists on `origin/main`. Methodology entry appended under existing `## docs-PR-merge-doesnt-imply-migration-applied` heading in `docs/methodology-patterns.md` capturing both 5/9 fires and the class-kill rationale.
+
+**Why:** Cascade `docs-PR-merge-doesnt-imply-migration-applied` fired twice on 2026-05-09 — morning (PR #70 ↔ PR #79 collision at `20260510040000` silently no-op'd the apikey fix; recovered via PR #92 fresh-timestamp re-apply) and evening (orphan PR #70 file on main caused duplicate-key error blocking `db push` of PR #94's new `20260510100000` migration; recovered via `migration repair --status applied` + temp file move). Two empirical fires in one day meets YAGNI threshold for write-time prevention. The collision does not surface as a git merge conflict (different filenames) — CI is the only pre-merge layer that can catch it.
+
+**End-state:**
+- `.github/workflows/migration-timestamp-check.yml` triggers on `pull_request` with paths matching `supabase/migrations/*.sql`.
+- Enumerates timestamps already on `origin/main` via `git ls-tree` + sed/grep extraction.
+- Enumerates new-migration timestamps in the PR via `git diff --diff-filter=A` from merge-base.
+- Fails with explicit `::error file=…` annotation listing the conflicting timestamp, the new file, the existing file(s) on main, and the latest timestamp on main as a suggested fresh-stage point.
+- Pre-existing collisions on main (PR #70 ↔ PR #79 orphan pair at `20260510040000`) are NOT flagged — regression-only.
+- Branch protection should add this workflow as a required check once one PR exercises the rule live (captain gates).
+- Methodology entry appended under existing `## docs-PR-merge-doesnt-imply-migration-applied` heading: 2026-05-09 evening orphan-blocks-push instance + class-kill ship explanation.
+
+**Files touched:** 3 — 1 new workflow, 1 methodology-patterns entry append, 1 iteration log entry.
+
+**Build state:** Workflow logic verified locally by simulating both branches: empty NEW_FILES (current worktree state, no migrations added) → exits 0 with "check N/A"; collision against `20260510040000` → correctly flagged WOULD FAIL; fresh `20260601000000` → correctly WOULD PASS. 481 distinct timestamps enumerated on origin/main. No false-positive risk; workflow does not flag pre-existing collisions.
+
+**Single-purpose discipline:** PR contains only the workflow + methodology entry + this iteration log entry. Captain reviews; do not auto-merge.
+
+**Cross-catalog parity flag (open):** Cowork-side `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` does NOT have an entry for `docs-PR-merge-doesnt-imply-migration-applied` at all (verified by grep on `migration|timestamp|schema_migrations|silently no-op|PR #70|PR #92|PR #94`). The brief asserted parity already existed; empirically it does not. Captain should paste a parallel entry — paste-ready text included in PR description.
+
+**PR / commit:** PR-D (open via this branch).

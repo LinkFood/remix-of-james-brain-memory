@@ -934,6 +934,23 @@ Two local rows with the same timestamp; one with no remote pair. **That's the sm
 - Companion phantom-record incident: PR #80 5/8
 - Slate-clean session that surfaced this: 2026-05-09 morning
 
+### Instance — 2026-05-09 evening: orphan-on-main blocks fresh `db push`
+
+The same 5/9 morning's incomplete recovery surfaced a second-order fire later the same day. PR #94 (SKIP LOCKED class-kill) shipped a new migration at `20260510100000`. When running `npx supabase db push` post-merge to apply it, the push failed with a duplicate-key error against `schema_migrations` — the orphan PR #70 file (`20260510040000_ct_flow_ingester_cron_apikey_fix.sql`) is still on main alongside PR #79's butterfly file at the same timestamp, and the push tooling apparently re-attempted the apply on the orphan as part of catching up. Recovery: `npx supabase migration repair --status applied 20260510040000` to mark it applied (it's a known historical no-op; the apikey fix itself has been re-shipped via PR #92's fresh-timestamp file), temporarily move the orphan file aside, retry the push for `20260510100000`, restore the orphan file. The orphan file IS load-bearing as a record (it documents what was attempted) and CAN'T be deleted without rewriting history; it now lives as a permanent historical artifact that future `db push` runs route around via the `migration repair` row.
+
+### Class-kill ship — 2026-05-09 evening: CI workflow
+
+Two empirical fires of the same cascade in one day clears the YAGNI bar for write-time prevention. Class-kill ship: `.github/workflows/migration-timestamp-check.yml`. Triggers on `pull_request` against `supabase/migrations/*.sql`. Enumerates timestamps already on `origin/main` via `git ls-tree`, enumerates new-migration timestamps in the PR via `git diff --diff-filter=A`, fails the workflow with an explicit error annotation if any new timestamp collides with an already-present one. The collision does not surface as a git merge conflict (different filenames) so this is the only pre-merge layer that catches it. Pre-existing collisions on main (the PR #70 ↔ PR #79 orphan pair) are NOT flagged — the check is regression-only. Branch protection should add this workflow as a required check once one PR has exercised the rule live.
+
+**Resolution path the rule enforces:** when the workflow fails, the fix is to bump the offending file's timestamp to a value greater than the latest on main and re-push. The rule does not require migration content changes — it only blocks the silently-no-op'ing apply.
+
+**Why this is structural, not patching:** the rule does not catch any individual collision; it catches every future collision. Same shape as Tenet 13 (structural prevention beats validators) applied to the migration-apply layer. The 2026-05-08 mid-day fire was visible only in retrospect; the 2026-05-09 evening fire was visible only via push-failure. The CI rule moves detection to PR-open time.
+
+**Linked artifacts:**
+- Workflow file: `.github/workflows/migration-timestamp-check.yml`
+- Mid-day instance (orphan blocks push): PR #94 SKIP LOCKED class-kill recovery sequence
+- Sibling discipline ship pattern: `.github/workflows/docs-pr-discipline.yml` (PR #57, 2026-05-07)
+
 ---
 
 ## page-multiplication-violates-no-silos-at-UX-layer
