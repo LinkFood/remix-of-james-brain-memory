@@ -936,6 +936,167 @@ Two local rows with the same timestamp; one with no remote pair. **That's the sm
 
 ---
 
+## page-multiplication-violates-no-silos-at-UX-layer
+
+**Pattern:** Tenet 24 ("all systems talk to each other — no silos") is enforced at the substrate layer (`buildClaudeContext` composes all organs, `ct-reflect-to-jac` bridges Co-Trader → JAC, audience-gating per consumer). The discipline does NOT auto-extend to the UX layer. New surfaces ship as new ROUTES (`/alpha`, `/tape-v2`, `/tape-reader`, `/heatmap`, `/pulse`, `/specialists`, `/flags`, `/alarms`, `/eod`, `/eod-report`, `/morning-brief`, `/butterflies`, ...). Each route becomes a silo from the captain's perspective even when the backend is unified.
+
+**Structural shape:** substrate-vs-surface gap. Shipping unified backend (organs + buildClaudeContext + audience filtering) doesn't unify the user experience. Captain's daily glance involves navigating between surfaces; each navigation = a silo cost. Substrate compounds; UX silos fragment.
+
+**Discipline rule:**
+1. Every new surface PR explicitly answers: *does this consolidate existing surfaces, or add a new one?* If it adds a new one, what's the consolidation plan?
+2. Page count is a metric to watch. Tenet 24 at UX layer = fewer surfaces with more density, not more surfaces with focused alpha each.
+3. Command-center pattern (Tape composition surface, locked 2026-05-08 evening) is the canonical shape — one daily-glance surface renders snapshots from every dedicated alpha surface; dedicated pages exist for depth.
+4. Top-nav dropdown reflects the canonical command-center route, not all live surfaces.
+
+### Instance — 2026-05-09 afternoon /alpha consolidation gap
+
+After iter #2 of `/alpha` shipped (PRs #88 + #89 + #90 = TapeReaderArc + semantic ClaudesRead + News Causality Matrix), captain observed: `/alpha` is now a THIRD surface alongside `/tape` and `/tape-v2` (plus `/tape-reader`). Originally `/tape-v2` was supposed to consolidate; now `/alpha` sits on top of it. *"We're making more pages, and that's one of our main no-no's. That was the reason for V2 tape."* + *"Even if the backend is not siloed, the user feels like it's getting siloed."*
+
+Consolidation paths flagged (captain decides post-iter-#2-#5 land):
+- (a) `/alpha` becomes the new `/tape-v2` (rename + retire `/tape-v2` contents)
+- (b) `/alpha` and `/tape-v2` merge into one canonical command-center route
+- (c) all three (`/tape`, `/tape-v2`, `/alpha`) collapse to one canonical surface; legacy routes deprecate
+
+Top-nav exposure decision deferred until consolidation pick lands.
+
+**Class diagnostic question for future surface PRs:** *"Does this PR add a new route, or compose into an existing one? If new route, what existing surface(s) would the captain stop visiting once this lands?"* If the answer is none → page-multiplication.
+
+**Sibling patterns:**
+- compose-with-the-kernel (kernel-vs-application discipline) — surface-layer analog: compose with the existing canonical surface before adding a new route.
+- Tenet 24 (no silos) substrate-level — this entry extends the same discipline to UX.
+
+**Canonical articulation (Cowork-side):** `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `## Page-multiplication-violates-no-silos-at-UX-layer (2026-05-09 afternoon)` — captures captain's 5/9 afternoon catch + full discipline rule + cross-references to command-center pattern + tape-command-center-snapshot-inventory.
+
+**Linked artifacts:**
+- 2026-05-09 evening sync report — empirical motivation
+- Cowork-side decisions.md 2026-05-09 afternoon entry — captain's framing + 3 resolution paths
+- This alignment PR — codifies in engine-room catalog per cross-catalog rule
+
+---
+
+## substrate-on-table-vs-sibling-table-discrimination — cascade #43
+
+**Pattern:** When a brief calls for "embed table X," verify which sibling table is the LIVE writer. Two tables in the same family can have nearly identical names and overlapping schemas while serving very different roles — one may be the actual producer (the live writer), the other may be dead-on-arrival or vestigial. A brief that doesn't distinguish will write the embed in the wrong place. The wrong-place embed silently never gets queried because consumers read the live table.
+
+**Structural shape:** family-of-tables ambiguity. Naming similarity does not imply functional equivalence. Always verify "which table is the live writer this consumer reads from" before targeting an embed insertion site.
+
+**Discipline rule:** before any substrate ship that adds an `embedding` column to an existing table, run a 3-question check:
+1. *Does any current edge function INSERT into this table?* (verify via `git grep`)
+2. *Does any consumer SELECT from this table?* (verify via `git grep` + brain organ inventory)
+3. *If yes to both, this is the live writer.* If no to either, it's a vestige; the live sibling needs identification.
+
+### Instance — 2026-05-09 Phase 7 specialist substrate Phase A
+
+PR #93 audit Section 2: `ct_specialist_memory` already has an `embedding` column from an earlier scoping pass — but inspecting the codebase found ZERO writers and ZERO consumers. Dead-on-arrival sibling. The live writer + consumer is `ct_specialist_reads` (`specialistRunner` writes; `specialistRecallContext` reads). A naive Phase 7 brief that targeted `ct_specialist_memory` for embedding would have shipped the column on the wrong table; specialists would never have benefited because the recall organ reads `ct_specialist_reads`.
+
+The audit caught the discrimination before any code shipped. Phase 7a now correctly targets `ct_specialist_reads`.
+
+**Class diagnostic question for future audits:** *"Have I verified the live writer + consumer of this table, or am I about to embed a vestigial sibling?"*
+
+**Sibling patterns:**
+- audit-frame-mismatch — surface-vs-substrate confusion at the table-identity layer.
+- back-anchorability-is-a-feature-precondition — adjacent: "is this column the right shape for the consumer?" Same family of pre-implementation verification.
+
+**Linked artifacts:**
+- PR #93 — `docs/audit/2026-05-09-phase-7-specialist-substrate-phase-a.md` Section 2 — original codification.
+
+---
+
+## measurement-window-respect-on-additive-substrate-vs-consumer-change — cascade #44
+
+**Pattern:** During an active measurement window (D2.2 acceptance, D3 experiment, any multi-day-acceptance criterion), distinguish between SUBSTRATE changes (add a column, populate it via write-time embed, leave consumer behavior unchanged) and CONSUMER changes (read the new column, change what the consumer surfaces). Substrate changes are window-safe — zero behavior change to the consumer being measured. Consumer changes are NOT window-safe — they alter the very behavior the measurement window is grading.
+
+**Structural shape:** Tenet 26 (one-structural-change-per-measurement-window) refines into two-tier classification. Additive substrate is structurally distinct from consumer behavior; the discipline applies to the latter, not the former. Naive application of Tenet 26 blocks BOTH; precise application unblocks substrate ships during measurement windows while keeping consumer ships gated until the window closes.
+
+**Discipline rule:** before deferring a ship under a measurement-window guard, ask: *"Does this ship change what the consumer reads, or does it only add substrate the consumer continues to ignore?"* If only substrate (column add + write-time embed + RPC available but not yet called by the consumer): window-safe; ship. If consumer change (the recall organ now queries the new column / the surface now renders the new field): window-blocked; defer to post-window.
+
+### Instance — 2026-05-09 Phase 7 splitting into 7a (substrate) + 7b (consumer)
+
+PR #93 audit Section 8: Phase 7 was originally framed as one ship — "embed `ct_specialist_reads` AND activate semantic recall in `specialistRecallContext`." Naive Tenet 26 application = the entire ship is blocked until D2.2 verdict (5/13) + D3 experiment closes (5/26). 17+ days deferred.
+
+The audit refined: Phase 7a = additive substrate (embedding column + write-time embed in `specialistRunner` + match RPC available; consumer untouched). Phase 7b = consumer change (`specialistRecallContext` swaps chronological recall for semantic recall). Phase 7a is window-safe — zero behavior change to specialist organ output. Phase 7b is window-blocked — it changes what specialists recall, contaminating D2.2's measurement of specialist verdict quality.
+
+Phase 7a can ship same-day on 5/13 (or even earlier with explicit captain go); Phase 7b waits for explicit captain go after D2.2 verdict + D3 close. Articulating the distinction at audit time saved ~17 days of unnecessary defer.
+
+**Class diagnostic question for future window-gated work:** *"Does this ship change what the measured consumer reads, or only what's available to it?"* If the latter, it's window-safe.
+
+**Sibling patterns:**
+- one structural change per measurement window (Tenet 26) — this entry refines its application precision.
+- back-anchorability-is-a-feature-precondition — adjacent verification at the column-shape layer.
+
+**Linked artifacts:**
+- PR #93 — `docs/audit/2026-05-09-phase-7-specialist-substrate-phase-a.md` Section 8 — original codification.
+
+---
+
+## parallel-drainer-without-skip-locked — cascade #45
+
+**Pattern:** When N concurrent callers execute `SELECT ... WHERE <claim_predicate> ORDER BY ... LIMIT M` against the same table, all N callers receive the SAME M rows. Each caller then re-processes those rows (re-embedding, re-grading, re-ingesting). (N − 1) × M of the calls are wasted dupes. The dupe issue silently never surfaces under steady-state operation (single-caller cron) but explodes the moment a manual fire goes parallel.
+
+**Structural shape:** absence of row-level claim atomicity. The fix is `FOR UPDATE SKIP LOCKED` inside an atomic claim RPC that combines the SELECT and the UPDATE-the-claim-marker into one statement. Optionally write a sentinel value (zero-vector for embeddings; status='claimed' for state-machine work) so concurrent SELECTs see the row as already-claimed and skip it.
+
+**Discipline rule:** any drainer / worker function that selects un-processed rows from a queue-shaped table needs the claim to be atomic. Patterns that work:
+1. **`SELECT ... FOR UPDATE SKIP LOCKED` inside an RPC** with a claim-marker UPDATE (sentinel value) inside the same statement.
+2. **Optimistic concurrency via `UPDATE ... WHERE id = X AND embedding IS NULL`** with row-version checking.
+3. **Job-queue table** with explicit claim TTL + crash recovery RPC.
+
+The first is the cheapest retrofit and matches the SQL-native pattern.
+
+### Instance — 2026-05-09 manual tape_commentary backlog drain
+
+Session-A fired 10 parallel batches of `ct-embed-tape-commentary` via `invoke_edge_function` RPC, expecting ~1,000 rows drained in ~70s wall-clock. Actual: only ~100 unique rows drained; the other 900 Voyage calls were wasted dupes. The drainer's `SELECT WHERE embedding IS NULL ORDER BY created_at DESC LIMIT 100` doesn't claim atomically — all 10 parallel calls grabbed the same top-100 set, computed embeddings concurrently, then UPDATEd them all (the UPDATE didn't conflict because UPDATE-after-UPDATE is idempotent on the embedding column). 90% of Voyage spend was waste.
+
+PR #94 class-killed: migration `20260510100000` adds `claim_unembedded_breaking_news` + `claim_unembedded_tape_commentary` RPCs (atomic SELECT + UPDATE inside one statement using `FOR UPDATE SKIP LOCKED` + zero-vector sentinel). Plus `reset_stale_embed_claims` for crash recovery. Both drainer JS files swap their `.from(...).select(...)` for `.rpc(...)`. Steady-state cron unaffected; activates under concurrent claims.
+
+**Class diagnostic question for future drainer / worker designs:** *"If N callers fire this in parallel, do they each claim a disjoint slice or do they all grab the same slice?"* If the latter, the drainer needs atomic claim.
+
+**Sibling patterns:**
+- pg_cron_schedule_idempotency — both about ensuring intended-once operations actually run once.
+- back-anchorability-is-a-feature-precondition — pre-implementation verification cousin.
+
+**Linked artifacts:**
+- PR #94 — `fix(drainers): FOR UPDATE SKIP LOCKED class-kill on embedding backlogs`.
+- `docs/runbooks/embedding_gate.md` — appended "parallel-fire is now safe" + recovery sequence for stuck sentinel rows.
+
+---
+
+## disciplines-need-write-time-enforcement-not-just-post-hoc-audit
+
+**Pattern:** Locking a discipline at the methodology layer (codify the rule in `methodology-patterns.md` / `decisions.md` / engine-room CLAUDE.md tenets) catches drift via post-hoc audit, but does NOT prevent the writing of artifacts that violate the discipline. Each fire = one more wall-clock day of drift before catch. Write-time enforcement = prevention. Same shape as Tenet 13 (structural prevention beats validators) applied to methodology discipline itself.
+
+**Structural shape:** codification establishes the rule; the write-time gate prevents violation. Without a write-time gate, the discipline-stack works as audit-catch but artifacts in canonical state propagate stale framings until the next audit. Compounded over weeks of build velocity = many artifacts carrying drift.
+
+**Discipline rule:** when a discipline is locked, identify the WRITE-TIME enforcement layer alongside the codification. Examples:
+- **Brief-author write-time check** — before sending paste-ready PR, run a 5-check audit: state assertions, calendar anchors, cross-catalog parity, substrate-target verification, page-multiplication.
+- **Memory-file write-time gate** — before appending to `methodology-patterns.md` / pickup files, search for calendar anchors + verify cross-catalog parity if the entry codifies a new discipline.
+- **CI-layer enforcement** — regex check on docs PRs for calendar anchors outside historical context; cross-catalog parity check between Cowork-side `memory/patterns.md` and engine-room `docs/methodology-patterns.md`.
+- **Templated entries** — methodology-patterns.md entry-template that prompts cross-catalog parallel codification before the entry can be saved.
+
+### Instance — 2026-05-09 evening sync (this PR)
+
+Two disciplines locked earlier in the day fired on their own canonization artifacts within 30 minutes of locking:
+
+1. **calendar-anchor-becomes-deferral discipline** (locked 2026-05-09 morning, codified in this catalog via PR #95) fired on `project_co_trader_5pr_chain_shipped_2026_05_09_evening.md` — engine-room's own pickup file used "Sunday" 6 times AFTER the discipline was locked AND PR #95 explicitly dropped "Sunday is calibration day" from Tenet 19. Same anti-pattern on the artifact that's supposed to canonize the lesson.
+
+2. **Cowork↔engine-room cross-catalog rule** (locked 2026-05-07 evening) fired on this very catalog — Cowork-side codified `page-multiplication-violates-no-silos-at-UX-layer` 5/9 afternoon, but engine-room methodology-patterns.md never got the parallel entry. Plus 3 cascade instances #43/#44/#45 codified inline in PR descriptions but not as top-level entries here. Catalog gap existed despite cross-catalog rule existing.
+
+In both cases, the discipline existed; the artifact-author didn't run a write-time check. Audit caught the drift hours later; meanwhile artifacts existed in canonical form propagating bad framings. The 5/9 evening sync report surfaced the drift; this alignment PR closes it. Write-time gates for next time would have prevented the drift entirely.
+
+**Class diagnostic question for future discipline codifications:** *"What's the write-time enforcement layer for this rule?"* If the answer is "we'll catch it at audit," that's not enforcement — it's reactive catch-up. Identify a gate at the layer where the violating artifact is written.
+
+**Sibling patterns:**
+- Tenet 13 (structural prevention beats validators) — same shape applied to methodology discipline itself.
+- audit-first discipline — write-time check IS audit-first applied to brief-author / memory-author layer.
+- brief-author-state-vs-intent — the rule itself is a write-time gate at the brief layer; this entry generalizes the gate concept across all artifact-writing layers.
+
+**Canonical articulation (Cowork-side):** `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `## Disciplines need write-time enforcement, not just post-hoc audit (2026-05-09 evening)` — same content, parallel codification per cross-catalog rule. The entry itself observes that it must land in BOTH catalogs to honor the cross-catalog rule it cites.
+
+**Linked artifacts:**
+- 2026-05-09 evening sync report — empirical motivation; Drift A + B both fired at artifact-creation layer.
+- This alignment PR — closes Drift A + B and codifies the meta-pattern simultaneously.
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
