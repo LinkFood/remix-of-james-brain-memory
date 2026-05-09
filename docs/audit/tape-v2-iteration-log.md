@@ -241,6 +241,60 @@ Captain first reaction: "good bones, needs work, alot of small different things.
 
 **Bundle status:** Flow Butterfly v2 visual layer is now actually-clean (iter #1+#2+#3 polish + iter #4 dedup + sparse-guard) plus brain-organ-wired (#78) plus corpus-capturing (#79+#80 fix). The visible-on-/tape-v2 surface should now match what captain expects on first read.
 
+**PR / commit:** #81 (squash; merged 2026-05-09 00:53Z) + #82 hotfix-React-error-300-from-iter-#4-conditional-hooks (squash; merged 2026-05-09 ~01:11Z)
+
+---
+
+## v2 ALPHA SURFACE — RESHAPED 2026-05-09: NEW route, separate from /tape and /tape-v2 (both stay v1-class)
+
+Captain reframed during 5/8 evening vision-mode. The "v2 command-center" iteration sequence (PRs #73→#82 above) lives at /tape-v2 and is NOW v1-class. The new v2 is a NEW route — surgical-grade institutional flow diagnostic where the system's intelligence becomes visible. Three temporal layers stack (near + medium + long horizon). Push not render for non-alphas. Embedding-layer as the underutilized moat to activate.
+
+Brief reshaped 2026-05-09 from "audit + design doc, no code" → "audit-while-building" because sandbox safety holds (separate route, single-PR rollback, captain validates iterations on the live URL).
+
+Architecture-fundamental gates (A7 + A6) passed clean from the prior audit (PR #83 design doc):
+- A7: tape commentary semantic recall = 1-PR ship; butterfly = multi-PR; heatmap GEX = JAC-core kernel work (separate scoping). NO blocker for v2 build.
+- A6: long-dated positioning depth fully feasible from existing ct_oi_snapshots + ct_contract_tracks (both indefinite retention). NO blocker.
+
+---
+
+## 2026-05-09 — Alpha v2 iter #1: page shell + ClaudesRead + four-surface placeholders
+
+**What changed:** New route `/alpha`. Page shell at `src/pages/Alpha.tsx`, three new components in `src/components/alpha/`. Hidden from top nav initially (captain validates via direct URL).
+
+**Layout (per design doc Layout 1 "Stacked Diagnostic"):**
+- Top strip: regime · tide · VIX · push count (existing useRegimeState + useTapeReader + useAlarmRealtime)
+- **ClaudesRead full-width section** (the synthesis layer captain reads first): latest tape commentary + top 3 specialist reads by conviction. Reuses existing useTapeReader + useSpecialistsTileRow hooks from /tape-v2 — honest first cut, no new substrate.
+- Two middle-layer surface placeholders: Flow Butterfly historical (multi-day arc) + Heatmap alpha-class
+- Curated tape placeholder: filtered to flagged/stacked contracts only, future get_v2_curated_tape RPC
+- Long-dated positioning placeholder: 10 tickers × 12-month OI momentum heatmap
+
+**Why iter #1 ships placeholders for 4 of 5 surfaces:** captain validates the architecture + identity + Claude's-Read-as-leadership pattern immediately on the live URL, then iters wire each surface in turn. Honest about what's pending; not faking presence.
+
+**Architecture identity locked:**
+- Push-not-render footer rationale visible: "Specialists, Flow Pulse, full news panel, Stacking → off this page; arrive via Slack emission."
+- Three temporal layers visibly stacked top-to-bottom
+- Bloomberg-terminal-class minimal chrome (no consumer-dashboard padding/widgets)
+
+**Files touched:**
+- `src/pages/Alpha.tsx` — NEW page shell (~110 LOC)
+- `src/components/alpha/AlphaTopStrip.tsx` — NEW (~95 LOC)
+- `src/components/alpha/ClaudesRead.tsx` — NEW (~155 LOC)
+- `src/components/alpha/AlphaPlaceholderSection.tsx` — NEW reusable placeholder component (~40 LOC)
+- `src/App.tsx` — +1 import, +1 route (1-line route addition pattern, hidden from nav)
+
+**Reuse:** AuthLayout (left chat sidebar automatic) + ChatPanel + Card + useRegimeState + useTapeReader + useAlarmRealtime + useSpecialistsTileRow. Zero edits to existing components or hooks.
+
+**Iter #2 next ship:** Flow Butterfly historical-pattern surface (Shape A multi-day cross magnitude arc + Shape B watchlist consensus rollup). Reads from `ct_butterfly_cross_events` corpus shipped by PR #79/#80. First useful arc once corpus has ≥5 RTH days (~5/15).
+
+**Iter #3 queue:** Heatmap alpha-class redesign (Shape D — baseline-comparison default, strike-side dominance badges, drill panel surfacing per-alert conviction).
+
+**Iter #4 queue:** Curated tape via new `get_v2_curated_tape` RPC composing ct_scored_flow + ct_flags + ct_contract_tracks + ct_specialist_reads filters.
+
+**Iter #5 queue:** Long-dated OI momentum heatmap (Shape E) — needs new `ct_oi_monthly_baselines` aggregation table + nightly cron + extended OI delta RPC.
+
+**Iter #N (post-C1 5/15+):** semantic recall over tape commentary embedding (1-PR backend ship) — wires `ct-tape-reader` to embed each commentary at write-time + activates query in ClaudesRead via existing `ct_similar_items` RPC. The semantic-recall-on-tape ship is the deepest unlock per PR #83 audit.
+
 **PR / commit:** TBD on push
+
 
 
