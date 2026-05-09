@@ -183,6 +183,29 @@ Captain first reaction: "good bones, needs work, alot of small different things.
 
 **Validation:** specialists pick up new organ on next read (after CI redeploys all `_shared/`-importing functions). Captain sees flag quality improvement empirically over the next several RTH days. No UI surface for this ship — it's autonomous-mode infrastructure (Tenet 26). Captain's primary surface (/tape-v2) doesn't change visually.
 
-**PR / commit:** TBD on push
+**PR / commit:** #78 (squash c54e044; merged 2026-05-09 00:19Z)
 
 ---
+
+## 2026-05-09 — Best-alpha ship: Rank 1 detector + grader + warden invariants
+
+**What changed:** Bundled corpus-building infrastructure completing PR #64 Rank 1.
+
+1. **`ct_butterfly_cross_events` table** + `get_butterfly_hit_rates()` RPC (migration 20260510040000)
+2. **`ct-butterfly-detector` edge function** — fires every 5 min RTH, UPSERTs new crosses into corpus
+3. **`ct-butterfly-grader` edge function** — fires twice daily 20:30 UTC; intraday + NextClose grading from `ct_price_bars`
+4. **4 EXISTS-guarded warden invariants** (migration 20260510040100): cross_events_today_rth, grader_intraday_lag, nextclose_grade_lag, rpc_responsive (critical)
+5. **config.toml** registers both edge functions
+
+**Why:** brain organ #78 uses STATIC thresholds. This ship builds the LIVE corpus that lets thresholds switch from heuristic to data-driven over 30+ RTH days. The corpus IS the long-term alpha compounding mechanism.
+
+**End-state:** Detector fires every 5 min RTH starting Mon 5/11 ~13:35 UTC. Grader fires Mon-Fri 20:30 UTC. Warden invariants engage automatically once first cross row lands. Once corpus matures, organ's `nextCloseSignalFor()` upgradeable to rolling hit-rates with one-line query swap.
+
+**Files touched:** 5 — 2 migrations (table + invariants), 2 edge fns (~700 LOC combined), 1 config.toml entry block.
+
+**Verification path:** CI deploys edge functions (auto-discover); engine-room runs `npx supabase db push` post-merge to apply migrations + activate cron schedules. First corpus row Monday morning. Grader fires same day after RTH close.
+
+**Bundle close:** Flow Butterfly is now alpha-tight (chart polish iters #1-#3) + brain-wired (#78) + corpus-capturing (this ship).
+
+**PR / commit:** TBD on push
+

@@ -489,3 +489,9 @@ verify_jwt = false
 
 [functions.ct-mcp-verification-runner]
 verify_jwt = false
+
+[functions.ct-butterfly-detector]
+verify_jwt = false
+
+[functions.ct-butterfly-grader]
+verify_jwt = false
