@@ -765,3 +765,43 @@ AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the 
 **Cascade catalog instance surfaced:** new pattern `parallel-agents-create-same-file-with-different-signatures`. Codified in `docs/methodology-patterns.md` (this PR). Cross-catalog parallel codification at Cowork-side `memory/patterns.md` per cross-catalog rule (captain pastes from PR description).
 
 **PR:** #106 (PR-B in iter #3 stack, rebased on main with hook conflict resolved per α; force-push triggers new CI run; merge once clean).
+
+---
+
+## 2026-05-09 evening — Emission Phase 2 PR-3: regime_transition trigger
+
+**What changed:** Single-purpose backend PR registers a third proactive emission trigger in the JAC kernel. New SQL detection function `public.detect_regime_transition(p_params JSONB)` mirrors the `detect_hot_contract` shape (`event_dedup_key, event_payload, severity, ticker_focus`). New row in `public.jac_emission_triggers`: `cotrader_regime_transition_v1`, application=`cotrader`, default_severity=`signal`, debounced 60min, slack-only. New composition template `cotrader_regime_transition_v1` in `supabase/functions/jac-compose-emission/index.ts` produces `🌀 [TICKER] regime: [prev] → [current]` shape with confidence/trajectory/momentum and synchronized-flip lead.
+
+**Why:** Phase 2 of the emission layer expansion (1/10 → 2/10 alongside parallel PR-1 news_flow_causality). Regime transitions are the slow signal under every other detector — when the captain's macro/positioning backdrop flips, every detector recalibrates. The "9 tickers all flipped to pre_event_macro at 5/6 10:00" pattern from PR #91's findings is the canonical synchronized-flip case the alert tier exists to catch.
+
+**Engine-room judgment per Phase A:** computed transitions inline via `LAG()` window over `ct_regime_history` partitioned by `COALESCE(ticker, '__MKT__')` ordered by `bucket_ts ASC`. PR #91's `get_regime_transitions` RPC migration is on the PR branch but NOT on origin/main — cherry-picking would couple this PR to PR #91's merge state. Inline LAG is cheap (one per (ticker, bucket_ts) in the lookback window) and keeps this PR independent. When PR #91 lands, the RPC and this detector co-exist serving different consumers (Regime Flip Journal UI vs proactive emission).
+
+**Severity ladder (all tunable via detection_params row, Tenet 25):**
+- `alert` — synchronized flip: ≥ `synchronized_flip_threshold` (default 5, half the watchlist) tickers transitioning to the same classification at the same `bucket_ts`
+- `signal` — single-ticker flip with confidence ≥ `signal_confidence_min` (default 75)
+- `info` — routine flip below the confidence floor (still emitted; captain observes regime drift in low-conviction states)
+
+**Migration timestamp:** `20260510130000` — verified vs origin/main latest at `20260510100000` and local worktree latest at `20260510100000`. Leaves a window for parallel PR-1 (news_flow_causality) at e.g. `20260510110000` or `20260510120000`. PR #100's CI workflow catches collisions.
+
+**Engine-room write-time checklist:**
+1. State-vs-intent — composes existing `ct_regime_history` substrate (Pulse v2 schemas, 20260502040100), no new substrate asserted.
+2. No calendar anchors on forward work.
+3. Cross-catalog parity — Cowork-side Phase 2 emission stack tracks the same PR-1/PR-3 split (Trigger 2 first_daily_cross deferred for substrate gap).
+4. Substrate-target verification — `ct_regime_history` schema verified empirically via REST select (`ticker IS NULL` = market-wide; `classification` is the labeled state; `confidence` 0-100).
+5. Page-multiplication — no UI surface added; emission lands in Slack via the existing `jac-emission-detector` cron path.
+
+**Discipline:**
+- Single-purpose: only `detect_regime_transition` SQL + trigger row + one composition template entry + this iteration log entry.
+- Did NOT touch `ct_specialist_reads` or any specialist substrate (Tenet 26).
+- Did NOT touch `detect_hot_contract` or its template — additive alongside.
+- Did NOT cherry-pick PR #91's `get_regime_transitions` migration — inline LAG path per Phase A judgment.
+
+**Smoke-test plan:** post-merge + Supabase deploy, verify the trigger row exists in `public.jac_emission_triggers` (`SELECT trigger_name, enabled, detection_params FROM jac_emission_triggers WHERE trigger_name='cotrader_regime_transition_v1'`). The Phase 1 cron `jac-emission-detector` (every minute, 13-20 UTC, weekdays) picks up the new row on its next tick. Saturday quiet — first real fire likely Monday RTH; documenting that's expected.
+
+**Iteration log conflict expected** with parallel PR-1 (news_flow_causality) — both append to this file. Resolvable via rebase keeping both, same chain pattern as iter #3 PR-B/PR-C.
+
+**Cascade catalog instances surfaced:** none new — this PR follows the established detect_hot_contract precedent end-to-end.
+
+**5x bar:** previous emission state was 1/10 triggers (`hot_contract` only). Adding regime_transition expands proactive coverage onto the slow-signal layer that colors every other detector. The captain currently learns regime flips by reading `/heatmap` or by inference from cron Slack output — proactive Slack on a confidence-gated flip closes that gap.
+
+**PR / commit:** PR-3 in Emission Phase 2 stack. Captain validates post-Vercel deploy + Monday-RTH first-fire — no auto-merge.
