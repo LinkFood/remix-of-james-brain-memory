@@ -451,4 +451,36 @@ Cluster axis is severity + sentiment + category + tickers, not just headline pro
 
 **Next:** Phase 5 — News Causality Matrix on /alpha (renders empirical per-source × per-ticker hit rates).
 
+---
 
+## 2026-05-09 late evening — Phase 5: News Causality Matrix on /alpha
+
+**The 2-month-old derived signal finally surfaces.** The `ct_news_causality` schema comment (migration 20260416000019, shipped 2026-04-16) explicitly designed the per-source × per-ticker hit-rate signal: *"Per-source hit rates become a novel derived signal ('Bloomberg moves NVDA flow 68% of the time, Tradex 12%')."* The cron has been computing it every 15 min for ~3 weeks. **No UI ever rendered it.** Phase 5 closes that gap.
+
+**5x bar:** Surface doesn't exist anywhere in the system. Captain has been blind to which news sources reliably drive flow on which tickers. Source × ticker matrix renders the empirical edge in a single glance.
+
+**What shipped:**
+- Migration `20260510070000_get_news_causality_hit_rates.sql` — `get_news_causality_hit_rates(p_lookback_days, p_min_n, p_tickers)` RPC: aggregates ct_news_causality by (news_source, ticker), returns total_n + moved_count + hit_pct + flow_moved_count + dp_moved_count + premium totals. HAVING N >= p_min_n filters single-fluke noise.
+- New hook `src/hooks/useNewsCausalityMatrix.ts` — calls RPC with watchlist filter + 7-day default lookback, reshapes flat list into source-keyed matrix, sorts sources by total_n DESC. Refetches every 5 min.
+- New component `src/components/alpha/NewsCausalityMatrix.tsx` (~190 LOC) — compact source × ticker grid, cells colored by hit-rate band (60%+ emerald-bold, 40-60% emerald, 25-40% amber, 10-25% blue, <10% gray). HoverCard surfaces full breakdown (total_n, flow_moved, dp_moved, total premiums). Per-source mean column at right.
+- `src/pages/Alpha.tsx` — `<NewsCausalityMatrix />` mounted between curated-tape placeholder and long-dated positioning placeholder.
+
+**Live state at ship — RPC verification (sample query):**
+```
+Benzinga    NVDA  n= 52  moved= 18  hit=34.6%
+Benzinga    SPY   n= 47  moved= 11  hit=23.4%
+Benzinga    QQQ   n= 44  moved= 11  hit=25.0%
+Benzinga    AMZN  n= 41  moved=  8  hit=19.5%
+Benzinga    GOOGL n= 38  moved=  5  hit=13.2%
+Benzinga    MSFT  n= 36  moved=  3  hit=8.3%
+```
+
+Real signal: Benzinga clearly the dominant news volume source; NVDA the most-moved ticker (34.6%); MSFT the most-noise (8.3%). **Captain has never seen this.**
+
+**Files touched:** 4 — 1 migration, 1 new hook, 1 new component, 1 page edit, 1 iteration log entry.
+
+**Build state:** vite build passes clean (4158 modules). UI not visually verified locally — captain validates post-deploy.
+
+**Time:** ~25 min from "Phase 4 done" to ship-ready.
+
+**Next:** Phase 6 — Regime Flip Journal. Renders `ct_regime_history` transitions on /pulse (or as another /alpha section) with trigger annotations. Last visible-5x phase before Phase 7 unlocks 2026-05-13 post-D2.2-verdict.
