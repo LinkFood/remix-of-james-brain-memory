@@ -511,3 +511,19 @@ Real signal: Benzinga clearly the dominant news volume source; NVDA the most-mov
 **Cross-catalog parity flag (open):** Cowork-side `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` does NOT have an entry for `docs-PR-merge-doesnt-imply-migration-applied` at all (verified by grep on `migration|timestamp|schema_migrations|silently no-op|PR #70|PR #92|PR #94`). The brief asserted parity already existed; empirically it does not. Captain should paste a parallel entry — paste-ready text included in PR description.
 
 **PR / commit:** PR-D (open via this branch).
+
+---
+
+## 2026-05-09 evening — PR-C: PWA install popup suppressed on /alpha + dismissals persist
+
+**What changed:** `src/components/InstallPrompt.tsx` — added `/alpha` (and any `/alpha/*` sub-route) to the existing route-suppression guard alongside `/jac`, and migrated dismissal persistence from `sessionStorage` to `localStorage` (with one-shot legacy-flag migration so existing sessionStorage dismissals carry over). No other component edits.
+
+**Why:** Cowork visual validation 5/9 afternoon flagged "Install LinkJac" PWA install popup appearing on /alpha — consumer-feel injection on a surgical-grade institutional flow surface. Identity violation. Same class as the existing /jac Nerve Center carve-out already in this file.
+
+**Option C (both) over A or B alone:** Route guard closes the cited /alpha identity violation immediately and follows the precedent already encoded in the file (line 57 `pathname === '/jac'`). The sessionStorage→localStorage upgrade is the durable fix — without it, James dismisses the popup, closes the browser, and gets it again next session on every other route. Both are tiny; defense in depth on a pure UX class with zero downside.
+
+**End-state:** Install popup never renders on `/jac`, `/alpha`, or `/alpha/*`. On all other routes (e.g. `/dashboard`), once dismissed, stays dismissed across sessions. Native `beforeinstallprompt` is still preempted (`e.preventDefault()`); browser will not auto-show its own install affordance.
+
+**Phase A flag (not fixed in this PR):** InstallPrompt.tsx uses raw `window.location.pathname` instead of `useLocation()` from react-router. Works in practice (component re-renders on route nav because parent re-renders), but it's a subtle reactivity correctness gap — if the install event fires after a route change without parent re-render, the guard could read a stale path. Single-purpose discipline holds: PR-C is the suppress fix, the `useLocation()` switch is a separate cleanup if/when it actually bites.
+
+**PR / commit:** PR-C in 5/9 evening bundle.
