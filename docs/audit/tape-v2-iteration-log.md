@@ -674,3 +674,40 @@ AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the 
 **Cross-catalog parity flag for captain:** This entry generalizes a back-anchorability instance (cascade #29 in `docs/methodology-patterns.md`) — `ct_gex_timeseries` is append-only and the live substrate; no consumer should be reaching for the dropped `ct_gex_snapshots` overwrite-shape table. The 5 inline-inference edge functions all already read `ct_gex_timeseries` correctly per `grep ct_gex_timeseries supabase/functions/`. Iter #3.5 (caller refactor) is the right place to centralize the kernel logic; this PR ships the kernel.
 
 **PR / commit:** PR-A in iter #3 stack. PR-B (`/heatmap` redesign) and PR-C (`/alpha` snapshot composition) follow. Captain reviews — no auto-merge.
+
+---
+
+## 2026-05-09 — Alpha v2 iter #3 PR-C: GEX Snapshot Card on /alpha (medium-temporal-layer surface)
+
+**What changed:** New component `src/components/alpha/GexSnapshotCard.tsx` mounted on `/alpha` between `<ClaudesRead />` (synthesis layer) and `<NewsCausalityMatrix />` (information-rate layer) — the medium-temporal-layer position per the three-layer architecture comment in `Alpha.tsx`. New hook `src/hooks/useGexInference.ts`. New edge-function transport `supabase/functions/ct-gex-inference/index.ts` — thin wrapper around the `gex_inference` brain organ kernel (`_shared/gexInferenceContext.ts`, PR #104) so the strike-ladder math lives ONCE and every UI consumer pulls from the same source.
+
+**Visual shape (terminal-class density, mirrors NewsCausalityMatrix identity bar):**
+- **Header strip** — Crosshair icon + "GEX SNAPSHOT · DEALER POSITIONING" label, market-wide consensus_direction badge (BROAD POSITIVE GAMMA emerald / BROAD NEGATIVE GAMMA red / MIXED amber / NO SIGNAL muted), N tickers above flip / N below flip, generated_at relative timestamp.
+- **Per-ticker grid** — one row per watchlist ticker in canonical order (NVDA, AAPL, MSFT, GOOGL, AMZN, META, TSLA, QQQ, SPY, IWM): ticker (font-bold mono) · dealer net direction badge (+γ / −γ / flat with color) · spot price · direction arrow ↑/↓/− vs flip · γ flip strike · call wall (dimmed when >3% from spot) · put floor (dimmed when >3% from spot). Click row → `/heatmap?ticker={t}` (PR-B mounts the depth view; query param is the agreed hand-off).
+- **Footer** — populated/total count + organ_status when not `populated` + "+γ = mean reversion · −γ = momentum amplifier" legend + "Open /heatmap →" link.
+
+**Data path (single source per Tenet 24 — NO SILOS):**
+- Frontend hook `useGexInference` invokes `ct-gex-inference` edge function via `supabase.functions.invoke`.
+- Edge function instantiates a service-role Supabase client and calls `getGexInferenceContext` from the brain organ — that's the kernel from PR #104. Returns the organ's structured-numeric output unchanged.
+- **Why edge function over direct table reads:** the inference math (gamma flip linear interpolation, dealer-net-flat threshold, ATM-band filter, watchlist-aggregate consensus rule) all lives in `_shared/gexInferenceContext.ts`. Reaching for `ct_gex_timeseries` directly from a hook would re-implement that math in a third place (organ + edge fn + hook = drift surface). The edge wrapper costs one extra round-trip; the math discipline is worth it. Mirrors `useGexRadar` precedent — the page-edge-function pattern is already established for GEX surfaces. PR-B should consume the same hook OR re-invoke the same edge function so `/alpha` and `/heatmap` share the data path.
+- Refetch cadence: 60s during RTH (matches the 60s `cacheTtlSeconds` on the organ), paused outside RTH.
+
+**Coordination with PR-B:** PR-B (`/heatmap` alpha-class redesign, parallel agent) — recommended consumption pattern is `useGexInference()` directly when the depth view needs the same per-ticker inference. If PR-B picks a different path (e.g., a custom hook reading the organ via a different transport), captain can consolidate iter #3.5. Both ship against the same kernel either way.
+
+**Why:** Captain-glance dealer-positioning state across the full watchlist in <5 seconds, mounted in the medium-temporal-layer position the brief calls out. The 5x-better-than-/tape bar — `/tape` and `/tape-v2` had no GEX strip; this surface compresses 10 tickers' worth of dealer positioning into one card-glance, the direct visual analog of an institutional desk's dealer-net board.
+
+**Discipline:**
+- Single-purpose: PR is ONLY the `GexSnapshotCard` component + `useGexInference` hook + `ct-gex-inference` edge function + `Alpha.tsx` mount + this iteration log entry. No `/heatmap` edits, no edits to `ClaudesRead` / `NewsCausalityMatrix` / `TapeReaderArc` / `AlphaTopStrip`, no Tenet 26 substrate touch (`ct_specialist_reads` / `specialistRecallContext` untouched), no edits to the 5 inline-inference edge functions (iter #3.5 scope).
+- `npm run build`: clean. `tsc --noEmit`: clean. `deno check supabase/functions/ct-gex-inference/index.ts`: clean.
+- Engine-room write-time checklist:
+  1. State-vs-intent — composes existing organ rather than asserting new substrate.
+  2. No calendar anchors on forward work.
+  3. Cross-catalog parity — Cowork-side iter #3 stack tracks the same PR-A/B/C structure; this PR is PR-C.
+  4. Substrate-target verification — kernel reads `ct_gex_timeseries` (verified live in PR #104, this PR doesn't touch substrate).
+  5. Page-multiplication — adds ONE card to the existing `/alpha` route; doesn't ship a new page.
+
+**Iteration log conflict expected** when PR-B and PR-C land in either order — both append to this file. Resolvable via rebase-and-keep-both per the chain pattern.
+
+**5x bar:** `/tape` and `/tape-v2` have no compressed GEX board; the closest precedent is `/edge` showing one-ticker-at-a-time. This surface puts 10 tickers' dealer positioning + flip direction + walls in one grid the captain reads at a glance. Direct visual analog of an institutional dealer-net dashboard, deployed for one trader.
+
+**PR / commit:** PR-C in iter #3 stack. Captain validates visually post-Vercel deploy on `/alpha` — no auto-merge.

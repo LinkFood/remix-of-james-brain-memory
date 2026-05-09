@@ -31,6 +31,7 @@ import { ArrowUpRight } from 'lucide-react';
 import { AlphaTopStrip } from '@/components/alpha/AlphaTopStrip';
 import { TapeReaderArc } from '@/components/alpha/TapeReaderArc';
 import { ClaudesRead } from '@/components/alpha/ClaudesRead';
+import { GexSnapshotCard } from '@/components/alpha/GexSnapshotCard';
 import { NewsCausalityMatrix } from '@/components/alpha/NewsCausalityMatrix';
 
 export default function Alpha() {
@@ -69,6 +70,12 @@ export default function Alpha() {
       {/* Synthesis — Claude's read sits at the top of every captain glance.
           Phase 4 (semantic recall) composed inside ClaudesRead. */}
       <ClaudesRead />
+
+      {/* GEX Snapshot — medium-temporal-layer dealer-positioning view across
+          the full watchlist (iter #3 PR-C). Composes the gex_inference brain
+          organ (PR #104) so /alpha and /heatmap pull from the same kernel
+          per Tenet 24 (no silos). */}
+      <GexSnapshotCard />
 
       {/* News Causality Matrix — Phase 5 of the audit-driven loop. The
           derived signal documented in ct_news_causality.sql since
