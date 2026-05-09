@@ -232,6 +232,18 @@ Severity grades: `info` (log only), `warn` (Slack on first fail and on recovery)
 
 Run `df -h /` at session start, before big builds (3+ files/agents), every 5+ commits, and before deploys/pushes. If under 20GB: `sudo rm -rf /private/tmp/*`, re-verify, stop if still low.
 
+## Write-Time Enforcement Checklist
+
+Before opening any PR description, ship report, runbook, audit doc, methodology-patterns entry, or canonical memory file (pickup, MEMORY.md North Star) — run the 5-check pre-paste audit at `docs/governance/engine-room-write-time-checklist.md`:
+
+1. State-vs-intent (cascade #37 catalog)
+2. Calendar-anchor on forward work (calendar-anchor-becomes-deferral pattern)
+3. Cross-catalog parity (Cowork ↔ engine-room rule)
+4. Substrate-target verification (cascade #43 + migration timestamps)
+5. Page-multiplication on new surfaces (Tenet 24 at UX layer)
+
+Codified 2026-05-09 evening as the operational form of Tenet 13 (structural prevention beats validators) applied to methodology discipline itself. Sibling artifact: Cowork-side checklist at `/Users/jameschellis/Documents/cowork-cotrader/memory/cowork-write-time-checklist.md`. See `docs/methodology-patterns.md` `## disciplines-need-write-time-enforcement-not-just-post-hoc-audit` for empirical motivation.
+
 ## What Works Right Now
 
 | Capability | Status | How |
