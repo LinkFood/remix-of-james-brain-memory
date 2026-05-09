@@ -1266,7 +1266,164 @@ Decile curve shape (after temporal-adjacency filter, n=206,650 pairs):
 
 **Linked artifacts:**
 - `docs/analysis/embedding-bet-backtest-2026-05-09.md` — Tier 1 decile table + plateau interpretation.
-- `docs/analysis/embedding-bet-flow-sequence-backtest-2026-05-09.md` (forthcoming) — second instance of decile-shape diagnosis on a different axis. Will validate or refine this pattern.
+- `docs/analysis/embedding-bet-flow-sequence-backtest-2026-05-09.md` — second instance (flow-sequence axis: monotonic D5→D9 plateau D9-D10).
+- `docs/analysis/embedding-bet-gex-state-backtest-2026-05-09.md` — third instance (GEX-state axis: FLAT curve, fourth canonical shape empirically observed). Three instances across three axes confirms the diagnostic generalizes.
+
+---
+
+## multi-axis-stacking-compounds-at-n=2
+
+**Pattern:** When a single embedding axis validates partially (real signal at low/mid cosine, instrument-mismatch ceiling at high cosine per the saturation diagnostic), adding a second independent axis that also validates partially causes the two-axis intersection (HH stratum: pairs scoring high on BOTH cosines) to show meaningfully tighter forward-outcome correlation than either single axis alone or the LL baseline. **Cross-axis filtering compounds because each axis catches different false positives** — pairs that look similar in axis A but diverge in axis B fall out of the high-similarity tail; only pairs similar across both survive. The intersection IS the signal.
+
+**Structural shape:** axis-as-filter rather than axis-as-direct-predictor. A single embedding instrument's high-similarity tail contains real analogs MIXED WITH false positives (similar prose for different setups, similar flow rhythm for different directions, etc.). A second axis with different false-positive geometry filters them out. The product of two partial filters can be a strong filter even when neither is strong alone.
+
+**Discipline rule:** when validating a new embedding axis, run BOTH standalone Tier 1+Tier 2 AND cross-axis Tier 3 stratum analysis vs prior validated axes. If Tier 1 standalone shows partial validation (signal at low/mid + plateau at high) AND Tier 2 surfaces contamination patterns (busy-session-rhythm, default-cluster, etc.), the axis may STILL be valuable as a filter in stack — Tier 3 stratum analysis surfaces the stacking effect that single-axis tests miss. **Don't reject an axis on standalone weakness alone** — check the stratum.
+
+### Instance — 2026-05-09 evening flow-sequence backtest
+
+Flow-sequence axis standalone result was *negative* on Tier 2 trader-level inspection: top-10 high-flow-cosine pairs were 2.59× WORSE than baseline mean |Δret|. Bag-of-features clustered busy-session-open dense-flow rhythm together, conflating bullish-busy with bearish-busy opens. Tier 1 Pearson r = −0.060 (vs prose's −0.078) — slightly weaker.
+
+But Tier 3 stratum analysis vs prose:
+
+| Stratum | Mean \|Δret\| | vs LL |
+|---|---|---|
+| HH (prose-high AND flow-high) | 0.001666 | **−15.2%** |
+| HL (prose-high only) | mid | −9% via HH-HL diff |
+| LH (flow-high only) | mid | −6% via HH-LH diff |
+| LL (both low) | 0.001964 | baseline |
+
+HH beats LL by 15.2%. **HH beats either single-axis-high (HL or LH) by 6-9%.** Flow adds incremental signal *on top of* prose despite being weaker standalone. Captain's instrument-mismatch hypothesis (5/8 vision-mode: "algos leave clues in flow not prose") empirically supported in stronger form than two-axis-validates: weak individual axes compound when stacked.
+
+**Class diagnostic question for future axis validations:** *"Does my candidate axis's HH stratum (when paired with a prior validated axis) beat either single-axis-high stratum? If yes, the axis adds signal as a filter even if its standalone signal is weak."*
+
+**Sibling patterns:**
+- `embedding-validation-saturation-at-high-cosine` — saturation diagnostic informs WHICH axes might benefit from stacking. Plateau-at-high shape on multiple axes suggests each captures different residual variance; stacking should compound.
+- `analysis-pair-selection-contamination-by-temporal-adjacency` — same temporal-adjacency filter applies in stratum analysis (use >24h filter on pairs across all axes).
+
+**Canonical articulation (Cowork-side):** Parallel codification at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` per cross-catalog rule.
+
+**Linked artifacts:**
+- `docs/analysis/embedding-bet-flow-sequence-backtest-2026-05-09.md` — empirical motivation; Tier 3 stratum table.
+- Prior axis: `docs/analysis/embedding-bet-backtest-2026-05-09.md` (prose).
+
+---
+
+## multi-axis-stack-third-axis-can-subtract
+
+**Pattern:** Adding a third (or N+1) embedding axis to a validated multi-axis stack is NOT guaranteed to compound. If the new axis carries low standalone signal (flat decile curve) AND has contamination patterns (zero-fill from sparse coverage, default-cluster, or class-imbalance), it can dilute rather than tighten the existing stack's precision. The HHH stratum (all three high) may show WORSE forward-outcome correlation than HHL (best two-axis stratum) — adding the third axis as a filter on top of validated two-axis pairs introduces noise that excludes good analogs while keeping bad ones.
+
+**Structural shape:** more axes ≠ better. The two-axis-stacking-compounds pattern (above) holds when both axes carry real signal AND have orthogonal false-positive geometry. When a third axis carries mostly noise (its high-cosine tail clusters via default-fill rather than real similarity), the HHH stratum filters on a noise dimension — it's no longer a meaningful filter, it's a sample-size reducer that can flip the stack's effectiveness.
+
+**Two interpretations when HHH < HHL is observed:**
+1. **Instrumentation problem.** The third axis vectorization is wrong (zero-fill contamination, wrong feature selection, wrong window). Vectorization v2 might unlock real signal. Re-test before concluding "third axis doesn't help."
+2. **Natural ceiling.** Two-axis is empirically the analog book ceiling for this corpus. The signal that prose × flow capture together is the captureable signal; adding more axes dilutes rather than compounds.
+
+**Discipline rule:** before concluding an N+1th axis "doesn't compound," verify the axis isn't structurally broken. Tier 1 flat curve + Tier 2 contamination both pointing the same direction = instrumentation problem (try v2 vectorization). Tier 1 partial-validate + Tier 2 looks-right + Tier 3 still HHH < HH = natural ceiling (stop adding axes).
+
+### Instance — 2026-05-09 evening GEX-state backtest
+
+GEX-state axis Tier 1 standalone: Pearson r = +0.010 (effective zero), Spearman ρ = +0.005 (not significant), D10/D1 = 1.06 (slightly inverted). Curve shape: **FLAT across all 10 deciles** — fourth canonical shape in the saturation diagnostic family.
+
+Tier 2 trader-level: top-10 GEX-cosine pairs ceiling at cosine 0.9957 = identical zero-vector contamination (sparse-coverage sessions zero-fill into the same default vector and cluster artificially at the top). Different mechanism than flow's busy-session-open contamination, same diagnostic symptom.
+
+Tier 3 three-axis stratum:
+
+| Stratum | Ratio vs LL | Δ vs HHL (best) |
+|---|---|---|
+| HHL (prose-high, flow-high, GEX-low) | **0.8236** | baseline (best stratum) |
+| HHH (all three high) | 0.846 | **+2.7% WORSE** |
+| HLH (prose-high, GEX-high, flow-low) | mid | +4.5% better than HHH |
+| LHH (flow-high, GEX-high, prose-low) | mid | +9.8% better than HHH |
+| LL (all low) | 1.000 | — |
+
+**HHH is 2.7% WORSE than HHL.** Adding GEX on top of prose+flow makes the stack validate LESS, not more. The flat standalone signal + zero-fill contamination point to interpretation (1) instrumentation problem — GEX vectorization v1 is mostly noise; the HHH filter is filtering on noise, excluding good analogs while keeping bad ones.
+
+**Class diagnostic question for future axis additions:** *"Does my N+1th axis Tier 3 HHH stratum beat the best HH stratum? If no, is the axis's Tier 1 flat AND Tier 2 contaminated? Both pointing same direction = instrumentation problem; try v2. If Tier 1 partial-validate AND Tier 2 looks right but HHH still doesn't beat HH = natural ceiling at N axes."*
+
+**Sibling patterns:**
+- `multi-axis-stacking-compounds-at-n=2` — direct precedent. The pattern says compounding works at n=2 but doesn't generalize automatically. This entry is the boundary case.
+- `embedding-validation-saturation-at-high-cosine` — flat curve is one of the four diagnostic shapes. When standalone shows flat, expect HHH-subtracts on stratum analysis.
+- `analysis-pair-selection-contamination-by-temporal-adjacency` — same family of "raw pair-selection produces misleading aggregate without the right filter." Default-fill clustering is a different contamination mechanism than temporal adjacency but the same Tier 2 inspection catches it.
+
+**Canonical articulation (Cowork-side):** Parallel codification at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` per cross-catalog rule.
+
+**Linked artifacts:**
+- `docs/analysis/embedding-bet-gex-state-backtest-2026-05-09.md` — empirical motivation; Tier 3 stratum table + 8-stratum breakdown.
+- Prior validated stack: `docs/analysis/embedding-bet-flow-sequence-backtest-2026-05-09.md` (HH = 0.001666 vs LL = 0.001964).
+
+---
+
+## Multi-Axis Embedding Methodology Family
+
+The four patterns above (`analysis-pair-selection-contamination-by-temporal-adjacency`, `embedding-validation-saturation-at-high-cosine`, `multi-axis-stacking-compounds-at-n=2`, `multi-axis-stack-third-axis-can-subtract`) form a coherent test-procedure framework for embedding-axis validation. Future axis tests (strike-concentration, regime-state, sentiment-drift, GEX v2 vectorization, specialist-recall post-D2.2, any new substrate) inherit this framework so the diagnostic apparatus is armed from day one.
+
+### Test runbook for a new embedding axis
+
+**0. Phase A — substrate verification.**
+- Confirm the source data exists, has the expected schema, and aligns temporally with the prior tests' commentary timestamps (or whatever the anchoring time-series is).
+- Sample size after alignment with prior-test populations — if N is too small for stratum analysis, rethink before vectorizing.
+- Verify no field-name retargets needed (cascade #37 family — use empirical schema check, not brief assertion).
+
+**1. Vectorization shape — start simple.**
+- Bag-of-features for v1: low-dim feature vector per axis-window. Z-score, unit-normalize.
+- Sequence-aware embeddings for v2 only if v1 is flat with verified-non-contamination Tier 2.
+- Document rationale; future v2 iterations have the v1 baseline to compare against.
+
+**2. Tier 1 standalone — decile-binned correlation with temporal-adjacency filter.**
+- Apply `analysis-pair-selection-contamination-by-temporal-adjacency` (>24h filter or natural session boundary).
+- Compute pairwise cosine + forward-outcome similarity.
+- Bin by cosine decile. Compute mean and median |Δret| per decile.
+- Pearson r + Spearman ρ for magnitude.
+- **Curve shape diagnosis** per `embedding-validation-saturation-at-high-cosine`:
+  - **Linear monotonic** (no plateau) — instrument captures bulk of signal; ceiling not yet hit. Continue extending substrate.
+  - **Monotonic + plateau at high deciles** — instrument-mismatch ceiling; signal lives in another axis. Move to Tier 3 stratum vs prior validated axes.
+  - **Flat** — wrong instrument or contaminated vectorization. Inspect Tier 2 for default-cluster patterns; consider v2.
+  - **Inverse** — structural problem. Stop. Diagnose before extending.
+
+**3. Tier 2 standalone — top-10 cross-session high-cosine pairs.**
+- Time-filtered (per Tier 1 filter).
+- Per pair: timestamps, axis-feature summary at both moments, forward outcomes.
+- Trader-level read: do these pairs feel like genuine analogs trader-wise? Did outcomes track within reasonable delta?
+- **Watch for contamination patterns:** identical default vectors clustering at the cosine ceiling, busy-session-rhythm aggregating without direction, etc. **Tier 2 catches what Tier 1 statistical-significance tests miss.**
+
+**4. Tier 3 cross-axis stratum analysis vs prior validated axes.**
+- For pairs where ALL relevant axis vectors exist: compute axis-N percentile rank per axis.
+- Bin pairs into 2^N strata (HH/HL/LH/LL for n=2; HHH/HHL/.../LLL for n=3).
+- Per stratum: count, mean |Δret|, ratio vs LL.
+- **Compare:**
+  - HH(...H) vs LL(...L) — ceiling test (should beat by meaningful margin if axis adds signal).
+  - HHH(...) vs best HH(...L) two-axis stratum — does N+1th axis add incremental signal per `multi-axis-stacking-compounds-at-n=2`, or subtract per `multi-axis-stack-third-axis-can-subtract`?
+  - Asymmetric strata (e.g., HLH ≫ HHL) — which axis pairs interact best; informs future surface composition.
+
+**5. Honest interpretation — pick from the four canonical readings:**
+- **Linear standalone + HHH compounds** — axis is a clean win. Extend production.
+- **Monotonic-plateau standalone + HHH compounds** — axis adds filter signal at the stratum boundary even though saturated alone. Production-eligible in stack only.
+- **Flat standalone + HHH < HH** — instrumentation problem (try v2) OR natural ceiling at N axes (verify by inspection).
+- **Anything Tier 2 contaminated** — fix vectorization before believing Tier 1 / Tier 3 results.
+
+**6. Codify if a new pattern surfaces.**
+- Cross-catalog rule applies: parallel codification at engine-room `docs/methodology-patterns.md` AND Cowork-side `memory/patterns.md`.
+- Use this family's existing entries as shape precedent.
+
+### What's been validated empirically (2026-05-09 evening)
+
+- **n=1 axes tested:** prose (monotonic-plateau, partial validate), flow-sequence (monotonic-with-wobble, Tier 2 negative standalone), GEX-state (flat, contaminated).
+- **n=2 stacking:** prose × flow validates strongly (HH 15.2% better than LL).
+- **n=3 stacking:** prose × flow × GEX does NOT compound on this corpus with v1 GEX vectorization (HHH 2.7% worse than HHL). Two interpretations open per `multi-axis-stack-third-axis-can-subtract`.
+- **The diagnostic framework generalizes:** three different axes, three different curve shapes, three different contamination signatures — the methodology family captures all three coherently.
+
+### Cross-references between family members
+
+- `analysis-pair-selection-contamination-by-temporal-adjacency` → applied as Tier 1+Tier 3 filter.
+- `embedding-validation-saturation-at-high-cosine` → curve shape diagnostic at Tier 1.
+- `multi-axis-stacking-compounds-at-n=2` → stratum analysis at Tier 3; HH-vs-LL ceiling test.
+- `multi-axis-stack-third-axis-can-subtract` → boundary case at n=3+; HHH-vs-best-HH interpretation rule.
+
+### Open questions the family doesn't yet answer
+
+- Does the natural ceiling on this corpus genuinely live at n=2, or does it live at n=2 *with this set of axis instruments*? GEX v2 (magnitude + time-evolution aware) is the cheapest test of the latter.
+- Does the family apply to non-embedding axis tests (e.g., regime-state where the "vector" is small categorical + numeric)? Likely yes; first such test will validate.
+- At what corpus size does the saturation plateau move? Today's tests had 644-704 commentaries with valid forward-outcome data. Larger corpus might extend the monotonic region.
 
 ---
 
