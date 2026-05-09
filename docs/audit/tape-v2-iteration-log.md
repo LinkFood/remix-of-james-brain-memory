@@ -561,3 +561,32 @@ AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the 
 **Build state:** vite build passes clean (4161 modules). UI captain-validates post-deploy.
 
 **PR / commit:** TBD (PR-B in the bundle).
+
+---
+
+## 2026-05-09 evening — PR-A: TapeReaderArc / ClaudesRead prose dedup on /alpha
+
+**Audit anchor:** Cowork visual validation 5/9 afternoon flagged that `ClaudesRead.tsx` (synthesis prose home, lines 132-138) and `TapeReaderArc.tsx` (mood-arc + bottom detail strip, lines 168-196) render the same latest tape commentary text within ~200vh on /alpha. Same `ct_tape_commentary` substrate via two paths (`useTapeReader` direct vs. `useTapeReaderArc` aggregated) — when `pinned === null` (default page state), the arc's bottom strip echoed the latest commentary already rendered above in ClaudesRead.
+
+**Resolution chosen:** option (a) — distinguish structurally. The arc keeps its visual primitive (segment strip + tide colors + intensity heights + glow on latest + amber ring on flag_interrupt + per-segment HoverCard with full prose). ClaudesRead remains the prose home for the latest read. Bottom detail strip now activates only when the captain pins a non-latest segment — the strip becomes the historical drill-down surface, not a redundant latest-prose echo.
+
+**Why (a) over (b) collapse:** the arc reads structurally distinct without the bottom prose strip — segments + glow already communicate latest position, HoverCard handles explore-on-hover for any segment including latest, and the pinned-segment drill-down is the unique value the strip carries (no other surface on /alpha lets the captain pin a 10:30 ET read while the latest is 14:50 ET).
+
+**What changed:** `src/components/alpha/TapeReaderArc.tsx` — removed unused `latest` from useTapeReaderArc destructure (was only consumed by `pinned ?? latest` fallback); replaced fallback with `focused = pinned && !isLatestPinned ? pinned : null`; conditional render no longer branches on "pinned vs latest" label (always "pinned · HH:MM ET"); unpin button always visible when strip renders.
+
+**End-state on /alpha:**
+- ClaudesRead: latest tape commentary prose (13px) — single home for synthesis read.
+- TapeReaderArc: header + segment strip + per-segment HoverCard. No bottom strip on first paint or after unpin. Bottom strip activates the moment captain clicks a non-latest segment; clicking the latest segment is a no-op (HoverCard already covers it).
+- Captain's daily-glance flow: read latest from ClaudesRead, scan arc for mood evolution, click a historical segment to pin and drill — three distinct surfaces, no duplicated prose.
+
+**Discipline gates run:**
+- Engine-room write-time checklist: state-vs-intent ✓ (intent: dedup latest-prose; formula: gate strip on pinned && !isLatestPinned), no calendar anchor, cross-catalog parity N/A (UI-only), substrate verified (no schema touch), Tenet 24 N/A (no new surface).
+- Single-purpose: one component, one logic gate, no specialist-tiles or placeholder edits (DECISION-1 / DECISION-2 captain-pending — not touched).
+- `npx tsc --noEmit`: clean.
+- `npm run build`: clean (4161 modules, 3.98s).
+
+**Files touched:** 2 — 1 component edit, 1 iteration log entry.
+
+**PR:** #TBD (single-purpose, no auto-merge — captain validates visually post-deploy on /alpha).
+
+**Next:** captain validates dedup on live /alpha; if confirmed, the visual-validation cowork pass moves to its next /alpha item.
