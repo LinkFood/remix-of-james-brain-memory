@@ -303,7 +303,8 @@ export type HelperName =
   | 'claude_trades'
   | 'analogs'
   | 'specialist_recall'
-  | 'regime';
+  | 'regime'
+  | 'flow_butterfly';
 
 /**
  * Top-level brain options. Consumers pass this to `buildClaudeContext`.

@@ -82,6 +82,7 @@ import { getTemporalContext } from './temporalContext.ts';
 // Synthesis layer Phase 3 — brain organ helpers (composed via Promise.all)
 // ---------------------------------------------------------------------------
 import flowHeatmapHelper, { getFlowHeatmapContext } from './flowHeatmapContext.ts';
+import flowButterflyHelper from './flowButterflyContext.ts';
 import pulseHelper from './pulseContext.ts';
 import specialistHelper from './specialistContext.ts';
 import detectorHelper from './detectorContext.ts';
@@ -1966,6 +1967,7 @@ export async function buildClaudeContext(
     analogsHelper,
     specialistRecallHelper,
     regimeHelper,
+    flowButterflyHelper,
   ];
 
   // Synthesis Phase 4: organ whitelist + tickerFocus + perOrganOpts plumbing.
@@ -2182,6 +2184,7 @@ async function buildSynthesisOnlyContext(
     analogsHelper,
     specialistRecallHelper,
     regimeHelper,
+    flowButterflyHelper,
   ];
 
   const organWhitelist: ReadonlySet<HelperName> | null =
