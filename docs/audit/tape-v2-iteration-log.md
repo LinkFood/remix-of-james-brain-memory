@@ -296,5 +296,46 @@ Architecture-fundamental gates (A7 + A6) passed clean from the prior audit (PR #
 
 **PR / commit:** TBD on push
 
+---
+
+## 2026-05-09 late evening — Phase 1: ct_tape_commentary embedded at write-time
+
+**Audit anchor:** `docs/audit/2026-05-09-jac-os-fusion-ground-truth.md` Section B gap #2. First substrate ship in the audit-driven Phase 1→6 loop. Brought forward from "Iter #N post-5/15" because the audit + 5x bar required substrate before any more captain-visible iters.
+
+**5x bar:** Substrate alone isn't captain-visible 5x; it enables Phases 3 + 4 (Tape Reader Arc + ClaudesRead semantic recall) which ARE the captain-visible 5x. Substrate ships as part of the stack so Path A surfaces have something real to render.
+
+**What shipped:**
+- Migration `20260510050000_ct_tape_commentary_embedding.sql` — `embedding extensions.vector(512)` + `rich_text` columns + HNSW COSINE index + `match_ct_tape_commentary_by_similarity` RPC + warden invariant `tape_commentary_embedding_backlog_1h`
+- Migration `20260510050100_ct_embed_tape_commentary_cron.sql` — schedules `ct-embed-tape-commentary-rth` every 5 min RTH
+- New edge function `supabase/functions/ct-embed-tape-commentary/` — backlog drainer (batch 1-100, internally chunks ≤20 per Voyage gotcha)
+- Edited `supabase/functions/ct-tape-reader/index.ts` — imports `voyageEmbed`, after successful insert builds rich_text + voyageEmbeds + UPDATEs row. Fire-and-forget; never blocks response. Returns `embed: { ok, error }` in response shape
+- New runbook `docs/runbooks/embedding_gate.md` — diagnosis sequence + manual backfill recipe for the embedding-gate invariant family
+- `supabase/config.toml` — `ct-embed-tape-commentary` registered with verify_jwt=false
+
+**rich_text shape (the cluster axis):**
+```
+TAPE_COMMENTARY | tide:bullish vix:18.50 flags:3 flow:12 | session:2026-05-09
+<commentary text>
+```
+Header carries regime+state context so embeddings cluster by setup-shape, not just prose. Validated end-to-end: row 1178 (Sat pre-market, quiet tape, 0 flow, flat tide) returned 5 most-similar prior reads — ALL also quiet-tape/0-flow/flat-tide pre-market reads (cosine 0.86-0.88). Similar SETUPS cluster, not just similar words.
+
+**Live state at ship:**
+- 1,178 total tape commentary rows (~15+ days of substrate)
+- 224 embedded immediately (manual fire + 10 parallel backfill drains)
+- 954 remaining; cron drains over next RTH session (~hour)
+- Write-time path verified live via row 1178 manual fire
+- match RPC verified end-to-end with self-match query
+- Warden invariant registered, dormant until next 30-min warden tick
+
+**Files touched:** 7 — 2 migrations, 1 new edge function, 1 edge function edited, 1 config.toml entry, 1 runbook, 1 iteration log entry.
+
+**No /alpha visible change yet.** Phases 3 + 4 ship the captain-visible 5x downstream from this substrate.
+
+**Time:** ~30 min from "go" to substrate-live.
+
+**PR:** TBD on push.
+
+**Next:** Phase 2 — same substrate pattern for `ct_news_causality`. Then Phase 3 ships the first captain-visible 5x render off this substrate.
+
 
 
