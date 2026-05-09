@@ -1195,6 +1195,81 @@ PR-C merged first (`#105` → `0e931b0`). PR-B's rebase surfaced the file confli
 
 ---
 
+## analysis-pair-selection-contamination-by-temporal-adjacency
+
+**Pattern:** Pairwise correlation/similarity backtests on time-stamped substrate (embeddings, feature vectors, observation rows) must filter for minimum time-separation between paired rows. Without the filter, pairs sampled from adjacent timestamps (same-session, same-minute, or same-N-minute window) dominate the high-similarity tail of the distribution. Adjacent-time pairs share persistent market conditions, identical or near-identical content, and trivially-correlated forward outcomes — they over-validate any test that uses similarity-vs-outcome correlation as the bet validator.
+
+**Structural shape:** the contamination is *invisible at the macro level* — total pair count looks healthy, statistical-significance p-values look strong, top-decile shows tightest correlation. Without the temporal-adjacency filter, the result reads "embedding works great" while the actual signal driving the result is "rows from the same minute are obviously similar." The fix is mechanical (a single time-difference filter) but the *discipline is structural* — every backtest design over time-stamped substrate needs the filter as a default, not an afterthought.
+
+**Discipline rule:** before running a pairwise correlation backtest, add a temporal-adjacency filter (`pair_time_diff > N` where N is the natural session/cycle boundary for the substrate). Default N = 24h for daily-scope analyses; N = same-session-end for intra-session analyses. Surface the result with AND without the filter so the contamination ratio is visible.
+
+### Instance — 2026-05-09 evening prose-embedding backtest
+
+Tier 1 raw run (n=247K pairs, no time filter): top-decile mean |Δret| = 0.001498, bottom-decile = 0.002123. **Top decile 29% smaller than bottom — looks like strong validation.**
+
+Tier 2 raw top-10 cross-pair examples (no time filter) surfaced the contamination: pairs #1, #3, #4, #5, #6 were all adjacent-minute reads from the same session with cosine ≥ 0.997 and identical commentary text (`tape commentary` is the system's evolving narrative; adjacent minutes share most of the prose). Forward outcomes were trivially identical because the SPY price barely moved in 1 minute.
+
+After filtering to pair_time_diff > 24h (n=206,650): top-decile mean |Δret| = 0.001747 vs bottom = 0.002125. **Top decile 18% smaller — still validates, but the real effect size is half what the raw run suggested.** The filtered result is the trustworthy validation; the raw result over-validated by ~10 percentage points.
+
+The filter is what made the test result trustworthy. **Without the filter, the discipline-stack would have validated the embedding bet on contaminated evidence.** Caught at Tier 2 trader-level inspection (the prose pairs at top cosine were obviously duplicates), not at Tier 1 statistical-significance level.
+
+**Class diagnostic question for future analyses:** *"Are my pair-similarity samples drawing from a population where adjacent-time pairs share content/conditions trivially? If yes, what's the natural session-cycle boundary and am I filtering above it?"*
+
+**Sibling patterns:**
+- `placeholder-glyph-collapses-three-states` (cascade #45 instance) — same family of UI/analysis ambiguity-collapse: a single output value (em-dash glyph there, top-decile pair here) that can mean multiple things gets read as ONE thing.
+- `audit-frame-mismatch` — surface-vs-substrate confusion. Here the surface is "Tier 1 raw correlation looks strong" while the substrate has "adjacent-time pairs dominating the tail."
+- `audit-verification-surface-mismatch` — meta-check: verify the analysis surface matches the question the analysis is actually asking. "Does cosine predict forward outcome?" requires sampling from temporally independent pairs; raw run was asking "does adjacent-minute prose predict adjacent-minute return?" (a different, trivial question).
+
+**Canonical articulation (Cowork-side):** Parallel codification at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` per cross-catalog rule — Cowork drafts at write-time of this entry's parallel.
+
+**Linked artifacts:**
+- `docs/analysis/embedding-bet-backtest-2026-05-09.md` — empirical motivation; full Tier 1/Tier 2 raw + filtered comparison.
+- Throwaway analysis script (Tenet 26): `/tmp/embedding-backtest/run.py`.
+
+---
+
+## embedding-validation-saturation-at-high-cosine
+
+**Pattern:** Decile-binned correlation curve shape IS the instrument diagnostic for embedding-axis backtests. The shape tells you *what kind of signal the embedding captured* — not just whether it captured signal. Four canonical shapes, four interpretations.
+
+**The four diagnostic shapes:**
+
+1. **Linear monotonic (no plateau)** — top decile shows tightest forward-outcome correlation; correlation continues to improve from D1 → D10 with no saturation. Reading: the embedding instrument captures the bulk of the signal available in this axis; *upside ceiling not yet hit*. Continue extending the same axis with more substrate / better embeddings — gains compound.
+
+2. **Monotonic + plateau at high deciles** — D1 → D7-ish shows monotonic improvement; D8/D9/D10 plateau or slightly invert. Reading: the embedding instrument captures real signal at low/mid similarity, but at high similarity the residual variance lives in *other axes* the instrument doesn't see. **Instrument-mismatch ceiling.** Adding more data on this axis won't help; the next axis (different feature substrate) is the unlock.
+
+3. **Flat curve** — no meaningful difference in mean forward-outcome delta across deciles. Reading: the embedding instrument captured *linguistic* similarity (or whatever surface property) but the pattern doesn't live in this axis. Wrong instrument entirely. Iterate test design on a different substrate.
+
+4. **Inverse curve** — D10 (highest cosine) shows LOWER correlation than D1 (lowest cosine). Reading: structural problem. Either the similarity metric is computing the inverse of what was intended, the substrate is corrupted, or the forward-outcome metric is misaligned with the embedding axis. Flag for investigation; do not extend the test.
+
+**Discipline rule:** every embedding-axis backtest plots the decile curve AND reports the shape diagnosis as the load-bearing finding. Pearson r and Spearman ρ summarize magnitude; the curve shape summarizes *what kind of signal exists in this axis*. Two embedding tests with identical Pearson r can have completely different decile curves and require completely different next-test decisions.
+
+### Instance — 2026-05-09 evening prose-embedding backtest
+
+Decile curve shape (after temporal-adjacency filter, n=206,650 pairs):
+- D1 (cosine 0.5278-0.6925): mean |Δret| 0.002125
+- D2: 0.002067, D3: 0.001937, D4: 0.001828, D5: 0.001805, D6: 0.001795, D7: 0.001764
+- **D8 (cosine 0.8059-0.8194): mean |Δret| 0.001737 — minimum**
+- D9: 0.001746, D10 (cosine 0.8361-0.9217): 0.001747
+
+**Shape: monotonic D1→D8, plateau D8-D10.** Reading: prose embedding captures the bulk of setup-shape signal (tide × VIX bucket × dominant-ticker character × time-of-session × regime/conviction language); at the top of the cosine distribution, prose has extracted what it can extract. Residual variance lives in *other axes* the prose instrument doesn't see — algo footprints, strike concentration, GEX state, microstructure timing.
+
+**The plateau IS the load-bearing finding** — Pearson r of −0.078 understates the case. The curve says: prose works, AND another axis is needed. Captain's instrument-mismatch hypothesis (5/8 vision-mode: "algos leave clues in flow not prose") is empirically supported by the plateau diagnostic. The next test (flow-sequence embedding, ct_flow_alerts axis) ships against this same diagnostic framework — the curve shape on flow-sequence will tell us whether that axis captures additional signal (linear shape) or hits the same ceiling (saturation).
+
+**Class diagnostic question for future embedding tests:** *"What shape is my decile curve? What does that shape tell me about whether this instrument hit its ceiling, missed the pattern entirely, or is structurally broken?"* Decide next-test direction by curve-shape, not by p-value alone.
+
+**Sibling patterns:**
+- `audit-frame-mismatch` — same family of "the question being asked vs the question being answered." A flat decile curve can produce a non-zero Pearson r if there's micro-variation; the shape diagnosis is what tells you it's flat.
+- `compose-with-the-kernel` — implication for substrate design: when shape says "instrument-mismatch ceiling," the move is *another axis on the same kernel*, not "more rows on this axis." The kernel composes; the axes compound.
+
+**Canonical articulation (Cowork-side):** Parallel codification at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` per cross-catalog rule.
+
+**Linked artifacts:**
+- `docs/analysis/embedding-bet-backtest-2026-05-09.md` — Tier 1 decile table + plateau interpretation.
+- `docs/analysis/embedding-bet-flow-sequence-backtest-2026-05-09.md` (forthcoming) — second instance of decile-shape diagnosis on a different axis. Will validate or refine this pattern.
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
