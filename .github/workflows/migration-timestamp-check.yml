@@ -1,0 +1,127 @@
+name: migration-timestamp-check
+
+# Class-kill ship for the cascade `docs-PR-merge-doesnt-imply-migration-applied`
+# (codified in docs/methodology-patterns.md). The pattern fired twice on
+# 2026-05-09 — PR #70 ↔ PR #79 timestamp collision (`20260510040000`) silently
+# no-op'd the apikey fix; later that day the orphan PR #70 file blocked
+# `supabase db push` of an unrelated new migration. Two fires in one day meets
+# YAGNI threshold for write-time prevention.
+#
+# Mechanism: on every PR that adds a file under supabase/migrations/, this
+# workflow enumerates the 14-digit timestamp prefix of every NEW migration in
+# the PR, compares it against the timestamps already on origin/main, and fails
+# the check if any new timestamp collides with an existing one. The collision
+# does not show up as a git merge conflict (different filenames), so this is
+# the only pre-merge layer that catches it.
+#
+# This is a BLOCK gate (required for merge once branch protection adds it),
+# unlike the docs-PR-discipline workflow which is detect-after-the-fact.
+# Migration apply is silent, schema_migrations PRIMARY KEY is the actual
+# constraint that fails post-merge — far better to fail in CI than to ship a
+# silently-no-op'd migration onto main.
+#
+# Pre-existing collisions on origin/main (e.g. the PR #70 orphan that still
+# coexists with PR #79's butterfly migration at `20260510040000`) are NOT
+# flagged — the check only compares NEW migrations in the PR against
+# already-present timestamps. Historical artifacts are out of scope; only
+# regressions are blocked.
+
+on:
+  pull_request:
+    paths:
+      - 'supabase/migrations/*.sql'
+
+jobs:
+  migration-timestamp-collision:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch origin/main
+        run: |
+          git fetch origin main --depth=0 2>/dev/null || git fetch origin main
+
+      - name: Detect new migrations in PR
+        id: detect
+        run: |
+          # Use merge-base to compare against the divergence point, not HEAD of
+          # main, so PRs based on older commits still get a correct diff.
+          BASE=$(git merge-base origin/main HEAD)
+          NEW_FILES=$(git diff --name-only --diff-filter=A "$BASE"..HEAD -- 'supabase/migrations/*.sql' 2>/dev/null || echo "")
+          if [ -z "$NEW_FILES" ]; then
+            echo "No new migration files added in this PR — check N/A."
+            echo "has_new=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "has_new=true" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$NEW_FILES" > new_migrations.txt
+          echo "New migration files in PR:"
+          sed 's/^/  - /' new_migrations.txt
+
+      - name: Check for timestamp collisions vs origin/main
+        if: steps.detect.outputs.has_new == 'true'
+        run: |
+          # Enumerate timestamps already present on origin/main. Strip the
+          # supabase/migrations/ path prefix first, then extract the leading
+          # 14-digit timestamp.
+          git ls-tree origin/main -r --name-only -- supabase/migrations \
+            | sed 's|^supabase/migrations/||' \
+            | grep -oE '^[0-9]{14}' \
+            | sort -u \
+            > applied_timestamps.txt
+
+          APPLIED_COUNT=$(wc -l < applied_timestamps.txt | tr -d ' ')
+          echo "origin/main has $APPLIED_COUNT distinct migration timestamps."
+
+          # Latest timestamp on main (most recent) — used in the diagnostic
+          # message to suggest a fresh stage point.
+          LATEST_ON_MAIN=$(tail -1 applied_timestamps.txt)
+
+          COLLISIONS=0
+          while IFS= read -r FILE; do
+            # Strip path prefix, extract timestamp.
+            BASENAME=$(basename "$FILE")
+            TS=$(echo "$BASENAME" | grep -oE '^[0-9]{14}' || echo "")
+            if [ -z "$TS" ]; then
+              echo "::warning::Migration filename $FILE does not start with a 14-digit timestamp — skipping (does it follow naming convention?)."
+              continue
+            fi
+            if grep -qx "$TS" applied_timestamps.txt; then
+              # Find the existing file(s) with this timestamp on main for the
+              # diagnostic message — surfaces what the new file would collide
+              # against.
+              EXISTING=$(git ls-tree origin/main -r --name-only -- supabase/migrations \
+                | grep "/$TS" | head -3 | sed 's|^|    |')
+              echo "::error file=$FILE,title=Migration timestamp collision::Migration timestamp $TS (file: $FILE) collides with existing migration on origin/main."
+              echo ""
+              echo "  Conflicting timestamp: $TS"
+              echo "  This PR's file:        $FILE"
+              echo "  Already on main:"
+              echo "$EXISTING"
+              echo ""
+              echo "  Stage this migration at a fresh timestamp greater than the latest on main"
+              echo "  (currently $LATEST_ON_MAIN). UTC-now in the YYYYMMDDhhmmss format usually"
+              echo "  works."
+              echo ""
+              echo "  Why this matters: schema_migrations.version is PRIMARY KEY. Two files at"
+              echo "  the same timestamp = the second apply silently no-ops on PRIMARY KEY"
+              echo "  conflict. The migration file lives on main as a load-bearing record but"
+              echo "  its SQL never ran."
+              echo ""
+              echo "  See docs/methodology-patterns.md ## docs-PR-merge-doesnt-imply-migration-applied"
+              echo "  for the cascade history."
+              echo ""
+              COLLISIONS=$((COLLISIONS + 1))
+            fi
+          done < new_migrations.txt
+
+          if [ "$COLLISIONS" -gt 0 ]; then
+            echo "::error::$COLLISIONS migration timestamp collision(s) found. PR cannot merge until timestamps are bumped."
+            exit 1
+          fi
+
+          echo "All new migration timestamps are clear of origin/main."
