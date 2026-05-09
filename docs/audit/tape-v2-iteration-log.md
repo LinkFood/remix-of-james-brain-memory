@@ -408,4 +408,47 @@ Header carries regime+state context so embeddings cluster by setup-shape, not ju
 
 **Next:** Phase 5 — News Causality Graph on /alpha. Renders `ct_news_causality` substrate as nodes/edges in one of the iter #4/#5 placeholder slots.
 
+---
+
+## 2026-05-09 late evening — Phase 2: ct_breaking_news embedded (cron-only)
+
+**Audit anchor:** `docs/audit/2026-05-09-jac-os-fusion-ground-truth.md` Section B (breaking news 0% embedding gap). Pivoted from original "ct_news_causality" target because that's structured numeric (no prose to embed); ct_news_analyses already gates at sig≥3 by design. **The actual 0%-embedded news gap is ct_breaking_news (1.2k rows, Tavily firehose).**
+
+**Why cron-only (no producer edits):** Two producers (`ct-news-sweep`, `ct-tavily-news-watcher`) both insert without embedding. Streamlined approach: skip producer edits, accept ~5-min embed latency via cron-only drainer. Acceptable for breaking-news semantic recall — captain looks back at "5 most-similar prior news days," not "embed within 1 second of insert." Future write-time-embed is a 1-PR optimization if 5-min latency becomes load-bearing.
+
+**5x bar:** Substrate enabling Phase 5 (News Causality Graph on /alpha). Substrate alone isn't captain-visible; Phase 5 is.
+
+**What shipped:**
+- Migration `20260510060000_ct_breaking_news_embedding.sql` — embedding + rich_text columns + HNSW + `match_ct_breaking_news_by_similarity` RPC (with ticker_filter + min_severity params) + warden invariant `breaking_news_embedding_backlog_10m`
+- Migration `20260510060100_ct_embed_breaking_news_cron.sql` — schedules `ct-embed-breaking-news-24x7` every 5 min ALL hours (Tavily fires off-hours unlike RTH-only flow tables)
+- New edge function `supabase/functions/ct-embed-breaking-news/` — backlog drainer, batch 1-100, internally chunks ≤20 per Voyage gotcha
+- `supabase/config.toml` — `ct-embed-breaking-news` registered with verify_jwt=false
+
+**rich_text shape:**
+```
+BREAKING_NEWS | sev:3 sent:bullish cat:sector tickers:[NVDA,AMZN] macro:false
+<headline>
+<summary>
+```
+Cluster axis is severity + sentiment + category + tickers, not just headline prose.
+
+**Live state at ship:**
+- 1,232 total breaking_news rows
+- 184 embedded immediately (13 parallel drain batches, Voyage rate-limited)
+- 1,048 remaining; cron drains over next ~hour
+- match RPC verified end-to-end (1.000 self-match, 0.65-0.68 on related Amazon news)
+- Warden invariant registered
+
+**Files touched:** 5 — 2 migrations, 1 new edge function, 1 config.toml entry, 1 iteration log entry.
+
+**Time:** ~20 min from "go" to substrate-live.
+
+**Pivot finding:** ct_news_analyses gates embedding at significance≥3 by INTENTIONAL DESIGN ("keeps the corpus tight" per ct-news-ingester:198). 342/2030 = 17% coverage is correct, not a bug. The audit's call-out of "ct_news_causality needing embedding" was wrong (it's structured numeric). The real gap was ct_breaking_news firehose, now closed.
+
+**Note:** shipped out of phase-number order — Phase 3 + Phase 4 already merged before Phase 2 because the captain prioritized captain-visible 5x surfaces ahead of pure backend substrate. ct_breaking_news embedding still required for Phase 5 (News Causality Matrix) consumer.
+
+**PR:** #87 (squash-merged 2026-05-09).
+
+**Next:** Phase 5 — News Causality Matrix on /alpha (renders empirical per-source × per-ticker hit rates).
+
 
