@@ -35,6 +35,7 @@ import { ArrowUpRight, Activity, Flame, Filter, Layers } from 'lucide-react';
 import { AlphaTopStrip } from '@/components/alpha/AlphaTopStrip';
 import { TapeReaderArc } from '@/components/alpha/TapeReaderArc';
 import { ClaudesRead } from '@/components/alpha/ClaudesRead';
+import { NewsCausalityMatrix } from '@/components/alpha/NewsCausalityMatrix';
 import { AlphaPlaceholderSection } from '@/components/alpha/AlphaPlaceholderSection';
 
 export default function Alpha() {
@@ -97,6 +98,12 @@ export default function Alpha() {
         shippingIn="iter #4"
         rationale="get_v2_curated_tape RPC composes ct_scored_flow + ct_flags + ct_contract_tracks + ct_specialist_reads filters into 10–30 ranked rows. Same detection floor as PR #63 hot_contract emission (signal/alert tiers). Live, filtered to what the system has classified as worth watching."
       />
+
+      {/* News Causality Matrix — Phase 5 of the audit-driven loop. The
+          derived signal documented in ct_news_causality.sql since
+          2026-04-16 ("Bloomberg moves NVDA flow 68% of the time") finally
+          surfaced. */}
+      <NewsCausalityMatrix />
 
       {/* Long-horizon positioning depth */}
       <AlphaPlaceholderSection
