@@ -51,12 +51,37 @@ interface MatrixCellProps {
   ticker: string;
 }
 
-function MatrixCell({ row }: MatrixCellProps) {
+function MatrixCell({ row, source, ticker }: MatrixCellProps) {
   if (!row) {
+    // Distinct from a low hit rate — cell is BELOW the n_min coverage floor.
+    // Captain previously read em-dash as "0%" on the Trades/Tradex row
+    // (AMZN: n=2 below floor → em-dash → mis-read as 0% hit rate).
+    // Render an explicit "n<min" badge with hover that names the semantic.
     return (
-      <div className="h-7 flex items-center justify-center text-[9px] font-mono bg-muted/10 text-muted-foreground/30 border border-border/20 rounded-sm">
-        —
-      </div>
+      <HoverCard openDelay={50} closeDelay={100}>
+        <HoverCardTrigger asChild>
+          <div
+            className="h-7 flex items-center justify-center text-[8px] font-mono bg-muted/5 text-muted-foreground/40 border border-dashed border-border/30 rounded-sm cursor-help"
+            aria-label={`${source} on ${ticker}: below sample-size floor — not 0% hit rate`}
+          >
+            n&lt;min
+          </div>
+        </HoverCardTrigger>
+        <HoverCardContent
+          className="w-64 p-3 bg-card/95 backdrop-blur border-primary/30 text-[11px]"
+          side="bottom"
+          align="center"
+        >
+          <div className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">
+            {source} · {ticker}
+          </div>
+          <div className="text-[11px] text-muted-foreground/90 leading-snug">
+            Below sample-size floor for the lookback window. Not enough news
+            from this source on this ticker yet to produce a stable hit-rate
+            cell. <span className="text-foreground/80 font-semibold">Not 0% — unknown.</span>
+          </div>
+        </HoverCardContent>
+      </HoverCard>
     );
   }
   return (
@@ -186,8 +211,14 @@ export function NewsCausalityMatrix() {
         </div>
       )}
 
-      <div className="text-[9px] font-mono text-muted-foreground/50 leading-snug pt-1 border-t border-border/30">
-        cell color: 60%+ emerald-bold · 40-60% emerald · 25-40% amber · 10-25% blue · &lt;10% gray. hover for full breakdown.
+      <div className="text-[9px] font-mono text-muted-foreground/50 leading-snug pt-1 border-t border-border/30 space-y-0.5">
+        <div>
+          cell color: 60%+ emerald-bold · 40-60% emerald · 25-40% amber · 10-25% blue · &lt;10% gray. hover for full breakdown.
+        </div>
+        <div>
+          <span className="inline-block px-1 mr-1 border border-dashed border-border/30 text-muted-foreground/60">n&lt;min</span>
+          = below sample-size floor for the lookback (NOT 0% hit rate — unknown).
+        </div>
       </div>
     </Card>
   );
