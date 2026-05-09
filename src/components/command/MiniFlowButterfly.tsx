@@ -83,6 +83,13 @@ export function MiniFlowButterfly({ ticker, range, mode, dte = 'all' }: Props) {
   const isLoading = mode === 'cp' ? cpQuery.isLoading : bbQuery.isLoading;
   const isError = mode === 'cp' ? cpQuery.isError : bbQuery.isError;
   const hasData = mode === 'cp' ? cpData.length > 0 : bbData.length > 0;
+  // Iter #4 sparse-data guard. Below 3 points, lines render as a single
+  // misleading diagonal between the only two data points (most visible in
+  // 5m / 10m windows after RTH or during slow midday for low-flow tickers).
+  // Show "low density" placeholder instead of trash-shaped chart.
+  const SPARSE_THRESHOLD = 3;
+  const seriesLength = mode === 'cp' ? cpData.length : bbData.length;
+  const isSparse = hasData && seriesLength < SPARSE_THRESHOLD;
 
   // Compute current bias label.
   const bias = useMemo(() => {
@@ -136,6 +143,11 @@ export function MiniFlowButterfly({ ticker, range, mode, dte = 'all' }: Props) {
         ) : !hasData ? (
           <div className="h-full flex items-center justify-center text-[10px] text-muted-foreground/60">
             no flow yet
+          </div>
+        ) : isSparse ? (
+          <div className="h-full flex flex-col items-center justify-center gap-0.5 text-[10px] text-muted-foreground/60 px-2 text-center">
+            <span>low density</span>
+            <span className="text-[9px] opacity-70">{seriesLength} pt{seriesLength === 1 ? '' : 's'} · widen window</span>
           </div>
         ) : mode === 'cp' ? (
           <ResponsiveContainer width="100%" height="100%">

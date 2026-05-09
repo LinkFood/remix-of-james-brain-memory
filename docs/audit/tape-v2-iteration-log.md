@@ -207,5 +207,40 @@ Captain first reaction: "good bones, needs work, alot of small different things.
 
 **Bundle close:** Flow Butterfly is now alpha-tight (chart polish iters #1-#3) + brain-wired (#78) + corpus-capturing (this ship).
 
+**PR / commit:** #79 (squash; merged 2026-05-09 00:33Z) + #80 phantom-fix recreate (squash; merged 2026-05-09 00:43Z, db push verified table live + 30 manual-fire corpus rows)
+
+---
+
+## 2026-05-09 — Flow Butterfly iteration #4: kill duplicate chart + sparse-data guard
+
+**What changed:** Two visible production bugs captain flagged after first wall-clock validation pass:
+
+1. **Duplicate chart rendering on /tape-v2.** `FlowPulse` (per-ticker table component) embeds `FlowPulseChartPanel` internally (line 379). Then `FlowButterflySection` ALSO renders a chart in MARKET / TICKER mode and a 10-grid in ALL mode. Result: two stacked Flow Butterfly charts on /tape-v2 — one from FlowPulse, one from FlowButterflySection. ALL mode doubly trash because the MARKET chart from FlowPulse stays visible above the 10-grid.
+2. **Sparse-data trash in 5m / 10m windows.** Captain saw single diagonal lines per panel in ALL × 5m, "flat" labels for tickers with <2 points. Cause: chart connects whatever data points exist, so 1-2 points in a narrow window paints a misleading single-segment line. Same problem during slow-flow midday for low-volume tickers.
+
+**Why:** Captain's wall-clock validation: "the all panel is still absolute trash. yes we added the smaller timeframes but if you click on said smaller timeframes they're worthless." Visual diagnosis via Chrome MCP confirmed both bugs at the DOM level.
+
+**Fixes:**
+
+1. **Kill the duplicate.** Added `showChartPanel?: boolean` prop to `FlowPulse` (default `true` preserves /tape behavior — propagation-safe). `TapeV2` passes `showChartPanel={false}`. v2 becomes: FlowPulse-table-only + FlowButterflySection-three-mode-chart-or-grid. Single chart surface, no doubling.
+
+2. **Sparse-data guard.** In `MiniFlowButterfly` and both `ButterflyCp` + `ButterflyBb` renderers in `FlowPulseChart`, when `data.length > 0 && data.length < 3` (1-2 points = misleading single-segment line), render a "low density — N data point(s) in window · widen window" placeholder instead of the trashy line. Threshold = 3 because that's the minimum needed to draw any pattern shape (2 segments per series).
+
+**End-state:**
+- /tape-v2 renders ONE Flow Butterfly chart surface (controlled by FlowButterflySection's MARKET/TICKER/ALL toggle), not two stacked ones.
+- 5m / 10m windows in ALL mode (and full chart) show "low density" placeholder when prints are sparse, instead of misleading single-line trash.
+- /tape unaffected — `showChartPanel` default `true` keeps the legacy embedded chart there.
+
+**Files touched:**
+- `src/components/command/FlowPulse.tsx` — `showChartPanel?: boolean` prop, default true; conditional `{showChartPanel && <FlowPulseChartPanel ... />}`
+- `src/pages/TapeV2.tsx` — pass `showChartPanel={false}`
+- `src/components/command/MiniFlowButterfly.tsx` — sparse guard via `seriesLength < 3` → "low density" placeholder
+- `src/components/command/FlowPulseChart.tsx` — sparse guard at top of `ButterflyCp` and `ButterflyBb` → same placeholder
+
+**Validation:** Captain visual check on /tape-v2 production after deploy — only one chart, narrow windows show "low density" message instead of garbage lines.
+
+**Bundle status:** Flow Butterfly v2 visual layer is now actually-clean (iter #1+#2+#3 polish + iter #4 dedup + sparse-guard) plus brain-organ-wired (#78) plus corpus-capturing (#79+#80 fix). The visible-on-/tape-v2 surface should now match what captain expects on first read.
+
 **PR / commit:** TBD on push
+
 
