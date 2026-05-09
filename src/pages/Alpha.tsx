@@ -33,6 +33,7 @@ import { Card } from '@/components/ui/card';
 import { Link } from 'react-router-dom';
 import { ArrowUpRight, Activity, Flame, Filter, Layers } from 'lucide-react';
 import { AlphaTopStrip } from '@/components/alpha/AlphaTopStrip';
+import { TapeReaderArc } from '@/components/alpha/TapeReaderArc';
 import { ClaudesRead } from '@/components/alpha/ClaudesRead';
 import { AlphaPlaceholderSection } from '@/components/alpha/AlphaPlaceholderSection';
 
@@ -64,6 +65,10 @@ export default function Alpha() {
 
       {/* Top strip — compressed regime + tide + VIX + push count */}
       <AlphaTopStrip />
+
+      {/* Tape Reader Arc — today's mood evolution as a single glanceable
+          horizontal primitive. Shipped Phase 3 of the audit-driven loop. */}
+      <TapeReaderArc />
 
       {/* Synthesis — Claude's read sits at the top of every captain glance */}
       <ClaudesRead />

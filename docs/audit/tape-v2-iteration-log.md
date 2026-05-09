@@ -333,9 +333,48 @@ Header carries regime+state context so embeddings cluster by setup-shape, not ju
 
 **Time:** ~30 min from "go" to substrate-live.
 
-**PR:** TBD on push.
+**PR:** #86 (squash-merged 2026-05-09 11:35Z, commit 93b03e2).
 
 **Next:** Phase 2 — same substrate pattern for `ct_news_causality`. Then Phase 3 ships the first captain-visible 5x render off this substrate.
+
+---
+
+## 2026-05-09 late evening — Phase 3: Tape Reader Arc on /alpha
+
+**FIRST CAPTAIN-VISIBLE 5x SHIP** of the audit-driven 1→6 loop.
+
+**Captain articulation (prior session):** *"There's a tape reader every 10 minutes... Read the fucking text: green light, red light, blue light, blue light, blue light, red light. I don't even know how we'll design it."* — captain wants the system's evolving tape-reader "mood" as a glance-able visual primitive, not as scrollable prose.
+
+**5x bar measured against /tape, /tape-v2, /tape-reader:**
+- `/tape`: raw flow rows, no commentary structure
+- `/tape-v2`: latest commentary text + 3 specialist tiles, snapshot only
+- `/tape-reader`: full commentary timeline as scrollable prose list — captain reads minutes per session
+- **Arc:** full session compressed to ~60 horizontal segments, structurally reads the day's mood evolution at a glance — sub-second alpha-density. Different surface, not "improved tape." Passes 5x bar.
+
+**What shipped:**
+- New hook `src/hooks/useTapeReaderArc.ts` — fetches today's chronological tape commentary (filtered by NY-tz session_date), oldest-first, refetches every 60s, derives dominant-tide rollup + intensity per segment (flag_count + flow_count/4)
+- New component `src/components/alpha/TapeReaderArc.tsx` (~190 LOC) — horizontal segment strip with HoverCard per segment, click-to-pin behavior, latest-segment glow ring, `flag_interrupt` segments ringed amber, full-commentary detail strip below
+- `src/pages/Alpha.tsx` — TapeReaderArc mounted between AlphaTopStrip and ClaudesRead
+
+**Visual primitive design:**
+- Segment color: `bullish=emerald-500`, `bearish=red-500`, `flat=blue-400` (per captain's "green/red/blue light" framing)
+- Segment height: scaled 8-32px by intensity (flag count + flow count/4, capped at 16)
+- Segment width: flex-1 min/max 6/14px — auto-fits a full RTH session (~60 reads)
+- Latest segment: glow ring + 100% opacity (vs 80% prior)
+- Pinned segment: ring-2 primary + bottom detail expansion
+- `flag_interrupt` segments: amber 1px ring (separates manual interrupt reads from scheduled cron reads)
+
+**Hover behavior:** any segment surfaces full commentary + tide + VIX + flag_count + flow_count + timestamp in a HoverCard. Captain reads the day arc, hovers any segment of interest, gets full context.
+
+**Files touched:** 4 — 1 new hook, 1 new component, 1 page edit, 1 iteration log entry.
+
+**Build state:** `npm run build` passes clean (vite, no type errors, 4158 modules). UI not visually verified locally — captain validates post-deploy on linkjac.cloud/alpha. If tide-color thresholds or segment density needs tuning, append iter #2 entry.
+
+**Time:** ~25 min from "go" to ship-ready.
+
+**Substrate dependency:** Uses `ct_tape_commentary.market_tide` + `vix_level` + `flag_ids` + `flow_ids` (all existing columns). Does NOT yet use Phase 1 embedding column — that powers Phase 4 (semantic recall in ClaudesRead) next.
+
+**Next:** Phase 4 — wire semantic recall into `ClaudesRead` ("5 most-similar past reads + their outcomes"). The iter #2 hint at `ClaudesRead.tsx:154` becomes the actual surface, powered by Phase 1 substrate.
 
 
 
