@@ -749,3 +749,19 @@ AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the 
 **5x bar:** `/tape` and `/tape-v2` have no compressed GEX board; the closest precedent is `/edge` showing one-ticker-at-a-time. This surface puts 10 tickers' dealer positioning + flip direction + walls in one grid the captain reads at a glance. Direct visual analog of an institutional dealer-net dashboard, deployed for one trader.
 
 **PR / commit:** PR-C in iter #3 stack. Captain validates visually post-Vercel deploy on `/alpha` — no auto-merge.
+
+---
+
+## 2026-05-09 evening — iter #3 PR-B rebase: hook conflict resolved per (α)
+
+**What changed during rebase of PR-B on main (post-#105 PR-C merge):** PR-B and PR-C both authored `src/hooks/useGexInference.ts` independently. Same data shape, different signatures (PR-C: `tickers: string[]` arg + `GexInferenceResponse` wrapper + edge function transport; PR-B: `UseGexInferenceArgs` object + `GexInferenceResult` wrapper + direct table query with re-implemented kernel math). Conflict surfaced at rebase time.
+
+**Captain decision (α):** drop PR-B's hook; PR-B's 3 components consume PR-C's hook (already on main). Single-source kernel preserved — math lives once in `_shared/gexInferenceContext.ts`, exposed via `ct-gex-inference` edge function, surfaced to UI via the single hook.
+
+**Mechanical resolution:** `git checkout --ours src/hooks/useGexInference.ts` during rebase took main's version. PR-B's 3 components (`GexBanner.tsx`, `GexDirectionStrips.tsx`, `GexFlipOverlay.tsx`) compiled against PR-C's hook with zero edits — both versions exposed identical type names (`DealerNetDirection`, `PriceVsFlip`, `ConsensusDirection`, `PinAttractor`, `GexInferencePerTicker`) and the components' `useGexInference()` calls used the no-args default that both signatures support. **No component edits needed.** `npx tsc --noEmit` clean; `npm run build` clean (4164 modules, 3.68s).
+
+**Iter #3.5 reduces:** original `(β) refactor 5 inline GEX callers` queue stays. The "consolidate 4 → 1 GEX math kernel" item collapses to "consolidate 5 → 1" — the 4th drift site (PR-B's hook re-implementation) didn't ship to main.
+
+**Cascade catalog instance surfaced:** new pattern `parallel-agents-create-same-file-with-different-signatures`. Codified in `docs/methodology-patterns.md` (this PR). Cross-catalog parallel codification at Cowork-side `memory/patterns.md` per cross-catalog rule (captain pastes from PR description).
+
+**PR:** #106 (PR-B in iter #3 stack, rebased on main with hook conflict resolved per α; force-push triggers new CI run; merge once clean).
