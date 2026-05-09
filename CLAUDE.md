@@ -56,7 +56,7 @@ Co-Trader is an **intelligence amplifier for James** — pattern detection that 
 
 18. **Progress measured by detection accuracy and trust-per-alarm, not P&L on trades.** The system gets smarter via outcome-graded detector scoreboards, regardless of paper capital state. Replay harness lets us measure detection quality continuously.
 
-19. **Replay harness as continuous calibration tool.** `ct-backtest-harness` (commit `1fc795f`) — built once, used weekly. Every meaningful detector change goes through harness backtest before shipping. Sunday is calibration day.
+19. **Calibration is continuous, operationalized into the workflow.** Phase A audits per ship, iteration log validation, audit-while-building, captain-validates-live-URL after each surface, warden's 30-min invariant ticks (53+ invariants), and the 7-layer defense net all run continuously — not on a calendar slot. `ct-backtest-harness` (commit `1fc795f`) remains available when a specific track needs backtest grounding (D3 fork picks, threshold recalibration, detector lifecycle promotion); content-gated by track readiness, not by day-of-week. The earlier "built once, used weekly. Sunday is calibration day" framing was right at articulation; it became obsolete as build velocity operationalized continuous calibration, and the calendar anchor began creating deferral ("we'll do that Sunday") rather than discipline. See `docs/methodology-patterns.md` calendar-anchor-becomes-deferral.
 
 20. **Model tier matches decision tempo + cost shape.**
     - **Operational/cron** (autonomous, runs without James present): API-Claude — Sonnet daily / Haiku per-heartbeat / pure logic for execution-style triggers

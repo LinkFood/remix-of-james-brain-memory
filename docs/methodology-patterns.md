@@ -1097,6 +1097,45 @@ In both cases, the discipline existed; the artifact-author didn't run a write-ti
 
 ---
 
+## calendar-anchor-becomes-deferral — when discipline evolves past the framing
+
+**Pattern:** When a tenet articulates discipline via a calendar anchor ("Sunday is calibration day," "weekly Sonnet distillation," "nightly retro"), the calendar anchor was the right shape AT THAT TIME. As build velocity accelerates and the discipline gets operationalized into continuous practice, the calendar anchor becomes obsolete — but the FRAMING persists in language. Continuing to invoke it creates a deferral pattern ("we'll do that Sunday") rather than the discipline the original tenet wanted.
+
+**Structural shape:** the tenet's MECHANISM evolves into continuous practice; the tenet's FRAMING doesn't update. The framing then becomes the anti-pattern. The fix is at the framing layer, not per-incident.
+
+**Discipline rule:** periodically check tenet framings against actual discipline operationalization. If discipline has evolved past the framing, update the framing. Drop calendar-day anchors from forward work; content-gate everything ("when X capacity opens" / "when validation surfaces issue" / "when N captures complete"). If actual calendar-anchored discipline is wanted (a genuine pause-and-calibrate day), name it explicitly as a workflow change, not a wish anchored to a calendar slot.
+
+**Canonical articulation (Cowork-side):** `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` calendar-anchor-becomes-deferral entry — captures empirical motivation (Cowork's 4+ "Sunday becomes [X]" framings during the v2 push), structural shape (mechanism evolves but framing doesn't), full discipline rule (5 sub-rules), and cross-references to the broader framing-discipline family.
+
+### Instance — 2026-05-09 Tenet 19 framing update
+
+CLAUDE.md Tenet 19 originally read: *"Replay harness as continuous calibration tool. ct-backtest-harness — built once, used weekly. Every meaningful detector change goes through harness backtest before shipping. Sunday is calibration day."* Articulated when build velocity was slower; the harness was the primary calibration mechanism.
+
+By 2026-05-09 calibration is operationalized continuously across the daily workflow:
+- Phase A audits per ship (today's 6-PR chain ran Phase A per PR before any merge)
+- Iteration log validation (`docs/audit/tape-v2-iteration-log.md` appends per-PR findings)
+- Audit-while-building shape (architecture-fundamental Phase A first, design-iterable build in parallel)
+- Captain-validates-live-URL on /alpha after each surface ship
+- Warden 30-min invariant ticks (53+ invariants, 7 layers of defense net continuously evaluated)
+
+`ct-backtest-harness` (commit `1fc795f`) remains available for specific tracks needing backtest grounding (D3 fork picks, threshold recalibration, detector lifecycle promotion) — content-gated by track readiness, not calendar slot.
+
+Captain caught the drift after observing repeated "Sunday becomes [X]" framings in briefs during the v2 push. The "Sunday is calibration day" anchor was creating a deferral shell ("we'll do that Sunday") rather than the calibration discipline the tenet originally wanted. Updated Tenet 19 framing in this same PR. The catch IS the discipline working — drift caught at the framing layer rather than per-incident.
+
+**Class diagnostic question for future audits:** *"Do any of my tenets anchor discipline to a calendar slot? If so, has the discipline been operationalized into continuous practice such that the calendar anchor is now obsolete? If yes, update the framing — the obsolete anchor will create deferral, not discipline."*
+
+**Sibling patterns:**
+- date-gating-vs-content-gating (CLAUDE.md preferences, locked 2026-05-07 evening) — same structural shape applied to forward commitments. Forward gates are content-shaped, never calendar dates.
+- brief-author-state-vs-intent (cascade #37, cataloged 2026-05-07) — calendar anchors in briefs are state assertions about future capacity that drift between memory updates and actual operationalization.
+- discovery-of-existing-coverage-changes-edit-shape-not-edit-target — when existing operationalization exists, the edit shape changes (update the framing), not the edit target (don't add another mechanism on top).
+
+**Linked artifacts:**
+- Cowork-side canonical entry: `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `## Calendar-anchor-becomes-deferral when discipline evolves past the framing (2026-05-09 morning)`
+- Cowork-side decision log: `/Users/jameschellis/Documents/cowork-cotrader/memory/decisions.md` 2026-05-09 morning entry
+- This PR: Tenet 19 framing update + this entry codification
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
