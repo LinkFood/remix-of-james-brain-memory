@@ -83,6 +83,7 @@ import { getTemporalContext } from './temporalContext.ts';
 // ---------------------------------------------------------------------------
 import flowHeatmapHelper, { getFlowHeatmapContext } from './flowHeatmapContext.ts';
 import flowButterflyHelper from './flowButterflyContext.ts';
+import gexInferenceHelper from './gexInferenceContext.ts';
 import pulseHelper from './pulseContext.ts';
 import specialistHelper from './specialistContext.ts';
 import detectorHelper from './detectorContext.ts';
@@ -1968,6 +1969,7 @@ export async function buildClaudeContext(
     specialistRecallHelper,
     regimeHelper,
     flowButterflyHelper,
+    gexInferenceHelper,
   ];
 
   // Synthesis Phase 4: organ whitelist + tickerFocus + perOrganOpts plumbing.
@@ -2185,6 +2187,7 @@ async function buildSynthesisOnlyContext(
     specialistRecallHelper,
     regimeHelper,
     flowButterflyHelper,
+    gexInferenceHelper,
   ];
 
   const organWhitelist: ReadonlySet<HelperName> | null =

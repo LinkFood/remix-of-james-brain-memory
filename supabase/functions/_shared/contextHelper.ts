@@ -304,7 +304,8 @@ export type HelperName =
   | 'analogs'
   | 'specialist_recall'
   | 'regime'
-  | 'flow_butterfly';
+  | 'flow_butterfly'
+  | 'gex_inference';
 
 /**
  * Top-level brain options. Consumers pass this to `buildClaudeContext`.

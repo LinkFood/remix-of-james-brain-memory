@@ -648,3 +648,29 @@ AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the 
 - page-multiplication-violates-no-silos compliant — adds a route to an already-rendered dropdown, doesn't ship a new surface.
 
 **PR:** #103 (single-purpose).
+
+---
+
+## 2026-05-09 — Alpha v2 iter #3 PR-A: GEX Inference brain organ (substrate compute layer)
+
+**What changed:** New brain organ `_shared/gexInferenceContext.ts` (the 13th — slots in alongside `flow_butterfly` as the 12th and `regime` as the 11th). `HelperName` union extended with `'gex_inference'`. Helper wired into BOTH helper arrays in `_shared/claudeReadSurface.ts` (slim + standard variants), mirroring the `flow_butterfly` precedent.
+
+**Output shape (structured-numeric — no narrative):** Per-ticker × most-recent-snapshot — `gamma_flip_strike` (signed-interpolated zero crossing), `call_wall_strike`, `put_floor_strike`, `dealer_net_direction` (`positive_gamma | negative_gamma | flat`), `dealer_net_total`, `price_vs_flip` (`above | below | at` with 0.1% ε), top-3 `pin_attractor_strikes` by `abs(net_gex)`, `atm_strike_count`. Watchlist aggregate — `consensus_direction` (`broad_positive_gamma | broad_negative_gamma | mixed | no_signal`, ≥7-of-10 = broad), above/below/at-flip counts, `median_price_vs_flip_pct`. Always non-throwing, defensive-empty on error per ContextHelper contract.
+
+**Source:** Reads `ct_gex_timeseries` directly (filtered `is_atm_band=true`, ordered by `strike` ascending, scoped to most-recent `snapshot_at` per ticker within 72h lookback). Two roundtrips per ticker × 10 tickers = ~20 round-trips when uncached; `cacheTtlSeconds: 60`. Helper-side compute, no new RPC — payload is small (~30 strikes/ticker × 10 tickers × ~8 numeric fields, well under 50KB) and the indexed `(ticker, snapshot_at DESC)` path makes per-ticker latency cheap. Out-of-scope per brief — DID NOT touch the 5 inline-inference edge functions (`ct-ticker-snapshot-builder`, `ct-hypothesis-proposer`, `ct-custom-rule-eval`, `ct-regime-watch`, `ct-eod-report`); their refactor onto this organ is iter #3.5.
+
+**Audience:** `['cotrader', 'analyst', 'agent_internal']` — paper_claude stays isolated per the firewall contract (D3), same scope as `flow_butterfly` and `flow_heatmap`.
+
+**Brief-author state-vs-intent fire (cascade #37 family):** Brief named the substrate as `ct_gex_snapshots` from memory; Phase A grep against `supabase/migrations/` caught the rename — the table was DROPPED via migration `20260417000001_drop_ct_gex_snapshots.sql` and the live substrate is `ct_gex_timeseries` (created in `20260416000010_ct_gex_timeseries.sql`). Brief author recovered before any code was written — Check 4 of `engine-room-write-time-checklist.md` (substrate-target verification) operationalized correctly. No code shipped against the dropped name.
+
+**Why:** Captain-locked Path (iii) substrate compute layer. PR-B (`/heatmap` redesign) and PR-C (`/alpha` snapshot composition card) consume this surface. Per Tenet 24 (no silos) — every Co-Trader Claude-facing read should pull GEX inference from the same organ rather than each consumer reimplementing the strike-ladder math against `ct_gex_timeseries` with its own thresholds and edge cases.
+
+**Discipline:**
+- Single-purpose: ONLY the new helper + `HelperName` extension + `buildClaudeContext` wiring + this iteration log entry. No caller refactors. No UI work. No new RPC. No new migration (so no migration-timestamp collision risk).
+- `deno check supabase/functions/_shared/gexInferenceContext.ts` clean. `claudeReadSurface.ts` retains its two pre-existing baseline errors (lines 1063 + `configCache.ts:62`) — neither introduced by this PR; verified via `git stash` baseline diff.
+- Backward-compat: organs map is sparse `Partial<Record<HelperName, ...>>` — existing consumers that don't request `gex_inference` see no payload change. Consumers that opt-in via `organs: ['gex_inference', ...]` or `'all'` get the new organ.
+- audience-gated → paper_claude unaffected.
+
+**Cross-catalog parity flag for captain:** This entry generalizes a back-anchorability instance (cascade #29 in `docs/methodology-patterns.md`) — `ct_gex_timeseries` is append-only and the live substrate; no consumer should be reaching for the dropped `ct_gex_snapshots` overwrite-shape table. The 5 inline-inference edge functions all already read `ct_gex_timeseries` correctly per `grep ct_gex_timeseries supabase/functions/`. Iter #3.5 (caller refactor) is the right place to centralize the kernel logic; this PR ships the kernel.
+
+**PR / commit:** PR-A in iter #3 stack. PR-B (`/heatmap` redesign) and PR-C (`/alpha` snapshot composition) follow. Captain reviews — no auto-merge.
