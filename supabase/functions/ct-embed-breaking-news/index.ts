@@ -63,12 +63,12 @@ serve(async (req) => {
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
   );
 
+  // Atomic claim via FOR UPDATE SKIP LOCKED RPC. Concurrent callers get
+  // disjoint slices; sentinel-zero-vector marks claimed rows so subsequent
+  // calls skip them. See migration 20260510100000.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error: selectErr } = await (supabase.from('ct_breaking_news' as never) as any)
-    .select('id,ingested_at,source,headline,summary,severity,sentiment,category,tickers_affected,macro_wide')
-    .is('embedding', null)
-    .order('ingested_at', { ascending: false })
-    .limit(requested);
+  const { data, error: selectErr } = await (supabase as any)
+    .rpc('claim_unembedded_breaking_news', { p_batch_size: requested });
 
   if (selectErr) {
     return new Response(JSON.stringify({ ok: false, error: selectErr.message }),

@@ -54,6 +54,41 @@ curl -X POST https://rvhyotvklfowklzjahdd.supabase.co/functions/v1/ct-embed-tape
 
 Returns `{ embedded: N, errors: [] }`.
 
+**Parallel manual fires are now safe.** Per migration `20260510100000`, the
+drainers claim rows atomically via `claim_unembedded_<table>` RPCs that use
+`FOR UPDATE SKIP LOCKED`. Concurrent callers get disjoint slices; pre-fix
+behavior (10 parallel calls all grabbed the same top-100 rows and re-embedded
+them, wasting 900 Voyage calls) is structurally impossible.
+
+## Recovery — stuck sentinel claims
+
+The atomic claim sets `embedding` to a zero-vector sentinel before the
+drainer's Voyage call. On success the drainer overwrites with the real
+embedding + rich_text. If the drainer **crashes mid-embed** (Voyage timeout
+that escapes the try/catch, edge function killed, etc.), the row stays at
+sentinel forever and looks claimed to subsequent runs.
+
+**Detection:** rows where `embedding IS NOT NULL AND rich_text IS NULL` are
+stuck claims. Count via:
+
+```sql
+SELECT count(*) FROM public.ct_breaking_news WHERE embedding IS NOT NULL AND rich_text IS NULL;
+SELECT count(*) FROM public.ct_tape_commentary WHERE embedding IS NOT NULL AND rich_text IS NULL;
+```
+
+**Recovery:** call `reset_stale_embed_claims` to clear sentinels older than N
+minutes. Default is 5 min. The next drainer cycle will re-claim and embed
+properly.
+
+```sql
+SELECT public.reset_stale_embed_claims('ct_breaking_news', 5);
+SELECT public.reset_stale_embed_claims('ct_tape_commentary', 5);
+```
+
+The function returns rows-reset count. Manual fire only — designed for
+runbook recovery, not crons. If stuck rows recur, treat as a cascade
+candidate (Voyage SDK exception escaping; signal-handler death; OOM).
+
 ## Why this matters (link to audit)
 
 Per the fusion ground-truth doc Section B verdict, the JAC OS "nothing in the
