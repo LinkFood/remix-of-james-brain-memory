@@ -48,7 +48,7 @@ function timeOnly(iso: string): string {
 }
 
 export function TapeReaderArc() {
-  const { segments, latest, sessionDate, dominantTide, counts, isLoading } = useTapeReaderArc();
+  const { segments, sessionDate, dominantTide, counts, isLoading } = useTapeReaderArc();
   const [pinned, setPinned] = useState<TapeArcSegment | null>(null);
 
   if (isLoading) {
@@ -84,7 +84,16 @@ export function TapeReaderArc() {
   const maxH = 32;
   const intensityToH = (i: number) => Math.round(minH + ((maxH - minH) * Math.min(i, 16)) / 16);
 
-  const focused = pinned ?? latest;
+  // Bottom detail strip is the drill-down surface for non-latest segments only.
+  // Latest commentary lives in ClaudesRead (synthesis-leadership home for prose).
+  // The arc carries the multi-read mood evolution; HoverCard handles per-segment
+  // explore-on-hover for any segment including latest. Showing the latest's prose
+  // here too duplicates ClaudesRead within ~200vh on /alpha (visual dedup pass
+  // 2026-05-09). When pinned is null OR pinned IS latest, no strip — captain
+  // reads latest from ClaudesRead, drills into history by clicking earlier
+  // segments, and the strip activates as their pinned-segment surface.
+  const isLatestPinned = pinned != null && segments.length > 0 && pinned.id === segments[segments.length - 1].id;
+  const focused = pinned != null && !isLatestPinned ? pinned : null;
 
   return (
     <Card className="p-3 bg-muted/10 border-primary/20 space-y-2">
@@ -165,13 +174,15 @@ export function TapeReaderArc() {
         })}
       </div>
 
-      {/* Pinned/latest detail strip below — full commentary text of the segment in focus */}
+      {/* Pinned-segment detail strip — drill-down surface for historical segments.
+          Hidden when nothing pinned (or latest pinned) so latest commentary stays
+          in ClaudesRead's synthesis home above (no prose duplication on /alpha). */}
       {focused && (
         <div className="text-[11px] leading-relaxed text-foreground/90 px-1 pt-1 border-t border-border/30">
           <div className="flex items-center gap-2 mb-1">
             <Clock className="w-3 h-3 text-muted-foreground" />
             <span className="font-mono text-[9px] uppercase tracking-wider text-muted-foreground">
-              {pinned ? 'pinned' : 'latest'} · {timeOnly(focused.created_at)} ET
+              pinned · {timeOnly(focused.created_at)} ET
             </span>
             <span className={cn('font-mono text-[9px] uppercase', tideText(focused.market_tide))}>
               {focused.market_tide ?? '—'}
@@ -181,15 +192,13 @@ export function TapeReaderArc() {
                 vix {focused.vix_level.toFixed(2)}
               </span>
             )}
-            {pinned && (
-              <button
-                type="button"
-                onClick={() => setPinned(null)}
-                className="ml-auto text-[9px] font-mono text-muted-foreground/70 hover:text-foreground"
-              >
-                unpin →
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setPinned(null)}
+              className="ml-auto text-[9px] font-mono text-muted-foreground/70 hover:text-foreground"
+            >
+              unpin →
+            </button>
           </div>
           <div className="line-clamp-3">{focused.commentary}</div>
         </div>
