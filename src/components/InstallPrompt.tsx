@@ -13,9 +13,15 @@ export function InstallPrompt() {
   const [dismissed, setDismissed] = useState(false);
 
   useEffect(() => {
-    // Check if already dismissed this session
-    const wasDismissed = sessionStorage.getItem("pwa-prompt-dismissed");
-    if (wasDismissed) {
+    // Check if already dismissed (persisted across sessions).
+    // Migrate any legacy sessionStorage flag so once-dismissed-always-dismissed.
+    const persisted = localStorage.getItem("pwa-prompt-dismissed");
+    const legacy = sessionStorage.getItem("pwa-prompt-dismissed");
+    if (persisted || legacy) {
+      if (legacy && !persisted) {
+        localStorage.setItem("pwa-prompt-dismissed", "true");
+        sessionStorage.removeItem("pwa-prompt-dismissed");
+      }
       setDismissed(true);
       return;
     }
@@ -51,10 +57,15 @@ export function InstallPrompt() {
   const handleDismiss = () => {
     setShowPrompt(false);
     setDismissed(true);
-    sessionStorage.setItem("pwa-prompt-dismissed", "true");
+    // Persist across sessions — once dismissed, stay dismissed.
+    localStorage.setItem("pwa-prompt-dismissed", "true");
   };
 
-  if (!showPrompt || dismissed || window.location.pathname === '/jac') return null;
+  // Surgical-grade surfaces (/jac Nerve Center, /alpha institutional flow diagnostic)
+  // suppress the consumer-feel install popup to preserve identity.
+  const path = window.location.pathname;
+  const suppressedRoute = path === '/jac' || path === '/alpha' || path.startsWith('/alpha/');
+  if (!showPrompt || dismissed || suppressedRoute) return null;
 
   return (
     <div className="fixed bottom-20 left-4 right-4 md:left-auto md:right-4 md:w-80 z-50 animate-in slide-in-from-bottom-4">
