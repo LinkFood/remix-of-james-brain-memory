@@ -3,40 +3,35 @@
  *
  * Surgical-grade institutional flow diagnostic at one-person scale. Bloomberg-
  * terminal-class identity per captain's brief 2026-05-09. NOT a consumer
- * dashboard, NOT a 0DTE gambling tool. Leading-indicator across three
- * temporal layers (near + medium + long horizon positioning visibility).
+ * dashboard, NOT a 0DTE gambling tool. Leading-indicator across temporal
+ * layers (near + medium + long horizon positioning visibility).
  *
  * Architecture (load-bearing, per brief):
  *   - PUSH NOT RENDER. Non-alpha signals (specialists, full news panel,
  *     Flow Pulse, Stacking, alarms, conviction shifts, regime transitions,
  *     hot contracts) push via Slack emission layer (PR #63). Page renders
- *     the four alpha surfaces + Claude's reads of them, nothing else.
+ *     working alpha surfaces + Claude's reads of them, nothing else.
  *   - THREE TEMPORAL LAYERS STACK. Top: synthesis (Claude's read). Middle:
- *     leading indicators (Flow Butterfly historical / Heatmap alpha-class /
- *     Curated tape). Bottom: long-horizon positioning depth.
+ *     leading indicators. Bottom: long-horizon positioning depth. Each
+ *     layer fills as its surface ships; surfaces don't pre-render as
+ *     placeholders.
  *   - THE CAPTAIN EMBEDS EVERYTHING. Every read is embedded at write time;
  *     semantic recall surfaces are activated incrementally per surface
- *     (tape commentary first — iter #2; butterfly second; heatmap GEX is
- *     JAC-core kernel work).
+ *     (tape commentary first — Phase 1+4; news second — Phase 2+5).
  *
- * Iter #1 ships:
- *   - Route + page shell + layout
- *   - AlphaTopStrip (compressed regime/tide/VIX/push count)
- *   - ClaudesRead (full-width synthesis section using existing tape +
- *     specialist hooks)
- *   - Four alpha surfaces as honest placeholders pointing at iter #N
- *
- * Iter #2-#5 wire each surface in turn. See iteration log entries.
+ * Iter #2.6 (2026-05-09): top specialist reads section + 4 placeholder
+ * sections removed per captain decisions. Push-not-render strict;
+ * surfaces land in their temporal-layer position when their iter ships.
+ * Trajectory captured in docs/audit/tape-v2-iteration-log.md.
  */
 
 import { Card } from '@/components/ui/card';
 import { Link } from 'react-router-dom';
-import { ArrowUpRight, Activity, Flame, Filter, Layers } from 'lucide-react';
+import { ArrowUpRight } from 'lucide-react';
 import { AlphaTopStrip } from '@/components/alpha/AlphaTopStrip';
 import { TapeReaderArc } from '@/components/alpha/TapeReaderArc';
 import { ClaudesRead } from '@/components/alpha/ClaudesRead';
 import { NewsCausalityMatrix } from '@/components/alpha/NewsCausalityMatrix';
-import { AlphaPlaceholderSection } from '@/components/alpha/AlphaPlaceholderSection';
 
 export default function Alpha() {
   return (
@@ -68,36 +63,12 @@ export default function Alpha() {
       <AlphaTopStrip />
 
       {/* Tape Reader Arc — today's mood evolution as a single glanceable
-          horizontal primitive. Shipped Phase 3 of the audit-driven loop. */}
+          horizontal primitive. Phase 3 of the audit-driven loop. */}
       <TapeReaderArc />
 
-      {/* Synthesis — Claude's read sits at the top of every captain glance */}
+      {/* Synthesis — Claude's read sits at the top of every captain glance.
+          Phase 4 (semantic recall) composed inside ClaudesRead. */}
       <ClaudesRead />
-
-      {/* Two middle-layer alphas — Flow Butterfly historical (medium) +
-          Heatmap alpha-class (near) */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        <AlphaPlaceholderSection
-          icon={Activity}
-          label="Flow Butterfly · multi-day arc"
-          shippingIn="iter #2"
-          rationale="Per-ticker cross magnitude × last 5d, points colored by tertile (s/m/L) and phase. Watchlist consensus rollup row above. Reads from ct_butterfly_cross_events corpus (PR #79/#80; first useful arc once corpus has ≥5 RTH days, ≈ 5/15)."
-        />
-        <AlphaPlaceholderSection
-          icon={Flame}
-          label="Heatmap · alpha-class"
-          shippingIn="iter #3"
-          rationale="Baseline-comparison ON by default. Strike-side dominant direction badges. Drill panel surfaces per-alert conviction + multi-mode agreement. Refactor of current /heatmap with the toolbar surfaced and underutilized cells turned on."
-        />
-      </div>
-
-      {/* Curated live tape — flagged/stacked contracts only */}
-      <AlphaPlaceholderSection
-        icon={Filter}
-        label="Curated tape · flagged/stacked contracts only"
-        shippingIn="iter #4"
-        rationale="get_v2_curated_tape RPC composes ct_scored_flow + ct_flags + ct_contract_tracks + ct_specialist_reads filters into 10–30 ranked rows. Same detection floor as PR #63 hot_contract emission (signal/alert tiers). Live, filtered to what the system has classified as worth watching."
-      />
 
       {/* News Causality Matrix — Phase 5 of the audit-driven loop. The
           derived signal documented in ct_news_causality.sql since
@@ -105,20 +76,14 @@ export default function Alpha() {
           surfaced. */}
       <NewsCausalityMatrix />
 
-      {/* Long-horizon positioning depth */}
-      <AlphaPlaceholderSection
-        icon={Layers}
-        label="Long-dated positioning · OI momentum"
-        shippingIn="iter #5"
-        rationale="10 tickers × 12 month buckets. Cell color = monthly OI Δ% (building → emerald, leaking → rose). Reveals where institutions are positioned 6–12 months out. Needs ct_oi_monthly_baselines aggregation table + nightly cron + extended OI delta RPC. Bounded by ct_oi_snapshots availability (live since 2026-04-23)."
-      />
-
       {/* Footer rationale — captain reading discipline */}
       <Card className="p-2.5 bg-muted/5 border-muted/20">
         <div className="text-[9.5px] text-muted-foreground/70 leading-snug">
           v2 architecture: push for non-alphas, render for alphas + system reads of them.
           Specialists, Flow Pulse, full news panel, Stacking → off this page; arrive via Slack
-          emission. Every iteration appended to <span className="font-mono">docs/audit/tape-v2-iteration-log.md</span>.
+          emission. Future surfaces (Flow Butterfly multi-day, Heatmap alpha-class, Curated tape,
+          Long-dated OI momentum) land in their temporal-layer position when each iter ships.
+          Every iteration appended to <span className="font-mono">docs/audit/tape-v2-iteration-log.md</span>.
           Captain validates each iteration on the live URL.
         </div>
       </Card>

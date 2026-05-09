@@ -590,3 +590,44 @@ AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the 
 **PR:** #TBD (single-purpose, no auto-merge — captain validates visually post-deploy on /alpha).
 
 **Next:** captain validates dedup on live /alpha; if confirmed, the visual-validation cowork pass moves to its next /alpha item.
+
+---
+
+## 2026-05-09 evening — iter #2.6: surface compression per captain decisions
+
+**Captain decisions locked (v2 identity reading):**
+
+**DECISION-1 — Top Specialist Reads section: MOVE OFF /alpha.** v2 identity is surgical-grade institutional flow diagnostic, not specialist roster render. Specialists are graded sub-system outputs that feed Claude's synthesis; rendering top-3 conviction tiles alongside the synthesis is redundant. Specialists remain accessible via existing `/specialists` depth view + Slack emission triggers (when `specialist_conviction_shift` ships per PR #83 catalog).
+
+**DECISION-2 — 4 "SHIPS ITER #X" placeholder sections: HIDE.** Surgical-grade surfaces don't render "coming soon" vapor. Bloomberg terminals don't display future-capability placeholders. Each iteration ships the surface; until then it doesn't render. `docs/audit/tape-v2-iteration-log.md` + `scope/` docs already capture trajectory.
+
+(The brief said "5 placeholders" — `Alpha.tsx` actually had 4: Flow Butterfly multi-day arc, Heatmap alpha-class, Curated tape, Long-dated OI momentum. Same intent, accurate count.)
+
+**What changed:**
+- `src/components/alpha/ClaudesRead.tsx` — removed `useSpecialistsTileRow` import + `SpecialistTile` type + `Sparkles` icon + `convictionColor` helper + `arrowFor` helper + `topSpecialists` derivation + the entire "Specialist reads" render block. Latest commentary + semantic recall sections preserved unchanged. Header docstring updated.
+- `src/pages/Alpha.tsx` — removed `AlphaPlaceholderSection` import + 4 placeholder render calls + the wrapping 2-column grid div + `Activity / Flame / Filter / Layers` icon imports (only used by the placeholder calls). Header docstring updated. Footer rationale tightened to reflect "future surfaces land when each iter ships" framing instead of pre-rendering the trajectory.
+- `src/components/alpha/AlphaPlaceholderSection.tsx` — DELETED (orphan after removing the 4 calls).
+
+**Phase A verification:**
+- `useSpecialistsTileRow` still imported by `tape-v2/SpecialistsTileRow.tsx` and `tape-v2/FlowButterflySection.tsx` — hook stays. Only ClaudesRead's import removed.
+- `AlphaPlaceholderSection` only used by `Alpha.tsx` (the 4 placeholder calls). Component deletion safe.
+- Grep cross-check post-edit: zero remaining `AlphaPlaceholderSection` references in `src/`.
+
+**End-state on /alpha:**
+- Top strip · TapeReader Arc · Claude's Read (latest commentary + semantic recall) · News Causality Matrix · Footer rationale.
+- 4 surfaces total — surgical, dense per glance.
+- Specialists off-page; placeholders off-page.
+- When iter #X ships its surface (Flow Butterfly multi-day arc, Heatmap alpha-class, Curated tape, Long-dated OI momentum), the surface lands in its temporal-layer position; no placeholder needed to have existed beforehand.
+
+**Discipline gates run:**
+- Engine-room write-time checklist: state-vs-intent ✓, no calendar anchors, cross-catalog parity N/A (UI-only), substrate verified (no schema touch), page-multiplication ✓ (this REMOVES surfaces, doesn't add).
+- Single-purpose: PR is ONLY the surface compression. No Tenet 26 substrate touch (`ct_specialist_reads` untouched per the gate captain set).
+- `npm run build`: clean.
+
+**Files touched:** 4 — 2 component edits, 1 component deletion, 1 iteration log entry.
+
+**5x bar:** post-iter-#2.6 the surface measures denser per glance; placeholder removal compresses vertical. Iter #5 fills the long-horizon position when long-dated OI substrate ships.
+
+**PR:** #102 (single-purpose, no auto-merge — captain validates visually post-deploy on /alpha).
+
+**Next:** captain validates compressed /alpha live. If captain disagrees with either decision after seeing the live result, iter #2.7 reverts the specific call. Decisions locked per current vision-state but not irreversible.

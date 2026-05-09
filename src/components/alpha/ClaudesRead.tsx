@@ -1,27 +1,24 @@
 /**
  * ClaudesRead — the synthesis layer of the v2 alpha surface.
  *
- * Top-of-page full-width section. The system's reads of the tape +
- * specialists + (semantic recall over historical reads, iter #2) compose
- * here. Captain reads this FIRST, then drops down to the four alpha
- * surfaces feeding it.
+ * Top-of-page full-width section. The system's read of the tape +
+ * semantic recall over historical reads compose here. Captain reads
+ * this FIRST, then drops down to the alpha surfaces feeding it.
  *
- * Iter #1: latest tape commentary (full text) + 3 most-recent specialist
- * reads ordered by conviction × freshness. Both feeds reuse existing
- * /tape-v2 hooks (useTapeReader, useSpecialistsTileRow) — no new
- * substrate; honest first cut.
+ * Iter #2.6 (2026-05-09): top specialist reads section removed per
+ * push-not-render architecture — specialists move off /alpha and
+ * arrive via /specialists depth view + Slack emission triggers.
  *
- * Iter #2 will wire semantic recall over ct_tape_commentary embedding:
- * "show 5 most-similar historical reads + their NextClose outcomes." See
- * iteration log for sequencing.
+ * Current shape: latest tape commentary (full text) + semantic
+ * recall over ct_tape_commentary embeddings (5 most-similar past
+ * reads, 90s refetch).
  */
 
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
-import { Brain, Calendar, Clock, Zap, Sparkles, Layers } from 'lucide-react';
+import { Brain, Calendar, Clock, Zap, Layers } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useTapeReader } from '@/hooks/useTapeReader';
-import { useSpecialistsTileRow, type SpecialistTile } from '@/hooks/useSpecialistsTileRow';
 import { useSemanticTapeRecall, type SemanticTapeMatch } from '@/hooks/useSemanticTapeRecall';
 
 function timeAgo(iso: string): string {
@@ -36,27 +33,6 @@ function tideClass(tide: string | null | undefined): string {
   if (tide === 'bullish') return 'text-emerald-300';
   if (tide === 'bearish') return 'text-red-300';
   return 'text-muted-foreground';
-}
-
-function convictionColor(conviction: number | null, direction: SpecialistTile['direction']): string {
-  if (conviction == null) return 'text-muted-foreground';
-  if (conviction >= 70) {
-    if (direction === 'bullish') return 'text-emerald-300 font-semibold';
-    if (direction === 'bearish') return 'text-red-300 font-semibold';
-    return 'text-amber-300 font-semibold';
-  }
-  if (conviction >= 50) {
-    if (direction === 'bullish') return 'text-emerald-400/80';
-    if (direction === 'bearish') return 'text-red-400/80';
-    return 'text-foreground/80';
-  }
-  return 'text-muted-foreground';
-}
-
-function arrowFor(direction: SpecialistTile['direction']): string {
-  if (direction === 'bullish') return '↑';
-  if (direction === 'bearish') return '↓';
-  return '−';
 }
 
 function shortDay(iso: string): string {
@@ -76,14 +52,7 @@ function matchTideClass(tide: SemanticTapeMatch['market_tide']): string {
 
 export function ClaudesRead() {
   const { latest } = useTapeReader({ priorCount: 0 });
-  const { data: specialistTiles } = useSpecialistsTileRow();
   const { matches: semanticMatches, isLoading: recallLoading } = useSemanticTapeRecall({ matchCount: 5 });
-
-  // Top 3 specialist reads by conviction, requiring a populated read.
-  const topSpecialists = (specialistTiles ?? [])
-    .filter((t) => t.conviction != null && t.last_fired_at != null)
-    .sort((a, b) => (b.conviction ?? 0) - (a.conviction ?? 0))
-    .slice(0, 3);
 
   return (
     <Card className="p-4 bg-muted/10 border-primary/20">
@@ -137,42 +106,12 @@ export function ClaudesRead() {
         )}
       </div>
 
-      {/* Specialist reads — the inputs the synthesis is reading */}
-      {topSpecialists.length > 0 && (
-        <div className="border-t border-border/40 pt-3">
-          <div className="flex items-center gap-1.5 mb-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
-            <Sparkles className="w-3 h-3" />
-            Top specialist reads · by conviction
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            {topSpecialists.map((tile) => (
-              <div
-                key={tile.ticker}
-                className="px-2 py-1.5 rounded bg-muted/15 border border-muted/30 text-[10px] font-mono"
-              >
-                <div className="flex items-center justify-between mb-0.5">
-                  <span className="font-semibold tracking-wider">
-                    {tile.ticker} <span className="opacity-70">{arrowFor(tile.direction)}</span>
-                  </span>
-                  <span className={cn(convictionColor(tile.conviction, tile.direction))}>
-                    {tile.conviction != null ? Math.round(tile.conviction) : '—'}
-                  </span>
-                </div>
-                <div className="text-muted-foreground/70 text-[9px]">
-                  {tile.last_fired_at ? timeAgo(tile.last_fired_at) : '—'}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Semantic recall — 5 most-similar prior tape reads.
           Phase 4 of audit-driven loop: iter #2 hint becomes reality.
           Substrate: Phase 1 ct_tape_commentary embedding + match_*
           RPC. Captain reads "today is similar to Y at HH:MM" — pattern
           recall over setup-shape, not chronological scrolling. */}
-      <div className="mt-3 pt-3 border-t border-border/30">
+      <div className="pt-3 border-t border-border/30">
         <div className="flex items-center gap-1.5 mb-2 text-[10px] font-mono uppercase tracking-wider text-muted-foreground">
           <Layers className="w-3 h-3" />
           Today most resembles · semantic recall
