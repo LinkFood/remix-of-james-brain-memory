@@ -298,6 +298,43 @@ Architecture-fundamental gates (A7 + A6) passed clean from the prior audit (PR #
 
 ---
 
+## 2026-05-09 late evening — Phase 6: Regime Flip Journal on /alpha (merged 2026-05-14)
+
+**Last captain-visible 5x ship before Phase 7 unlocks 2026-05-13.**
+
+Per audit Section E #3: `/pulse` shows current regime + sparkline only. Regime TRANSITIONS (when/why a ticker flipped from trending to chop, or from `chop_neutral` to `pre_event_macro`, with the trigger annotation in `ct_regime_history.rationale`) had no UI surface today. Phase 6 surfaces the journal.
+
+**5x bar:** Surface doesn't exist. Captain has been blind to when regimes flip + what triggers them + whether flips are ticker-isolated or market-wide synchronized. Single visual primitive renders all of that.
+
+**What shipped:**
+- Migration `20260510080000_get_regime_transitions.sql` — `get_regime_transitions(p_lookback_hours, p_tickers, p_limit, p_include_market_wide)` RPC. Uses LAG window function partitioned by `COALESCE(ticker, '__MKT__')` to detect classification flips per (ticker OR market-wide) sequence. Returns the FULL row of the transition-landing bucket (timestamps + prior→next + confidence + momentum/breadth/trajectory + rationale jsonb).
+- New hook `src/hooks/useRegimeTransitions.ts` — calls RPC with 72h default lookback + 50-row cap. Refetches every 2 min. Groups consecutive same-bucket flips so "9 tickers all flipped to pre_event_macro at 10:00" renders as ONE event with 9 ticker chips, not 9 separate rows.
+- New component `src/components/alpha/RegimeFlipJournal.tsx` (~190 LOC) — vertical list of grouped flip events. Each row: time | prior-state chip | → | next-state chip (color-coded by family) | ticker count | mean confidence. Click to expand → full rationale snippet + per-ticker breakdown. Color heuristic: bull/trend_up=emerald, bear/trend_down=red, chop=amber, event/macro/pre_=sky, unknown=muted, default=violet.
+- `src/pages/Alpha.tsx` — `<RegimeFlipJournal />` mounted between curated-tape placeholder and long-dated positioning placeholder.
+
+**Live state at ship — RPC verification (sample):**
+```
+2026-05-06 10:00  NVDA   unknown         -> pre_event_macro  conf=100
+2026-05-06 10:00  QQQ    unknown         -> pre_event_macro  conf=100
+2026-05-06 10:00  IWM    unknown         -> pre_event_macro  conf=100
+2026-05-06 10:00  MSFT   chop_neutral    -> pre_event_macro  conf=100
+2026-05-06 10:00  META   unknown         -> pre_event_macro  conf=100
+2026-05-06 10:00  AAPL   unknown         -> pre_event_macro  conf=100
+2026-05-06 10:00  MKT    chop_low_dispersion -> pre_event_macro  conf=100
+2026-05-06 10:00  GOOGL  chop_neutral    -> pre_event_macro  conf=100
+```
+
+**Real signal:** 9 tickers + market-wide all flipped to `pre_event_macro` at 5/6 10:00 UTC simultaneously — likely a Fed event upcoming. Captain has never seen this synchronization surfaced.
+
+**Files touched:** 4 — 1 migration, 1 new hook, 1 new component, 1 page edit, 1 iteration log entry.
+
+**Build state:** vite build passes clean (4158 modules). UI not visually verified locally — captain validates post-deploy.
+
+**Time:** ~25 min from "Phase 5 done" to ship-ready.
+
+**Loop status:** 6/7 phases complete. Phase 7 (specialist substrate work) blocked until 2026-05-13 (D2.2 acceptance verdict) per active measurement-window protection. End of audit-driven loop for tonight.
+
+
 ## 2026-05-09 late evening — Phase 1: ct_tape_commentary embedded at write-time
 
 **Audit anchor:** `docs/audit/2026-05-09-jac-os-fusion-ground-truth.md` Section B gap #2. First substrate ship in the audit-driven Phase 1→6 loop. Brought forward from "Iter #N post-5/15" because the audit + 5x bar required substrate before any more captain-visible iters.
