@@ -805,3 +805,46 @@ AMZN's underlying data DOES exist (n=2, never moved) — the em-dash erased the 
 **5x bar:** previous emission state was 1/10 triggers (`hot_contract` only). Adding regime_transition expands proactive coverage onto the slow-signal layer that colors every other detector. The captain currently learns regime flips by reading `/heatmap` or by inference from cron Slack output — proactive Slack on a confidence-gated flip closes that gap.
 
 **PR / commit:** PR-3 in Emission Phase 2 stack. Captain validates post-Vercel deploy + Monday-RTH first-fire — no auto-merge.
+
+---
+
+## 2026-05-09 evening — Emission Layer Phase 2 PR-1: news_flow_causality trigger
+
+**What changed:** New migration `20260510120000_jac_emission_trigger_news_flow_causality.sql` registers `cotrader_news_flow_causality_v1` — the second proactive emission trigger (Phase 1 shipped `hot_contract` as the proof trigger). Adds SQL function `public.detect_news_flow_causality(p_params jsonb)` mirroring `detect_hot_contract` shape (`event_dedup_key, event_payload, severity, ticker_focus`) — returns rows from `ct_news_causality` where `moved=true` AND a premium threshold is crossed, scoped to the 10-name watchlist, deduped per `(news_id, ticker)` within a 60-min debounce. INSERT row into `jac_emission_triggers` registers the trigger; `jac-emission-detector` cron picks it up on next minute tick (no code change to detector — Tenet 25, adding a trigger is a database INSERT). Companion edit to `supabase/functions/jac-compose-emission/index.ts` adds the `cotrader_news_flow_causality_v1` template entry to the `TEMPLATES` registry — terse font-mono identity-bar shape (`📰 [news_source] · [TICKER] · flow $XXk in 15min`), severity-default model selection (haiku for signal, sonnet for alert).
+
+**Detection thresholds (per `detection_params`):**
+- `premium_signal_min=$250k`, `premium_alert_min=$500k` (flow_premium_15min tier)
+- `dp_signal_min=$500k`, `dp_alert_min=$1M` (dp_notional_15min tier)
+- `lookback_minutes=30`, `debounce_minutes=60`
+
+**24h cadence sample (Phase A pre-ship):** 9 `moved=true` rows in last 24h; premium range $109k → $2.24M. Slack budget well-bounded — same news headline can fire across multiple watchlist tickers (per-ticker dedup is intentional; that IS the cross-ticker signal).
+
+**Brief-author state-vs-intent fire (cascade #37 family) — TWO retargets surfaced in Phase A:**
+1. **Column name retarget:** brief asserted detection threshold uses `ct_news_causality.impact_score >= threshold`. Empirical column check: that column does NOT exist on `ct_news_causality`. Actual columns are `id, news_id, ticker, news_source, news_at, flow_hits_15min, flow_premium_15min, dp_hits_15min, dp_notional_15min, moved, analyzed_at` — no impact_score. Detection retargeted to `moved=true AND (flow_premium_15min ≥ signal OR dp_notional_15min ≥ dp_signal)`.
+2. **Headline-source-table retarget:** brief asserted headline lives on `ct_breaking_news`, joinable by `news_id`. Empirical FK check: `ct_news_causality.news_id REFERENCES ct_news_analyses(id)`, NOT `ct_breaking_news`. `ct_breaking_news` is a separate Tavily-sourced high-severity macro stream with no FK from `ct_news_causality`. Headline (`news_headline`), source (`news_source`), `impact`, and `significance` all live on `ct_news_analyses`. Detection function LEFT JOINs `ct_news_analyses` to surface headline into `event_payload` for compose-time use; LEFT JOIN keeps emissions firing even when headline is null (defensive).
+
+Both retargets caught at write-time per `docs/governance/engine-room-write-time-checklist.md` Check 1 (state-vs-intent) and Check 4 (substrate-target verification). No code shipped against the brief's wrong-substrate names.
+
+**Why:** Captain-locked Emission Layer Phase 2 — expand emission from 1/10 → 4/10 triggers. News-flow causality is the highest-value emission shape after `hot_contract` because it's the structural multiplier the End-State doc names: a news headline + measurable flow reaction within 15min is the storm-shape signal, not just the headline alone. Per Tenet 24 (no silos) — the news organ already feeds `buildClaudeContext`; the same substrate now becomes a proactive emission rather than a passive context dimension.
+
+**Discipline:**
+- Single-purpose: ONLY this trigger. No `/heatmap` edits, no `/alpha` edits, no other triggers, no detector-edge-function changes. Trigger 2 (first_daily_cross) deferred for substrate gap; Trigger 3 (regime_transition) ships in parallel as PR-3 (separate agent, separate migration timestamp).
+- Migration timestamp `20260510120000` verified vs `origin/main` pre-stage — latest on main was `20260510100000_drainer_skip_locked_class_kill.sql`. PR #100's CI workflow now catches collisions automatically.
+- Engine-room write-time checklist:
+  1. State-vs-intent — TWO retargets logged above (cascade #37 family).
+  2. No calendar anchors on forward work — uses "ships next minute tick" framing not "tonight."
+  3. Cross-catalog parity — Cowork-side back-end cadence tracks Phase 2 (PR-1 + PR-3 parallel); this PR is PR-1.
+  4. Substrate-target verification — `ct_news_causality.moved` + `flow_premium_15min` + `dp_notional_15min` columns verified live via REST; `ct_news_analyses.news_headline` join verified via PostgREST embedded select.
+  5. Page-multiplication — N/A (no UI surface; emission target is Slack only in Phase 1 budget; site-feed target deferred to Phase 3 per kernel comment).
+
+**Deploy:** migration auto-applies via Supabase push; `jac-compose-emission` redeploys to pick up the new template entry. `jac-emission-detector` cron requires no redeploy — it queries `jac_emission_triggers` at runtime.
+
+**Smoke-test plan (post-merge):**
+1. Verify the new row: `SELECT trigger_name, enabled, default_severity, composition_template FROM jac_emission_triggers WHERE trigger_name='news_flow_causality'` — expect 1 row, enabled=true.
+2. Wait for next `moved=true` ct_news_causality row in lookback window. `jac-emission-detector` (every minute RTH 13-20 UTC weekdays) picks it up.
+3. Verify Slack receives the emission with the font-mono headline shape.
+4. Inspect `jac_emissions` row for context_status=populated and source_organs populated.
+
+**Cross-catalog parity flag for captain:** No new methodology pattern surfaced (the substrate retarget instances are filed under the existing cascade #37 family — `brief-author-state-vs-intent`). Cross-catalog (Cowork-side) update remains the existing cascade #37 catalog entry; no new paste-ready text needed.
+
+**PR / commit:** Emission Phase 2 PR-1. Captain reviews — no auto-merge. Trigger 3 (regime_transition) ships as PR-3 in parallel.
