@@ -376,5 +376,36 @@ Header carries regime+state context so embeddings cluster by setup-shape, not ju
 
 **Next:** Phase 4 — wire semantic recall into `ClaudesRead` ("5 most-similar past reads + their outcomes"). The iter #2 hint at `ClaudesRead.tsx:154` becomes the actual surface, powered by Phase 1 substrate.
 
+---
+
+## 2026-05-09 late evening — Phase 4: Semantic recall in ClaudesRead
+
+**The iter #2 hint becomes reality.** The footer text at `src/components/alpha/ClaudesRead.tsx:154` ("iter #2 · semantic recall over historical reads (5 most-similar past reads + NextClose outcomes)") had been pending since iter #1. Phase 4 ships the actual surface, powered by Phase 1 substrate.
+
+**5x bar:** Captain reads "today is similar to 5/5 14:32 (0.87 cosine), 5/7 09:48 (0.85), ..." — pattern recall by setup-shape (tide + vix + flag-count + flow-count + commentary prose), not chronological scrolling. Surface doesn't exist anywhere on /tape, /tape-v2, /tape-reader. Structurally different.
+
+**What shipped:**
+- New hook `src/hooks/useSemanticTapeRecall.ts` — fetches latest tape commentary's embedding column, calls `match_ct_tape_commentary_by_similarity` RPC with that embedding (excludes the same-minute self-match), returns up to 5 most-similar prior rows. Refetches every 90s.
+- `src/components/alpha/ClaudesRead.tsx` — replaced the "iter #2 hint" footer with the actual surface. New section "Today most resembles · semantic recall" renders 5 match rows: short date+time | tide chip | vix | flag/flow counts | commentary snippet | similarity %. Empty state when threshold not met.
+
+**Match row layout:**
+```
+5/7 09:48 ET  flat   vix 17.2  f0/p0  Quiet pre-market, zero options flow...   87%
+5/5 14:32 ET  bull   vix 18.5  f3/p12 Tape pivoting bullish on NVDA call...   84%
+```
+
+**Substrate verification (from Phase 1 ship):** row 1178 (Sat pre-market quiet tape, 0 flow, flat tide) returned 5 most-similar prior reads ALL also quiet-tape pre-market reads (cosine 0.86-0.88). Cluster axis works; surface now reads it.
+
+**NextClose outcomes deferred:** the iter #2 hint mentioned "+ NextClose outcomes." That requires a join to ct_price_bars (compute SPY % change in 60min after the historical read). Deferred to iter #2 of Phase 4 — surface alone proves the substrate works; outcomes are an iteration on top.
+
+**Files touched:** 3 — 1 new hook, 1 component edit, 1 iteration log entry.
+
+**Build state:** vite build passes clean (4158 modules). No type errors. UI not visually verified locally — captain validates post-deploy.
+
+**Time:** ~15 min from "Phase 3 done" to ship-ready.
+
+**PR:** #89 (squash-merged 2026-05-09, commit TBD).
+
+**Next:** Phase 5 — News Causality Graph on /alpha. Renders `ct_news_causality` substrate as nodes/edges in one of the iter #4/#5 placeholder slots.
 
 
