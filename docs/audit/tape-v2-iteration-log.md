@@ -128,6 +128,61 @@ Captain first reaction: "good bones, needs work, alot of small different things.
 
 **Iteration sequence closeout:** This wraps the Flow Butterfly bundle. Captain validates iter-#1 + iter-#2 + iter-#3 cumulatively on `/tape-v2` and `/tape`. Next direction at captain's call — likely the Rank 1 detector + grader autonomous build (per PR #64 design pass) which builds the 30-day grading corpus that unlocks "inline hit-rate per cross" alpha.
 
+**PR / commit:** #77 (squash 692cb8a; merged 2026-05-08 20:45Z)
+
+---
+
+## 2026-05-08 — Best-alpha ship: `flow_butterfly` brain organ (Rank 2)
+
+**What changed:** Shipped the 11th brain organ at `supabase/functions/_shared/flowButterflyContext.ts`. Computes per-ticker butterfly state (cross_state, magnitude tertile, session phase, ticker role, NextClose-direction signal heuristic) plus watchlist-aggregate state (consensus, first-cross leader) and surfaces both into `buildClaudeContext`. Captain explicitly asked for "the best alpha I can get" — this is it.
+
+**Why this is "the best alpha":**
+- Pre-organ, specialists fired flags **blind to the captain's strongest indicator** — butterfly state existed only as a chart for human eyes.
+- The empirical pass at `docs/audits/flow-butterfly-empirical-design-pass.md` projects ~10–15pp hit-rate improvement on specialist flag quality once butterfly state composes into the brain payload.
+- Compounds permanently — every flag fired from now on benefits.
+- Doesn't require waiting for grading corpus. Uses the empirical thresholds + cells already locked in PR #64 § A.2-A.7.
+- Detector + grader (Rank 1, queued next) will ground the heuristic in measured truth over 30+ days; the organ structure is already correct so wiring corpus → confidence is a one-line update later.
+
+**Per-ticker fields:**
+- `cross_state` — pre_cross / bull_crossed / bear_crossed
+- `last_cross_at` + `cross_minutes_into_session` + `cross_phase` (open_hour / midday / mid_afternoon / close_hour per § A.4)
+- `cross_magnitude_tertile` (small / mid / large per § A.3 thresholds $164k / $510k)
+- `cross_magnitude_dollars`
+- `gap_now` (signed cum_all_call − cum_all_put at latest data point)
+- `cross_count_today` (noisy-day signal)
+- `ticker_role` — fast_leader / index_carrier / slow_follower / lone_wolf per § A.7 first-cross-timing pattern (NVDA/MSFT/TSLA = fast_leader; QQQ/SPY = index_carrier; AAPL/META/GOOGL/AMZN = slow_follower; IWM = lone_wolf)
+- `next_close_signal` — empirical heuristic per § A.3 + § A.4 cells:
+  - large bearish (any phase) → bullish high-confidence (78% reverse-hit)
+  - midday mid bullish → bullish high-confidence (72% hit)
+  - midday bearish (mid+large) → bullish mid-confidence (69% reverse-hit)
+  - bullish (other) → bullish mid-confidence (63% hit)
+  - bearish (other) → bullish low-confidence (63% reverse-hit, weak contrarian)
+  - small magnitude → null (noise)
+
+**Watchlist fields:**
+- `tickers_bullish` / `tickers_bearish` / `tickers_pre_cross` (counts across the 10)
+- `consensus` — strong_bull (≥7 bull) / strong_bear (≥7 bear) / mixed / no_signal
+- `cross_leader_today` — ticker with earliest cross today + direction (captures the QQQ-leads-Mag7 pattern empirically)
+
+**How it's wired:**
+- New file `supabase/functions/_shared/flowButterflyContext.ts` (~440 LOC). Implements full `ContextHelper<T>` contract per `_shared/contextHelper.ts`. Defensive-empty on error; never throws. organMetadata populated.
+- `HelperName` union extended with `'flow_butterfly'` in `_shared/contextHelper.ts`.
+- Wired into BOTH helper arrays in `_shared/claudeReadSurface.ts` (slim + standard buildClaudeContext variants) so every consumer that calls the orchestrator picks it up.
+- `audienceFilter: ['cotrader', 'analyst', 'agent_internal']` — paper_claude stays isolated from operational tape signals per the firewall contract.
+- Source: `ct_net_premium_expiry_split(p_ticker, p_since)` RPC (same source the FlowPulseChart UI reads from). 10 tickers in parallel via `Promise.all`. ~60s freshness covers one ingester tick.
+
+**Files touched:**
+- `supabase/functions/_shared/flowButterflyContext.ts` — NEW (440 LOC)
+- `supabase/functions/_shared/contextHelper.ts` — `HelperName` += `'flow_butterfly'`
+- `supabase/functions/_shared/claudeReadSurface.ts` — import + 2 helpers-array entries
+
+**Deferred:**
+- Rank 1 detector + grader cron (next ship) — captures every cross going forward into `ct_butterfly_cross_events`, grades outcomes at 5/15/30/60min/EOD/NextClose. Once 30+ days of corpus exist, the organ's `next_close_signal.confidence` switches from static empirical-pass thresholds to live rolling hit-rate.
+- Warden invariants for the new organ data quality (cross_events_today_rth, hit_rate_drift, rpc_responsive). Pair-ship with Rank 1.
+- 5min-delta gap, regime_hold_minutes, full cumsum_now snapshot — defer per "v1 captures highest-leverage fields only."
+
+**Validation:** specialists pick up new organ on next read (after CI redeploys all `_shared/`-importing functions). Captain sees flag quality improvement empirically over the next several RTH days. No UI surface for this ship — it's autonomous-mode infrastructure (Tenet 26). Captain's primary surface (/tape-v2) doesn't change visually.
+
 **PR / commit:** TBD on push
 
 ---
