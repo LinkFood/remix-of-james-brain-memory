@@ -94,16 +94,28 @@ If a check fires AFTER an artifact has landed → log as a discipline fire in th
 
 **The class to kill:** Cowork (or any other authoring surface) writes a paste-ready brief from a stale mental-model region. Captain pastes it. Engine-room executes the brief's Phase B against false premises. Manual audit later reconciles. Class repeats.
 
-**Discipline:** before any Phase B execution on a state-asserting brief, run ground-truth audit as Phase A step 1, regardless of how confident the brief sounds:
+**Discipline:** before any Phase B execution on a state-asserting OR architecture-decision brief, run ground-truth audit as Phase A step 1, regardless of how confident the brief sounds.
+
+**For state-asserting briefs (per-PR claims — open/merged/closed, decision pending, count, branch existence):**
 
 1. Open `/Users/jameschellis/Documents/cowork-cotrader/STATE_OF_BUILD.md` and read the freshness header.
 2. If older than 4 hours OR its `origin/main` SHA differs from current → run `scripts/write_state_of_build.sh` to regen.
 3. Cross-check every state assertion in the brief against the regenerated state file.
 4. If drift surfaces → report drift findings to captain BEFORE executing Phase B. Captain decides whether to proceed, re-scope, or hold.
 
-This is the second layer of the cross-surface drift prevention. The state file (Cowork's read surface) closes the gap between authoring sessions; this check closes the residual gap when a brief slips through stale anyway.
+**For architecture-decision briefs (consolidation, scope-pick, retire-surface, organ-lifecycle, table-orphan):**
 
-**Catalog reference:** `docs/methodology-patterns.md` `## state-asserting-briefs-need-cross-surface-snapshot-plus-receive-time-audit`. Sibling to `## brief-author-premise-error` and `## disciplines-need-write-time-enforcement-not-just-post-hoc-audit` — same family.
+1. Open `/Users/jameschellis/Documents/cowork-cotrader/ATLAS_OF_BUILD.md` and read the freshness header.
+2. If older than 7 days OR a referenced section (routes / organs / debt) doesn't match current empirical state via spot-check → regen the atlas before proceeding.
+3. Cross-check the brief's enumerations (e.g., "3 tape-class surfaces") against atlas Section 1 / 2 / 4. Surface drift on any enumeration the brief asserts.
+4. If drift surfaces → report findings to captain BEFORE executing Phase B.
+
+This is the second layer of cross-surface drift prevention. State file + atlas (Cowork's read surfaces) close the gap between authoring sessions; this check closes the residual gap when a brief slips through stale anyway.
+
+**Catalog references:**
+- `docs/methodology-patterns.md` `## state-asserting-briefs-need-cross-surface-snapshot-plus-receive-time-audit` — per-PR sync layer counterpart.
+- `docs/methodology-patterns.md` `## system-atlas-as-orientation-layer-distinct-from-per-pr-state-layer` — per-system orientation layer counterpart.
+- Sibling family: `## brief-author-premise-error`, `## disciplines-need-write-time-enforcement-not-just-post-hoc-audit`.
 
 ## Post-ship-batch — regen STATE_OF_BUILD.md
 
