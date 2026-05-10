@@ -25,6 +25,8 @@ Does the artifact ASSERT current state, or assert design INTENT?
 
 If the artifact contains state assertions → either verify each via tool (read PR diff, query DB, grep) OR rephrase as intent ("ship X" not "PR #N already targets X") + Phase A discovery.
 
+**Canonical state-verification surface:** `/Users/jameschellis/Documents/cowork-cotrader/STATE_OF_BUILD.md`. Regenerable via `scripts/write_state_of_build.sh`. If the file is older than 4 hours OR its commit SHA differs from current `origin/main`, regen first, then verify against the fresh file. See `docs/governance/state-of-build-schema.md` for the full design.
+
 **Engine-room write surfaces this catches:** PR descriptions, ship reports, pickup files, methodology entries, runbook updates.
 
 **Catalog reference:** `docs/methodology-patterns.md` `## brief-author-premise-error` (and the cascade #37 instance family Cowork-side at `/Users/jameschellis/Documents/cowork-cotrader/memory/discipline-brief-author-intent-over-state.md`). Sub-classes include `brief-asserts-merged-when-only-on-branch`, `brief-asserts-PR-substrate-target-incorrectly`.
@@ -85,6 +87,39 @@ If the artifact proposes a NEW surface (page, route, dedicated dashboard):
 If a check fires DURING write-time and gets fixed before the artifact lands → that's the rule working. Log nothing; the discipline did its job.
 
 If a check fires AFTER an artifact has landed → log as a discipline fire in the appropriate catalog (`docs/methodology-patterns.md` instance entry under the relevant pattern). Then refactor the artifact.
+
+## Phase A audit step 1 — receive-time check on state-asserting briefs
+
+**When this fires:** any captain brief or paste-from-Cowork brief that asserts per-item state — PR open/merged/closed, decision shipped/pending, count, threshold value, table-row count, branch existence.
+
+**The class to kill:** Cowork (or any other authoring surface) writes a paste-ready brief from a stale mental-model region. Captain pastes it. Engine-room executes the brief's Phase B against false premises. Manual audit later reconciles. Class repeats.
+
+**Discipline:** before any Phase B execution on a state-asserting brief, run ground-truth audit as Phase A step 1, regardless of how confident the brief sounds:
+
+1. Open `/Users/jameschellis/Documents/cowork-cotrader/STATE_OF_BUILD.md` and read the freshness header.
+2. If older than 4 hours OR its `origin/main` SHA differs from current → run `scripts/write_state_of_build.sh` to regen.
+3. Cross-check every state assertion in the brief against the regenerated state file.
+4. If drift surfaces → report drift findings to captain BEFORE executing Phase B. Captain decides whether to proceed, re-scope, or hold.
+
+This is the second layer of the cross-surface drift prevention. The state file (Cowork's read surface) closes the gap between authoring sessions; this check closes the residual gap when a brief slips through stale anyway.
+
+**Catalog reference:** `docs/methodology-patterns.md` `## state-asserting-briefs-need-cross-surface-snapshot-plus-receive-time-audit`. Sibling to `## brief-author-premise-error` and `## disciplines-need-write-time-enforcement-not-just-post-hoc-audit` — same family.
+
+## Post-ship-batch — regen STATE_OF_BUILD.md
+
+**When this fires:** after merging any cluster of PRs (a "ship batch" — typically 2+ PRs landed in proximity, or any single PR that touches user-facing state, schema, or measurement-window posture).
+
+**Discipline:** run `scripts/write_state_of_build.sh` from the repo root before declaring the ship-batch complete. The script regenerates `/Users/jameschellis/Documents/cowork-cotrader/STATE_OF_BUILD.md` so Cowork (or any future authoring session) reads fresh state on the next brief draft.
+
+This is the prevention-layer counterpart to the receive-time audit above. If post-ship regen fires reliably, the receive-time audit becomes the residual safety net rather than the primary catch.
+
+**Trigger surfaces (any of these = run the regen):**
+
+- Final PR in a multi-PR phase chain merges.
+- A captain decision lands (page consolidation pick, deferred-list item closes, etc.).
+- A measurement window opens or closes (D2.2, D3, future windows).
+- A new in-flight branch gets pushed or an old one gets cleaned up.
+- Captain explicitly asks for state-of-build report.
 
 ## Maintenance
 
