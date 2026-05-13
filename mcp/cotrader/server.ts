@@ -319,7 +319,7 @@ server.registerTool(
       'from prior session reflections, written by the distill-principles ' +
       'cron. Filters to active principles (retired_at IS NULL). Use when ' +
       "evaluating whether a current setup pattern matches a previously- " +
-      "codified failure mode (e.g., 'do any of my principles flag this ' +
+      "codified failure mode (e.g., 'do any of my principles flag this " +
       "GOOGL conviction idea?'). " +
       'EXPLICIT ABSENCE: returns status="no_principles_yet" with empty ' +
       'principles[] when no active rows exist — does NOT fabricate. ' +
