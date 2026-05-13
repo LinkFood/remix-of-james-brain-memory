@@ -1470,6 +1470,53 @@ The two layers compound: Layer 1 closes the cross-process mental-model gap; Laye
 
 ---
 
+## system-atlas-as-orientation-layer-distinct-from-per-pr-state-layer (2026-05-09 evening, sibling pattern to state-asserting-briefs)
+
+**Pattern:** A single drift-prevention surface insufficient to cover both per-PR moving inventory ("what's open, what merged, what's blocked") AND per-system shape ("what routes exist, what organs are wired, what debt is structural"). The two layers fail at different cadences and fail in different shapes. Trying to fold both into one file forces a regen-cadence tradeoff: refresh fast enough for per-PR changes and the per-system sections churn unnecessarily; refresh slow enough for per-system stability and the per-PR sections go stale. **Two surfaces compounding** at different cadences = full coverage; no overlap.
+
+**Empirical motivation — 2026-05-09 evening, two-tier drift-fix completing:**
+
+`STATE_OF_BUILD.md` (shipped earlier 5/9 evening, sibling entry above) covers per-PR sync drift. The same Cowork session that produced today's PR-list drift ALSO produced an architectural-decision drift: `cowork-cotrader/scope/2026-05-09-page-consolidation-paths.md` enumerated 3 tape-class surfaces (`/tape`, `/tape-v2`, `/alpha`) but missed `/butterflies` (4th — confirmed by atlas Phase A) and `/tape-reader` (5th candidate). Captain caught manually; engine-room verified empirically; the consolidation memo blocks v2-nail-down brief until revised.
+
+Same drift-class root cause as the state-file fire (author writing from stale mental-model region), different surface: per-system shape rather than per-PR moving inventory. The state file by design does NOT cover routes / organs / debt / drill-paths — those are stable enough that high-frequency regen would be wasteful, but they DO drift over multi-week build pushes. Captain's 14-day arc 2026-04-27 → 2026-05-09 added 5 new routes, 3 new brain organs, 6 new warden-invariant categories; mental-model accuracy at architectural-decision time empirically can't track that velocity.
+
+**Structural prevention — second compounding surface (shipped 2026-05-09 evening):**
+
+`/Users/jameschellis/Documents/cowork-cotrader/ATLAS_OF_BUILD.md` — engine-room regenerates on-demand or after major arc closeouts. 8 sections: routes · brain organs · warden invariants · substrate tables · feature clusters · in-flight/deferred · known debt · drill-down gaps. Plus appended Slate Cleaning (Phase C) and composition rules (Phase D). v1 manually maintained; writer script ships when grain stabilizes.
+
+The state file + atlas compose without overlap. State file = high-frequency, narrow scope; atlas = low-frequency, broad scope. Atlas Section 6 (in-flight/deferred) explicitly defers to state file as authoritative for moving inventory; state file does not duplicate atlas content.
+
+**Discipline at the engine-room write-time checklist:**
+
+Phase A audit step 1 extended to handle two brief shapes:
+- **State-asserting briefs** → check `STATE_OF_BUILD.md` (existing rule from sibling entry).
+- **Architecture-decision briefs** (consolidation, scope-pick, retire-surface, organ-lifecycle, table-orphan) → check `ATLAS_OF_BUILD.md` (new rule).
+
+If either surface is stale per its freshness rule, regen before Phase B execution. If drift surfaces, report findings to captain BEFORE executing.
+
+**Sub-pattern — orientation-surface cadence-coupling.** When a single orientation surface has to cover changes that happen at fundamentally different cadences (per-commit vs per-arc), a regen-frequency choice forces drift in one direction or the other. The structural fix is to split by cadence — each surface sized for its own update tempo. Same shape as the substrate-vs-surface separation in the synthesis-layer architecture (different tempos = different surfaces); applied here at the orientation-artifact layer.
+
+**Drift findings surfaced by atlas Phase A itself** (atlas regen catches more than just consolidation gaps):
+- `ct_specialist_memory` is LIVE — direct grep shows ct-flag-grader writes + specialistRecallContext.ts reads. Cascade #43 codification ("dead-on-arrival") was either incorrect at codification time or has been superseded. Recommend instance-update entry under cascade #43.
+- `ct_debates` is LIVE — initial agent flag as orphan disproven; ct-chat + ct-debate-outcome-scorer write. Not orphan.
+- `flow_butterfly` organ is consumed by 7 src/ files (Butterflies, TapeV2, command/MiniFlowButterfly, command/FlowPulse, command/FlowPulseChart, tape-v2/FlowButterflySection, lib/flowButterflyCrosses). Initial Explore agent grep found zero — overly narrow grep pattern. Atlas regen surfaced the gap; corrected before publication.
+
+These three findings illustrate the atlas's value beyond consolidation: it forces empirical re-verification of substrate claims that may have rotted since their last codification.
+
+**Diagnostic question for future class fires of this shape:** *"Does this orientation artifact try to track changes at fundamentally different cadences? If so, what's the natural split — and which split lets each surface regen at its own rhythm without forcing tradeoffs on the other?"*
+
+**Linked artifacts:**
+- `/Users/jameschellis/Documents/cowork-cotrader/ATLAS_OF_BUILD.md` (the canonical atlas)
+- `docs/governance/atlas-of-build-schema.md` (schema + protocol)
+- `docs/governance/state-of-build-schema.md` (sibling per-PR sync surface)
+- `docs/governance/engine-room-write-time-checklist.md` (Phase A audit step 1 — both surfaces)
+- Cross-catalog parity entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` (Cowork-side codification — drafted by engine-room, applied by Cowork-Claude)
+- Sibling: `## state-asserting-briefs-need-cross-surface-snapshot-plus-receive-time-audit` (above in this file — per-PR sync layer counterpart)
+- Sibling family: `## page-multiplication-violates-no-silos-at-UX-layer` (the empirical surface that motivated atlas — page-multiplication debt is what atlas Section 7 surfaces)
+- Sibling family: `## disciplines-need-write-time-enforcement-not-just-post-hoc-audit` (parent class)
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
