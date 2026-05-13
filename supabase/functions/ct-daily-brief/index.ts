@@ -50,6 +50,7 @@ import {
 } from '../_shared/claudeReadSurface.ts';
 import { ctSlackPushDirect } from '../_shared/ctSlack.ts';
 import { now as clockNow, dayNameInTz, relativeDayTag, dateInTz } from '../_shared/clock.ts';
+import { lastMarketClose } from '../_shared/marketClock.ts';
 import { getTemporalContext } from '../_shared/temporalContext.ts';
 import { validateTemporalCoherence } from '../_shared/temporalValidator.ts';
 import { getFlowHeatmapContext } from '../_shared/flowHeatmapContext.ts';
@@ -271,6 +272,86 @@ async function findPriorBriefToday(
   return (data?.[0] as { id: string; brief_version: number; urgency: string } | undefined) ?? null;
 }
 
+/** Prior-trading-day canonical brief summary for daily continuity.
+ *  - "Prior trading day" via marketClock.lastMarketClose — skips weekends + holidays.
+ *  - Canonical = max(brief_version) per session_date — mirrors Ship 2's UI rule
+ *    and Ship 5's MCP rule, so all three surfaces (page, MCP, composer) read
+ *    the same canonical brief.
+ *  - Trimmed payload: only the fields today's composer needs for continuity-vs-pivot
+ *    framing. Full body, breaking_events, per_ticker, idea bodies excluded —
+ *    context bloat without payoff at the brief layer. ideas_count exposed
+ *    instead of the bodies.
+ *  - accuracy_score + accuracy_notes populated by Ship 6 bridge (Path A).
+ *    NULL when no EOD report has fired yet for that day. */
+interface PriorBriefSummary {
+  session_date: string;
+  brief_version: number | null;
+  triggered_by: string | null;
+  urgency: string | null;
+  macro_regime: string | null;
+  convergent_view: string | null;
+  watchlist_focus: string[];
+  skip_today: string[];
+  ideas_count: number;
+  accuracy_score: number | null;
+  accuracy_notes: string | null;
+}
+
+async function pullPriorBrief(
+  supabase: SupabaseClient,
+  sessionDate: string,
+): Promise<PriorBriefSummary | null> {
+  // "Prior trading day" = the ET date of the most recent market close,
+  // excluding today's session if it's already past 16:00 ET (defensive — the
+  // morning brief fires at ~11:00 UTC = ~7:00 ET, so this branch shouldn't
+  // hit, but we guard anyway).
+  const lastClose = lastMarketClose(new Date());
+  const priorDate = dateInTz(lastClose, 'America/New_York');
+  if (priorDate === sessionDate) {
+    // Edge case: shouldn't happen at 7 AM ET fire, but if invoked late in
+    // the day we'd self-reference. Return null rather than today's brief.
+    return null;
+  }
+
+  const { data, error } = await supabase
+    .from('ct_daily_briefs')
+    .select(
+      'session_date, brief_version, triggered_by, urgency, macro_regime, convergent_view, watchlist_focus, skip_today, high_conviction_ideas, accuracy_score, accuracy_notes',
+    )
+    .eq('session_date', priorDate)
+    .order('brief_version', { ascending: false })
+    .limit(1);
+
+  if (error || !data || data.length === 0) return null;
+  const row = data[0] as Record<string, unknown>;
+
+  // Trim convergent_view to ~400 chars — captain framing usually fits, but
+  // some Sonnet outputs go long. Truncate at sentence boundary if possible.
+  const rawCv = (row.convergent_view as string | null) ?? null;
+  let cv: string | null = rawCv;
+  if (rawCv && rawCv.length > 400) {
+    const cut = rawCv.slice(0, 400);
+    const lastDot = cut.lastIndexOf('. ');
+    cv = lastDot > 200 ? cut.slice(0, lastDot + 1) : cut + '...';
+  }
+
+  const ideas = Array.isArray(row.high_conviction_ideas) ? row.high_conviction_ideas : [];
+
+  return {
+    session_date: row.session_date as string,
+    brief_version: (row.brief_version as number) ?? null,
+    triggered_by: (row.triggered_by as string | null) ?? null,
+    urgency: (row.urgency as string | null) ?? null,
+    macro_regime: (row.macro_regime as string | null) ?? null,
+    convergent_view: cv,
+    watchlist_focus: Array.isArray(row.watchlist_focus) ? (row.watchlist_focus as string[]) : [],
+    skip_today: Array.isArray(row.skip_today) ? (row.skip_today as string[]) : [],
+    ideas_count: ideas.length,
+    accuracy_score: (row.accuracy_score as number | null) ?? null,
+    accuracy_notes: (row.accuracy_notes as string | null) ?? null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Handler
 // ---------------------------------------------------------------------------
@@ -320,7 +401,7 @@ serve(async (req) => {
     const watchlist = await getWatchlist(supabase);
     const ttlHours = Number(await getConfig<number>('claude_brief_ttl_hours', 8));
 
-    const [ctx, breakingNews, upcomingEvents, snapshots, recentClosed, flowHeatmapContext] = await Promise.all([
+    const [ctx, breakingNews, upcomingEvents, snapshots, recentClosed, flowHeatmapContext, priorBrief] = await Promise.all([
       buildClaudeContext(supabase, {
         audience: 'cotrader',
         consumerName: 'ct-daily-brief',
@@ -335,6 +416,7 @@ serve(async (req) => {
       pullTickerSnapshots(supabase, watchlist),
       pullYesterdayClosedTrades(supabase),
       getFlowHeatmapContext(supabase, watchlist, { consumerName: 'ct-daily-brief' }),
+      pullPriorBrief(supabase, sessionDate),
     ]);
 
     // Temporal anchor — tool-use JSON consumer, so use the SHORT variant.
@@ -472,6 +554,8 @@ serve(async (req) => {
       triggeredBy !== 'scheduled'
         ? `  - THIS IS A ${urgency.toUpperCase()} RE-BRIEF triggered by ${triggeredBy}${reason ? ` — ${reason}` : ''}. Weight the new information heavily; re-score any ideas that are now stale.`
         : '  - This is the scheduled morning brief.',
+      '',
+      'CONTINUITY: `prior_brief_summary` carries yesterday\'s canonical brief (prior trading day; skips weekends + holidays). Reference it when today\'s frame compounds or contradicts. If yesterday scored well (`accuracy_score >= 0.7`), lean toward continuity in regime + tilt unless the tape says otherwise — restate the thesis in your own framing rather than starting from scratch. If yesterday scored poorly (`accuracy_score <= 0.4`), signal the pivot explicitly in convergent_view (e.g. "yesterday\'s X call got invalidated; pivoting to Y"). If `accuracy_score` is null (no EOD scorecard yet), treat the prior brief as context-only — no continuity-vs-pivot framing pressure. Do NOT force a yesterday-reference when today\'s setup is structurally unrelated (different regime, different catalysts, different positioning).',
     ].join('\n');
 
     // Trim the payload to keep context bounded — Claude doesn't need everything.
@@ -517,6 +601,11 @@ serve(async (req) => {
       },
       supersedes_id: supersedesId,
       prior_brief_version: briefVersion - 1,
+      // Daily continuity — yesterday's canonical brief summary (prior trading
+      // day; skips weekends + holidays). Lean toward continuity if accuracy_score
+      // was high; signal the pivot if it was low. NULL when no prior brief
+      // exists or EOD scorecard hasn't bridged yet (today's first-brief case).
+      prior_brief_summary: priorBrief,
     };
 
     // ------- CLAUDE CALL -------
