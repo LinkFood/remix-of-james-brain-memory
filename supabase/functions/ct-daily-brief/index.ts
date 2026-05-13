@@ -343,20 +343,26 @@ serve(async (req) => {
     // See _shared/temporalContext.ts.
     const tctx = getTemporalContext();
 
-    // Figure out versioning + urgency before calling Claude.
-    let supersedesId: string | null = supersedesIdHint ?? null;
-    let briefVersion = 1;
+    // Figure out urgency before calling Claude.
     let urgency: 'normal' | 'elevated' | 'high' | 'acute' = 'normal';
-
     if (triggeredBy === 'breaking_news' || triggeredBy === 'regime_shift' || supersedesIdHint) {
-      const prior = await findPriorBriefToday(supabase, sessionDate);
-      if (prior) {
-        supersedesId = supersedesId ?? prior.id;
-        briefVersion = prior.brief_version + 1;
-      }
-      // Severity from recent breaking news drives urgency when relevant.
       const maxSev = breakingNews.reduce((m: number, r: { severity?: number }) => Math.max(m, Number(r.severity) || 0), 0);
       urgency = maxSev >= 5 ? 'acute' : 'high';
+    }
+
+    // Provisional brief_version + supersedes_id for the Claude context snapshot.
+    // The PERSISTED values come from ct_insert_daily_brief_locked under an
+    // advisory lock — the lock and atomic SELECT-MAX-then-INSERT live in the
+    // RPC so they can fence a same-second race that supabase-js can't fence
+    // across separate statements. If a concurrent fire races between this
+    // provisional read and the locked INSERT, the model sees a slightly stale
+    // prior_brief_version; the persisted chain stays correct.
+    let supersedesId: string | null = supersedesIdHint ?? null;
+    let briefVersion = 1;
+    const provisionalPrior = await findPriorBriefToday(supabase, sessionDate);
+    if (provisionalPrior) {
+      briefVersion = provisionalPrior.brief_version + 1;
+      if (supersedesId === null) supersedesId = provisionalPrior.id;
     }
 
     // ------- PRE-RESOLVE EVENT DATES TO RELATIVE-TIME TAGS -------
@@ -609,32 +615,36 @@ serve(async (req) => {
     };
 
     // ------- PERSIST -------
+    // Single RPC fences the race: pg_advisory_xact_lock on session_date,
+    // SELECT MAX(brief_version), INSERT — all in one transaction. UNIQUE
+    // (session_date, brief_version) is the DB-layer backstop.
     const expiresAt = new Date(Date.now() + ttlHours * 3600 * 1000).toISOString();
-    const { data: inserted, error: insertErr } = await supabase
-      .from('ct_daily_briefs')
-      .insert({
-        session_date: sessionDate,
-        brief_version: briefVersion,
-        triggered_by: triggeredBy,
-        supersedes_id: supersedesId,
-        urgency,
-        macro_narrative: payload.macro_narrative,
-        macro_regime: payload.macro_regime ?? null,
-        breaking_events: payload.breaking_events ?? [],
-        overnight_action: payload.overnight_action ?? null,
-        recent_prints: payload.recent_prints ?? [],
-        per_ticker: perTicker,
-        convergent_view: payload.convergent_view,
-        high_conviction_ideas: ideas,
-        watchlist_focus: payload.watchlist_focus ?? [],
-        skip_today: payload.skip_today ?? [],
-        generated_by_model: 'sonnet',
-        ttl_hours: ttlHours,
-        expires_at: expiresAt,
-      })
-      .select('id, brief_version, urgency, session_date, triggered_by')
-      .maybeSingle();
+    const { data: insertedRows, error: insertErr } = await supabase.rpc(
+      'ct_insert_daily_brief_locked',
+      {
+        p_session_date: sessionDate,
+        p_triggered_by: triggeredBy,
+        p_urgency: urgency,
+        p_supersedes_id_hint: supersedesIdHint ?? null,
+        p_payload: {
+          macro_narrative: payload.macro_narrative,
+          macro_regime: payload.macro_regime ?? null,
+          breaking_events: payload.breaking_events ?? [],
+          overnight_action: payload.overnight_action ?? null,
+          recent_prints: payload.recent_prints ?? [],
+          per_ticker: perTicker,
+          convergent_view: payload.convergent_view,
+          high_conviction_ideas: ideas,
+          watchlist_focus: payload.watchlist_focus ?? [],
+          skip_today: payload.skip_today ?? [],
+          generated_by_model: 'sonnet',
+          ttl_hours: ttlHours,
+          expires_at: expiresAt,
+        },
+      },
+    );
 
+    const inserted = Array.isArray(insertedRows) ? insertedRows[0] : insertedRows;
     if (insertErr || !inserted) {
       console.error('[daily-brief] insert failed:', insertErr?.message);
       return new Response(JSON.stringify({ error: 'insert_failed', detail: insertErr?.message }), {
@@ -642,6 +652,9 @@ serve(async (req) => {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
+    // Persisted values may differ from provisional if a concurrent fire raced.
+    briefVersion = inserted.brief_version;
+    supersedesId = inserted.supersedes_id ?? null;
 
     // Claude usage log
     const tokensIn = response.usage?.input_tokens ?? 0;

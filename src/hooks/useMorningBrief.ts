@@ -2,9 +2,13 @@
  * useMorningBrief — TanStack Query hook over ct_daily_briefs.
  *
  * Reads the daily brief rows produced by the ct-daily-brief cron at
- * 7 AM ET. One row per session_date (UNIQUE). Read-only — UI mode per
- * the three-mode rule (tenet 26): the page is a window into state,
- * never a trigger.
+ * 7 AM ET plus any breaking_news / regime_shift / manual rebriefs.
+ * Read-only — UI mode per the three-mode rule (tenet 26).
+ *
+ * Multiple rows per session_date possible (v1 + rebrief v2/v3/...). This hook
+ * returns ONE CANONICAL ROW per session_date (the max brief_version) with the
+ * older rows attached as `superseded_versions[]` so the page can show a
+ * single card per day with an "earlier reads" disclosure.
  *
  * Date range filter mirrors /flags: Today / 7d / 30d / All.
  *  - 'today'  → session_date = today (NY-tz)
@@ -13,7 +17,7 @@
  *  - 'all'    → no lower bound (last 365 still capped server-side)
  *
  * Refetches every 5 min so the 7 AM ET cron landing surfaces without a
- * page reload. Sorted DESC so today (or latest) is index 0.
+ * page reload. Canonical rows sorted by session_date DESC so today is index 0.
  */
 
 import { useQuery } from '@tanstack/react-query';
@@ -78,6 +82,9 @@ export interface DailyBriefRow {
   ttl_hours: number | null;
   expires_at: string | null;
   created_at: string | null;
+  /** Older versions superseded by this canonical row, sorted by
+   *  brief_version DESC. Empty on rows with no prior versions. */
+  superseded_versions?: DailyBriefRow[];
 }
 
 /** NY-tz YYYY-MM-DD for "today" — aligns with the trader's calendar day. */
@@ -128,7 +135,26 @@ export function useMorningBrief(range: BriefDateRange = 'today') {
 
       const { data, error } = await query;
       if (error) throw error;
-      return (data ?? []) as DailyBriefRow[];
+
+      // Group raw rows by session_date → canonical = max brief_version per
+      // group, older rows attached as superseded_versions. Mirrors the
+      // ct_insert_daily_brief_locked chain semantics (always one canonical row
+      // per day, even when concurrent fires race past the DB UNIQUE guard).
+      const rows = (data ?? []) as DailyBriefRow[];
+      const groups = new Map<string, DailyBriefRow[]>();
+      for (const r of rows) {
+        const bucket = groups.get(r.session_date) ?? [];
+        bucket.push(r);
+        groups.set(r.session_date, bucket);
+      }
+      const canonical: DailyBriefRow[] = [];
+      for (const [, bucket] of groups) {
+        bucket.sort((a, b) => (b.brief_version ?? 0) - (a.brief_version ?? 0));
+        const [head, ...rest] = bucket;
+        canonical.push({ ...head, superseded_versions: rest });
+      }
+      canonical.sort((a, b) => b.session_date.localeCompare(a.session_date));
+      return canonical;
     },
   });
 }

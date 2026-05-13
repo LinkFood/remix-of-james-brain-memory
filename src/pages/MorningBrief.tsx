@@ -300,8 +300,19 @@ function BreakingEventRow({ ev }: { ev: BreakingEvent }) {
 
 // ---------- per-day section ----------
 
+/** Mirrors the Slack titleNoun map at ct-daily-brief/index.ts:728-740 so the
+ *  card header tells the same story as the Slack push. */
+function briefTitleNoun(triggeredBy: string | null, briefVersion: number): string {
+  if (briefVersion === 1 && triggeredBy === 'scheduled') return 'Morning Brief';
+  if (triggeredBy === 'breaking_news') return 'Rebrief — Breaking News';
+  if (triggeredBy === 'regime_shift') return 'Rebrief — Regime Shift';
+  if (briefVersion > 1) return 'Rebrief';
+  return 'Brief';
+}
+
 function BriefEntry({ row, defaultOpen }: { row: DailyBriefRow; defaultOpen: boolean }) {
   const [expanded, setExpanded] = useState(defaultOpen);
+  const [showSuperseded, setShowSuperseded] = useState(false);
 
   const breaking = Array.isArray(row.breaking_events) ? row.breaking_events : [];
   const prints = Array.isArray(row.recent_prints) ? row.recent_prints : [];
@@ -309,6 +320,8 @@ function BriefEntry({ row, defaultOpen }: { row: DailyBriefRow; defaultOpen: boo
   const ideas = Array.isArray(row.high_conviction_ideas) ? row.high_conviction_ideas : [];
   const watchlist = Array.isArray(row.watchlist_focus) ? row.watchlist_focus : [];
   const skip = Array.isArray(row.skip_today) ? row.skip_today : [];
+  const superseded = Array.isArray(row.superseded_versions) ? row.superseded_versions : [];
+  const titleNoun = briefTitleNoun(row.triggered_by, row.brief_version);
 
   return (
     <Card className="p-4 space-y-4">
@@ -318,7 +331,7 @@ function BriefEntry({ row, defaultOpen }: { row: DailyBriefRow; defaultOpen: boo
           <div className="flex items-center gap-2 flex-wrap">
             <Calendar className="w-4 h-4 text-muted-foreground" />
             <h2 className="text-base font-semibold tracking-tight">
-              {formatDateET(row.session_date)}
+              {titleNoun} · {formatDateET(row.session_date)}
             </h2>
             {row.macro_regime && (
               <span className="text-[10px] uppercase tracking-wider font-medium px-2 py-0.5 rounded-full border border-primary/40 bg-primary/10 text-primary">
@@ -537,6 +550,58 @@ function BriefEntry({ row, defaultOpen }: { row: DailyBriefRow; defaultOpen: boo
               id: <span className="font-mono">{row.id.slice(0, 8)}</span>
             </span>
           </div>
+
+          {/* Earlier reads — superseded versions for this session_date */}
+          {superseded.length > 0 && (
+            <div className="border-t border-border/40 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowSuperseded((s) => !s)}
+                className="text-[11px] text-muted-foreground hover:text-foreground inline-flex items-center gap-1"
+              >
+                {showSuperseded ? '▾' : '▸'} Earlier reads ({superseded.length})
+              </button>
+              {showSuperseded && (
+                <div className="mt-2 space-y-2 opacity-80">
+                  {superseded.map((prior) => (
+                    <div
+                      key={prior.id}
+                      className="rounded border border-border/40 bg-background/30 p-2"
+                    >
+                      <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                        <span className="font-semibold">
+                          {briefTitleNoun(prior.triggered_by, prior.brief_version)}
+                        </span>
+                        <span className="font-mono text-muted-foreground">
+                          v{prior.brief_version}
+                        </span>
+                        {prior.triggered_by && (
+                          <span className="font-mono text-muted-foreground/70">
+                            · {prior.triggered_by}
+                          </span>
+                        )}
+                        {prior.urgency && prior.urgency !== 'normal' && (
+                          <span className="font-mono text-amber-400/80">
+                            · {prior.urgency}
+                          </span>
+                        )}
+                        {prior.created_at && (
+                          <span className="font-mono text-muted-foreground/70 ml-auto">
+                            {formatGenAt(prior.created_at)}
+                          </span>
+                        )}
+                      </div>
+                      {prior.macro_narrative && (
+                        <p className="mt-1 text-[11px] text-foreground/70 line-clamp-3 whitespace-pre-wrap">
+                          {prior.macro_narrative}
+                        </p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </Card>
