@@ -1427,6 +1427,49 @@ The four patterns above (`analysis-pair-selection-contamination-by-temporal-adja
 
 ---
 
+## state-asserting-briefs-need-cross-surface-snapshot-plus-receive-time-audit (2026-05-09 evening, third instance of the brief-author-state class)
+
+**Pattern:** When an authoring surface (Cowork, captain's manual notes, future agents) writes a paste-ready brief asserting per-item state — open PRs, merged PRs, decisions pending or shipped, table counts, branch existence, threshold values — the brief's accuracy depends on the author's mental-model freshness at write time. Mental models drift between sessions; the discipline "briefs assert intent, not state" is correct but fires at write time and depends on author accuracy holding. **The discipline keeps failing because the failure mode IS the discipline depending on author accuracy.** Cross-surface ground-truth state file + receive-time audit at the executing surface = two structural layers that compound; class kills, doesn't just detect.
+
+**Empirical motivation — third instance of brief-author-state class within ~10 days:**
+
+1. **2026-05-04** — pulse v2 brief asserted ct_sweeps as canonical flow source; ground truth was ct_flow_alerts (post-2026-04-27 ingester split made ct_sweeps degenerate). Caught at engine-room Phase A; bridge shipped.
+2. **2026-05-07** — Chain 1 substrate brief asserted ct_specialist_reads as the embed target; actual chain target was ct_tape_commentary. Caught at engine-room Phase A; cascade #44 codified.
+3. **2026-05-09 evening** — Cowork's paste-ready brief listed 6 items as "open/in-flight" against 1 actually open: PR #109, PR #93, PR #94 all already merged; top-nav exposure for /alpha already shipped via #103; the parenthetical on #93+#94 conflated their content. Captain caught via manual prompt for engine-room audit; engine-room reconciled 11 PRs of post-wrap drift. Same class, third fire.
+
+In all three cases: the discipline existed; the author wrote from stale mental-model anyway; the captain spent decision cycles on a stale inventory before reconciling. The "briefs assert intent, not state" rule (codified 2026-05-07 evening) didn't prevent the third fire because the rule fires at brief-write time and depends on author mental-model accuracy holding.
+
+**Structural prevention — two compounding layers (shipped 2026-05-09 evening):**
+
+**Layer 1 — cross-surface state file.** `/Users/jameschellis/Documents/cowork-cotrader/STATE_OF_BUILD.md`. Engine-room writes via `scripts/write_state_of_build.sh` (jac-agent-os repo). Cowork reads at brief-write time as Step 0 of any state-asserting brief. Cross-surface direct write — no git-pull lag, no shared-repo sync cost. Schema covers: open PRs, merged-since-prior-snapshot, in-flight branches, active measurement windows, deferred captain decisions, ct_invariants count, warden state (passing/failing/critical/errored), ct_growth_crons manifest count, embedding backlog counts, regen integrity. Freshness header includes last-regen timestamp + commit SHA on origin/main + a deterministic "Stale if:" rule. Schema spec: `docs/governance/state-of-build-schema.md`.
+
+**Layer 2 — engine-room receive-time audit.** Engine-room write-time checklist now includes Phase A audit step 1: any captain or Cowork brief asserting per-item state triggers a state-file freshness check + cross-reference of every assertion against ground truth before Phase B execution. If state file is stale per the freshness rule, regen first. If drift surfaces, report findings to captain BEFORE executing the brief's Phase B. Reference: `docs/governance/engine-room-write-time-checklist.md` "Phase A audit step 1" section.
+
+The two layers compound: Layer 1 closes the cross-process mental-model gap; Layer 2 closes the residual gap when Layer 1 fails (Cowork forgets to read, file briefly stale, brief written before regen). Either layer alone has a failure mode; together the class is structurally dead — the brief can be wrong, but the wrong-brief can't ship work.
+
+**Trigger surfaces for regen (engine-room post-ship-batch hygiene):**
+- Final PR in a multi-PR phase chain merges.
+- A captain decision lands.
+- A measurement window opens or closes.
+- A new in-flight branch gets pushed or an old one cleaned up.
+- Captain explicitly asks for state-of-build report.
+- Side-effect of any Phase A receive-time audit on a state-asserting brief.
+
+**Sub-pattern — discipline-as-author-discipline-vs-discipline-as-infrastructure.** Disciplines that fire at write time and depend on author accuracy holding *do not* prevent the failure mode they target — they catch it via post-hoc audit, but the audit happens after the artifact has already propagated bad framings (a session of decision cycles, a Phase B execution, a memory write). When the same class fires three times despite the rule existing, the structural fix is to externalize the discipline: move from "author runs the check" to "infrastructure runs the check." Sibling to: `## disciplines-need-write-time-enforcement-not-just-post-hoc-audit` (parent class — the third instance escalates the pattern: write-time enforcement at the AUTHOR's surface still fails when the author has stale state, so enforcement also needs to fire at the EXECUTOR's surface AND the surface needs to be backed by externalized ground truth).
+
+**Diagnostic question for future class fires of this shape:** *"If the discipline that's supposed to prevent this depends on the author's mental-model holding, what surface can we externalize the check to so the author's drift doesn't shadow it?"* If the answer is "no externalization possible," the discipline itself is mis-located — find a different layer.
+
+**Linked artifacts:**
+- `scripts/write_state_of_build.sh` (the writer)
+- `docs/governance/state-of-build-schema.md` (schema + protocol)
+- `docs/governance/engine-room-write-time-checklist.md` (receive-time audit step 1 + post-ship-batch regen)
+- `/Users/jameschellis/Documents/cowork-cotrader/STATE_OF_BUILD.md` (the canonical state file)
+- Cross-catalog parity entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` (Cowork-side codification — drafted by engine-room, applied by Cowork-Claude)
+- Sibling parent: `## disciplines-need-write-time-enforcement-not-just-post-hoc-audit` (above in this file)
+- Sibling family: `## brief-author-premise-error` (the class this drift belongs to)
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
