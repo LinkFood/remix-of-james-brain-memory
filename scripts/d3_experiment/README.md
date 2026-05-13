@@ -60,3 +60,17 @@ not deployed today).
 - No statistical analysis in this pipeline. Analysis lives in terminal-Claude
   per Tenet 26 (three-mode architecture).
 - No fork pick today.
+
+## D2.2 dependency (verdict-report forward-handling)
+
+When D3 closes (14-day capture + analysis), its verdict report MUST explicitly handle the D2.2 dependency. D2.2 was rendered PASS on 2026-05-13, conditional on D3 → bimodal. D3's resolution of the bimodal-vs-continuous fork retroactively confirms or re-opens D2.2:
+
+| D3 outcome | D2.2 disposition | Action |
+|---|---|---|
+| **bimodal** | PASS stands | GOOGL/AMZN/META join AAPL/NVDA as hardened. Note in D3 verdict report. No engine-room operational work. |
+| **continuous** | RE-OPENS | Empty 5-day marginal band under continuous distribution is structurally surprising; threshold-drop becomes suspicious. Captain re-renders D2.2 per the surprise. May involve threshold revert (55 → 60) or different parameter. |
+| **hybrid** | RE-OPENS per fork's actual shape | Captain re-renders D2.2 against the empirical mixture (e.g., bimodal on some tickers, continuous on others). |
+
+Full reasoning chain: `docs/decisions/2026-05-13-d2.2-verdict-pass-conditional-on-d3.md`.
+
+Methodology pattern motivated by this dependency: `docs/methodology-patterns.md` ## `threshold-calibration-test-premise-requires-distribution-shape-verification`.

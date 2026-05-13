@@ -1715,6 +1715,49 @@ Both Ship 6's miss and Ship 2's misses are the same family — brief names a con
 
 ---
 
+## threshold-calibration-test-premise-requires-distribution-shape-verification — methodology pattern (2026-05-13)
+
+**Pattern:** A threshold calibration test's RESULT MEANING depends on the assumed distribution shape of the metric the threshold gates. The same empirical result — empty marginal band over a window — has opposite interpretations under continuous vs bimodal distributions:
+
+- **Under continuous distribution:** empty marginal band over N trading days suggests a **signal-capture gap** — either the threshold is mis-positioned (the gate is too restrictive and is missing real marginal signal), or the upstream calibration that produces the metric is broken (the producer rarely lands in the marginal band because its conviction-output scaling drifted). Both shapes warrant treating the threshold-drop as suspicious. FAIL territory.
+
+- **Under bimodal distribution:** there is no marginal band by construction. The metric clusters at the modes, with near-zero density between them. An empty marginal band is the EXPECTED observation, not a signal-capture gap. The threshold's POSITION inside the inter-modal valley is structurally irrelevant — moving it 60→55 (or 60→65, or 60→50) catches or misses zero reads in either direction. PASS territory under bimodal, IF the threshold was meant to gate signal that lives at the modes.
+
+The empirical result is the same; the interpretation diverges. **Verify distribution shape FIRST, then interpret threshold-test results.** Don't interpret a calibration result before identifying the metric's shape — the wrong-shape interpretation can flip PASS↔FAIL on the same evidence.
+
+**Empirical motivation — 2026-05-13 D2.2 verdict:**
+
+D2.2 dropped `specialist.{GOOGL,AMZN,META}.wakeup_threshold` from 60 to 55 (applied 2026-05-06 18:05Z, effective 2026-05-07 → 2026-05-12). The captain's verdict question was: did the 55-59 marginal band catch additional flagged reads vs the prior 60-threshold baseline?
+
+Empirical result over the 5-day window: ZERO reads in the 55-59 conviction band across all three tickers (GOOGL n=11, AMZN n=17, META n=20). Baseline frame: only 6 reads in 55-59 conv across these tickers ALL TIME, all pre-window, all unflagged. The marginal band is empirically empty in the window AND in the historical baseline.
+
+Two valid interpretations of "empty marginal band":
+1. **Continuous distribution lens** → threshold mis-positioned, FAIL D2.2.
+2. **Bimodal distribution lens** → marginal band is structurally empty by construction; threshold-drop is operationally harmless; PASS D2.2.
+
+The bimodal-vs-continuous fork was surfaced 2026-05-06 via cross-ticker analysis (AAPL+NVDA+QQQ) but not yet resolved structurally. D3 (`scripts/d3_experiment/`, 14-day feature-isolation window) is the experiment that resolves the fork via Hartigan dip + per-ticker logistic regression. Captain rendered D2.2 verdict PASS conditional on D3 → bimodal; D2.2 re-opens if D3 → continuous. See `docs/decisions/2026-05-13-d2.2-verdict-pass-conditional-on-d3.md`.
+
+**Class:** sibling of `cadence-anchored-thresholds-for-burst-cron-consumers` (2026-05-07 — math-recipe-must-match-metric-distribution-shape on burst-cron warden thresholds). Both reflect the deeper rule: **don't pick an instrument before identifying the surface's shape.** A median-vs-p90 threshold recipe is wrong for burst-cron metrics (gap is 0 within-burst, 240 between-burst — not continuous); a continuous-distribution interpretation is wrong for bimodal-output specialists. Both classes manifest as "the test ran cleanly but the result interpretation is mis-shaped because the framing assumed the wrong distribution."
+
+**Companion patterns:**
+- `cadence-anchored-thresholds-for-burst-cron-consumers` (warden-side, math-recipe shape)
+- `bimodal-scoring-discovered-2026-05-06` (CLAUDE.md ## Pickup state — empirical surfacing that promoted D3 from Sunday-long-term to active queue)
+
+**Discipline forward:** Whenever a threshold drop or calibration test is briefed, the brief includes (or Phase A produces) an explicit distribution-shape claim with empirical evidence. Common shapes: continuous (uniform / normal / long-tailed), bimodal (two clusters with low inter-modal density), burst (deterministic cadence with 0-vs-N gap shape), categorical. The threshold-test's PASS/FAIL interpretation rule is named alongside the shape claim. If shape is unknown, surface that as a Phase A blocker and propose a shape-discovery experiment before running the threshold test.
+
+**Diagnostic question for future class fires of this shape:** *"Before I interpret this threshold-test result as PASS or FAIL, what distribution-shape assumption am I making? Is the assumption empirically grounded, and would the opposite shape flip my interpretation?"*
+
+**Linked artifacts:**
+
+- `docs/decisions/2026-05-13-d2.2-verdict-pass-conditional-on-d3.md` — full D2.2 verdict + reasoning chain
+- `scripts/d3_experiment/README.md` — D3 experiment + D2.2 dependency handling
+- `scope/2026-05-08-d3-feature-isolation-experiment.md` — D3 brief
+- Sibling: `## cadence-anchored-thresholds-for-burst-cron-consumers` (above in this file, codified 2026-05-07)
+- Cross-catalog parity entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` (2026-05-13 additions)
+- Parent class: methodology family "don't pick an instrument before identifying the surface's shape" — recurring meta-pattern across burst-cron threshold recipes, bimodal threshold tests, and other surface-vs-instrument mismatches
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
