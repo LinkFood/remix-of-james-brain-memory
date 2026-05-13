@@ -261,6 +261,75 @@ try {
   record({ tool: 'get_morning_brief', name: 'doc_fields_not_in_db_explicit_absence', category: 5, status: 'FAIL', evidence: e instanceof Error ? e.message : String(e) });
 }
 
+// T2.6 — canonical-row semantics: when multiple rows exist for one
+// session_date, returns the row with MAX(brief_version) and reports
+// supersededCount in meta. Mirrors Ship 2's useMorningBrief.ts UI rule;
+// must NOT diverge (cascade #48 family — bridge surface used a different
+// canonical rule than the UI before Ship 5). Inserts two ephemeral rows
+// at an out-of-range session_date, asserts canonical selection, cleans up.
+try {
+  const TEST_DATE = '2099-01-01'; // out of any real session-date range
+  // Clean any stale test rows from a previous failed run
+  await supabase.from('ct_daily_briefs').delete().eq('session_date', TEST_DATE);
+
+  const expiresAt = new Date(Date.now() + 60_000).toISOString();
+  // v1 first — created_at older. Then v2 — created_at newer (matches Ship 2
+  // chain semantics). The test passes if the tool returns v2's id and
+  // supersededCount=1. If it ordered by created_at it would coincidentally
+  // also return v2's id — so the test also asserts v1 with v2 having an
+  // OLDER created_at (forces the disagreement).
+  const olderTs = new Date(Date.now() - 5000).toISOString();
+  const newerTs = new Date().toISOString();
+  // v1 with NEWER timestamp, v2 with OLDER timestamp → forces canonical to
+  // depend on brief_version, not created_at. If the tool reverted to the
+  // pre-Ship-5 created_at ordering, it would return v1 and the test fails.
+  const { data: v1Insert } = await supabase.from('ct_daily_briefs').insert({
+    session_date: TEST_DATE,
+    brief_version: 1,
+    triggered_by: 'manual',
+    macro_narrative: 'T2.6-canonical-test-v1',
+    per_ticker: [],
+    convergent_view: 'T2.6',
+    expires_at: expiresAt,
+    generated_by_model: 'verification-test',
+    created_at: newerTs,
+  }).select('id').single();
+  const { data: v2Insert } = await supabase.from('ct_daily_briefs').insert({
+    session_date: TEST_DATE,
+    brief_version: 2,
+    supersedes_id: v1Insert?.id ?? null,
+    triggered_by: 'manual',
+    macro_narrative: 'T2.6-canonical-test-v2',
+    per_ticker: [],
+    convergent_view: 'T2.6',
+    expires_at: expiresAt,
+    generated_by_model: 'verification-test',
+    created_at: olderTs,
+  }).select('id').single();
+
+  const r = await getMorningBrief({ date: TEST_DATE });
+  const returnedV2 = r.brief.brief_id === v2Insert?.id;
+  const supersededCorrect = r.meta.supersededCount === 1;
+  record({
+    tool: 'get_morning_brief',
+    name: 'canonical_row_max_brief_version',
+    category: 5,
+    status: returnedV2 && supersededCorrect ? 'PASS' : 'FAIL',
+    evidence: `returnedV2:${returnedV2} returnedId:${r.brief.brief_id} expectedId:${v2Insert?.id} supersededCount:${r.meta.supersededCount} (expected 1)`,
+  });
+
+  // Cleanup
+  await supabase.from('ct_daily_briefs').delete().eq('session_date', TEST_DATE);
+} catch (e) {
+  record({
+    tool: 'get_morning_brief',
+    name: 'canonical_row_max_brief_version',
+    category: 5,
+    status: 'FAIL',
+    evidence: e instanceof Error ? e.message : String(e),
+  });
+}
+
 // ===========================================================================
 // Tool 3 — get_jac_brief (life-management self-review)
 // ===========================================================================

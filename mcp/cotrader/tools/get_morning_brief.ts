@@ -127,6 +127,13 @@ export interface GetMorningBriefResult {
     tool: string;
     requestedEtDate: string;
     rowCount: number;
+    /** How many superseded (older brief_version) rows exist for the same
+     *  session_date. 0 = no rebriefs that day. >0 = trading-Claude can fetch
+     *  earlier reads via a follow-up call if continuity context is needed.
+     *  Mirrors Ship 2's canonical-row UI semantics — site shows the canonical
+     *  row + "Earlier reads (N)" disclosure; bridge surface tells the model
+     *  the same N. */
+    supersededCount: number;
     latencyMs: number;
     generatedAt: string;
     warnings: string[];
@@ -255,13 +262,21 @@ export async function getMorningBrief(args: GetMorningBriefArgs): Promise<GetMor
     auth: { persistSession: false },
   });
 
+  // Canonical-row semantics — must mirror Ship 2's useMorningBrief.ts and
+  // ct_insert_daily_brief_locked RPC: the row with MAX(brief_version) per
+  // session_date is the canonical brief. Prior to 2026-05-13 Ship 5 this
+  // tool ordered by created_at DESC, which coincidentally aligned with
+  // brief_version DESC on all post-Ship-2 cleanup data, but the ordering
+  // was structurally fragile (cascade #48 family — bridge surface used a
+  // different rule than the UI surface). Now both surfaces use the same
+  // "max brief_version wins" rule.
   const { data, error } = await supabase
     .from('ct_daily_briefs')
     .select(
       'id, session_date, brief_version, triggered_by, supersedes_id, urgency, macro_narrative, macro_regime, breaking_events, overnight_action, recent_prints, per_ticker, convergent_view, high_conviction_ideas, watchlist_focus, skip_today, generated_by_model, ttl_hours, expires_at, created_at',
     )
     .eq('session_date', requestedEtDate)
-    .order('created_at', { ascending: false })
+    .order('brief_version', { ascending: false })
     .limit(1);
 
   const latencyMs = Math.round(performance.now() - t0);
@@ -282,6 +297,20 @@ export async function getMorningBrief(args: GetMorningBriefArgs): Promise<GetMor
   const brief = row ? mapRow(row) : emptyResponse();
   if (!row) warnings.push(`no_brief_for_session_date:${requestedEtDate}`);
 
+  // superseded_count — HEAD count of all rows for session_date minus 1 if
+  // the canonical row was found. Trading-Claude sees how many earlier reads
+  // exist for the same day and can decide whether to fetch them. Cheap
+  // separate query (head:true → no payload, count only).
+  let supersededCount = 0;
+  if (row) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { count } = await (supabase
+      .from('ct_daily_briefs' as never) as any)
+      .select('id', { count: 'exact', head: true })
+      .eq('session_date', requestedEtDate);
+    supersededCount = Math.max(0, (count ?? 1) - 1);
+  }
+
   const result: GetMorningBriefResult = {
     brief,
     meta: {
@@ -289,6 +318,7 @@ export async function getMorningBrief(args: GetMorningBriefArgs): Promise<GetMor
       tool: TOOL_NAME,
       requestedEtDate,
       rowCount: row ? 1 : 0,
+      supersededCount,
       latencyMs,
       generatedAt: new Date().toISOString(),
       warnings,
