@@ -141,6 +141,9 @@ verify_jwt = false
 [functions.ct-embed-breaking-news]
 verify_jwt = false
 
+[functions.ct-embed-specialist-reads]
+verify_jwt = false
+
 [functions.ct-score-self-grade]
 verify_jwt = false
 

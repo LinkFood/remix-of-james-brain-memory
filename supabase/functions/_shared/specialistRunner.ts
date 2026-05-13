@@ -35,6 +35,7 @@ import { getTemporalContext, tagIsoTimestamp } from './temporalContext.ts';
 import { validateTemporalCoherence } from './temporalValidator.ts';
 import { validateTickerCoherence } from './tickerCoherenceValidator.ts';
 import { buildClaudeContext } from './claudeReadSurface.ts';
+import { voyageEmbed } from './ctEmbed.ts';
 import type {
   FlowHeatmapResult,
 } from './flowHeatmapContext.ts';
@@ -532,6 +533,41 @@ function parseClaudeVerdict(raw: string): ClaudeVerdict | { error: string } {
   };
 }
 
+/** Cluster-axis rich text for ct_specialist_reads embedding (Phase 7a).
+ *  Format: SPECIALIST_READ | ticker:X lean:Y conv:N flagged:b flag:f | session:YYYY-MM-DD\n<read_text>
+ *  Mirrors the drainer's buildRichText so write-time and backfill paths produce
+ *  identical embeddings for the same row. */
+function buildSpecialistRichText(args: {
+  ticker: string;
+  read: CurrentRead;
+  flagged: boolean;
+  flagId: string | null;
+  sessionDate: string;
+}): string {
+  const flag = args.flagId ? args.flagId.slice(0, 8) : '-';
+  return [
+    `SPECIALIST_READ | ticker:${args.ticker} lean:${args.read.direction_lean} conv:${args.read.conviction} flagged:${args.flagged ? 'true' : 'false'} flag:${flag} | session:${args.sessionDate}`,
+    args.read.read_text ?? '',
+  ].join('\n');
+}
+
+/** YYYY-MM-DD in ET (America/New_York) from a timestamptz string or Date. */
+function etDateStr(ts: string | Date): string {
+  const d = ts instanceof Date ? ts : new Date(ts);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+    .formatToParts(d)
+    .reduce<Record<string, string>>((acc, p) => {
+      if (p.type !== 'literal') acc[p.type] = p.value;
+      return acc;
+    }, {});
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
 async function writeSpecialistRead(
   supabase: SupabaseClient,
   args: {
@@ -543,18 +579,52 @@ async function writeSpecialistRead(
   },
 ): Promise<void> {
   try {
-    const { error } = await supabase.from('ct_specialist_reads').insert({
-      ticker: args.ticker,
-      direction_lean: args.read.direction_lean,
-      conviction: args.read.conviction,
-      read_text: args.read.read_text,
-      flagged: args.flagged,
-      flag_id: args.flagId,
-      source_flow_ids: args.sourceFlowIds.length > 0 ? args.sourceFlowIds : null,
-    });
-    if (error) {
-      console.warn(`[specialistRunner] ${args.ticker} current_read write failed:`, error.message);
+    const { data, error } = await supabase
+      .from('ct_specialist_reads')
+      .insert({
+        ticker: args.ticker,
+        direction_lean: args.read.direction_lean,
+        conviction: args.read.conviction,
+        read_text: args.read.read_text,
+        flagged: args.flagged,
+        flag_id: args.flagId,
+        source_flow_ids: args.sourceFlowIds.length > 0 ? args.sourceFlowIds : null,
+      })
+      .select('id, updated_at')
+      .single();
+    if (error || !data) {
+      console.warn(`[specialistRunner] ${args.ticker} current_read write failed:`, error?.message);
+      return;
     }
+
+    // Fire-and-forget embed — never block the specialist wakeup response.
+    // Drainer (ct-embed-specialist-reads-rth cron) backstops failures within
+    // 5 min. Tenet 26: autonomous-mode producer, autonomous-mode embed.
+    (async () => {
+      try {
+        const sessionDate = etDateStr(data.updated_at);
+        const richText = buildSpecialistRichText({
+          ticker: args.ticker,
+          read: args.read,
+          flagged: args.flagged,
+          flagId: args.flagId,
+          sessionDate,
+        });
+        const embedding = await voyageEmbed(richText, 'document');
+        const { error: updateErr } = await supabase
+          .from('ct_specialist_reads')
+          .update({
+            embedding: embedding as unknown as string,
+            rich_text: richText,
+          })
+          .eq('id', data.id);
+        if (updateErr) {
+          console.warn(`[specialistRunner] ${args.ticker} embed UPDATE failed (drainer will retry):`, updateErr.message);
+        }
+      } catch (e) {
+        console.warn(`[specialistRunner] ${args.ticker} embed threw (drainer will retry):`, String(e));
+      }
+    })();
   } catch (e) {
     console.warn(`[specialistRunner] ${args.ticker} current_read write threw:`, String(e));
   }
