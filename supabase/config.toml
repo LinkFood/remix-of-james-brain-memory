@@ -144,6 +144,9 @@ verify_jwt = false
 [functions.ct-embed-specialist-reads]
 verify_jwt = false
 
+[functions.ct-brief-reflection]
+verify_jwt = false
+
 [functions.ct-score-self-grade]
 verify_jwt = false
 
