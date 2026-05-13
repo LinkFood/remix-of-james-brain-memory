@@ -20,11 +20,18 @@ name: migration-timestamp-check
 # constraint that fails post-merge — far better to fail in CI than to ship a
 # silently-no-op'd migration onto main.
 #
-# Pre-existing collisions on origin/main (e.g. the PR #70 orphan that still
-# coexists with PR #79's butterfly migration at `20260510040000`) are NOT
-# flagged — the check only compares NEW migrations in the PR against
-# already-present timestamps. Historical artifacts are out of scope; only
-# regressions are blocked.
+# Pre-existing collisions on origin/main are ALSO flagged as of 2026-05-13
+# (cascade #47 — migration-timestamp-collision-check-misses-pre-existing-
+# duplicates). The Ship 2 incident on 2026-05-13 surfaced that the original
+# gate validated new-vs-existing but not existing-vs-existing — the PR #70
+# orphan at `20260510040000` had coexisted on main with PR #79's butterfly
+# migration at the same timestamp since 2026-05-10 and only surfaced when
+# the next migration ship's `supabase db push --include-all` hit it. The
+# `Detect pre-existing duplicates on origin/main` step below now scans the
+# full migration directory at PR-author time and fails the PR if any
+# duplicate-timestamp pair is present, regardless of whether the duplicates
+# came from the proposing change. This closes the gate's coverage gap per
+# cascade #47.
 
 on:
   pull_request:
@@ -125,3 +132,56 @@ jobs:
           fi
 
           echo "All new migration timestamps are clear of origin/main."
+
+      - name: Detect pre-existing duplicates on origin/main
+        if: always()
+        run: |
+          # Per cascade #47 (migration-timestamp-collision-check-misses-pre-existing-
+          # duplicates). The new-vs-existing scan above does NOT catch the case where
+          # two files on main already share a timestamp. Those collisions are dormant
+          # until the next `supabase db push --include-all` hits the schema_migrations
+          # PRIMARY KEY conflict. This step scans origin/main itself and fails the PR
+          # if any duplicate-timestamp pair is present — regardless of whether the
+          # PR introduced them. The gate now validates BOTH new-vs-existing AND
+          # existing-vs-existing.
+          #
+          # Naming: BASENAME-only dedup so vendor/cross-project migrations sitting
+          # under supabase/migrations/<subdir>/ would still surface, but the repo
+          # currently flattens all migrations into supabase/migrations/ directly so
+          # path stripping is the right shape.
+
+          DUPLICATES=$(git ls-tree origin/main -r --name-only -- supabase/migrations \
+            | sed 's|^supabase/migrations/||' \
+            | grep -oE '^[0-9]{14}' \
+            | sort \
+            | uniq -d)
+
+          if [ -z "$DUPLICATES" ]; then
+            echo "origin/main has no pre-existing duplicate migration timestamps."
+            exit 0
+          fi
+
+          DUP_COUNT=$(echo "$DUPLICATES" | wc -l | tr -d ' ')
+          echo "::error title=Pre-existing migration timestamp duplicates::$DUP_COUNT timestamp(s) on origin/main are shared by 2+ migration files. The gate's new-vs-existing check missed these; class-kill per cascade #47 fires on the next PR until duplicates are resolved."
+          echo ""
+          echo "Duplicate timestamps + the files sharing them:"
+          while IFS= read -r TS; do
+            echo "  $TS"
+            git ls-tree origin/main -r --name-only -- supabase/migrations \
+              | grep "/$TS" \
+              | sed 's|^|    - |'
+          done <<< "$DUPLICATES"
+          echo ""
+          echo "Resolution patterns (pick by which file has been applied to remote DB):"
+          echo "  - If only ONE file's SQL has been applied (the other was a silent no-op):"
+          echo "      1. git rm the obsolete file"
+          echo "      2. npx supabase migration repair --status applied <timestamp>"
+          echo "      3. open a single-purpose cleanup PR"
+          echo "  - If BOTH files contain distinct unapplied work:"
+          echo "      1. Rename one file to a fresh timestamp greater than the latest on main"
+          echo "      2. npx supabase migration repair --status reverted <old-timestamp>"
+          echo "      3. open a single-purpose cleanup PR"
+          echo ""
+          echo "See docs/methodology-patterns.md ## migration-timestamp-collision-check-misses-pre-existing-duplicates"
+          echo "for the cascade #47 history."
+          exit 1
