@@ -244,21 +244,28 @@ function computeStats(entries: RecallEntry[]): RecallStats {
 // ticker_status to, see audit doc 2026-05-07-organ-10-specialist-recall-
 // phase-a.md instance #38). organMetadata describes the ORGAN's state.
 //
-// CHRONOLOGICAL-VS-SEMANTIC contract boundary: this organ is currently
-// chronological recall (last N reads by updated_at DESC). Semantic recall
-// (vector similarity over embedded prior reads) is future work; the bundle
-// metadata-completeness invariant covers what's currently shipped. Future
-// semantic-recall PR must not regress the chronological-shape invariant.
+// CHRONOLOGICAL-VS-SEMANTIC contract boundary (Phase 7b ship 2026-05-13):
+// - FLAGGED set stays chronological (last N flagged reads by updated_at DESC)
+//   — the graded-outcomes trail needs temporal coherence so captain can read
+//   "outcomes over time" rather than "outcomes from setup-similar prior reads
+//   in no particular order".
+// - UNFLAGGED set is now SEMANTIC — match_ct_specialist_reads_by_similarity
+//   over the embedded substrate (Ship 3 of Bundle 2, 2026-05-13). Query
+//   embedding = the most-recent ct_specialist_reads.embedding for this ticker
+//   (the anchor pattern captain graded as meaningful in Ship 9). Falls back
+//   gracefully to chronological if the anchor has no embedding yet (write-
+//   time embed gap window — drainer is the 5-min backstop).
 function buildOrganMetadata(
   asOf: string,
   ticker: string | null,
   status: OrganStatus,
+  unflaggedMode: 'semantic' | 'chronological_fallback' = 'semantic',
 ): OrganMetadata {
   return {
     as_of: asOf,
-    source: '_shared/specialistRecallContext.ts / ct_specialist_reads + ct_flags + ct_flag_grades + ct_specialist_scoreboard_v2 (chronological recall — semantic not yet shipped; cotrader audience only)',
+    source: '_shared/specialistRecallContext.ts / ct_specialist_reads + ct_flags + ct_flag_grades + ct_specialist_scoreboard_v2 (FLAGGED chronological; UNFLAGGED semantic via match_ct_specialist_reads_by_similarity; cotrader audience only)',
     window: ticker
-      ? `last ${FLAGGED_CAP} flagged + last ${UNFLAGGED_CAP} unflagged-conviction-≥${UNFLAGGED_CONVICTION_FLOOR} within ${UNFLAGGED_LOOKBACK_DAYS}d for ${ticker}`
+      ? `last ${FLAGGED_CAP} flagged (chronological) + top ${UNFLAGGED_CAP} ${unflaggedMode === 'semantic' ? 'semantically-similar' : 'chronological-fallback'} unflagged-conviction-≥${UNFLAGGED_CONVICTION_FLOOR} for ${ticker}`
       : 'no ticker focus (recall is per-entity)',
     status,
   };
@@ -330,17 +337,27 @@ export async function getSpecialistRecallContext(
       .order('updated_at', { ascending: false })
       .limit(FLAGGED_CAP);
 
-    // 2. Last 5 days of unflagged-with-conviction-≥50 reads on this ticker.
+    // 2. UNFLAGGED set — Phase 7b semantic swap (2026-05-13). Query embedding
+    //    = the most-recent ct_specialist_reads.embedding for this ticker (the
+    //    anchor pattern captain graded as meaningful in Ship 9). Returns the
+    //    top UNFLAGGED_CAP semantically-similar unflagged reads with
+    //    conviction ≥ UNFLAGGED_CONVICTION_FLOOR. Falls back to chronological
+    //    if the anchor has no embedding yet (write-time embed gap window —
+    //    drainer cron is the 5-min backstop, so this fallback should be rare
+    //    in steady state). The 5-day lookback window from the chronological
+    //    era is dropped — semantic recall surfaces structurally-similar reads
+    //    regardless of recency; the analog book reaches as far back as the
+    //    embedded substrate goes.
     const lookback = new Date(Date.now() - UNFLAGGED_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
-    const unflaggedQ = supabase
+
+    // Anchor lookup: most-recent embedded read on this ticker.
+    const anchorQ = supabase
       .from('ct_specialist_reads')
-      .select('id, ticker, updated_at, direction_lean, conviction, flagged, flag_id')
+      .select('updated_at, embedding')
       .eq('ticker', ticker)
-      .eq('flagged', false)
-      .gte('conviction', UNFLAGGED_CONVICTION_FLOOR)
-      .gte('updated_at', lookback)
+      .not('embedding', 'is', null)
       .order('updated_at', { ascending: false })
-      .limit(UNFLAGGED_CAP);
+      .limit(1);
 
     // v2 enrichment runs in parallel with the existing recall reads. It is
     // best-effort — if the v2 tables are empty / missing / 4xx, the recall
@@ -348,7 +365,64 @@ export async function getSpecialistRecallContext(
     // via meta.warning when the v2 layer was expected but came back blank.
     const v2EnrichmentP = fetchV2Enrichment(supabase, ticker);
 
-    const [flaggedRes, unflaggedRes] = await Promise.all([flaggedQ, unflaggedQ]);
+    // Resolve flagged + anchor in parallel. UNFLAGGED is then either semantic
+    // (RPC call with anchor's embedding) or chronological fallback.
+    const [flaggedRes, anchorRes] = await Promise.all([flaggedQ, anchorQ]);
+
+    type UnflaggedMode = 'semantic' | 'chronological_fallback';
+    let unflaggedMode: UnflaggedMode = 'semantic';
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let rawUnflaggedRows: any[] = [];
+    let unflaggedErr: { message: string } | null = null;
+
+    const anchorRow = (anchorRes.data?.[0] as { updated_at: string; embedding: string | null } | undefined) ?? null;
+    if (anchorRow && anchorRow.embedding) {
+      // Semantic recall via match RPC. exclude_after_ts = anchor's own
+      // timestamp so the anchor itself is excluded from results; ticker_filter
+      // narrows to this specialist; flagged_filter=false keeps the UNFLAGGED
+      // contract; min_conviction preserves the conviction floor.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const semRes = await (supabase as any).rpc('match_ct_specialist_reads_by_similarity', {
+        query_embedding: anchorRow.embedding,
+        match_threshold: 0.5,
+        match_count: UNFLAGGED_CAP,
+        exclude_after_ts: anchorRow.updated_at,
+        ticker_filter: ticker,
+        min_conviction: UNFLAGGED_CONVICTION_FLOOR,
+        flagged_filter: false,
+      });
+      if (semRes.error) {
+        // RPC failed — fall back to chronological so the organ still produces
+        // useful output. Log via warning so the consumer surface knows.
+        unflaggedMode = 'chronological_fallback';
+        unflaggedErr = { message: `semantic_recall_rpc_error:${semRes.error.message}` };
+      } else {
+        rawUnflaggedRows = (semRes.data ?? []) as Array<Record<string, unknown>>;
+      }
+    } else {
+      // No anchor or no embedding yet (steady-state-rare after Ship 3 drainer).
+      unflaggedMode = 'chronological_fallback';
+    }
+
+    if (unflaggedMode === 'chronological_fallback') {
+      // Chronological fallback — same query shape as pre-Ship-10.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const chronoRes = await (supabase
+        .from('ct_specialist_reads') as any)
+        .select('id, ticker, updated_at, direction_lean, conviction, flagged, flag_id')
+        .eq('ticker', ticker)
+        .eq('flagged', false)
+        .gte('conviction', UNFLAGGED_CONVICTION_FLOOR)
+        .gte('updated_at', lookback)
+        .order('updated_at', { ascending: false })
+        .limit(UNFLAGGED_CAP);
+      if (chronoRes.error) {
+        unflaggedErr = unflaggedErr ?? { message: chronoRes.error.message };
+      } else {
+        rawUnflaggedRows = (chronoRes.data ?? []) as Array<Record<string, unknown>>;
+      }
+    }
+    const unflaggedRes = { data: rawUnflaggedRows, error: unflaggedErr };
 
     if (flaggedRes.error) {
       return emptyResult(startedAt, ticker, `flagged_query_error:${flaggedRes.error.message}`, 'error');
@@ -466,7 +540,7 @@ export async function getSpecialistRecallContext(
         truncated: false,
         ...(v2.warning ? { warning: v2.warning } : {}),
       },
-      organMetadata: buildOrganMetadata(asOf, ticker, 'populated'),
+      organMetadata: buildOrganMetadata(asOf, ticker, 'populated', unflaggedMode),
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
