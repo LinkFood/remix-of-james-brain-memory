@@ -1517,6 +1517,204 @@ These three findings illustrate the atlas's value beyond consolidation: it force
 
 ---
 
+## squash-merge-of-dependent-PR-stack-causes-false-CONFLICT-on-follower — cascade #46 (2026-05-13)
+
+**Pattern:** When PR B's branch is based on PR A's branch (PR-stack dependency), and PR A is squash-merged to `main`, GitHub's merge-conflict detector marks PR B as CONFLICTING — even when the two PRs' net content changes are semantically independent. Squash flattens A's N commits into one commit with a different SHA than A's branch tip; B's branch still carries A's original commits in its history; the duplicate-by-content commits trip the auto-merge detector even though the working trees agree.
+
+**Empirical motivation — 2026-05-13 Ship 1:**
+
+Ship 1 of Bundle 1 cleared the merge backlog: PR #114 (STATE_OF_BUILD.md governance) and PR #115 (ATLAS_OF_BUILD.md), where #115 was authored against #114's branch to avoid pre-merge conflicts on shared `docs/methodology-patterns.md` + `docs/governance/engine-room-write-time-checklist.md`. Both pre-merge mergeable status: CLEAN. After #114 squash-merged at 17:36:34Z to `main` (commit `dc15bfe`), GitHub re-evaluated #115 and flagged it `DIRTY` / `CONFLICTING` within ~12s. The conflict was not semantic — #115's branch carried #114's original commits (`7e76c73` + `05a6852`); main now carried the squash (`dc15bfe`) which contained the same file content as the first commit. Git's per-file merge driver couldn't reconcile the duplicate-content patch context.
+
+**Resolution pattern (mechanical):**
+
+```
+git checkout <follower-branch>
+git reset --hard origin/main
+git cherry-pick <follower-feature-commits>
+# resolve any drift conflicts (typically near-trailing-edge content)
+git push --force-with-lease origin <follower-branch>
+# CI re-runs against the new linear history; GitHub re-marks as MERGEABLE
+```
+
+This rewrites the follower branch on top of the now-squashed main, dropping the duplicate-content commits and keeping only the follower's net additions. Today's Ship 1 incident: 12-second false-CONFLICT, ~6-minute total recovery including CI re-run. PR #115 merged cleanly at 17:45:53Z (commit `6b5b3fd`).
+
+**Class:** sibling to `docs-PR-merge-doesnt-imply-migration-applied` (cascade #43) — both surface workflow-state drift around merge mechanics, neither caught by the discipline at pre-merge time. Both fire at the moment the merge actually completes.
+
+**Class-kill candidate:** PR template carries a Diagnosis section flagging dependencies — "Depends on PR #N — if #N merges via squash before this one, this branch needs reset-cherry-pick-force before merge." Standalone single-purpose docs ship; pairs naturally with the docs-PR-discipline guard already shipped at `.github/workflows/docs-pr-discipline.yml`. Captain decision whether to ship the template addition.
+
+**Diagnostic question for future class fires of this shape:** *"Is this PR based on another open PR's branch? If yes, does the merge plan accommodate the squash-flattening case, or does the discipline assume both land cleanly without rebase?"*
+
+**Linked artifacts:**
+
+- Ship 1 incident chain: PR #114 merge `dc15bfe` 17:36Z → PR #115 false-CONFLICT 17:36-17:42Z → reset+cherry-pick+force-push 17:42Z → CI re-run → PR #115 merge `6b5b3fd` 17:45Z
+- Cross-catalog parity entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `### Instance #46-candidate — squash-merge-of-dependent-PR-stack-causes-false-CONFLICT-on-follower`
+- Sibling: `## docs-PR-merge-doesnt-imply-migration-applied` (cascade #43 elsewhere in this file)
+
+---
+
+## migration-timestamp-collision-check-misses-pre-existing-duplicates — cascade #47 (2026-05-13)
+
+**Pattern:** PR #100 (`20260510_migration_collision_class_kill.sql` adjacent CI workflow `.github/workflows/migration-timestamp-collision-check.yml`) checks new migration timestamps against the migration directory at PR-author time. The check catches: "your new commit introduces a file with timestamp that already exists." It does NOT catch: "two pre-existing files in `supabase/migrations/` already share a timestamp." Pre-existing collisions slip through the gate structurally — they predate the gate's introduction and the gate only validates new-vs-existing, not existing-vs-existing.
+
+**Empirical motivation — 2026-05-13 Ship 2:**
+
+Ship 2 race-fence migration (`20260513174700_ct_daily_briefs_race_fence_and_dedup.sql`) hit a `db push` failure because two files already on `main` shared timestamp `20260510040000`:
+- `20260510040000_ct_butterfly_cross_events.sql` (applied to remote DB)
+- `20260510040000_ct_flow_ingester_cron_apikey_fix.sql` (never applied — PG primary-key collision with the first; its work was superseded by `20260510090000_ct_flow_ingester_cron_apikey_reapply.sql`)
+
+Both files were on `main` when PR #100 shipped its gate. Neither violated #100's check (the check only fires on new commits). The collision was dormant until the next migration ship surfaced it via the Supabase CLI's `--include-all` push flow.
+
+**Resolution mid-ship:** Engine-room ran `npx supabase migration repair --status applied 20260510040000` to mark the butterfly_cross_events migration as applied, then deleted the obsolete duplicate via `git rm`. Recovery: ~3 minutes of migration repair + one-line file delete. Ship 2's actual race-fence migration applied cleanly after.
+
+**Class:** sub-class of `gate-validates-new-but-not-existing-state` — a family of patterns where a guard rule's invariant only fires on the proposing change, not on the substrate it lands into. Sibling to many "the new rule doesn't backfill the old state" patterns. Companion to `discovery-of-existing-coverage-changes-edit-shape-not-edit-target` — once you discover pre-existing duplicates, the fix is closing the gate's coverage gap, not adding a fifth-redundancy guard.
+
+**Class-kill (standalone-eligible):** Extend PR #100's check to also scan ALL `supabase/migrations/*.sql` for duplicate timestamps at PR-author time, failing the PR if any duplicates exist (regardless of whether they came from the proposing change). One-script change. Doesn't compete with Bundle 2 sequencing. Captain explicitly opened this as an optional fill-the-wait-time class-kill while Ship 4 gates on 20:00 UTC.
+
+**Diagnostic question for future class fires of this shape:** *"Does this gate validate the proposing change in isolation, or does it ALSO validate the substrate-as-of-now? If only the former, what pre-existing state could the gate be silently tolerating?"*
+
+**Linked artifacts:**
+
+- PR #100 collision-check workflow
+- Cross-catalog parity entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `### Instance #47-candidate — migration-timestamp-collision-check-misses-pre-existing-duplicates`
+- Sibling-family parent: `## disciplines-need-write-time-enforcement-not-just-post-hoc-audit`
+- Class-kill candidate: optional standalone PR extending the workflow
+
+---
+
+## advisory-lock-spec-requires-RPC-migration-because-supabase-js-statement-isolation — cascade #48 (2026-05-13)
+
+**Pattern:** When a brief specifies a transaction-scoped Postgres locking primitive (e.g., `pg_advisory_xact_lock`, `SELECT FOR UPDATE`, isolation-level dependency) wrapped around application-layer reads + writes, the natural application-layer call pattern doesn't work. `supabase-js` sends each `.rpc(...)`, `.from(...).insert(...)`, `.from(...).select(...)` call as its own HTTP request through PostgREST — and each HTTP request runs in its own database transaction. A `pg_advisory_xact_lock_text('key')` call from the application acquires the lock and releases it before the next call begins. The lock holds nothing.
+
+The driver semantics make the lock useless unless the dependent reads + write all live inside ONE PG transaction, which from supabase-js means a single RPC body containing the lock + SELECT + INSERT/UPDATE in PL/pgSQL.
+
+**Empirical motivation — 2026-05-13 Ship 2 B3:**
+
+Cowork's Ship 2 brief specified Phase B3:
+> *"Wrap `findPriorBriefToday` + `INSERT` block in a transaction-scoped advisory lock keyed on `session_date`. If project doesn't expose a text-keyed lock RPC, ship `CREATE FUNCTION pg_advisory_xact_lock_text(text) RETURNS void LANGUAGE sql AS $$ SELECT pg_advisory_xact_lock(hashtext($1)) $$;` with service_role GRANT in the same migration."*
+
+Engine-room caught at Phase A: the spec's literal application-layer pattern (`await supabase.rpc('pg_advisory_xact_lock_text', ...); const prior = await findPriorBriefToday(...); await supabase.from('ct_daily_briefs').insert(...)`) wouldn't actually serialize anything because each `await` is a separate HTTP round-trip through PostgREST and each round-trip is its own DB transaction. The lock acquired-and-released inside the first call.
+
+**Resolution Engine-room shipped:** Migration `20260513174700_ct_daily_briefs_race_fence_and_dedup.sql` includes:
+
+```sql
+CREATE FUNCTION pg_advisory_xact_lock_text(p_key text) RETURNS void
+LANGUAGE sql AS $$ SELECT pg_advisory_xact_lock(hashtext(p_key)) $$;
+
+CREATE FUNCTION ct_insert_daily_brief_locked(
+  p_session_date date, p_triggered_by text, p_urgency text,
+  p_supersedes_id_hint uuid, p_payload jsonb
+) RETURNS TABLE (...) AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(hashtext(p_session_date::text));
+  -- SELECT max(brief_version), compute supersedes_id, INSERT — all in one tx
+  ...
+END;
+$$;
+```
+
+`ct-daily-brief/index.ts` calls one RPC; the entire transaction including the lock, SELECT-MAX, and INSERT lives server-side in PL/pgSQL. The wrapper RPC closed the actual race (verified Phase C via two parallel curl POSTs Δ150ms → serialized v3→v4 chain with correct `supersedes_id`).
+
+**Class:** sub-class of `brief-asserts-language-pattern-without-driver-semantics-check` — when a brief names a specific application-layer call pattern that depends on driver/transport semantics, the spec is asserting state about the driver's behavior. supabase-js + PostgREST is one specific driver-semantic boundary; other boundaries (Deno KV, edge function isolates, direct PG over node-postgres) have different semantics. Sibling to `Ship 6's brief-asserts-cron-slot-without-verifying-current-cron-table` — both share root of brief naming concrete implementation details that depend on empirical state instead of asserting design intent.
+
+**Discipline forward:** When a brief specifies PG-server-side state requiring single-transaction semantics (advisory locks, FOR UPDATE, isolation levels), the brief either:
+1. Frames as intent ("ensure SELECT + write execute under a serialized lock per partition-key"), and engine-room picks implementation surface (wrapper RPC, PL/pgSQL function, etc.) at Phase A, OR
+2. Explicitly names the wrapper-RPC requirement so the brief's recommendation matches the driver's semantics.
+
+Default forward: intent-only. The wrapper-RPC ship pattern is now in `_shared/` precedent; engine-room can produce it at Phase A from intent alone.
+
+**Diagnostic question for future class fires of this shape:** *"Does this spec's call pattern depend on transaction boundaries the driver doesn't expose? If yes, can the dependent reads + writes be folded into one RPC body to make the lock useful?"*
+
+**Linked artifacts:**
+
+- Migration `supabase/migrations/20260513174700_ct_daily_briefs_race_fence_and_dedup.sql` (the wrapper RPC ship)
+- Edge function `supabase/functions/ct-daily-brief/index.ts` post-Ship-2 (caller path)
+- Cross-catalog parity entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `### Instance #48-candidate — advisory-lock-spec-requires-RPC-migration-because-supabase-js-statement-isolation`
+- Sibling family: `## brief-author-premise-error` (parent class — concrete-implementation-detail-as-state)
+
+---
+
+## brief-models-race-surface-from-one-call-path-misses-other-call-path-asymmetry — instance #37 sub-class (2026-05-13)
+
+**Pattern:** When a brief describes a race-class problem ("Writer A and Writer B race on shared state X"), the brief author models the race from the call paths visibly exercising the contention (the `findPriorBriefToday`-then-`INSERT` window). The brief asserts state about ALL writers participating in the same call shape. Reality: not every writer takes the same code path into the contended surface. Some writers skip the prior-check step entirely, contribute to the race in a different direction, and the brief's resolution catches only the modeled subset.
+
+Same root as instance #37 (brief asserts state vs intent): the brief should frame intent ("kill the race surface for shared-state X writes regardless of which trigger fires") and let Phase A audit ALL call paths into the surface. Naming specific call sites in the brief is illustrative; naming them as the exhaustive race surface is the state-assertion miss.
+
+**Empirical motivation — 2026-05-13 Ship 2 brief:**
+
+Cowork's Ship 2 brief Phase A item 3:
+> *"Re-read the findPriorBriefToday + INSERT path in supabase/functions/ct-daily-brief/index.ts and confirm the race window."*
+
+Implicit framing: both writers (scheduled cron + tavily-watcher rebrief) call `findPriorBriefToday` and the race lives at SELECT-vs-INSERT. Engine-room Phase A caught: **scheduled writer (the `0 11 * * 1-5` UTC fire) never called findPrior at all**. The `findPriorBriefToday` call was gated to `triggered_by ∈ {breaking_news, regime_shift}` OR `supersedesIdHint` (see `ct-daily-brief/index.ts:351` post-Ship-2 for the corrected fall-through). A scheduled fire after a breaking_news fire on the same day would double-write `brief_version=1` even with the race the brief modeled fixed — because the scheduled writer never participated in the modeled prior-check at all.
+
+The race surface was bigger than the brief modeled. The brief's resolution (advisory lock around `findPriorBriefToday` + INSERT) would have closed only half the contention. Engine-room shipped `ct_insert_daily_brief_locked` RPC that holds the advisory lock + SELECT-MAX + INSERT unconditionally on EVERY write path, regardless of `triggered_by` — closing both directions structurally.
+
+**Class:** instance #37 sub-class (brief-asserts-state-vs-intent rule). Sibling to:
+- `## advisory-lock-spec-requires-RPC-migration-because-supabase-js-statement-isolation` (same brief, same Ship 2, same family)
+- `## brief-asserts-cron-slot-without-verifying-current-cron-table` (Ship 6 Phase A — same family, different surface)
+
+All three share root: brief names a concrete implementation detail or call-path inventory that depends on current empirical state, when the brief should assert design intent ("serialize all writes to `<table>` per `<partition-key>`") and let Phase A audit the empirical reality.
+
+**Discipline forward:** When briefing race-class problems:
+1. Brief writes intent: "serialize all writes to `<table>` per `<partition-key>` regardless of which trigger fires."
+2. Phase A audits ALL trigger paths into the race surface (grep all callers, list every `triggered_by` branch, identify which paths skip the prior-check). The brief's named call sites are illustrative, not exhaustive.
+3. If the brief names specific call sites, frame as "the race is visible at A; verify no other path bypasses the check."
+
+**Diagnostic question for future class fires of this shape:** *"Does this brief's race model assume symmetric participation across all writers? If yes, what call paths are NOT being audited that could contribute to the same contended surface?"*
+
+**Linked artifacts:**
+
+- Migration `supabase/migrations/20260513174700_ct_daily_briefs_race_fence_and_dedup.sql` (the unconditional lock ship)
+- `supabase/functions/ct-daily-brief/index.ts:351` post-Ship-2 (the call-path asymmetry that the brief missed)
+- Cross-catalog parity entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `### Instance #37 sub-class — brief-models-race-surface-from-one-call-path-misses-other-call-path-asymmetry`
+- Parent: instance #37 family (`brief-author-state-vs-intent rule`)
+
+---
+
+## brief-asserts-cron-slot-without-verifying-current-cron-table — instance #37 sub-class (2026-05-13)
+
+**Pattern:** When a brief specifies a concrete crontab string for new scheduled work (e.g., `'0 21 * * 1-5'`), the brief frames the slot as intent ("post-EOD cron") but carries a hidden state-assertion ("this slot is free of conflicting jobs OR conflicts are tolerable"). Reality: the slot may be occupied by a live cron whose READ/WRITE set the new job depends on, creating a race-or-read-stale window the brief didn't account for.
+
+Same root as instance #37 (brief asserts state vs intent): the brief should frame intent ("post-EOD slot with ≥N min margin from `<dependency-cron>`") and let Phase A query the current `cron.job` table to pick the empirically-correct slot.
+
+**Empirical motivation — 2026-05-13 Bundle 2 Ship 6:**
+
+Bundle 2 Ship 6 brief specified:
+> *"Cron: 0 21 * * 1-5 UTC (5 PM ET weekdays, post-EOD)."*
+
+Engine-room Phase A caught three live jobs already at 21:00 UTC weekdays:
+- `ct-eod-report` (`20260429240100_ct_eod_report_cron.sql`) — the very dependency `ct-brief-reflection` needs to READ for its grading input
+- `ct-eod-positioning` (`20260416000018_ct_eod_positioning_cron.sql`)
+- `ct-market-snapshot` (`20260302000002_market_snapshot_cron.sql`, JAC-side)
+
+Firing `ct-brief-reflection` at `0 21 * * 1-5` would race `ct-eod-report`'s INSERT and read empty/partial state — defeating the reflection's whole purpose.
+
+**Resolution Engine-room proposed + captain acked:** `30 21 * * 1-5` (21:30 UTC, 30-min margin after `ct-eod-report` write). Verified no read/write conflict with the two other 21:30-slot jobs (`ct-session-analog` writes `ct_session_analogs`; `ct-eod-specialist-narrative` writes specialist narratives — neither shares reflection's read/write set). `ct-eod-recap` at 21:30 was scrubbed in v2 retire-list (`20260423000023_v2_scrub_crons.sql`).
+
+**Class:** instance #37 sub-class (brief-asserts-state-vs-intent rule). Sibling to:
+- `## advisory-lock-spec-requires-RPC-migration-because-supabase-js-statement-isolation` (Ship 2 — locking primitive)
+- `## brief-models-race-surface-from-one-call-path-misses-other-call-path-asymmetry` (Ship 2 — call-path inventory)
+
+Both Ship 6's miss and Ship 2's misses are the same family — brief names a concrete implementation detail (crontab string, call pattern, call-site inventory) that depends on current empirical state, when the brief should assert design intent and let Phase A pick implementation from the empirical reality.
+
+**Today's instance #37 fire count: 2.** Both caught at engine-room Phase A. Discipline-stack works structurally — but the same brief author (Cowork) firing twice in one day on the same family is worth catching as a pattern. Possible Cowork-side write-time-checklist extension: "for any concrete identifier in the brief (cron string, function call pattern, table name, RPC name), verify empirically OR frame as intent." Captain decision whether to formalize.
+
+**Discipline forward — for engine-room receive-time audit (per `docs/governance/engine-room-write-time-checklist.md`):** When the brief names a concrete crontab string, Phase A audit step 1 (state-asserting brief check) extends to:
+1. Query `SELECT jobname, schedule FROM cron.job WHERE schedule LIKE ...` for the proposed slot.
+2. For every existing job at the same slot, verify their read/write tables don't conflict with the proposed job's read/write set.
+3. If conflict surfaces, propose an alternative slot with ≥N-min margin from the conflicting job's expected runtime; flag the conflict to captain for ack.
+
+**Diagnostic question for future class fires of this shape:** *"Does this brief's named crontab slot depend on its empirical freedom? If yes, what `cron.job` query verifies it before Phase B ships?"*
+
+**Linked artifacts:**
+
+- Ship 6 Phase A finding (this session) — captain acked `30 21 * * 1-5` alternative
+- `supabase/migrations/20260429240100_ct_eod_report_cron.sql` (the conflicting cron at 21:00 UTC)
+- Cross-catalog parity entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `### Instance #37 sub-class (second of today) — brief-asserts-cron-slot-without-verifying-current-cron-table`
+- Parent: instance #37 family
+- Sibling: Ship 2 advisory-lock spec miss (same family, different surface)
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
