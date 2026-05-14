@@ -60,7 +60,18 @@ interface FlagLite {
   instrument?: string;
   option_symbol?: string | null;
   horizon_ts?: string;
-  ct_flag_grades: FlagGrade[] | null;
+  // Ship 5: kept optional for the SpecialistDrawer (last-10 list) where the
+  // embedded query still works because we're scoped to a single ticker — but
+  // page-level stats no longer use this; grades are joined separately via
+  // ct_flag_grades.specialist_ticker (the grader's canonical routing column).
+  ct_flag_grades?: FlagGrade[] | null;
+}
+
+interface GradeLite {
+  flag_id: string;
+  specialist_ticker: string;
+  outcome: string;
+  alpha_pct: number | null;
 }
 
 interface SpecialistStats {
@@ -99,11 +110,19 @@ function dayKey(iso: string): string {
   return d.toISOString().slice(0, 10);
 }
 
-function computeStats(flags: FlagLite[]): Record<string, SpecialistStats> {
+// Ship 5: widened from 7d to 30d. Specialist flag cadence is 1-3/week per the
+// 5/14 audit — 7d hid 3 of 10 tickers (MSFT/AMZN/META rendered with no graded
+// counts). 30d captures all 10 with enough volume to compute hit rates.
+const WINDOW_DAYS = 30;
+
+function computeStats(
+  flags: FlagLite[],
+  gradesByTicker: Record<string, GradeLite[]>,
+): Record<string, SpecialistStats> {
   const out: Record<string, SpecialistStats> = {};
-  // Seed 7-day bucket keys per ticker
+  // Seed daily bucket keys per ticker over the full window
   const days: string[] = [];
-  for (let i = 6; i >= 0; i--) {
+  for (let i = WINDOW_DAYS - 1; i >= 0; i--) {
     const d = new Date();
     d.setHours(0, 0, 0, 0);
     d.setDate(d.getDate() - i);
@@ -137,8 +156,26 @@ function computeStats(flags: FlagLite[]): Record<string, SpecialistStats> {
     if (!s.lastFlagAt || Date.parse(f.created_at) > Date.parse(s.lastFlagAt)) {
       s.lastFlagAt = f.created_at;
     }
-    const g = f.ct_flag_grades?.[0];
-    if (g) {
+    // Tag tally
+    for (const tag of f.tags ?? []) {
+      tagCounts[t] ??= {};
+      tagCounts[t][tag] = (tagCounts[t][tag] ?? 0) + 1;
+    }
+    // Daily bucket
+    const dk = dayKey(f.created_at);
+    const bucket = s.dailyCounts.find((b) => b.day === dk);
+    if (bucket) bucket.n++;
+  }
+
+  // Ship 5: aggregate grades from ct_flag_grades.specialist_ticker (canonical
+  // grader routing column). Previously came via embedded PostgREST join from
+  // ct_flags → ct_flag_grades, which silently returned null because the
+  // parent ct_flags.specialist_ticker column is upstream-broken (Ship 14
+  // territory) and there's no named forward FK PostgREST can auto-resolve.
+  for (const t of TICKERS) {
+    const grades = gradesByTicker[t] ?? [];
+    const s = out[t];
+    for (const g of grades) {
       s.graded++;
       if (g.outcome === 'win') s.wins++;
       else if (g.outcome === 'partial') s.partials++;
@@ -149,15 +186,6 @@ function computeStats(flags: FlagLite[]): Record<string, SpecialistStats> {
         alphaSums[t].n++;
       }
     }
-    // Tag tally
-    for (const tag of f.tags ?? []) {
-      tagCounts[t] ??= {};
-      tagCounts[t][tag] = (tagCounts[t][tag] ?? 0) + 1;
-    }
-    // Daily bucket
-    const dk = dayKey(f.created_at);
-    const bucket = s.dailyCounts.find((b) => b.day === dk);
-    if (bucket) bucket.n++;
   }
 
   for (const t of TICKERS) {
@@ -711,12 +739,15 @@ export default function Specialists() {
   const [selected, setSelected] = useState<string | null>(null);
 
   const { data: flags, isLoading } = useQuery<FlagLite[]>({
-    queryKey: ['ct_specialists_stats'],
+    queryKey: ['ct_specialists_stats', WINDOW_DAYS],
     queryFn: async () => {
-      const since = new Date(Date.now() - 7 * 86400_000).toISOString();
+      const since = new Date(Date.now() - WINDOW_DAYS * 86400_000).toISOString();
+      // Ship 5: dropped embedded ct_flag_grades(*) — PostgREST forward
+      // auto-resolve returns null (verified empirically pre-ship). Grades
+      // fetched separately via ct_flag_grades.specialist_ticker.
       const { data, error } = await supabase
         .from('ct_flags' as never)
-        .select('specialist_ticker, status, created_at, tags, ct_flag_grades(outcome, alpha_pct)')
+        .select('specialist_ticker, status, created_at, tags')
         .in('specialist_ticker', TICKERS)
         .gte('created_at', since);
       if (error) throw error;
@@ -725,7 +756,49 @@ export default function Specialists() {
     refetchInterval: 60_000,
   });
 
-  const statsByTicker = useMemo(() => computeStats(flags ?? []), [flags]);
+  // Ship 5: grades pulled directly from ct_flag_grades by the grader's
+  // canonical routing column (specialist_ticker), not via embedded join from
+  // ct_flags. 30d window. ct_flag_grades.id used to dedup if a flag somehow
+  // got graded twice (UNIQUE (flag_id) should prevent this, but defensive).
+  const { data: grades } = useQuery<GradeLite[]>({
+    queryKey: ['ct_specialists_grades', WINDOW_DAYS],
+    queryFn: async () => {
+      const since = new Date(Date.now() - WINDOW_DAYS * 86400_000).toISOString();
+      // 10 tickers × ~max 700/30d (NVDA highest) = ~3-5k rows. Well under
+      // PostgREST default 1000-cap when paginated — but to stay under cap
+      // and align with watch invariants, we cap per-ticker via parallel
+      // queries.
+      const results = await Promise.all(
+        TICKERS.map(async (t) => {
+          const { data, error } = await supabase
+            .from('ct_flag_grades' as never)
+            .select('flag_id, specialist_ticker, outcome, alpha_pct')
+            .eq('specialist_ticker', t)
+            .gte('graded_at', since)
+            .order('graded_at', { ascending: false })
+            .limit(1000);
+          if (error) throw error;
+          return (data ?? []) as unknown as GradeLite[];
+        }),
+      );
+      return results.flat();
+    },
+    refetchInterval: 60_000,
+  });
+
+  const gradesByTicker = useMemo(() => {
+    const out: Record<string, GradeLite[]> = {};
+    for (const t of TICKERS) out[t] = [];
+    for (const g of grades ?? []) {
+      if (out[g.specialist_ticker]) out[g.specialist_ticker].push(g);
+    }
+    return out;
+  }, [grades]);
+
+  const statsByTicker = useMemo(
+    () => computeStats(flags ?? [], gradesByTicker),
+    [flags, gradesByTicker],
+  );
 
   const { data: scoreboard } = useSpecialistScoreboard();
   const outcomeByName = useMemo(() => {
@@ -796,7 +869,11 @@ export default function Specialists() {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => qc.invalidateQueries({ queryKey: ['ct_specialists_stats'] })}
+            onClick={() => {
+              qc.invalidateQueries({ queryKey: ['ct_specialists_stats'] });
+              qc.invalidateQueries({ queryKey: ['ct_specialists_grades'] });
+              qc.invalidateQueries({ queryKey: ['ct_specialist_scoreboard_latest_per_ticker'] });
+            }}
             className="text-xs"
           >
             <RefreshCw className="w-3 h-3 mr-1" />
@@ -835,8 +912,9 @@ export default function Specialists() {
 
         <div className="text-[10px] text-muted-foreground leading-relaxed space-y-1">
           <div>
-            Stats computed over last 7 days of flags. Hit rate = (wins + 0.5×partials) / graded,
-            shown only when graded ≥ 5. α = mean alpha vs SPY at horizon.
+            Stats computed over last {WINDOW_DAYS} days of flags. Hit rate = (wins + 0.5×partials) / graded,
+            shown only when graded ≥ 5. α = mean alpha vs SPY at horizon. Grades joined via
+            <span className="font-mono"> ct_flag_grades.specialist_ticker</span> (grader's canonical routing column).
           </div>
           <div>
             Status dot: <span className="text-emerald-300">green</span> = last flag &lt; 1h,{' '}
@@ -848,6 +926,7 @@ export default function Specialists() {
             <span className="text-foreground">Outcome row</span> (hit 7d / peak / top): from{' '}
             <span className="font-mono">ct_specialist_scoreboard</span> — derived from{' '}
             <span className="font-mono">ct_contract_tracks.track_status</span>, not flag volume.
+            Latest-per-specialist (not single-snap MAX) so partial snaps don't blank tickers.
             Tiles sorted by 7d hit rate. Snap fires nightly 23:00 UTC weekdays.
           </div>
           <div>Refreshes every 60s. Click a tile to see its last 10 flags.</div>
