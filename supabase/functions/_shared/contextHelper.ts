@@ -149,6 +149,19 @@ export interface OrganMetadata {
   window: string;
   /** Semantic state per OrganStatus enum. Resolves 🔴#2 + 🟡#5. */
   status: OrganStatus;
+  /**
+   * Organ-specific recall mode marker. Currently populated only by
+   * specialist_recall (Ship 13 of Bundle 5, 2026-05-14): 'semantic' /
+   * 'chronological_fallback' / 'no_history'. Lets trading-Claude verify the
+   * UNFLAGGED set's recall path at the organMetadata layer without diving
+   * into data.unflagged_mode. Other organs leave this undefined.
+   *
+   * Snake_case per codebase convention for data-layer / organ-output fields
+   * (cf. as_of, source, window, status above; data.unflagged_mode in
+   * SpecialistRecallResult). Optional so additive — no other organ schema
+   * change required.
+   */
+  unflagged_mode?: 'semantic' | 'chronological_fallback' | 'no_history';
 }
 
 /**

@@ -459,6 +459,107 @@ try {
   });
 }
 
+// T1.6 — Ship 13 of Bundle 5: get_co_trader_context specialist_recall organ
+// projects unflagged_mode at the organMetadata layer (NOT just data layer).
+// T1.5 checks data.unflagged_mode; T1.6 checks organMetadata.unflagged_mode.
+// Trading-Claude reads organMetadata first as the canonical organ-state surface,
+// so the field must be present there for the captain-bridge contract to be
+// complete. Snake_case per codebase data-layer convention (matches as_of,
+// source, window, status siblings).
+try {
+  const r = await getCoTraderContext({ ticker: 'NVDA', organs: ['specialist_recall'] });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const meta = (r as any).structured?.organs?.specialist_recall?.organMetadata;
+  const mode = meta?.unflagged_mode;
+  const validMode = mode === 'semantic' || mode === 'chronological_fallback' || mode === 'no_history';
+  record({
+    tool: 'get_co_trader_context',
+    name: 'specialist_recall_organMetadata_unflagged_mode',
+    category: 2,
+    status: validMode ? 'PASS' : 'FAIL',
+    evidence: `organMetadata.unflagged_mode=${mode ?? 'MISSING'} (expected: semantic | chronological_fallback | no_history)`,
+  });
+} catch (e) {
+  record({
+    tool: 'get_co_trader_context',
+    name: 'specialist_recall_organMetadata_unflagged_mode',
+    category: 2,
+    status: 'FAIL',
+    evidence: e instanceof Error ? e.message : String(e),
+  });
+}
+
+// T2.9 — Ship 13: brief_version projected on MorningBriefResponse + integer ≥1
+// on populated rows. Ship 2's race-fence semantics mean canonical-row pick is
+// MAX(brief_version); brief_version was selected by Ship 5 but never projected
+// on the brief surface until Ship 13.
+try {
+  const r = await getMorningBrief({});
+  if (r.brief.status === 'populated') {
+    const v = r.brief.brief_version;
+    const isIntGte1 = typeof v === 'number' && Number.isInteger(v) && v >= 1;
+    record({
+      tool: 'get_morning_brief',
+      name: 'brief_version_projected',
+      category: 3,
+      status: isIntGte1 ? 'PASS' : 'FAIL',
+      evidence: `brief_version=${v} (expected: integer ≥1)`,
+    });
+  } else {
+    record({
+      tool: 'get_morning_brief',
+      name: 'brief_version_projected',
+      category: 3,
+      status: 'DRIFT',
+      evidence: 'no brief today; cannot verify field projection',
+    });
+  }
+} catch (e) {
+  record({
+    tool: 'get_morning_brief',
+    name: 'brief_version_projected',
+    category: 3,
+    status: 'FAIL',
+    evidence: e instanceof Error ? e.message : String(e),
+  });
+}
+
+// T2.10 — Ship 13: supersedes_id projected on MorningBriefResponse. UUID
+// string for v2+ rebriefs (chain back to v1); null for v1 rows and
+// no_brief_today. Validates the supersession chain is reconstructible
+// from a single get_morning_brief call.
+try {
+  const r = await getMorningBrief({});
+  if (r.brief.status === 'populated') {
+    const s = r.brief.supersedes_id;
+    const isUuid = typeof s === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
+    const isNull = s === null;
+    record({
+      tool: 'get_morning_brief',
+      name: 'supersedes_id_projected',
+      category: 3,
+      status: isUuid || isNull ? 'PASS' : 'FAIL',
+      evidence: `supersedes_id=${s === null ? 'null' : s} (expected: UUID string or null)`,
+    });
+  } else {
+    record({
+      tool: 'get_morning_brief',
+      name: 'supersedes_id_projected',
+      category: 3,
+      status: 'DRIFT',
+      evidence: 'no brief today; cannot verify field projection',
+    });
+  }
+} catch (e) {
+  record({
+    tool: 'get_morning_brief',
+    name: 'supersedes_id_projected',
+    category: 3,
+    status: 'FAIL',
+    evidence: e instanceof Error ? e.message : String(e),
+  });
+}
+
 // ===========================================================================
 // Tool 3 — get_jac_brief (life-management self-review)
 // ===========================================================================

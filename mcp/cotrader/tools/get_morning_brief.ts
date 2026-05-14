@@ -81,6 +81,24 @@ export interface MorningBriefResponse {
 
   brief_id: string | null;
   brief_date: string | null;
+  /** Brief version per session_date — canonical row is MAX(brief_version)
+   *  (Ship 2 race-fence pattern). Integer ≥1 on populated rows; null when
+   *  no_brief_today. Lets trading-Claude verify the canonical-row pick
+   *  forensically (e.g. brief_version=3 + supersededCount=2 ⇒ this is the
+   *  3rd write for the session, with 2 earlier reads still available via
+   *  follow-up call). Ship 13 of Bundle 5, 2026-05-14 — Ship 5 selected
+   *  this column but never projected it onto the brief surface; Ship 13
+   *  closes the gap so brief_version is captain-visible without a separate
+   *  DB query. */
+  brief_version: number | null;
+  /** UUID of the brief this row supersedes (Ship 2 race-fence semantics).
+   *  Null on v1 rows (the morning fire for a given session_date) AND on
+   *  no_brief_today. Populated on v2+ rebriefs (breaking_news /
+   *  regime_shift / manual). Lets trading-Claude trace the supersession
+   *  chain v1→v2→v3 directly from the brief object. Ship 13 of Bundle 5,
+   *  2026-05-14 — Ship 5 added this column to the schema but neither
+   *  selected it nor projected it; Ship 13 closes both gaps. */
+  supersedes_id: string | null;
   regime: string | null;
   generated_at: string | null;
   expires_at: string | null;
@@ -185,6 +203,8 @@ function emptyResponse(): MorningBriefResponse {
     status: 'no_brief_today',
     brief_id: null,
     brief_date: null,
+    brief_version: null,
+    supersedes_id: null,
     regime: null,
     generated_at: null,
     expires_at: null,
@@ -217,6 +237,8 @@ function mapRow(row: CtDailyBriefRow): MorningBriefResponse {
     status: 'populated',
     brief_id: row.id,
     brief_date: row.session_date,
+    brief_version: row.brief_version,
+    supersedes_id: row.supersedes_id,
     regime: row.macro_regime,
     generated_at: row.created_at,
     expires_at: row.expires_at,
