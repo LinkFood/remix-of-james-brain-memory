@@ -11,6 +11,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { Brain, Clock, Zap, Calendar } from 'lucide-react';
+import { TapeCommentaryRender } from '@/components/co-trader/TapeCommentaryRender';
 
 interface CommentaryRow {
   id: number;
@@ -102,7 +103,7 @@ export function TapeReaderBanner() {
           </Link>
         </div>
       </div>
-      <div className="text-sm leading-snug text-foreground/90">{data.commentary}</div>
+      <TapeCommentaryRender commentary={data.commentary} compact />
     </Card>
   );
 }

@@ -27,6 +27,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/h
 import { cn } from '@/lib/utils';
 import { Activity, Zap, Clock } from 'lucide-react';
 import { useTapeReaderArc, type TapeArcSegment } from '@/hooks/useTapeReaderArc';
+import { TapeCommentaryRender } from '@/components/co-trader/TapeCommentaryRender';
 
 function tideClass(tide: TapeArcSegment['market_tide']): string {
   if (tide === 'bullish') return 'bg-emerald-500';
@@ -166,7 +167,7 @@ export function TapeReaderArc() {
                   <span>flow {s.flow_count}</span>
                 </div>
                 <div className="text-[11px] leading-snug text-foreground/95 line-clamp-6">
-                  {s.commentary}
+                  <TapeCommentaryRender commentary={s.commentary} compact />
                 </div>
               </HoverCardContent>
             </HoverCard>
@@ -200,7 +201,9 @@ export function TapeReaderArc() {
               unpin →
             </button>
           </div>
-          <div className="line-clamp-3">{focused.commentary}</div>
+          <div className="line-clamp-3">
+            <TapeCommentaryRender commentary={focused.commentary} compact />
+          </div>
         </div>
       )}
     </Card>

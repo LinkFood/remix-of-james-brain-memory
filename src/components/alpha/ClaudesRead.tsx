@@ -20,6 +20,18 @@ import { Brain, Calendar, Clock, Zap, Layers } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useTapeReader } from '@/hooks/useTapeReader';
 import { useSemanticTapeRecall, type SemanticTapeMatch } from '@/hooks/useSemanticTapeRecall';
+import { TapeCommentaryRender } from '@/components/co-trader/TapeCommentaryRender';
+
+/**
+ * Strip `**markdown bold**` markers for inline mini-previews where we slice
+ * commentary at a char limit — leaving asterisks would split inside a bold
+ * span and render literal `**` to the user. Used only for the semantic-recall
+ * preview row, NOT for the latest commentary (which goes through
+ * TapeCommentaryRender for proper markdown rendering).
+ */
+function stripBoldMarkers(s: string): string {
+  return s.replace(/\*\*/g, '');
+}
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - Date.parse(iso);
@@ -51,7 +63,10 @@ function matchTideClass(tide: SemanticTapeMatch['market_tide']): string {
 }
 
 export function ClaudesRead() {
-  const { latest } = useTapeReader({ priorCount: 0 });
+  // priorCount: 1 so we can pass priorCommentary to TapeCommentaryRender for
+  // the Δ-from-prior summary line. Latest stays the headline; prior is just
+  // for the diff (which new bold contract anchors appeared this read).
+  const { latest, prior } = useTapeReader({ priorCount: 1 });
   const { matches: semanticMatches, isLoading: recallLoading } = useSemanticTapeRecall({ matchCount: 5 });
 
   return (
@@ -97,10 +112,18 @@ export function ClaudesRead() {
         </div>
       </div>
 
-      {/* Tape commentary — the synthesis */}
-      <div className="text-[13px] leading-relaxed text-foreground/95 mb-4">
-        {latest?.commentary ?? (
-          <span className="italic text-muted-foreground">
+      {/* Tape commentary — the synthesis. Canonical renderer handles
+          markdown bolds + flag/flow chips + Δ-from-prior summary line. */}
+      <div className="mb-4">
+        {latest ? (
+          <TapeCommentaryRender
+            commentary={latest.commentary}
+            flagIds={latest.flag_ids}
+            flowIds={latest.flow_ids}
+            priorCommentary={prior[0]?.commentary ?? null}
+          />
+        ) : (
+          <span className="italic text-muted-foreground text-[13px]">
             Awaiting first commentary. Tape reader fires every 10 min during market hours.
           </span>
         )}
@@ -142,7 +165,7 @@ export function ClaudesRead() {
                   <span>f{m.flag_id_count}/p{m.flow_id_count}</span>
                 </div>
                 <div className="flex-1 min-w-0 text-foreground/80 truncate">
-                  {m.commentary.replace(/\s+/g, ' ').slice(0, 140)}
+                  {stripBoldMarkers(m.commentary.replace(/\s+/g, ' ')).slice(0, 140)}
                 </div>
                 <div className="shrink-0 text-primary/70 font-semibold">
                   {(m.similarity * 100).toFixed(0)}%

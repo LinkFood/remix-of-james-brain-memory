@@ -32,6 +32,7 @@ export interface TapeCommentaryRow {
   window_start: string | null;
   window_end: string | null;
   flag_ids: string[];
+  flow_ids: number[];
 }
 
 export interface UseTapeReaderArgs {
@@ -53,6 +54,7 @@ interface RawTapeRow {
   window_start: string | null;
   window_end: string | null;
   flag_ids: string[] | null;
+  flow_ids: number[] | null;
 }
 
 function normalizeTriggerKind(k: string): TapeCommentaryRow['trigger_kind'] {
@@ -77,6 +79,7 @@ function toRow(r: RawTapeRow): TapeCommentaryRow {
     window_start: r.window_start,
     window_end: r.window_end,
     flag_ids: Array.isArray(r.flag_ids) ? r.flag_ids : [],
+    flow_ids: Array.isArray(r.flow_ids) ? r.flow_ids : [],
   };
 }
 
@@ -93,7 +96,7 @@ export function useTapeReader(args: UseTapeReaderArgs = {}) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sb: any = supabase;
       const { data, error } = await sb.from('ct_tape_commentary')
-        .select('id, created_at, session_date, trigger_kind, commentary, vix_level, market_tide, window_start, window_end, flag_ids')
+        .select('id, created_at, session_date, trigger_kind, commentary, vix_level, market_tide, window_start, window_end, flag_ids, flow_ids')
         .order('created_at', { ascending: false })
         .limit(totalNeeded);
       if (error) throw error;

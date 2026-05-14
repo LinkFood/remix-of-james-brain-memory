@@ -21,6 +21,7 @@ import { Card } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
 import { Brain, Calendar, Clock, Zap, Activity } from 'lucide-react';
 import { useTapeReader } from '@/hooks/useTapeReader';
+import { TapeCommentaryRender } from '@/components/co-trader/TapeCommentaryRender';
 
 function timeAgo(iso: string): string {
   const ms = Date.now() - Date.parse(iso);
@@ -183,7 +184,12 @@ export function TapeReaderArc() {
         </div>
       )}
 
-      <div className="text-sm leading-snug text-foreground/90">{latest.commentary}</div>
+      <TapeCommentaryRender
+        commentary={latest.commentary}
+        flagIds={latest.flag_ids}
+        flowIds={latest.flow_ids}
+        priorCommentary={rows[1]?.commentary ?? null}
+      />
     </Card>
   );
 }
