@@ -510,3 +510,6 @@ verify_jwt = false
 
 [functions.ct-butterfly-grader]
 verify_jwt = false
+
+[functions.ct-d3-feature-extension]
+verify_jwt = false
