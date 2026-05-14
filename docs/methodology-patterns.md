@@ -1540,14 +1540,25 @@ This rewrites the follower branch on top of the now-squashed main, dropping the 
 
 **Class:** sibling to `docs-PR-merge-doesnt-imply-migration-applied` (cascade #43) — both surface workflow-state drift around merge mechanics, neither caught by the discipline at pre-merge time. Both fire at the moment the merge actually completes.
 
-**Class-kill candidate:** PR template carries a Diagnosis section flagging dependencies — "Depends on PR #N — if #N merges via squash before this one, this branch needs reset-cherry-pick-force before merge." Standalone single-purpose docs ship; pairs naturally with the docs-PR-discipline guard already shipped at `.github/workflows/docs-pr-discipline.yml`. Captain decision whether to ship the template addition.
+**Empirical motivation #2 — 2026-05-13 PR #91 Regime Flip Journal late merge:**
 
-**Diagnostic question for future class fires of this shape:** *"Is this PR based on another open PR's branch? If yes, does the merge plan accommodate the squash-flattening case, or does the discipline assume both land cleanly without rebase?"*
+PR #91 was opened 2026-05-09 against then-current `main`. Captain deferred merge for iter #N.5 captain validation. By the time captain acked merge at 00:09Z (2026-05-14), `main` had advanced 8 commits + 3 squash-merged Bundle 1-3 PRs (#114, #115, #116, #117, #118, plus all Bundle 1-3 ships). PR #91 flipped to `DIRTY/CONFLICTING` post-PR-#118-squash.
+
+Conflicts on `src/pages/Alpha.tsx` (iter #2.6 had removed the placeholder slot PR #91 expected) + `docs/audit/tape-v2-iteration-log.md` (Phase 1-5 entries landed via #86-#90 + Bundle 1-3 entries since). Resolution identical to Instance #1: reset + cherry-pick `d62bc96` + manual conflict resolution (drop retired placeholder imports; slot RegimeFlipJournal after NewsCausalityMatrix per current layout) + force-with-lease push. PR #91 merged at 00:10:09Z as `889ace2`. Wall ~7 min.
+
+**Two empirical instances in one wall-clock day = class-kill threshold met.** Ship 12 of Bundle 4 (2026-05-13 evening) codifies the resolution pattern in `docs/runbooks/squash-merge-dependency-resolution.md` and adds a `## Dependencies` section to `.github/PULL_REQUEST_TEMPLATE.md` so PR authors declare the dependency at PR-author time. **Status: resolved-via-runbook.**
+
+**Class:** sibling to `docs-PR-merge-doesnt-imply-migration-applied` (cascade #43) — both surface workflow-state drift around merge mechanics, neither caught by the discipline at pre-merge time. Both fire at the moment the merge actually completes.
+
+**Diagnostic question for future class fires of this shape:** *"Is this PR based on another open PR's branch? If yes, did the dependency merge via squash? If yes, has this PR been rebased onto post-squash `main` since the dependency merged?"* — three-question check.
 
 **Linked artifacts:**
 
 - Ship 1 incident chain: PR #114 merge `dc15bfe` 17:36Z → PR #115 false-CONFLICT 17:36-17:42Z → reset+cherry-pick+force-push 17:42Z → CI re-run → PR #115 merge `6b5b3fd` 17:45Z
-- Cross-catalog parity entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `### Instance #46-candidate — squash-merge-of-dependent-PR-stack-causes-false-CONFLICT-on-follower`
+- Ship 12 trigger: PR #91 late-merge `889ace2` 00:10Z 2026-05-14 (after Bundle 1-3 drift)
+- **Resolution runbook: `docs/runbooks/squash-merge-dependency-resolution.md`**
+- **PR template Dependencies section: `.github/PULL_REQUEST_TEMPLATE.md`**
+- Cross-catalog parity entry at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `### Instance #46 — squash-merge-of-dependent-PR-stack-causes-false-CONFLICT-on-follower`
 - Sibling: `## docs-PR-merge-doesnt-imply-migration-applied` (cascade #43 elsewhere in this file)
 
 ---
