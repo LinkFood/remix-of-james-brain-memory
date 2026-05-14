@@ -49,6 +49,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { cn } from '@/lib/utils';
+import { isMarketHoursET } from '@/lib/marketHours';
 import {
   REGIME_WATCHLIST,
   MARKET_KEY,
@@ -260,10 +261,12 @@ function TickerGrid({
   perTickerLatest,
   perTickerSignals,
   config,
+  isAfterHours,
 }: {
   perTickerLatest: Map<string, RegimeClassificationRow>;
   perTickerSignals: Map<string, RegimeSignalRow>;
   config: Map<string, RegimeConfigRow>;
+  isAfterHours: boolean;
 }) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
@@ -272,10 +275,22 @@ function TickerGrid({
         const sig = perTickerSignals.get(t);
         const style = cls ? classificationStyle(cls.classification) : classificationStyle('unknown');
         const desc = cls ? config.get(cls.classification)?.description ?? null : null;
+        // After-hours disambiguation: classifier returns "unknown" post-close
+        // because the 30-min momentum window is empty — not a failure. Mute the
+        // tile and label it so the page doesn't read as broken. ARIA hook is
+        // the sibling-pattern anchor for future after-hours empty surfaces.
+        const isAfterHoursEmpty =
+          isAfterHours && (cls == null || cls.classification === 'unknown');
         return (
           <Card
             key={t}
-            className={cn('p-2.5 border space-y-1.5', style.border, style.bg)}
+            className={cn(
+              'p-2.5 border space-y-1.5',
+              style.border,
+              style.bg,
+              isAfterHoursEmpty && 'opacity-60',
+            )}
+            aria-label={isAfterHoursEmpty ? 'data-empty-after-hours' : undefined}
           >
             <div className="flex items-center justify-between">
               <span className="font-mono font-semibold text-sm">{t}</span>
@@ -283,7 +298,17 @@ function TickerGrid({
             </div>
             {cls ? (
               <>
-                <ClassificationBadge name={cls.classification} description={desc} />
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <ClassificationBadge name={cls.classification} description={desc} />
+                  {isAfterHoursEmpty && (
+                    <Badge
+                      variant="outline"
+                      className="text-[9px] py-0 px-1 font-mono border-muted-foreground/30 text-muted-foreground"
+                    >
+                      post-close
+                    </Badge>
+                  )}
+                </div>
                 <div className="flex items-center justify-between text-[10px] text-muted-foreground">
                   <ConfidenceBar value={cls.confidence} />
                   <span className="font-mono tabular-nums">
@@ -292,7 +317,9 @@ function TickerGrid({
                 </div>
               </>
             ) : (
-              <div className="text-[11px] text-muted-foreground italic">no capture yet</div>
+              <div className="text-[11px] text-muted-foreground italic">
+                {isAfterHours ? 'post-close' : 'no capture yet'}
+              </div>
             )}
           </Card>
         );
@@ -577,11 +604,19 @@ export default function Pulse() {
     isError,
   } = state;
 
+  // Post-RTH ct-regime-capture intentionally stops producing fresh classifications
+  // (30-min momentum window goes empty), so the "stale" banner is misleading after
+  // the close — page is working as designed, not broken. Swap copy to disambiguate.
+  const isAfterHours = useMemo(() => !isMarketHoursET(), []);
+
   const stalenessCopy = useMemo(() => {
     if (!dataAnchor) return null;
     if (!isStale) return null;
+    if (isAfterHours) {
+      return `After-hours — showing last RTH close (${formatAge(ageMinutes)}). Capture resumes at 09:30 ET.`;
+    }
     return `Last regime capture ${formatAge(ageMinutes)}. Showing that snapshot — auto-resumes when capture cron resumes.`;
-  }, [dataAnchor, isStale, ageMinutes]);
+  }, [dataAnchor, isStale, ageMinutes, isAfterHours]);
 
   return (
     <TooltipProvider delayDuration={150}>
@@ -645,6 +680,7 @@ export default function Pulse() {
               perTickerLatest={perTickerLatest}
               perTickerSignals={perTickerSignals}
               config={configByName}
+              isAfterHours={isAfterHours}
             />
           </section>
 
