@@ -330,6 +330,135 @@ try {
   });
 }
 
+// T2.7 — Ship 11 of Bundle 4: triggered_by + urgency projected on MorningBriefResponse.
+// Forensic verification surface — trading-Claude needs to see whether canonical
+// is breaking_news vs scheduled / urgency high vs normal, not just the
+// scheduled-boolean derived in pre-Ship-11 projection.
+try {
+  const r = await getMorningBrief({});
+  if (r.brief.status === 'populated') {
+    const hasTriggeredBy = 'triggered_by' in r.brief && typeof r.brief.triggered_by === 'string';
+    const hasUrgency = 'urgency' in r.brief && typeof r.brief.urgency === 'string';
+    record({
+      tool: 'get_morning_brief',
+      name: 'triggered_by_and_urgency_projected',
+      category: 3,
+      status: hasTriggeredBy && hasUrgency ? 'PASS' : 'FAIL',
+      evidence: `triggered_by:${r.brief.triggered_by} urgency:${r.brief.urgency}`,
+    });
+  } else {
+    record({
+      tool: 'get_morning_brief',
+      name: 'triggered_by_and_urgency_projected',
+      category: 3,
+      status: 'DRIFT',
+      evidence: 'no brief today; cannot verify field projection',
+    });
+  }
+} catch (e) {
+  record({
+    tool: 'get_morning_brief',
+    name: 'triggered_by_and_urgency_projected',
+    category: 3,
+    status: 'FAIL',
+    evidence: e instanceof Error ? e.message : String(e),
+  });
+}
+
+// T2.8 — Ship 11: accuracy_score + accuracy_notes projected. Ship 6's bridge
+// populates the CANONICAL row only (the row whose id matches
+// ct_eod_reports.morning_brief_id). Newer post-bridge rebriefs (afternoon
+// breaking_news) don't get the score until next-day's bridge run. The test
+// iterates dates DESC and picks the FIRST one where the CURRENT canonical
+// (max brief_version) has accuracy_score populated — typically yesterday
+// when today's afternoon rebriefs have moved canonical past the bridged row.
+try {
+  // Find dates with ANY accuracy_score-populated row, DESC
+  const { data: candidates } = await supabase
+    .from('ct_daily_briefs')
+    .select('session_date')
+    .not('accuracy_score', 'is', null)
+    .order('session_date', { ascending: false })
+    .limit(10);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const dateList = ((candidates as any[] | null) || []).map((r) => r.session_date as string);
+  const uniqueDates = Array.from(new Set(dateList));
+
+  let result: { date: string; score: unknown; notes: unknown } | null = null;
+  for (const d of uniqueDates) {
+    const r = await getMorningBrief({ date: d });
+    if (r.brief.status === 'populated' && typeof r.brief.accuracy_score === 'number'
+        && typeof r.brief.accuracy_notes === 'string' && r.brief.accuracy_notes.length > 0) {
+      result = { date: d, score: r.brief.accuracy_score, notes: r.brief.accuracy_notes };
+      break;
+    }
+  }
+
+  if (!result) {
+    record({
+      tool: 'get_morning_brief',
+      name: 'accuracy_score_and_notes_projected',
+      category: 3,
+      status: 'DRIFT',
+      evidence: `no date had canonical-row with populated accuracy_score; checked ${uniqueDates.length} candidates`,
+    });
+  } else {
+    record({
+      tool: 'get_morning_brief',
+      name: 'accuracy_score_and_notes_projected',
+      category: 3,
+      status: 'PASS',
+      evidence: `date:${result.date} score:${result.score} notes_len:${(result.notes as string).length}`,
+    });
+  }
+} catch (e) {
+  record({
+    tool: 'get_morning_brief',
+    name: 'accuracy_score_and_notes_projected',
+    category: 3,
+    status: 'FAIL',
+    evidence: e instanceof Error ? e.message : String(e),
+  });
+}
+
+// T1.5 — Ship 11: get_co_trader_context specialist_recall organ projects
+// unflagged_mode + per-read similarity_score on semantic-recall analogs.
+// Note: tool returns { structured, ... }; organ data lives at
+// structured.organs.specialist_recall.data — NOT directly on the response.
+try {
+  const r = await getCoTraderContext({ ticker: 'NVDA', organs: ['specialist_recall'] });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recall = (r as any).structured?.organs?.specialist_recall?.data;
+  const mode = recall?.unflagged_mode;
+  const validMode = mode === 'semantic' || mode === 'chronological_fallback' || mode === 'no_history';
+  // Check for similarity_score on unflagged reads (semantic path only — chronological
+  // fallback leaves it null; we verify the field is PRESENT not necessarily populated).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const unflaggedReads = ((recall?.reads as any[]) || []).filter((x) => x.flagged === false);
+  const hasFieldOnAtLeastOne = unflaggedReads.length === 0
+    ? true // vacuous — no unflagged reads to check
+    : unflaggedReads.some((x) => 'similarity_score' in x);
+  // Under semantic mode, at least one unflagged should have a numeric similarity_score
+  const semanticEvidence = mode === 'semantic' && unflaggedReads.length > 0
+    ? unflaggedReads.some((x) => typeof x.similarity_score === 'number')
+    : true; // chronological_fallback or empty — null is correct, vacuous pass
+  record({
+    tool: 'get_co_trader_context',
+    name: 'specialist_recall_unflagged_mode_and_similarity_projected',
+    category: 3,
+    status: validMode && hasFieldOnAtLeastOne && semanticEvidence ? 'PASS' : 'FAIL',
+    evidence: `mode:${mode} unflagged_count:${unflaggedReads.length} sim_field_present:${hasFieldOnAtLeastOne} semantic_has_numeric_sim:${semanticEvidence}`,
+  });
+} catch (e) {
+  record({
+    tool: 'get_co_trader_context',
+    name: 'specialist_recall_unflagged_mode_and_similarity_projected',
+    category: 3,
+    status: 'FAIL',
+    evidence: e instanceof Error ? e.message : String(e),
+  });
+}
+
 // ===========================================================================
 // Tool 3 — get_jac_brief (life-management self-review)
 // ===========================================================================

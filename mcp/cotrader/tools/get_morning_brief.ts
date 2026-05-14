@@ -72,6 +72,8 @@ interface CtDailyBriefRow {
   ttl_hours: number | null;
   expires_at: string | null;
   created_at: string;
+  accuracy_score: number | null;
+  accuracy_notes: string | null;
 }
 
 export interface MorningBriefResponse {
@@ -82,9 +84,28 @@ export interface MorningBriefResponse {
   regime: string | null;
   generated_at: string | null;
   expires_at: string | null;
+  /** Trigger source for this brief: 'scheduled' | 'breaking_news' |
+   *  'manual' | 'regime_shift'. Lets trading-Claude do forensic verification
+   *  of whether the canonical row came from the morning fire or a rebrief.
+   *  Sibling of `scheduled` (boolean) — kept for backward compat; new
+   *  consumers should read `triggered_by` for full granularity. */
+  triggered_by: string | null;
+  /** Urgency tag: 'normal' | 'elevated' | 'high' | 'acute'. Surfaces on
+   *  rebriefs to signal how loud the trigger event was. Mirrors the chip
+   *  shown in the /morning-brief UI header. */
+  urgency: string | null;
   scheduled: boolean | null;
   model: string | null;
   ttl_hours: number | null;
+  /** Post-session reflection score 0.0-1.0, populated by ct-brief-reflection
+   *  bridge cron (Ship 6 of Bundle 2, 2026-05-13). Null when no EOD report
+   *  has fired yet for this brief's session. Property loop closure at brief
+   *  layer — trading-Claude can see "yesterday scored 0.55" without a
+   *  follow-up tool call. */
+  accuracy_score: number | null;
+  /** 1-3 sentence deterministic digest of the per-ticker scorecard
+   *  commentary (Ship 6 bridge). Null when no EOD report yet. */
+  accuracy_notes: string | null;
 
   focus_tickers: string[];
   skip_tickers: string[];
@@ -167,9 +188,13 @@ function emptyResponse(): MorningBriefResponse {
     regime: null,
     generated_at: null,
     expires_at: null,
+    triggered_by: null,
+    urgency: null,
     scheduled: null,
     model: null,
     ttl_hours: null,
+    accuracy_score: null,
+    accuracy_notes: null,
     focus_tickers: [],
     skip_tickers: [],
     macro_narrative: null,
@@ -195,9 +220,13 @@ function mapRow(row: CtDailyBriefRow): MorningBriefResponse {
     regime: row.macro_regime,
     generated_at: row.created_at,
     expires_at: row.expires_at,
+    triggered_by: row.triggered_by,
+    urgency: row.urgency,
     scheduled: row.triggered_by === 'scheduled',
     model: row.generated_by_model,
     ttl_hours: row.ttl_hours,
+    accuracy_score: row.accuracy_score,
+    accuracy_notes: row.accuracy_notes,
     focus_tickers: Array.isArray(row.watchlist_focus) ? row.watchlist_focus : [],
     skip_tickers: Array.isArray(row.skip_today) ? row.skip_today : [],
     macro_narrative: row.macro_narrative,
@@ -273,7 +302,7 @@ export async function getMorningBrief(args: GetMorningBriefArgs): Promise<GetMor
   const { data, error } = await supabase
     .from('ct_daily_briefs')
     .select(
-      'id, session_date, brief_version, triggered_by, supersedes_id, urgency, macro_narrative, macro_regime, breaking_events, overnight_action, recent_prints, per_ticker, convergent_view, high_conviction_ideas, watchlist_focus, skip_today, generated_by_model, ttl_hours, expires_at, created_at',
+      'id, session_date, brief_version, triggered_by, supersedes_id, urgency, macro_narrative, macro_regime, breaking_events, overnight_action, recent_prints, per_ticker, convergent_view, high_conviction_ideas, watchlist_focus, skip_today, generated_by_model, ttl_hours, expires_at, created_at, accuracy_score, accuracy_notes',
     )
     .eq('session_date', requestedEtDate)
     .order('brief_version', { ascending: false })

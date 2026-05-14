@@ -101,6 +101,14 @@ export interface RecallEntry {
   /** 'unflagged' when not flagged, 'pending' when flagged but no grade yet. */
   outcome: RecallOutcome;
   alpha_pct: number | null;
+  /** Cosine similarity to the anchor read (the most-recent ct_specialist_reads
+   *  row for this ticker), when this entry was returned by the semantic-recall
+   *  RPC. Populated for unflagged entries when `unflagged_mode='semantic'`.
+   *  null for the flagged set (always chronological) AND for unflagged entries
+   *  when fallback fires (`unflagged_mode='chronological_fallback'`). Lets
+   *  trading-Claude forensically verify which path produced each unflagged
+   *  analog without re-running the RPC. Phase 7b Ship 11 (Bundle 4, 2026-05-13). */
+  similarity_score?: number | null;
 }
 
 export interface RecallStats {
@@ -149,6 +157,17 @@ export interface SpecialistRecallResult {
   reads: RecallEntry[];
   stats: RecallStats;
   generated_at: string;
+  /** Which recall path produced the UNFLAGGED set:
+   *  - 'semantic' = match_ct_specialist_reads_by_similarity RPC fired with the
+   *    most-recent embedded read on this ticker as the anchor (Ship 10).
+   *  - 'chronological_fallback' = anchor missing / no embedding yet / RPC error;
+   *    helper fell back to the pre-Ship-10 chronological query.
+   *  - 'no_history' = ticker has no recall data at all (both sets empty).
+   *  Per-call forensic surface so trading-Claude can verify whether the
+   *  current recall is the analog book or the fallback. Phase 7b Ship 11
+   *  (Bundle 4, 2026-05-13). The FLAGGED set is ALWAYS chronological by
+   *  design (audit doc Section 8 — graded outcomes need temporal coherence). */
+  unflagged_mode: 'semantic' | 'chronological_fallback' | 'no_history';
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +313,7 @@ function emptyResult(
         current_streak_length: 0,
       },
       generated_at: asOf,
+      unflagged_mode: 'no_history',
     },
     meta: {
       helperName: HELPER_NAME,
@@ -484,17 +504,30 @@ export async function getSpecialistRecallContext(
       };
     });
 
-    const unflaggedEntries: RecallEntry[] = unflaggedRows.map((r) => ({
-      ts: r.updated_at,
-      ticker: r.ticker,
-      direction_lean: normalizeLean(r.direction_lean),
-      conviction: r.conviction == null ? null : Number(r.conviction),
-      flagged: false,
-      flag_id: null,
-      flag_label: null,
-      outcome: 'unflagged',
-      alpha_pct: null,
-    }));
+    const unflaggedEntries: RecallEntry[] = unflaggedRows.map((r) => {
+      // similarity is present on rows returned by match_ct_specialist_reads_by_similarity
+      // (semantic path). The chronological fallback's SELECT doesn't include it,
+      // so it's undefined for fallback rows. Coerce undefined → null for a
+      // stable contract: trading-Claude sees null and knows fallback fired.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sim = (r as any).similarity;
+      const similarity_score =
+        unflaggedMode === 'semantic' && typeof sim === 'number' && Number.isFinite(sim)
+          ? Number(sim)
+          : null;
+      return {
+        ts: r.updated_at as string,
+        ticker: r.ticker as string,
+        direction_lean: normalizeLean(r.direction_lean as string | null),
+        conviction: r.conviction == null ? null : Number(r.conviction),
+        flagged: false,
+        flag_id: null,
+        flag_label: null,
+        outcome: 'unflagged' as RecallOutcome,
+        alpha_pct: null,
+        similarity_score,
+      };
+    });
 
     // 5. Merge, sort newest-first.
     const reads: RecallEntry[] = [...flaggedEntries, ...unflaggedEntries].sort(
@@ -529,6 +562,7 @@ export async function getSpecialistRecallContext(
         reads,
         stats,
         generated_at: asOf,
+        unflagged_mode: unflaggedMode,
       },
       meta: {
         helperName: HELPER_NAME,
