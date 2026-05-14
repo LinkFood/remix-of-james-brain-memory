@@ -644,6 +644,48 @@ async function maybeFireBudgetAlarm(
 }
 
 // ---------------------------------------------------------------------------
+// Ship 2 — per-attempt telemetry flush. One batched insert at function exit,
+// fire-and-forget (catch + swallow). Never block the existing update path.
+// ---------------------------------------------------------------------------
+async function flushPollerLog(
+  supabase: SupabaseClient,
+  rows: Array<{
+    run_id: string;
+    option_symbol: string;
+    ticker: string | null;
+    dte: number | null;
+    sweep_reason: string;
+    latency_ms: number | null;
+    error_msg: string | null;
+  }>,
+): Promise<void> {
+  if (rows.length === 0) return;
+  try {
+    // error_msg cap to 500 chars so a runaway UW message doesn't blow the row.
+    const slim = rows.map((r) => ({
+      run_id: r.run_id,
+      option_symbol: r.option_symbol,
+      ticker: r.ticker,
+      dte: r.dte,
+      sweep_reason: r.sweep_reason,
+      latency_ms: r.latency_ms,
+      error_msg: r.error_msg ? r.error_msg.slice(0, 500) : null,
+    }));
+    const chunkSize = 200;
+    for (let i = 0; i < slim.length; i += chunkSize) {
+      const slice = slim.slice(i, i + chunkSize);
+      const { error } = await supabase.from('ct_contract_poller_log').insert(slice);
+      if (error) {
+        console.error(`[${FN_NAME}] poller-log flush: ${error.message}`);
+        break;
+      }
+    }
+  } catch (e) {
+    console.error(`[${FN_NAME}] poller-log flush threw: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main entry
 // ---------------------------------------------------------------------------
 serve(async (req) => {
@@ -659,6 +701,39 @@ serve(async (req) => {
   setUwCaller(FN_NAME);
 
   const startedAt = Date.now();
+  // Ship 2 — per-attempt telemetry. One run_id per invocation; rows pushed at
+  // every decision point and flushed fire-and-forget at function exit so they
+  // never block the existing update path.
+  const runId = crypto.randomUUID();
+  type PollerLogRow = {
+    run_id: string;
+    option_symbol: string;
+    ticker: string | null;
+    dte: number | null;
+    sweep_reason:
+      | 'tightened_throttle'
+      | 'critical_throttle'
+      | 'exhausted_full_halt'
+      | 'skipped_cadence'
+      | 'skipped_cap'
+      | 'skipped_budget'
+      | 'quote_written'
+      | 'quote_dropped'
+      | 'uw_error';
+    latency_ms: number | null;
+    error_msg: string | null;
+  };
+  const pollerLog: PollerLogRow[] = [];
+  const logSkip = (
+    sweep_reason: PollerLogRow['sweep_reason'],
+    option_symbol: string,
+    ticker: string | null = null,
+    dte: number | null = null,
+    latency_ms: number | null = null,
+    error_msg: string | null = null,
+  ) => {
+    pollerLog.push({ run_id: runId, option_symbol, ticker, dte, sweep_reason, latency_ms, error_msg });
+  };
   const stats: Stats = {
     ok: true,
     elapsed_ms: 0,
@@ -681,6 +756,10 @@ serve(async (req) => {
     errors: [],
   };
 
+  // Hoisted to function scope so the final fire-and-forget poller-log flush
+  // (Ship 2) can see it even if the try block bails early.
+  let supabase: SupabaseClient | undefined;
+
   try {
     let mode: Mode = 'rth';
     let oldestFirst = false;
@@ -693,7 +772,7 @@ serve(async (req) => {
     } catch { /* ignore */ }
     stats.mode = mode;
 
-    const supabase = createClient(
+    supabase = createClient(
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!,
     );
@@ -728,7 +807,9 @@ serve(async (req) => {
     const minuteOfHour = new Date().getMinutes();
     if (tierResult.tier === 'tightened' && minuteOfHour % 5 !== 0) {
       stats.skipped_reason = `tightened_throttle_min_${minuteOfHour}_mod5`;
+      logSkip('tightened_throttle', '__cron_skip__', null, null, null, stats.skipped_reason);
       stats.elapsed_ms = Date.now() - startedAt;
+      await flushPollerLog(supabase, pollerLog);
       return new Response(JSON.stringify(stats), {
         status: 200,
         headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
@@ -736,7 +817,9 @@ serve(async (req) => {
     }
     if (tierResult.tier === 'critical' && minuteOfHour % 7 !== 0) {
       stats.skipped_reason = `critical_throttle_min_${minuteOfHour}_mod7`;
+      logSkip('critical_throttle', '__cron_skip__', null, null, null, stats.skipped_reason);
       stats.elapsed_ms = Date.now() - startedAt;
+      await flushPollerLog(supabase, pollerLog);
       return new Response(JSON.stringify(stats), {
         status: 200,
         headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
@@ -747,7 +830,9 @@ serve(async (req) => {
     if (tierResult.tier === 'exhausted') {
       stats.budget_exhausted = true;
       stats.skipped_reason = 'exhausted_full_halt';
+      logSkip('exhausted_full_halt', '__cron_skip__', null, null, null, stats.skipped_reason);
       stats.elapsed_ms = Date.now() - startedAt;
+      await flushPollerLog(supabase, pollerLog);
       return new Response(JSON.stringify(stats), {
         status: 200,
         headers: { ...getCorsHeaders(req), 'Content-Type': 'application/json' },
@@ -774,6 +859,21 @@ serve(async (req) => {
     const dueTracks = filterByCadence(allTracks, cfg, mode);
     stats.tracks_eligible = dueTracks.length;
 
+    // Ship 2 telemetry — log tracks dropped by the cadence filter. Dedup by
+    // option_symbol here so we log one row per unique contract not yet due
+    // (matches how skipped_cap is bucketed below).
+    {
+      const dueSet = new Set(dueTracks.map((t) => t.option_symbol).filter(Boolean));
+      const loggedCadence = new Set<string>();
+      for (const t of allTracks) {
+        if (!t.option_symbol) continue;
+        if (dueSet.has(t.option_symbol)) continue;
+        if (loggedCadence.has(t.option_symbol)) continue;
+        loggedCadence.add(t.option_symbol);
+        logSkip('skipped_cadence', t.option_symbol, t.ticker, t.dte_at_print);
+      }
+    }
+
     // Dedup by option_symbol — many tracks can share a contract.
     const bySymbol = new Map<string, ContractTrack[]>();
     for (const t of dueTracks) {
@@ -785,8 +885,17 @@ serve(async (req) => {
 
     // Cap unique symbols at maxPerRun (LRU within bySymbol — Map preserves
     // insertion order, and dueTracks was already LRU-sorted by last_quoted_at).
-    const symbols = [...bySymbol.keys()].slice(0, cfg.maxPerRun);
+    const allSymbols = [...bySymbol.keys()];
+    const symbols = allSymbols.slice(0, cfg.maxPerRun);
     stats.unique_symbols = symbols.length;
+
+    // Ship 2 telemetry — log unique contracts dropped by the maxPerRun cap.
+    // These are the LRU tail that wasn't budget-blocked, just past the slice.
+    for (const sym of allSymbols.slice(cfg.maxPerRun)) {
+      const arr = bySymbol.get(sym);
+      const first = arr?.[0];
+      logSkip('skipped_cap', sym, first?.ticker ?? null, first?.dte_at_print ?? null);
+    }
 
     // Pull quotes with controlled concurrency. Inline pLimit cap at uwConcurrency.
     type QuoteResult = {
@@ -806,15 +915,25 @@ serve(async (req) => {
     // Build job array — each job is one UW call. We check budget INSIDE the
     // job so a mid-loop exhaustion stops new calls but in-flight ones complete.
     const jobs: Array<() => Promise<void>> = symbols.map((symbol) => async () => {
-      if (stats.budget_exhausted) return;
+      const tracksForSym = bySymbol.get(symbol);
+      const head = tracksForSym?.[0];
+      const symTicker = head?.ticker ?? null;
+      const symDte = head?.dte_at_print ?? null;
+      if (stats.budget_exhausted) {
+        logSkip('skipped_budget', symbol, symTicker, symDte, null, 'budget_exhausted_pre_check');
+        return;
+      }
       const ok = await uwBudgetOk();
       if (!ok) {
         stats.budget_exhausted = true;
+        logSkip('skipped_budget', symbol, symTicker, symDte, null, 'uw_budget_ok_false');
         return;
       }
       stats.uw_calls += 1;
+      const t0 = Date.now();
       try {
         const q = await getOptionContractLatestMid(symbol);
+        const latency = Date.now() - t0;
         quoteResults.push({
           symbol,
           ok: q.ok,
@@ -825,9 +944,18 @@ serve(async (req) => {
           spreadPct: q.spreadPct,
           ts: q.ts,
         });
+        if (q.ok && q.mid !== null) {
+          logSkip('quote_written', symbol, symTicker, symDte, latency);
+        } else {
+          logSkip('quote_dropped', symbol, symTicker, symDte, latency,
+            `ok=${q.ok}|mid=${q.mid === null ? 'null' : q.mid}`);
+        }
       } catch (e) {
+        const latency = Date.now() - t0;
         quoteResults.push({ symbol, ok: false, mid: null, bid: null, ask: null, last: null, spreadPct: null, ts: null });
-        stats.errors.push(`uw ${symbol}: ${e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200)}`);
+        const msg = e instanceof Error ? e.message.slice(0, 200) : String(e).slice(0, 200);
+        stats.errors.push(`uw ${symbol}: ${msg}`);
+        logSkip('uw_error', symbol, symTicker, symDte, latency, msg);
       }
     });
 
@@ -925,6 +1053,13 @@ serve(async (req) => {
   stats.elapsed_ms = Date.now() - startedAt;
   // Cap errors array
   stats.errors = stats.errors.slice(0, 20);
+
+  // Ship 2 — flush poller-log telemetry. Fire-and-forget shape inside; even if
+  // the insert fails we still return stats to the caller. Awaited only so the
+  // edge runtime doesn't kill the isolate before the insert lands.
+  try {
+    if (supabase) await flushPollerLog(supabase, pollerLog);
+  } catch { /* ignore */ }
 
   return new Response(JSON.stringify(stats), {
     status: 200,
