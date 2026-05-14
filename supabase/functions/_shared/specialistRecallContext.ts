@@ -278,7 +278,7 @@ function buildOrganMetadata(
   asOf: string,
   ticker: string | null,
   status: OrganStatus,
-  unflaggedMode: 'semantic' | 'chronological_fallback' = 'semantic',
+  unflaggedMode: 'semantic' | 'chronological_fallback' | 'no_history' = 'semantic',
 ): OrganMetadata {
   return {
     as_of: asOf,
@@ -287,6 +287,7 @@ function buildOrganMetadata(
       ? `last ${FLAGGED_CAP} flagged (chronological) + top ${UNFLAGGED_CAP} ${unflaggedMode === 'semantic' ? 'semantically-similar' : 'chronological-fallback'} unflagged-conviction-≥${UNFLAGGED_CONVICTION_FLOOR} for ${ticker}`
       : 'no ticker focus (recall is per-entity)',
     status,
+    unflagged_mode: unflaggedMode,
   };
 }
 
@@ -325,7 +326,7 @@ function emptyResult(
       truncated: false,
       ...(warning ? { warning } : {}),
     },
-    organMetadata: buildOrganMetadata(asOf, ticker, status),
+    organMetadata: buildOrganMetadata(asOf, ticker, status, 'no_history'),
   };
 }
 
