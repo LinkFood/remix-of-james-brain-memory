@@ -33,6 +33,7 @@ import { TapeReaderArc } from '@/components/alpha/TapeReaderArc';
 import { ClaudesRead } from '@/components/alpha/ClaudesRead';
 import { GexSnapshotCard } from '@/components/alpha/GexSnapshotCard';
 import { NewsCausalityMatrix } from '@/components/alpha/NewsCausalityMatrix';
+import { RegimeFlipJournal } from '@/components/alpha/RegimeFlipJournal';
 
 export default function Alpha() {
   return (
@@ -82,6 +83,13 @@ export default function Alpha() {
           2026-04-16 ("Bloomberg moves NVDA flow 68% of the time") finally
           surfaced. */}
       <NewsCausalityMatrix />
+
+      {/* Regime Flip Journal — Phase 6 of the audit-driven loop. Surfaces
+          ct_regime_history transitions that have been silently logged but
+          never rendered. Per audit Section E #3. Lands post iter #2.6
+          placeholder-removal so it slots directly after NewsCausalityMatrix
+          rather than between two retired placeholders. */}
+      <RegimeFlipJournal />
 
       {/* Footer rationale — captain reading discipline */}
       <Card className="p-2.5 bg-muted/5 border-muted/20">
