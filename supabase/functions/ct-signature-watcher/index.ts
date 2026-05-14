@@ -32,6 +32,7 @@ import {
   evaluateTier,
   loadTierThresholds,
   loadScoreForAlert,
+  loadScoreAndIdForAlert,
   type TierThresholds,
 } from '../_shared/alarmTiering.ts';
 import {
@@ -485,7 +486,9 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
       // afford to fire with a missing score.
       // executed_at is null on RepeatedHits* rules (~30% of alerts), so fall
       // back to ingested_at as the event timestamp for the recovery scoring.
-      let score: number | null = await loadScoreForAlert(supabase, a.alert_id);
+      // Ship 9b: also pick up the ct_scored_flow.id (BIGINT) so we can wire
+      // ct_flags.source_flow_ids correctly (BIGINT[] of scored_flow ids).
+      let { score, scoredFlowId } = await loadScoreAndIdForAlert(supabase, a.alert_id);
       if (score === null) {
         const eventTs = a.executed_at ?? a.ingested_at;
         if (eventTs) {
@@ -493,7 +496,9 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
           await (supabase.rpc as any)('ct_score_existing_flow', {
             p_since: new Date(Date.parse(eventTs) - 120_000).toISOString(),
           });
-          score = await loadScoreForAlert(supabase, a.alert_id);
+          const recovered = await loadScoreAndIdForAlert(supabase, a.alert_id);
+          score = recovered.score;
+          scoredFlowId = recovered.scoredFlowId;
         }
       }
 
@@ -596,6 +601,9 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
       // Pulse-at-fire-time — regime context per tenet 9.
       const pulse = await readPulseContext(supabase, ticker, printTime);
 
+      // Ship 9b: source_flow_ids carries ct_scored_flow.id (BIGINT[]) so flag
+      // detail pages and the corpus MV can join back to the originating scored
+      // event. Null when bronze fired purely on signature (no scored row).
       const { error: flagErr } = await supabase
         .from('ct_flags')
         .insert({
@@ -619,6 +627,7 @@ async function runSweep(supabase: SupabaseClient, thresholds: TierThresholds, re
           target_price: targetPrice,
           invalidation_price: invalidationPrice,
           status: 'active',
+          source_flow_ids: scoredFlowId != null ? [scoredFlowId] : null,
           pulse_net_premium_at_fire: pulse.netPremium,
           pulse_slope_5min_at_fire: pulse.slope5min,
           pulse_regime_at_fire: pulse.regime,

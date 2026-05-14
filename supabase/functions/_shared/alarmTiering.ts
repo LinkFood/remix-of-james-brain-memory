@@ -177,6 +177,36 @@ export async function loadScoreForAlert(
 }
 
 /**
+ * Looks up the per-alert flow score AND the ct_scored_flow.id (BIGINT) for the
+ * matching row. Used by ct-signature-watcher to wire ct_flags.source_flow_ids
+ * (BIGINT[] of ct_scored_flow.id values — Ship 9b).
+ *
+ * Returns both score and scoredFlowId as null if no matching scored row exists,
+ * which is normal for fresh alerts that bronze fires on (score-only path is
+ * impossible without a scored row, but signature-only is — sourceFlowId will
+ * be null in that case and ct_flags.source_flow_ids stays null).
+ */
+export async function loadScoreAndIdForAlert(
+  supabase: SupabaseClient,
+  alertId: string,
+): Promise<{ score: number | null; scoredFlowId: number | null }> {
+  const { data: scored } = await supabase
+    .from('ct_scored_flow')
+    .select('id, score')
+    .eq('source_table', 'ct_flow_alerts')
+    .eq('source_id', alertId)
+    .order('event_ts', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (!scored) return { score: null, scoredFlowId: null };
+  const score = Number.isFinite(Number(scored.score)) ? Number(scored.score) : null;
+  const scoredFlowId = typeof scored.id === 'number'
+    ? scored.id
+    : (Number.isFinite(Number(scored.id)) ? Number(scored.id) : null);
+  return { score, scoredFlowId };
+}
+
+/**
  * Bulk score lookup — single RPC-style query keyed by alert_id list. Avoids
  * N+1 round-trips when the harness evaluates 1,000+ alerts in a window.
  * Paginates internally so an oversized id list doesn't get truncated.
