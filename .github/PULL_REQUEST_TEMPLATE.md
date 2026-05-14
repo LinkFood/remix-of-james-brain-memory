@@ -2,6 +2,27 @@
 
 <!-- One paragraph: what this PR does and why. Link to brief/Phase A doc/incident retro if applicable. -->
 
+## Dependencies
+
+<!--
+Cascade #46 class-kill (2026-05-13). If this PR is based on another open
+PR's branch (i.e., you branched off PR #N to avoid pre-merge conflicts on
+shared files), declare it here. If PR #N merges first via squash, GitHub
+will mark this PR CONFLICTING/DIRTY even though the working trees agree
+semantically — squash flattens N commits into one and the duplicate-content
+patch context confuses the per-file merge driver.
+
+Resolution: reset --hard origin/main + cherry-pick + push --force-with-lease.
+See docs/runbooks/squash-merge-dependency-resolution.md for the runbook.
+
+Two empirical fires on 2026-05-13: PR #115 (after #114 squash) and PR #91
+(after Bundle 1-3 squash-merge accumulation).
+-->
+
+**Depends on:** <!-- e.g., "PR #N — branched from its feature branch to avoid pre-merge conflicts on docs/methodology-patterns.md" — OR "none / standalone" -->
+
+**Squash-merge resolution plan (if dependent):** <!-- "Merge dependency first, then immediately squash this PR before main drifts further" OR "Will require reset-cherry-pick-force per docs/runbooks/squash-merge-dependency-resolution.md if dependency merges before this one" — OR "n/a" -->
+
 ## Diagnosis (required for fix PRs; mark "n/a" for refactor / docs-only / new feature)
 
 <!--
