@@ -24,7 +24,8 @@ const Auth = () => {
           });
           return;
         }
-        navigate('/dashboard');
+        // Ship 6 — /dashboard retired; land on Flags home which is the authenticated default.
+        navigate('/');
       }
     });
     return () => subscription.unsubscribe();

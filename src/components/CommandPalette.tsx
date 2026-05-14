@@ -68,7 +68,6 @@ const ROUTES: RouteEntry[] = [
   { path: '/crons',        label: 'Crons',          group: 'System' },
   { path: '/agents',       label: 'Agents',         group: 'System' },
   // More
-  { path: '/dashboard',    label: 'Dashboard',      group: 'More' },
   { path: '/jac',          label: 'JAC',            group: 'More' },
   { path: '/calendar',     label: 'Calendar',       group: 'More' },
   { path: '/brain',        label: 'Brain',          group: 'More' },

@@ -85,7 +85,6 @@ const NAV_GROUPS: NavGroup[] = [
       { path: '/patterns', label: 'Patterns' },
       { path: '/morning-brief', label: 'Morning Brief' },
       { path: '/eod-report', label: 'EOD Report' },
-      { path: '/eod', label: 'EOD' },
     ],
   },
   {
@@ -101,7 +100,6 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'More',
     items: [
-      { path: '/dashboard', label: 'Dashboard' },
       { path: '/jac', label: 'JAC' },
       { path: '/brain', label: 'Brain' },
       { path: '/reports', label: 'Reports' },

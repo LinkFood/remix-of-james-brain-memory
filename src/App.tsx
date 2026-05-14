@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { RouteBoundary } from "./components/RouteBoundary";
@@ -11,7 +11,6 @@ import { ActivityTrackingProvider } from "./components/ActivityTrackingProvider"
 import { FreshnessClockProvider } from "./components/FreshnessClock";
 import { Ticker } from "./components/jac/Ticker";
 import { AuthLayout } from "./layouts/AuthLayout";
-import Dashboard from "./pages/Dashboard";
 import Settings from "./pages/Settings";
 import CtSettings from "./pages/CtSettings";
 import Auth from "./pages/Auth";
@@ -41,7 +40,6 @@ import Detectors from "./pages/Detectors";
 import CostDashboard from "./pages/CostDashboard";
 import Patterns from "./pages/Patterns";
 import Budget from "./pages/Budget";
-import Eod from "./pages/Eod";
 import EodReport from "./pages/EodReport";
 import MorningBrief from "./pages/MorningBrief";
 import Alarms from "./pages/Alarms";
@@ -97,7 +95,8 @@ const TrackedRoutes = () => {
       <Route path="/cost" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/cost"><CostDashboard /></RouteBoundary></AuthLayout>} />
       <Route path="/patterns" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/patterns"><Patterns /></RouteBoundary></AuthLayout>} />
       <Route path="/budget" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/budget"><Budget /></RouteBoundary></AuthLayout>} />
-      <Route path="/eod" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/eod"><Eod /></RouteBoundary></AuthLayout>} />
+      {/* Ship 6 — /eod retired, redirect to successor /eod-report. See docs/runbooks/route-retirement-protocol.md */}
+      <Route path="/eod" element={<Navigate to="/eod-report" replace />} />
       <Route path="/eod-report" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/eod-report"><EodReport /></RouteBoundary></AuthLayout>} />
       <Route path="/morning-brief" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/morning-brief"><MorningBrief /></RouteBoundary></AuthLayout>} />
       <Route path="/alarms" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/alarms"><Alarms /></RouteBoundary></AuthLayout>} />
@@ -105,7 +104,8 @@ const TrackedRoutes = () => {
       <Route path="/butterflies" element={<AuthLayout sidebar={<ChatPanel />}><RouteBoundary route="/butterflies"><Butterflies /></RouteBoundary></AuthLayout>} />
 
       {/* Authenticated routes — wrapped in AuthLayout */}
-      <Route path="/dashboard" element={<AuthLayout><RouteBoundary route="/dashboard"><Dashboard /></RouteBoundary></AuthLayout>} />
+      {/* Ship 6 — /dashboard retired, redirect to successor /tape-v2 (the Co-Trader command center). See docs/runbooks/route-retirement-protocol.md */}
+      <Route path="/dashboard" element={<Navigate to="/tape-v2" replace />} />
       <Route path="/code" element={<AuthLayout><RouteBoundary route="/code"><CodeWorkspace /></RouteBoundary></AuthLayout>} />
       <Route path="/jac" element={<AuthLayout><RouteBoundary route="/jac"><Jac /></RouteBoundary></AuthLayout>} />
       <Route path="/settings" element={<AuthLayout><RouteBoundary route="/settings"><Settings /></RouteBoundary></AuthLayout>} />
