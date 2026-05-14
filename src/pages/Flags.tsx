@@ -109,6 +109,13 @@ interface Filters {
   minScore: number;
   onlySlacked: boolean;
   dateRange: DateRangeFilter;
+  /**
+   * Ship 4: detector_alarm is opt-in. Default OFF — pre-Ship-4 the page
+   * defaulted to all three sources and detector_alarm dominated 97%+ of
+   * today's row count (1081/1106 on 2026-05-14), drowning specialist and
+   * signature_alarm signal. Toggle on via the Sources chip strip below.
+   */
+  includeDetectorAlarm: boolean;
 }
 
 interface JamesFlagGrade {
@@ -364,15 +371,13 @@ function FlagTile({
         </div>
       </div>
 
-      {/* Entry / target */}
-      {(flag.entry_price != null || flag.target_price != null) && (
+      {/* Entry — target is owned by ProgressChip (or implicit in the outcome
+          chip once graded), so this row used to dup target. Ship 4 dedup:
+          show entry only; target lives in ProgressChip's "spot · target
+          (+X%)" line. */}
+      {flag.entry_price != null && (
         <div className="flex gap-3 text-[10px] text-muted-foreground tabular-nums">
-          {flag.entry_price != null && (
-            <span>entry <span className="text-foreground font-mono">${flag.entry_price.toFixed(2)}</span></span>
-          )}
-          {flag.target_price != null && (
-            <span>target <span className="text-foreground font-mono">${flag.target_price.toFixed(2)}</span></span>
-          )}
+          <span>entry <span className="text-foreground font-mono">${flag.entry_price.toFixed(2)}</span></span>
         </div>
       )}
 
@@ -511,6 +516,7 @@ export default function Flags() {
     minScore: 70,
     onlySlacked: false,
     dateRange: 'today',
+    includeDetectorAlarm: false,
   });
   const [selectedFlag, setSelectedFlag] = useState<Flag | null>(null);
   const [selectedContract, setSelectedContract] = useState<string | null>(null);
@@ -518,9 +524,21 @@ export default function Flags() {
   // graded outcome (won/lost/neutral) on Today. Cleared the moment the user
   // touches the date filter directly (any range), so manual control wins.
   const [autoBumpedDateForOutcome, setAutoBumpedDateForOutcome] = useState(false);
+  // Sibling: true when we auto-bumped Today→30d because the user picked
+  // Status=Graded on Today. Graded flags rarely live in today's window
+  // (horizons resolve over hours-to-days), so the slice looks empty without
+  // widening. Same UX shape as the outcome auto-bump above.
+  const [autoBumpedDateForStatus, setAutoBumpedDateForStatus] = useState(false);
 
   const specialistsActive = mode === 'specialists' || mode === 'both';
   const mineActive = mode === 'mine' || mode === 'both';
+
+  // Ship 4: detector_alarm is opt-in. Default sources strip the 97% flood
+  // (detector_alarm) so the page opens to signal density (specialist +
+  // signature_alarm). Toggle the chip below to re-include detector_alarm.
+  const activeSources = filters.includeDetectorAlarm
+    ? ['specialist', 'signature_alarm', 'detector_alarm']
+    : ['specialist', 'signature_alarm'];
 
   const { data: flags, isLoading } = useQuery<Flag[]>({
     queryKey: ['ct_flags_live', {
@@ -531,6 +549,7 @@ export default function Flags() {
       onlySlacked: filters.onlySlacked,
       dateRange: filters.dateRange,
       outcome: filters.outcome,
+      sources: activeSources,
     }],
     queryFn: async () => {
       const isOutcomeFilter = filters.outcome === 'won' || filters.outcome === 'lost' || filters.outcome === 'neutral';
@@ -546,7 +565,7 @@ export default function Flags() {
       let q: any = supabase
         .from('ct_flags' as never)
         .select(select)
-        .in('source', ['specialist', 'signature_alarm', 'detector_alarm'])
+        .in('source', activeSources)
         .order('created_at', { ascending: false })
         .limit(200);
       if (isOutcomeFilter) {
@@ -717,24 +736,115 @@ export default function Flags() {
     });
   };
 
-  // Counts run against the unfiltered list so badge totals don't shift when
-  // the user narrows the outcome filter — they're meant to read like fixed
-  // status banners, not query-result counters.
-  const counts = useMemo(() => {
-    const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
-    const todayMs = todayStart.getTime();
-    let active = 0, conviction = 0, gradedToday = 0;
-    if (flags) {
-      for (const f of flags) {
-        if (f.status === 'active') active++;
-        if (f.status === 'conviction') conviction++;
-        const g = pickGrade(f);
-        if (g?.graded_at && Date.parse(g.graded_at) >= todayMs) gradedToday++;
-      }
-    }
-    const mine = jamesFlags?.length ?? 0;
-    return { active, conviction, gradedToday, mine };
-  }, [flags, jamesFlags]);
+  // Ship 4: Header counts source from DB-of-truth COUNT queries, NOT from
+  // the loaded 200-row slice. Pre-Ship-4 derivation read `flags` (the same
+  // useQuery slice the list renders from), so badges silently capped at 200
+  // and never reflected the full corpus. Post-Ship-1 grader recalibration
+  // (commit 3b377ec, 2026-05-14) the backlog of horizon-expired ungraded
+  // flags (~11.5k) starts grading at lower WIN thresholds — header
+  // gradedToday must show the lift visibly. PostgREST `Prefer: count=exact`
+  // + `head: true` does this in one round trip per metric. Each metric is a
+  // separate useQuery so they don't refetch when the list re-pages.
+  //
+  // Note: the active/conviction queries follow date-range + sources filter
+  // (so toggling detector_alarm or moving the When chip updates the
+  // badges), but ignore minScore/direction/specialists/outcome — they read
+  // like fixed status banners for the active window+source mix, not as
+  // query-result counters that shift with every filter chip.
+  const cutoff = dateRangeCutoff(filters.dateRange);
+  const sourcesKey = activeSources.join(',');
+
+  const { data: activeCount } = useQuery<number>({
+    queryKey: ['ct_flags_count_active', { cutoff, sourcesKey }],
+    refetchInterval: 30_000,
+    enabled: specialistsActive,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let q: any = (supabase.from('ct_flags' as never) as any)
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'active')
+        .in('source', activeSources);
+      if (cutoff) q = q.gte('created_at', cutoff);
+      const { count, error } = await q;
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+
+  const { data: convictionCount } = useQuery<number>({
+    queryKey: ['ct_flags_count_conviction', { cutoff, sourcesKey }],
+    refetchInterval: 30_000,
+    enabled: specialistsActive,
+    queryFn: async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let q: any = (supabase.from('ct_flags' as never) as any)
+        .select('id', { count: 'exact', head: true })
+        .eq('status', 'conviction')
+        .in('source', activeSources);
+      if (cutoff) q = q.gte('created_at', cutoff);
+      const { count, error } = await q;
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+
+  // gradedToday: ALL ct_flag_grades rows graded since NY-midnight today.
+  // Sourced from ct_flag_grades (not ct_flags) so it captures every grader
+  // write regardless of which source the parent flag came from. This is the
+  // metric Ship 1's recalibration should visibly lift over time.
+  const { data: gradedTodayCount } = useQuery<number>({
+    queryKey: ['ct_flag_grades_count_today'],
+    refetchInterval: 30_000,
+    enabled: specialistsActive,
+    queryFn: async () => {
+      const ny = dateRangeCutoff('today');
+      if (!ny) return 0;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { count, error } = await ((supabase.from('ct_flag_grades' as never) as any)
+        .select('id', { count: 'exact', head: true })
+        .gte('graded_at', ny));
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+
+  // Backlog: flags whose horizon has expired but are still active/conviction
+  // (i.e. qualifying for grading but not yet graded). Drives the
+  // empty-state copy on Status=Graded so the user sees why the slice looks
+  // thin: "11k awaiting grade" — Ship 1's chew-down.
+  const { data: backlogCount } = useQuery<number>({
+    queryKey: ['ct_flags_count_backlog'],
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const nowIso = new Date().toISOString();
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { count, error } = await ((supabase.from('ct_flags' as never) as any)
+        .select('id', { count: 'exact', head: true })
+        .in('status', ['active', 'conviction'])
+        .lt('horizon_ts', nowIso));
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+
+  const counts = useMemo(() => ({
+    active: activeCount ?? 0,
+    conviction: convictionCount ?? 0,
+    gradedToday: gradedTodayCount ?? 0,
+    mine: jamesFlags?.length ?? 0,
+  }), [activeCount, convictionCount, gradedTodayCount, jamesFlags]);
+
+  // CLASS-KILL PREVENTION (Tenet 15) — class to kill: header counts diverging
+  // from DB-of-truth when sourced from a loaded slice. Picked methodology
+  // entry only (option c per Ship 4 brief): smallest touch that durably
+  // anchors the rule. Engine-room judgement — no Playwright infra here, and
+  // a dev-mode runtime assertion would itself re-introduce a derivation
+  // path that drifts. Queued for end-of-arc methodology PR:
+  //   docs/methodology-patterns.md →
+  //     `header-counts-must-source-from-db-not-loaded-slice`
+  // Sibling pattern to: `brief-framed-wrong-computational-layer`. Same
+  // family — dashboard counts ARE a computational layer; sourcing them from
+  // the render slice mistakes "what's rendered" for "what exists."
 
   // Merged, chronologically sorted feed honoring mode + outcome filter.
   const merged: MergedItem[] = useMemo(() => {
@@ -836,9 +946,11 @@ export default function Flags() {
                 key={key}
                 onClick={() => {
                   setFilters((p) => ({ ...p, dateRange: key }));
-                  // Manual date change wins — drop the auto-bump hint regardless
-                  // of which range the user picked (including 7d itself).
+                  // Manual date change wins — drop both auto-bump hints
+                  // regardless of which range the user picked (including
+                  // 7d/30d itself).
                   setAutoBumpedDateForOutcome(false);
+                  setAutoBumpedDateForStatus(false);
                 }}
                 className={cn(
                   'text-[11px] font-mono px-2 py-1 rounded border transition-colors',
@@ -855,7 +967,39 @@ export default function Flags() {
                 (showing past 7 days for graded outcomes)
               </span>
             )}
+            {autoBumpedDateForStatus && (
+              <span className="text-[10px] text-muted-foreground italic ml-1">
+                (showing past 30 days — graded flags often live in 30d window)
+              </span>
+            )}
           </div>
+
+          {/* Sources — detector_alarm is opt-in (Ship 4). Default view shows
+              specialist + signature_alarm only (~25 today on 2026-05-14)
+              instead of 1,106 (97% of which is detector_alarm flood). */}
+          {specialistsActive && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-muted-foreground mr-1">Sources:</span>
+              <span className="text-[11px] font-mono px-2 py-1 rounded border border-primary/40 bg-primary/10 text-primary">
+                specialist
+              </span>
+              <span className="text-[11px] font-mono px-2 py-1 rounded border border-primary/40 bg-primary/10 text-primary">
+                signature_alarm
+              </span>
+              <button
+                onClick={() => setFilters((p) => ({ ...p, includeDetectorAlarm: !p.includeDetectorAlarm }))}
+                className={cn(
+                  'text-[11px] font-mono px-2 py-1 rounded border transition-colors',
+                  filters.includeDetectorAlarm
+                    ? 'border-primary/40 bg-primary/10 text-primary'
+                    : 'border-muted bg-muted/20 text-muted-foreground hover:text-foreground',
+                )}
+                title="detector_alarm dominates the feed by row count. Off by default; toggle on to include."
+              >
+                detector_alarm {filters.includeDetectorAlarm ? '' : '(off)'}
+              </button>
+            </div>
+          )}
 
           {/* Specialist chips */}
           <div className="flex items-center gap-2 flex-wrap">
@@ -897,7 +1041,19 @@ export default function Flags() {
                     key={s}
                     size="sm"
                     variant={filters.status === s ? 'default' : 'outline'}
-                    onClick={() => setFilters((p) => ({ ...p, status: s }))}
+                    onClick={() => {
+                      // Auto-widen Today → 30d when user picks Status=Graded.
+                      // Graded flags resolve at horizon (hours-to-days), so
+                      // today's graded slice is usually thin; 30d gives a
+                      // populated view. Mirrors the Outcome auto-bump pattern.
+                      if (s === 'graded' && filters.dateRange === 'today') {
+                        setFilters((p) => ({ ...p, status: s, dateRange: '30d' }));
+                        setAutoBumpedDateForStatus(true);
+                      } else {
+                        setFilters((p) => ({ ...p, status: s }));
+                        if (s !== 'graded') setAutoBumpedDateForStatus(false);
+                      }
+                    }}
                     className="h-7 px-2 text-[11px] capitalize"
                   >
                     {s}
@@ -1019,11 +1175,43 @@ export default function Flags() {
               <>No stars yet. Flag a print from the /tape page and it will show up here.</>
             ) : mode === 'both' ? (
               <>Nothing to show. No specialist flags at this threshold and no stars yet.</>
+            ) : filters.status === 'graded' && filters.dateRange === 'today' ? (
+              // Ship 4: explicit grader-coverage copy. Today's graded slice
+              // is almost always thin (horizons resolve hours-to-days post
+              // fire). Surface the backlog count so the user sees Ship 1's
+              // recalibration progress instead of a generic empty.
+              <>
+                Grader hasn't covered today's flags yet — backlog of{' '}
+                <span className="text-foreground font-semibold tabular-nums">
+                  {(backlogCount ?? 0).toLocaleString()}
+                </span>{' '}
+                awaiting grade. Try widening{' '}
+                <span className="font-medium">When</span> to <span className="font-medium">30d</span>{' '}
+                for the populated graded slice.
+              </>
+            ) : filters.status === 'graded' ? (
+              <>
+                No graded flags in this window. Backlog of{' '}
+                <span className="text-foreground font-semibold tabular-nums">
+                  {(backlogCount ?? 0).toLocaleString()}
+                </span>{' '}
+                qualifying flags awaiting grade — chew-down in progress.
+              </>
             ) : filters.outcome !== 'all' && filters.outcome !== 'active' ? (
               <>
                 No <span className="lowercase">{filters.outcome}</span> flags yet at this threshold.
                 Switch the Outcome filter to <span className="font-medium">All</span> to widen,
                 or <span className="font-medium">Active</span> for ungraded flags.
+              </>
+            ) : !filters.includeDetectorAlarm ? (
+              // Ship 4: hint when default sources view is empty — user may
+              // have hidden the flood without realizing detector_alarm
+              // contains the rows they expected.
+              <>
+                No specialist or signature_alarm flags in this window.
+                Toggle{' '}
+                <span className="font-medium">detector_alarm</span> on in the
+                Sources strip above to include the broader detector portfolio.
               </>
             ) : (
               <>
