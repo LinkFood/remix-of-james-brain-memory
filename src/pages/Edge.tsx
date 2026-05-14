@@ -46,6 +46,7 @@ import {
   usePrintTracks,
   useSignatureMagnitudeStats,
   useContractThresholdDistribution,
+  slowBurnCount,
   fmtPctRate,
   fmtInt,
   fmtNum,
@@ -117,6 +118,41 @@ function fmtStrike(s: number | null | undefined): string {
   return `$${s.toFixed(0)}`;
 }
 
+/**
+ * Human-readable age stamp for ct_edge_daily.computed_at, plus the freshness
+ * tier the UI should color-code. Added 2026-05-14 (Ship 3) — Bundle 1 lifted
+ * the contract grader thresholds, so freshness UX is load-bearing context for
+ * James reading the Edge page.
+ */
+function computedAtAge(iso: string | null | undefined): { label: string; tone: 'fresh' | 'recent' | 'stale' | 'gap' | 'unknown' } {
+  if (!iso) return { label: 'no compute stamp', tone: 'unknown' };
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return { label: 'no compute stamp', tone: 'unknown' };
+  const ageMs = Date.now() - t;
+  const ageH = ageMs / 3_600_000;
+  if (ageH < 2) return { label: 'fresh EOD', tone: 'fresh' };
+  if (ageH < 12) {
+    const h = Math.max(1, Math.round(ageH));
+    return { label: `${h}h stale`, tone: 'recent' };
+  }
+  if (ageH < 72) {
+    const d = Math.max(1, Math.round(ageH / 24));
+    return { label: `${d}d stale`, tone: 'stale' };
+  }
+  const d = Math.round(ageH / 24);
+  return { label: `${d}d stale — weekend or gap`, tone: 'gap' };
+}
+
+function ageToneClass(tone: 'fresh' | 'recent' | 'stale' | 'gap' | 'unknown'): string {
+  switch (tone) {
+    case 'fresh':   return 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
+    case 'recent':  return 'bg-amber-500/15 text-amber-300 border-amber-500/30';
+    case 'stale':   return 'bg-amber-500/20 text-amber-200 border-amber-500/40';
+    case 'gap':     return 'bg-rose-500/15 text-rose-300 border-rose-500/40';
+    case 'unknown': return 'bg-muted/40 text-muted-foreground border-border/50';
+  }
+}
+
 // ============================================================================
 // Section A — Hero row
 // ============================================================================
@@ -126,16 +162,17 @@ function HeroRow() {
 
   const cards: { label: string; value: string; sub?: string; cls?: string }[] = useMemo(() => {
     const d = data;
+    const sbCount = slowBurnCount(d);
     return [
       {
         label: 'Snapshot Hit',
         value: fmtPctRate(d?.snapshot_hit_rate, 1),
-        sub: `${fmtInt(d?.total_graded)} graded`,
+        sub: `${fmtInt(d?.snapshot_total_graded ?? d?.total_graded)} graded`,
         cls: (d?.snapshot_hit_rate ?? 0) > 0.5 ? 'text-emerald-300' : 'text-foreground',
       },
-      { label: 'Wins', value: fmtInt(d?.wins), cls: 'text-emerald-300' },
-      { label: 'Losses', value: fmtInt(d?.losses), cls: 'text-rose-300' },
-      { label: 'Flats', value: fmtInt(d?.flats), cls: 'text-muted-foreground' },
+      { label: 'Wins', value: fmtInt(d?.snapshot_wins), cls: 'text-emerald-300' },
+      { label: 'Losses', value: fmtInt(d?.snapshot_losses), cls: 'text-rose-300' },
+      { label: 'Flats', value: fmtInt(d?.snapshot_flats), cls: 'text-muted-foreground' },
       {
         label: 'Tracks Realized',
         value: fmtInt(d?.tracks_realized_today),
@@ -148,9 +185,9 @@ function HeroRow() {
       },
       {
         label: 'Slow-Burn',
-        value: fmtInt(d?.slow_burn_count),
+        value: fmtInt(sbCount),
         sub: 'paid today',
-        cls: (d?.slow_burn_count ?? 0) > 0 ? 'text-amber-300' : 'text-muted-foreground',
+        cls: sbCount > 0 ? 'text-amber-300' : 'text-muted-foreground',
       },
     ];
   }, [data]);
@@ -169,10 +206,10 @@ function HeroRow() {
               variant="outline"
               className={cn(
                 'text-[11px] uppercase tracking-wider px-2 py-1 w-fit',
-                regimeBadgeClass(data?.regime),
+                regimeBadgeClass(data?.regime_tag),
               )}
             >
-              {data?.regime ?? 'unknown'}
+              {data?.regime_tag ?? 'unknown'}
             </Badge>
           )}
           <div className="text-[10px] text-muted-foreground/70 mt-1">
@@ -195,7 +232,7 @@ function HeroRow() {
             </div>
           )}
           <div className="text-[10px] text-muted-foreground">
-            {fmtInt(data?.total_graded)} prints graded
+            {fmtInt(data?.snapshot_total_graded ?? data?.total_graded)} prints graded
           </div>
         </div>
 
@@ -456,13 +493,13 @@ function BestSignatures() {
                   {s.signature_key}
                 </TableCell>
                 <TableCell className="py-1.5 text-[11px] text-right tabular-nums">
-                  {fmtInt(s.sample)}
+                  {fmtInt(s.sample_count)}
                 </TableCell>
                 <TableCell className="py-1.5 text-[11px] text-right tabular-nums">
                   <span className="inline-flex items-center gap-1.5 justify-end">
-                    <HitBar rate={s.snap_hit_rate} />
+                    <HitBar rate={s.snapshot_hit_rate} />
                     <span className="text-muted-foreground w-10 text-right">
-                      {fmtPctRate(s.snap_hit_rate, 0)}
+                      {fmtPctRate(s.snapshot_hit_rate, 0)}
                     </span>
                   </span>
                 </TableCell>
@@ -475,7 +512,7 @@ function BestSignatures() {
                   </span>
                 </TableCell>
                 <TableCell className="py-1.5 text-[11px] text-right tabular-nums text-muted-foreground">
-                  {fmtNum(s.median_days_to_realize, 1)}
+                  {fmtNum(s.median_days_to_realization, 1)}
                 </TableCell>
                 <TableCell className={cn(
                   'py-1.5 text-[11px] text-right tabular-nums font-mono font-semibold',
@@ -487,7 +524,7 @@ function BestSignatures() {
                   {fmtDate(s.first_seen_at)}
                 </TableCell>
                 <TableCell className="py-1.5 text-[10px] text-muted-foreground">
-                  {fmtDate(s.updated_at)}
+                  {fmtDate(s.last_updated_at)}
                 </TableCell>
               </TableRow>
             ))}
@@ -640,7 +677,7 @@ function TickerScorecard({ ticker }: { ticker: string }) {
           {bestSig?.signature_key ?? '—'}
         </div>
         <div className="text-[9px] text-muted-foreground tabular-nums">
-          edge {fmtNum(bestSig?.edge_score ?? null, 2)} · n={fmtInt(bestSig?.sample ?? null)}
+          edge {fmtNum(bestSig?.edge_score ?? null, 2)} · n={fmtInt(bestSig?.sample_count ?? null)}
         </div>
       </div>
     </Card>
@@ -1173,9 +1210,9 @@ function SignatureMagnitude() {
 // ============================================================================
 
 export default function Edge() {
-  const [computedAt] = useState<string | null>(null);
   const { data: daily } = useEdgeDaily();
-  const stamp = daily?.computed_at ?? computedAt;
+  const stamp = daily?.computed_at ?? null;
+  const age = computedAtAge(stamp);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -1193,8 +1230,17 @@ export default function Edge() {
               Today's hit rate · slow-burn realizations · promoted signatures · per-ticker scorecards · open tracks · dimension attribution.
             </p>
           </div>
-          <div className="text-[11px] text-muted-foreground tabular-nums">
-            {stamp ? `computed ${new Date(stamp).toLocaleString()}` : 'live · 60s refresh'}
+          <div className="flex flex-col items-end gap-1">
+            <Badge
+              variant="outline"
+              className={cn('text-[10px] uppercase tracking-wider font-mono px-2 py-0.5', ageToneClass(age.tone))}
+              title={stamp ? `Computed at ${new Date(stamp).toLocaleString()}` : 'No computed_at stamp on the latest ct_edge_daily row'}
+            >
+              {age.label}
+            </Badge>
+            <div className="text-[10px] text-muted-foreground tabular-nums">
+              {stamp ? `computed ${new Date(stamp).toLocaleString()}` : 'live · 60s refresh'}
+            </div>
           </div>
         </header>
 
