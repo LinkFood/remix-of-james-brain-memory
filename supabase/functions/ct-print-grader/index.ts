@@ -112,6 +112,12 @@ interface DteThresholds {
 
 interface TrackingConfig {
   maxDays: number;
+  // Ship 7 — Phase 1 close arc. Skip ct_contract_tracks creation entirely
+  // when dte_at_print > longDteThreshold. Default 45 matches the 46d_plus
+  // bucket Ship 1 surfaced. Under tight UW tiers (tightened/critical) these
+  // never reach the eligible pool anyway; this just stops them from being
+  // seeded in the first place.
+  longDteThreshold: number;
 }
 
 // Direction inference now lives in `_shared/directionInference.ts` and is
@@ -308,17 +314,21 @@ async function loadDteThresholds(supabase: SupabaseClient): Promise<DteThreshold
 }
 
 async function loadTrackingConfig(supabase: SupabaseClient): Promise<TrackingConfig> {
-  const defaults: TrackingConfig = { maxDays: 30 };
+  const defaults: TrackingConfig = { maxDays: 30, longDteThreshold: 45 };
   const { data, error } = await supabase
     .from('ct_config')
-    .select('value')
-    .eq('key', 'grade_tracking_max_days')
-    .maybeSingle();
+    .select('key, value')
+    .in('key', ['grade_tracking_max_days', 'contract_poller_long_dte_threshold']);
   if (error || !data) return defaults;
-  const v = data.value;
-  const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
-  if (!Number.isFinite(n) || n < 1) return defaults;
-  return { maxDays: Math.floor(n) };
+  const out: TrackingConfig = { ...defaults };
+  for (const row of data as Array<{ key: string; value: unknown }>) {
+    const v = row.value;
+    const n = typeof v === 'number' ? v : typeof v === 'string' ? parseFloat(v) : NaN;
+    if (!Number.isFinite(n) || n < 0) continue;
+    if (row.key === 'grade_tracking_max_days' && n >= 1) out.maxDays = Math.floor(n);
+    else if (row.key === 'contract_poller_long_dte_threshold') out.longDteThreshold = Math.floor(n);
+  }
+  return out;
 }
 
 // Pass 3 — fixed LOSS magnitude (decimal fraction of entry premium). Asymmetric
@@ -794,6 +804,10 @@ interface Pass2Stats {
   contract_tracks_skipped_off_watchlist: number;
   skipped_no_symbol: number;              // option_symbol missing AND synthesis failed
   skipped_no_strike_or_expiry: number;    // synthesis input incomplete
+  // Ship 7 — long-DTE cull. dte_at_print > contract_poller_long_dte_threshold
+  // means we skip seeding the contract track entirely (won't get poll cadence
+  // under tight UW tiers anyway). Underlying-axis tracks still get created.
+  contract_tracks_skipped_long_dte: number;
   errors: string[];
 }
 
@@ -1058,6 +1072,18 @@ async function createMissingContractTracks(
         ? Math.max(0, Math.floor((new Date(a.expiry + 'T21:00:00Z').getTime() - printTime.getTime()) / (24 * 3600_000)))
         : null;
 
+      // Ship 7 — long-DTE cull. Don't seed a contract track for prints whose
+      // dte_at_print exceeds the configured threshold (default 45). These
+      // never get a poll cadence under tight UW tiers (the poller's tier
+      // filter caps at dteMax<=30 under 'tightened', <=7 under 'critical');
+      // seeding them just clogs ct_contract_tracks with dead rows. The
+      // underlying-axis track (ct_print_tracks) still gets created — only
+      // the contract-axis side is gated. Skip is counted for telemetry.
+      if (dteAtPrint !== null && dteAtPrint > trackingCfg.longDteThreshold) {
+        stats.contract_tracks_skipped_long_dte += 1;
+        continue;
+      }
+
       // Entry contract price from ct_flow_alerts.price. If null, leave
       // entry null + source='estimated_mid' so Phase B knows to backfill.
       const priceRaw = a.price;
@@ -1300,6 +1326,7 @@ async function runTrackPass(
     contract_tracks_skipped_off_watchlist: 0,
     skipped_no_symbol: 0,
     skipped_no_strike_or_expiry: 0,
+    contract_tracks_skipped_long_dte: 0,
     errors: [],
   };
 

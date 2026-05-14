@@ -392,7 +392,15 @@ async function fetchEligibleTracks(
     const staleCutoff = new Date(Date.now() - tierFilter.staleMin * 60_000).toISOString();
     q = q.or(`last_quoted_at.is.null,last_quoted_at.lt.${staleCutoff}`);
   }
+  // Ship 7 — conviction tie-breaker. Primary LRU on last_quoted_at NULLS FIRST
+  // (unpolled win), but when LRU ties (especially the NULL-tier on first
+  // fire after a backfill seed wave), high-conviction short-DTE prints get
+  // priority over longer-dated ones via dte_at_print ASC. Without this the
+  // cap-cut slice was effectively FIFO on insertion order; high-conviction
+  // 0DTE/short-DTE tracks could starve behind 22-45d tracks just because
+  // they were inserted later. Print-time still tie-breaks last.
   q = q.order('last_quoted_at', { ascending: true, nullsFirst: true })
+    .order('dte_at_print', { ascending: true, nullsFirst: false })
     .order('print_time', { ascending: oldestFirst });
   const { data, error } = await q.limit(MAX_TRACKS_PER_RUN_FETCH);
 
