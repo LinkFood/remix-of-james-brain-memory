@@ -11,8 +11,14 @@
 
 import { useDetectorScoreboard, STABILITY_K, type DetectorStatus } from '@/hooks/useDetectorScoreboard';
 import { Card } from '@/components/ui/card';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import { Activity, ArrowRight, TrendingUp, TrendingDown, Minus, Clock } from 'lucide-react';
+import { Activity, ArrowRight, TrendingUp, TrendingDown, Minus, Clock, Info } from 'lucide-react';
 
 function statusStyle(s: DetectorStatus): { chip: string; label: string } {
   switch (s) {
@@ -87,6 +93,7 @@ export default function Detectors() {
 
       {rows.length > 0 && (
         <Card className="p-3 overflow-x-auto">
+          <TooltipProvider delayDuration={150}>
           <table className="w-full text-[12.5px]">
             <thead>
               <tr className="text-[10.5px] uppercase tracking-wider text-muted-foreground border-b border-border/60">
@@ -96,8 +103,30 @@ export default function Detectors() {
                 <th className="text-right py-1.5 px-2 font-medium">stab. streak</th>
                 <th className="text-right py-1.5 px-2 font-medium">until flip</th>
                 <th className="text-right py-1.5 px-2 font-medium">n_graded</th>
-                <th className="text-right py-1.5 px-2 font-medium">hr 30d</th>
-                <th className="text-right py-1.5 px-2 font-medium">hr 7d</th>
+                <th className="text-right py-1.5 px-2 font-medium">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1 cursor-help">
+                        hr 30d <Info className="w-2.5 h-2.5 opacity-60" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-[260px] text-[10.5px] normal-case tracking-normal">
+                      Composite hit-rate over flags fired in the last 30 days that have been graded. Cohort = fired-in-window (not graded-in-window). Canonical metric for promote/demote gating per <code>docs/decisions/2026-05-02-detector-lifecycle-thresholds.md</code>.
+                    </TooltipContent>
+                  </Tooltip>
+                </th>
+                <th className="text-right py-1.5 px-2 font-medium">
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1 cursor-help">
+                        hr 7d (recent fires) <Info className="w-2.5 h-2.5 opacity-60" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-[280px] text-[10.5px] normal-case tracking-normal">
+                      Composite hit-rate over flags <em>fired</em> in the last 7d that have already been graded. Many recent fires haven&apos;t matured yet — when n_graded is 0 this column is greyed out and the 30d column is the canonical signal. Cohort is fired-in-window (cron-aligned with lifecycle gating), not graded-in-window. Cascade #40 sibling — column labelled to match metric shape.
+                    </TooltipContent>
+                  </Tooltip>
+                </th>
                 <th className="text-right py-1.5 px-2 font-medium">w/l streak</th>
                 <th className="text-right py-1.5 px-2 font-medium">last refresh</th>
               </tr>
@@ -110,6 +139,11 @@ export default function Detectors() {
                 const remaining = pending ? Math.max(0, STABILITY_K - r.proposed_streak) : 0;
                 const dir = streakDirChip(r.current_streak);
                 const Icon = dir.Icon;
+                // Cascade #40 sibling — hit-rate columns key off `n_graded` (the
+                // graded subset of the fired-in-window cohort). Grey when
+                // n_graded=0 so we don't imply a signal where none exists yet
+                // (column labels read as fire-cohort, not graded-cohort).
+                const ungraded = !r.n_graded || r.n_graded <= 0;
                 return (
                   <tr
                     key={r.detector_id}
@@ -141,8 +175,14 @@ export default function Detectors() {
                       {pending ? `${remaining} run${remaining === 1 ? '' : 's'}` : '—'}
                     </td>
                     <td className="py-1.5 px-2 text-right tabular-nums text-muted-foreground">{r.n_graded}</td>
-                    <td className="py-1.5 px-2 text-right tabular-nums">{fmtPct(r.hit_rate_30d)}</td>
-                    <td className="py-1.5 px-2 text-right tabular-nums text-muted-foreground">{fmtPct(r.hit_rate_7d)}</td>
+                    <td className={cn(
+                      'py-1.5 px-2 text-right tabular-nums',
+                      ungraded && 'text-muted-foreground/40 line-through decoration-muted-foreground/30',
+                    )}>{fmtPct(r.hit_rate_30d)}</td>
+                    <td className={cn(
+                      'py-1.5 px-2 text-right tabular-nums text-muted-foreground',
+                      ungraded && 'text-muted-foreground/40 line-through decoration-muted-foreground/30',
+                    )}>{fmtPct(r.hit_rate_7d)}</td>
                     <td className={cn('py-1.5 px-2 text-right tabular-nums inline-flex items-center justify-end gap-1', dir.cls)}>
                       <Icon className="w-3 h-3" />{dir.label}
                     </td>
@@ -154,6 +194,7 @@ export default function Detectors() {
               })}
             </tbody>
           </table>
+          </TooltipProvider>
         </Card>
       )}
 
