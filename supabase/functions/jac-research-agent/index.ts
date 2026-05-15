@@ -19,6 +19,7 @@ import { callClaude, CLAUDE_MODELS, parseTextContent, recordTokenUsage, resolveM
 import type { ModelTier } from '../_shared/anthropic.ts';
 import { notifySlack } from '../_shared/slack.ts';
 import { createAgentLogger } from '../_shared/logger.ts';
+import { isHackerNewsIntent, searchHackerNews, formatHackerNewsForResearch } from '../_shared/hnClient.ts';
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -86,38 +87,58 @@ serve(async (req) => {
       return data?.status === 'cancelled';
     }
 
-    // 2. Web search via jac-web-search (pass userId for service role auth)
+    // 2. Web substrate routing. HN-intent queries go through the Algolia HN
+    //    Search API (real-time front-page rankings); all others through
+    //    Tavily as before. Sibling class-kill to Ship 10's UW NBBO finding
+    //    (vendor-API-substrate-mismatch).
     let webResults = '';
     let webSources: Array<{ title: string; url: string }> = [];
-    const webStep = await log.step('web_search', { query });
+    const hnIntent = isHackerNewsIntent(query);
+    const webStep = await log.step('web_search', { query, substrate: hnIntent ? 'hn_algolia' : 'tavily' });
     try {
-      const webRes = await fetch(`${supabaseUrl}/functions/v1/jac-web-search`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${serviceKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          userId,
-          query,
-          brainContext: brainContext.slice(0, 500),
-          searchDepth: 'advanced',
-          maxResults: 8,
-          includeAnswer: true,
-        }),
-      });
-
-      if (webRes.ok) {
-        const webData = await webRes.json();
-        webResults = webData.contextForLLM || '';
-        webSources = (webData.results || []).map((r: { title: string; url: string }) => ({
-          title: r.title,
-          url: r.url,
-        }));
-        await webStep({ resultCount: webSources.length });
+      if (hnIntent) {
+        // For HN-intent queries with explicit "top/trending/front" semantics,
+        // pull the front page (live ranking). Otherwise treat the query as a
+        // search against HN. Heuristic: if query mentions trending/top/front,
+        // front page; else search.
+        const wantsFrontPage = /\b(top|trending|front[- ]?page|hot|latest)\b/i.test(query);
+        const hn = await searchHackerNews({
+          query: wantsFrontPage ? undefined : query,
+          limit: 10,
+        });
+        const formatted = formatHackerNewsForResearch(hn);
+        webResults = formatted.contextForLLM;
+        webSources = formatted.sources;
+        await webStep({ resultCount: webSources.length, substrate: 'hn_algolia', source: hn.source });
       } else {
-        const errText = await webRes.text();
-        await webStep.fail(`HTTP ${webRes.status}: ${errText.slice(0, 200)}`);
+        const webRes = await fetch(`${supabaseUrl}/functions/v1/jac-web-search`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${serviceKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            userId,
+            query,
+            brainContext: brainContext.slice(0, 500),
+            searchDepth: 'advanced',
+            maxResults: 8,
+            includeAnswer: true,
+          }),
+        });
+
+        if (webRes.ok) {
+          const webData = await webRes.json();
+          webResults = webData.contextForLLM || '';
+          webSources = (webData.results || []).map((r: { title: string; url: string }) => ({
+            title: r.title,
+            url: r.url,
+          }));
+          await webStep({ resultCount: webSources.length, substrate: 'tavily' });
+        } else {
+          const errText = await webRes.text();
+          await webStep.fail(`HTTP ${webRes.status}: ${errText.slice(0, 200)}`);
+        }
       }
     } catch (err) {
       await webStep.fail(err instanceof Error ? err.message : 'Unknown error');
