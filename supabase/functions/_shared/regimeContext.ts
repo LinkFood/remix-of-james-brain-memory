@@ -21,6 +21,7 @@ import type {
   HelperFetchContext,
   HelperOpts,
   HelperResult,
+  OrganStatus,
 } from './contextHelper.ts';
 import { voyageEmbed } from './ctEmbed.ts';
 
@@ -308,26 +309,40 @@ async function fetchAnalogs(
 // Empty-result helper
 // ---------------------------------------------------------------------------
 
+// Bundle Phase 2 organMetadata sibling-sweep ship 2026-05-15 (goal #5 item 1).
+// regime was structurally missing organMetadata on both return paths — every
+// other helper composes it. Closes the class with same shape as
+// pulseContext + flowHeatmapContext (inline organMetadata literal, no
+// dedicated buildOrganMetadata helper since regime's window/source string
+// only varies on the status field).
 function emptyResult(
   startedAt: number,
   warning?: string,
+  status: OrganStatus = 'no_signal_detected',
 ): HelperResult<RegimeResult> {
+  const asOf = new Date().toISOString();
   return {
     data: {
       market_wide: null,
       per_ticker: {},
       top_analogs: [],
-      generated_at: new Date().toISOString(),
+      generated_at: asOf,
     },
     meta: {
       helperName: HELPER_NAME,
       helperVersion: HELPER_VERSION,
-      fetchedAt: new Date().toISOString(),
+      fetchedAt: asOf,
       rowCount: 0,
       cacheHit: false,
       latencyMs: Date.now() - startedAt,
       truncated: false,
       ...(warning ? { warning } : {}),
+    },
+    organMetadata: {
+      as_of: asOf,
+      source: '_shared/regimeContext.ts / ct_regime_classifications + ct_regime_history (semantic analogs)',
+      window: 'most-recent classification per market+watchlist; analogs over ct_regime_history.embedded_state',
+      status,
     },
   };
 }
@@ -412,28 +427,39 @@ export async function getRegimeContext(
 
     const totalRows =
       (market_wide ? 1 : 0) + Object.keys(per_ticker).length + top_analogs.length;
+    const asOf = new Date().toISOString();
+    // Status semantics match other helpers: populated when any data resolved,
+    // no_signal_detected when fetch path completed but nothing came back.
+    // anyStale → still populated; the warning conveys staleness.
+    const status: OrganStatus = anyData ? 'populated' : 'no_signal_detected';
 
     return {
       data: {
         market_wide,
         per_ticker,
         top_analogs,
-        generated_at: new Date().toISOString(),
+        generated_at: asOf,
       },
       meta: {
         helperName: HELPER_NAME,
         helperVersion: HELPER_VERSION,
-        fetchedAt: new Date().toISOString(),
+        fetchedAt: asOf,
         rowCount: totalRows,
         cacheHit: false,
         latencyMs: Date.now() - startedAt,
         truncated: requestedCap > MAX_ANALOG_CAP,
         ...(warnings.length > 0 ? { warning: warnings.join(';') } : {}),
       },
+      organMetadata: {
+        as_of: asOf,
+        source: '_shared/regimeContext.ts / ct_regime_classifications + ct_regime_history (semantic analogs)',
+        window: `most-recent classification per market+watchlist (freshness ${freshnessSec}s); top-${analogCap} analogs over ct_regime_history.embedded_state @ threshold ${analogThreshold}`,
+        status,
+      },
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    return emptyResult(startedAt, `fetch_error:${msg}`);
+    return emptyResult(startedAt, `fetch_error:${msg}`, 'error');
   }
 }
 
