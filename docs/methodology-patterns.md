@@ -1769,6 +1769,51 @@ The bimodal-vs-continuous fork was surfaced 2026-05-06 via cross-ticker analysis
 
 ---
 
+## contract-projection-can-be-correct-at-source-and-lossy-at-projection-or-vice-versa — sibling-fields-on-same-projection-surface sweep together (2026-05-14)
+
+A structural ship adds N fields at the substrate layer (DB column, RPC return shape, organ-data structure). A projection-layer fix lands at one or more downstream surfaces (MCP tool, UI hook, edge function endpoint). The projection fix closes the gap for SOME of the new fields but **silently misses sibling fields that share the same gap class** at the same projection surface. Verification on the closed fields passes; the missed siblings remain invisible to consumers until a separate observability event (manual test, downstream surface complaint, consumer-side audit) surfaces them.
+
+**Sibling but distinct from `audit-verification-surface-mismatch`** (above). That pattern catches *audit verifies one layer; symptom is at another.* This one catches *projection-fix closes some fields at the projection surface; siblings at the SAME surface remain unprojected.* Both are about per-surface completeness, but at different stages — audit-surface-mismatch is about diagnostic targeting; this one is about fix-scope completeness.
+
+**Sibling but distinct from `brief-empirical-claim-undercount`** (above). That pattern catches *the brief frames N affected items; Phase A finds the actual number is larger.* This one catches *the brief frames N projection gaps; the projection layer has additional sibling gaps with identical shape that the brief didn't enumerate.* The miss is at a different stage — brief-author miscount is about enumeration completeness in the framing; this one is about surface completeness in the fix.
+
+**Diagnostic question for every projection-layer ship:** *"My ship closes N field-projection gaps at projection surface X. Have I checked whether the SAME projection surface has additional fields with the same gap shape — same source-side population, same `interface` omission, same `mapRow`/emission absence? If I'm fixing 5 fields on a MCP tool's response interface, do siblings 6/7/8 on the same response interface have the same defect?"*
+
+**Class-kill shape:** when fixing N projection gaps at a single projection surface, the Phase A opening step is `grep -A 0 "interface <ResponseType>"` (or equivalent) and **enumerate ALL fields** on the type. Then for each, ask: *"is this populated at source? is it emitted at the projection? does the user-visible contract include it?"* Build the full row-by-row matrix BEFORE deciding the fix scope. Siblings-in-shape sweep together — one PR closes ALL N+sibling fields at the same surface, not just the N the user reported.
+
+### Instance — 2026-05-14 Ship 13 closed 3 contract gaps Ship 11 missed at the same projection surfaces
+
+**The structural arc:** 5/13 Ship 11 (cotrader MCP contract field projection sweep) closed projection gaps for 5 fields across 2 surfaces:
+
+| Surface | Ship 11 closed |
+|---|---|
+| `mcp/cotrader/tools/get_morning_brief.ts` MorningBriefResponse | `triggered_by`, `urgency`, `accuracy_score`, `accuracy_notes` |
+| `mcp/cotrader/tools/get_co_trader_context.ts` specialist_recall data | `unflagged_mode`, `similarity_score` |
+
+**5/13 ~20:07 ET — captain ran end-to-end MCP test in trading-Claude post-Ship-11 + `/mcp` reconnect.** NVDA composed-read demoed meta-aware decision support working as designed (brief LONG LEAN vs specialist NEUTRAL vs pulse slope vs tape vs principles + semantic recall 8-day reach). Qualitative validation passed — but trading-Claude flagged 3 sibling fields STILL unprojected at the same surfaces:
+
+| Surface | Sibling gap Ship 11 missed | Source-side state |
+|---|---|---|
+| `MorningBriefResponse` | `brief_version` (Ship 2 race-fence schema field) | ✅ in DB column, ✅ in SELECT, ✅ in `CtDailyBriefRow` interface, ❌ absent from `MorningBriefResponse`, `mapRow()`, `emptyResponse()` |
+| `MorningBriefResponse` | `supersedes_id` (Ship 2 race-fence schema field) | ✅ in DB column, ✅ in SELECT, ✅ in `CtDailyBriefRow` interface, ❌ absent from `MorningBriefResponse`, `mapRow()`, `emptyResponse()` |
+| specialist_recall `organMetadata` (NOT `data`) | `unflagged_mode` at organMetadata layer | ✅ at `data.unflagged_mode` (Ship 11 fix-target), ❌ at `organMetadata.unflagged_mode` — the canonical organ-state surface trading-Claude reads first |
+
+**The defect class is identical across all 3:** source-side populated, sibling fields on the same projection interface, but the projection layer's `interface` declaration and emission path don't include them. Ship 11's PR description named 5 fields by name; Phase A on Ship 11's brief didn't run the "enumerate-ALL-fields-on-projection-type" pass that would have surfaced the 3 siblings.
+
+**Ship 13 (PR #120, 5/14)** closed all 3 with a single sweep at the same 2 surfaces. ~5-15 LOC of projection-layer additions + 3 new verification tests (T1.6 / T2.9 / T2.10) plus the OrganMetadata interface extension to allow `unflagged_mode?` as an optional field. Verification post-ship: 35/35 PASS, 0 FAIL, 0 DRIFT — the 3 new tests + Ship 11's 5 existing tests all green together.
+
+**Why the class-kill matters:** projection layers are where source-side substrate becomes consumer-visible contract. A projection-surface fix that lands "the 5 fields the brief named" without checking "what other fields on this surface share the same gap class" creates a Ship-11→Ship-13 ratchet pattern: each cycle catches the previous cycle's siblings. The class kill is to **sweep at the surface, not the field**: every projection fix Phase A enumerates the response interface in full and asks, for each field, "is this populated at source and emitted at projection?" The cost is 1-2 min of grep + enumeration; the savings is one fewer same-shape-second-pass ship per surface.
+
+**Cross-catalog:** Cowork-side `memory/patterns.md` owes a parity entry (queued post-merge per docs-PR discipline if the merge order needs separate writes).
+
+**References:**
+- PR #120 (Ship 13) — `feat(ship-13): cotrader MCP contract Phase 2 — close 3 post-Ship-11 gaps`
+- `docs/cotrader_mcp_punchlist.md` G1/G2/G3 RESOLVED entries
+- `mcp/cotrader/tests/run_verification.ts` T1.5/T1.6/T2.7/T2.8/T2.9/T2.10 — Ship 11 + Ship 13 paired tests
+- Sibling pattern above: `## audit-verification-surface-mismatch` (5/6 codification)
+
+---
+
 ## How to add an entry
 
 When a methodology error bites:
