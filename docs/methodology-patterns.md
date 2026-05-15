@@ -2060,3 +2060,403 @@ Three Phase A audits, three different fixes (deferred to Ship 14 post-5/15 per c
 - Ship 14 (deferred to ≥5/16) — three separate audits queued
 - Companion entry above (same section) — original 2026-05-09 instance.
 
+---
+
+## llm-prose-numeric-claims-lack-structural-anchor (2026-05-15)
+
+LLM-composed prose fields (EOD commentary, brief narrative, specialist explanation, tape-reader synthesis) carry numeric anchors — `+0.54%`, `+$102K bullish flow`, conviction values, spot prices, alpha_pct readouts — that have no enforced identity to the structured producer fields they purport to describe. The prose says "+0.00%"; the structured `session_pct` field reads `0.00`; both are honest at the surface; both can be wrong relative to the producer one layer below. There is no validator step that extracts the prose's numeric anchors and reconciles them against (a) the structured fields in the same record, (b) the upstream producer outputs the structured fields were computed from.
+
+**Why this matters:** prose is the highest-bandwidth surface a captain or trading-Claude reads. A prose anchor that's structurally locked to a broken producer field carries the producer's bug forward into every consumer of the prose — terminal-Claude, EOD report readers, recall lookups, downstream briefs. The lie has compounding reach because prose anchors are quoted, re-summarized, and used as evidence in subsequent prose. The class is invisible to substrate-layer monitoring and to LLM-output validators that only check schema shape.
+
+**Empirical motivation — 2026-05-15 Ship 1 Phase A:**
+
+Ship 1's "live source exists, propagation gap" hypothesis was refuted at Phase A — no CT surface has a live post-RTH spot. The deepest finding was that EOD commentary prose mentioned spot prices and pct moves that disagreed with `ct_ticker_snapshots` AND with the structured `session_pct` field on the same record. Two stale reads of the same overwrite-row at different wall-clock times produced two different "facts" surfaced in two different fields. Neither was strictly wrong by its own definition; together they violated internal-numeric coherence.
+
+The class generalizes beyond spot. Ship 7's `alpha_pct` / `session_pct` pollution (PostgREST 1000-row cap) flows through EOD prose at `eodReportPrompt.ts` — Sonnet correctly echoed the structured field per the cascade #51 guard, so the prose carried a structurally-wrong number that had no validator step to catch.
+
+**Class diagnostic question:** *Does this LLM-composed prose contain a numeric anchor? If yes, what structured producer field is the anchor claimed to identify, and is there a validator step that extracts the anchor and asserts equality against the producer field?*
+
+**Fix shape:** `numericClaimValidator` helper applied at the prose-emit surface. Extract numeric tokens with explicit anchor labels (`alpha_pct=`, `session_pct=`, `spot=`, etc.); resolve each to its structured field on the same record; raise an `organMetadata` warning when the anchor diverges from the structured field beyond tolerance. Per-anchor `organMetadata` adds the verification surface (see verification-surface entry below).
+
+**Linked artifacts:**
+- Ship 1 Phase A (2026-05-15) — empirical surfacing across `ct_ticker_snapshots` overwrite-row vs prose anchor
+- Ship 1 Bundle Phase 3 recommendation — `tickerSpotCard` primitive + `numericClaimValidator` + per-anchor organMetadata
+- Sibling: `## internal-numeric-anchor-reconciliation-verification-surface` (below — verification surface #8)
+- Sibling: `## codified-LLM-instruction-protecting-wrong-value — cascade #51 (2026-05-15)` (the guard that structurally locks the LLM to echo broken producer fields without the validator)
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## substrate-write-without-application-loop (2026-05-15)
+
+A substrate (table, column, RPC, organ row) exists; producers write to it on cadence; the row count is non-zero; warden invariants over `count(*)` pass. But no consumer reads the substrate back into application behavior. The substrate is a write-only fossil — populated, monitored, and unused. The producer chain "works"; the application loop is open.
+
+**Why this matters:** substrate-write success metrics (row counts, freshness, schema integrity) read as healthy while the system gets zero value from the substrate. Briefs that propose adding substrate ("ship a `ct_X` table to track Y") collect SHIP-DONE credit on the producer half; the unread-by-consumers half doesn't fire any alarm because nothing was promised at the consumer layer. The class compounds: subsequent briefs propose new substrate believing prior substrate is integrated, when it never was.
+
+**Empirical motivation — 2026-05-15 Ship 3 Phase A:**
+
+`jac_principles` substrate is populated weekly by `distill-principles` (Sonday 3 AM UTC) — multiple principles per week, weeks of accumulation. Phase A grep across `claudeReadSurface.ts` + all `_shared/` organ helpers found **ZERO** reads from `jac_principles` into the synthesis layer's organ payload. Co-Trader's brain composes nine organs and emits no principle context to Sonnet/Haiku. Principles are extracted, embedded, indexed — and never reach the inference layer that would use them. All 5 instances captain named were confirmed; 3 additional similar shapes surfaced (9 total).
+
+**Class diagnostic question:** *For every substrate this ship populates, what consumer-side read closes the loop? If the answer is "future consumer TBD," frame the brief as substrate-write only and surface the consumer-half as explicit deferred scope so a future brief doesn't assume integration that never landed.*
+
+**Fix shape:** at substrate ship time, name the application-loop close: which consumer will read this substrate, and on what surface. If unknown, surface as a Phase A blocker. Recommendation pattern from Ship 3: hybrid copy-paste principles-into-synthesis (A3) lands the consumer-half on the same cadence as the producer-half — substrate-write and application-read ship together or not at all.
+
+**Linked artifacts:**
+- Ship 3 Phase A (2026-05-15) — 5 confirmed + 4 additional surveyed (9 total substrate-write-only instances)
+- `jac_principles` table — populated, unread by Co-Trader synthesis
+- `supabase/functions/distill-principles/` (producer) vs `_shared/claudeReadSurface.ts` (zero consumption)
+- Sibling: `## extended-hours-substrate-shipped-but-unread (2026-05-15)` (below — specific case of this class)
+- Sibling: `## carryover-narrator-vs-direction-inversion (2026-05-15)` (below — sub-shape: substrate written for one direction, unread by the other)
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## carryover-narrator-vs-direction-inversion (2026-05-15)
+
+Sub-shape of `substrate-write-without-application-loop`. A narrative field (e.g., `carryover_thesis`) is written into one surface (EOD report, human-readable brief) but is NOT included in the propagator that feeds the next composer's input shape (`prior_brief_summary`). The "carryover" carries forward into human-readable artifacts but does NOT carry forward into the next machine-fed composition step. The direction of the carry inverts between the human-facing path and the machine-facing path, even though the field's name asserts continuity.
+
+**Why this matters:** the field's name (`carryover_*`, `previous_*`, `prior_*`) implies semantic continuity across the system. A reader sees the field populated in the EOD and assumes the next morning's brief composer will see it. It won't. The brief composer reads `prior_brief_summary`, which doesn't include `carryover_thesis`. The machine-fed composition path silently drops the continuity the human path preserves.
+
+**Empirical motivation — 2026-05-15 Ship 3 Phase A sub-shape C:**
+
+EOD report writes `carryover_thesis` text into the report record. Brief composer reads `prior_brief_summary` propagator. Phase A grep showed `carryover_thesis` is NOT in the `prior_brief_summary` projection — the field is human-visible in the EOD report surface but invisible to the next machine consumer. The name asserts a forward-carry that the projection layer does not implement.
+
+**Class diagnostic question:** *For every field named "carryover" / "previous" / "prior" — what is the carry's machine-fed propagator? Does the field appear in that propagator's projection? If the carry exists only in the human-facing surface, the name is a lie that subsequent design will inherit.*
+
+**Fix shape:** either include `carryover_thesis` in the `prior_brief_summary` projection (close the loop) OR rename the field to disambiguate human-only continuity from machine-fed continuity (e.g., `carryover_thesis_human_only`). Default forward: close the loop.
+
+**Linked artifacts:**
+- Ship 3 Phase A sub-shape C (2026-05-15)
+- `prior_brief_summary` propagator scope (Ship 7-from-5/13 commit `af8bd7f`)
+- Parent class: `## substrate-write-without-application-loop (2026-05-15)`
+- Sibling family: `## single-source-of-truth-for-rendering-layer-across-N-consumers` (drift class at the rendering layer; this entry is drift at the projection/propagator layer)
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## captain-primitive-only-in-markdown (2026-05-15)
+
+A reasoning primitive — a named combination of conditions ("5x call:put + $500K+ flow + conv ≥60 single name = institutional accumulation") — lives in markdown (briefs, memory files, captain notes) and in the captain's own pattern recognition, but has no programmatic implementation. No detector embodies it. No prompt instruction names it. No `ct_config` row captures its thresholds. The primitive cannot fire as system behavior; only the captain can fire it, and only when the captain happens to be reading the relevant surface.
+
+**Why this matters:** primitive-shaped patterns are the highest-value detection shape in the captain's catalog. They are typically arrived at empirically over months of observation and represent the strongest "this combination means X" intuitions the captain holds. Leaving them in markdown means: the system can't run them autonomously, can't grade them against outcomes, can't surface candidate fires for captain review. The asymmetry of "captain reads everything in real-time" doesn't scale; primitive-only-in-markdown structurally caps the system's detection ceiling at the captain's read-bandwidth.
+
+**Empirical motivation — 2026-05-15 Ship 3 Phase A captain amendment:**
+
+Captain's amendment to Ship 3 added a call-stacking primitive: 5x call:put + $500K+ flow + conv ≥60 single name = institutional accumulation. Phase A grep across detectors, prompts, and `ct_config` found no implementation. The primitive existed only in the captain's intuition and in this session's chat transcript. No prior session had codified it; no detector had ever fired against it. Five months of build, zero programmatic capture of the captain's strongest single-name accumulation read.
+
+**Class diagnostic question:** *Is this primitive named anywhere in `ct_detectors`, `ct_config`, prompt instructions, or specialist preambles? If only in markdown / captain memory, what's the minimum-effort path to programmatic capture — config-row + detector wrapper, or prompt-instruction injection?*
+
+**Fix shape:** Ship 3 Instance 6 — V/OI tiers + call-stacking primitive as `ct_config` rows + detector wrapper (B1+B3 in the recommendation set). Trivial config + wiring. Once the primitive is a row, lifecycle promotion / scoreboard grading applies (Tenet 10).
+
+**Linked artifacts:**
+- Ship 3 Phase A captain amendment (2026-05-15)
+- Ship 3 Instance 6 recommendation — V/OI tiers + call-stacking primitive (B1+B3)
+- Sibling: `## tunable-numbers-belong-in-ct_config-not-constants` (Tenet 16 enforcement; this entry is the cousin at the primitive-rule layer)
+- Tenet 25 ("adding a detector is a database INSERT, not a code change") — primitives belong as rows
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## window-shape-collision-in-surface (2026-05-15)
+
+A surface (RPC, organ payload, dashboard tile) renders a numeric result by querying a window of data. When the requested window falls outside the substrate's data window — for example, requesting a 30-min momentum window post-RTH while the substrate only emits during RTH — the query returns 0 rows. The surface formats `0 rows → 0.00%` and renders it as a measurement. The reader interprets "0.00%" as "the metric is at zero," not as "the window was empty." Window-shape mismatches at the surface layer masquerade as zero readings; the reader cannot distinguish "honestly zero" from "asked the wrong window."
+
+**Why this matters:** zero readings are load-bearing in many regime / momentum / drift contexts. A captain reading "MacroTile +0.00%" interprets it as steady-state, not as out-of-window. The class is invisible to substrate monitors (substrate is healthy; row count is on cadence) AND to RPC monitors (RPC returned a valid row; the row's value is 0). The lie lives at the join between window-shape and surface rendering, a layer neither monitor watches.
+
+**Empirical motivation — 2026-05-15 Ship 1 Phase A MacroTile finding:**
+
+MacroTile rendered "+0.00%" post-RTH. Phase A traced the RPC to a momentum calculation over a 30-min window ending at sample time. The substrate (`ct_ticker_snapshots` + bar-derived sources) does not populate the 30-min window post-RTH; the RPC returned the canonical "no rows → 0" collapse. The surface rendered `+0.00%` as if it were the metric's value. The captain's read ("MacroTile is steady") was a lie of measurement-vs-window-shape.
+
+**Class diagnostic question:** *Does this surface's "zero" reading distinguish "data measured and equals zero" from "window had no data to measure"? If both render the same way, the surface is mis-rendering the empty-window case as a measurement.*
+
+**Fix shape:** at the surface, emit `organMetadata.status` distinguishing `measured_zero` from `quiet_no_data` / `out_of_window`. The same diagnostic shape as Ship 6 Phase A's `quiet_no_events` vs `unknown / classifier-couldn't-decide` distinction. Surface renders empty-window with explicit "—" or "out of window" label, not "0.00%."
+
+**Linked artifacts:**
+- Ship 1 Phase A MacroTile finding (2026-05-15)
+- Ship 6 Phase A recommendation 6.A — same diagnostic shape applied to regime classifier abstention
+- Sibling: `## structured-zero-misread-as-null` (above) — same class at the structured-field-read layer; this entry is the surface-render layer
+- Sibling: `## brief-frames-symptom-as-classifier-problem-when-its-data-supply-problem (2026-05-15)` (below) — same root: window-empty vs metric-zero conflation
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## consumer-direct-vendor-wire-fragments-quote-truth-across-organs (2026-05-15)
+
+N consumers each wire directly to a vendor surface for the same conceptual data (spot price, quote, NBBO). Without a single canonical abstraction layer, "what's the spot" depends on which consumer is asked. Each wire is locally correct; collectively the answers diverge because each consumer's vendor path has different cadence, different fields, different freshness semantics. Quote truth fragments across the system because no organ normalizes vendor surfaces into a single canonical answer.
+
+**Why this matters:** the captain reads multiple organs in the same session and assumes their numeric anchors agree. They don't — and the divergence is not from market motion but from organ-vs-organ wiring asymmetry. The class compounds when prose anchors quote spot values (see `llm-prose-numeric-claims-lack-structural-anchor`): prose-anchor reconciliation against any single producer field can pass while different organs' prose still disagrees with each other.
+
+**Empirical motivation — 2026-05-15 Ship 5 Phase A:**
+
+7 Co-Trader consumers, 5 distinct upstream surfaces for quote/spot data. Phase A enumerated: `ct-uw-spot-poll uw_spot`, `ct_ticker_snapshots` overwrite-row, `ct_price_bars` derived close, UW MCP per-call quote, downstream RPC-derived. No `_shared/quoteSource.ts` abstraction. Each consumer made its own decision about freshness, fallback, and stale-window tolerance. Greenfield in CT — zero Public-API references; captain's terminal uses `public_api_sdk` Python at `/Users/jameschellis/trading/bars.py`. Closest internal-to-Public is `ct-uw-spot-poll uw_spot` (unread; see `## extended-hours-substrate-shipped-but-unread`).
+
+**Class diagnostic question:** *For every concept the system tracks across N consumers (spot, quote, regime, conviction), is there a single canonical organ that normalizes the upstream sources? If consumers each wire directly to vendor surfaces, the conceptual answer fragments along the wiring.*
+
+**Fix shape:** `_shared/publicApiClient.ts` (JAC-core vendor abstraction kernel) + `_shared/quoteSource.ts` (CT app wrapper). First concrete vendor abstraction layer instance. Recommended sequence: B-1 probe → B-2 first consumer (Pulse v1 spot) → B-3 remaining swaps → B-4 class-kill via projection layer.
+
+**Linked artifacts:**
+- Ship 5 Phase A (2026-05-15) — 7 consumers × 5 surfaces enumeration
+- Ship 5 B-1 open structural question — `public_api_sdk` Python vs Deno-direct REST
+- Captain terminal reference: `/Users/jameschellis/trading/bars.py` (Public API SDK Python)
+- Sibling: `## extended-hours-substrate-shipped-but-unread (2026-05-15)` (below)
+- Sibling: `## llm-prose-numeric-claims-lack-structural-anchor (2026-05-15)` (above) — prose-anchor reconciliation is downstream of canonical-organ existence
+- Tenet 24 ("all systems talk to each other — no silos") at the vendor abstraction layer
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## extended-hours-substrate-shipped-but-unread (2026-05-15)
+
+Specific sub-shape of `substrate-write-without-application-loop` and companion to `consumer-direct-vendor-wire-fragments-quote-truth-across-organs`. Infrastructure for a capability ships at the substrate layer (DB column, polling cron, RPC return field) but no consumer integration follows. The substrate is in place, on cadence, monitored — and zero application surfaces read it back. The capability the substrate was meant to enable never materializes for consumers; the substrate exists as latent infrastructure waiting for a consumer ship that never lands.
+
+**Why this matters:** substrate-shipped-but-unread is harder to detect than substrate-write-only-from-the-start because the substrate has a clear consumer intent at ship time. The expectation was "consumer integration follows shortly." Weeks later, no consumer has integrated. The substrate is now a dormant capability whose existence is easy to forget, leading to subsequent briefs proposing the substrate "needs to be built" when it already exists and is being written to on cadence.
+
+**Empirical motivation — 2026-05-15 Ship 1 Phase A sub-finding:**
+
+`ct-uw-spot-poll uw_spot` extended-hours column shipped 2026-05-07. As of 2026-05-15 (~8 days later), no consumer reads it. Phase A grep across `_shared/` organs, edge functions, dashboard hooks, MCP tools — zero references to the extended-hours column. Ship 1's "live source exists, propagation gap" framing was refuted at receive-time because the propagation framing assumed consumer-side integration; the empirical state is the substrate exists in isolation. Deferred by design (captain's note at ship time) but the deferral has rolled past 8 days without re-engagement.
+
+**Class diagnostic question:** *For every substrate this ship adds, what's the shipped-by date of the first consumer integration? If "TBD" or "follow-up," flag explicitly as deferred-consumer scope so subsequent briefs don't propose the substrate's creation.*
+
+**Fix shape:** at substrate-ship time, either (a) the consumer ship lands in the same arc (substrate + first-consumer co-ship), OR (b) the substrate ships with an explicit calendar-anchored consumer follow-up + warden invariant gating on consumer-read freshness (the substrate's row count is not the success metric; the consumer's read cadence is).
+
+**Linked artifacts:**
+- Ship 1 Phase A (2026-05-15) — `ct-uw-spot-poll uw_spot` extended-hours unread surfacing
+- 2026-05-07 ship date for the substrate (8-day deferral as of 2026-05-15)
+- Parent class: `## substrate-write-without-application-loop (2026-05-15)`
+- Sibling: `## consumer-direct-vendor-wire-fragments-quote-truth-across-organs (2026-05-15)` — would have consumed the substrate if a `quoteSource` abstraction existed
+- Sibling: `## calendar-anchor-becomes-deferral` — different shape but same root family of deferral-erodes-discipline
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## time-window-semantics-drift-masquerading-as-source-divergence (2026-05-15)
+
+Two consumers read what they each call "the spot" / "the latest value" / "the current X" from the same overwrite-row substrate at different wall-clock times. The values disagree. The disagreement looks like a source-of-truth divergence ("EOD says A, specialist says B — different sources"). Empirically, both consumers read the SAME row; the row was overwritten between their two reads; each consumer captured a different stale snapshot of the same source. The divergence is temporal, not architectural. The reader who frames it as "two sources of truth" mis-diagnoses the class — there is one source, two stale reads, and the substrate's overwrite semantics make every read a point-in-time freeze.
+
+**Why this matters:** the wrong-diagnosis ("we have two sources, pick one as canonical") leads to architectural ships that don't address the underlying class. The underlying class is overwrite-row semantics + non-coordinated read times. Picking a "canonical" source doesn't fix it; subsequent consumers will still read the canonical source at different wall-clock times and produce the same disagreement. The class survives the architectural fix.
+
+**Empirical motivation — 2026-05-15 Ship 1 Phase A:**
+
+Ship 1 surfaced EOD spot vs specialist spot disagreement. Phase A traced both reads to `ct_ticker_snapshots` — an overwrite-row substrate where each new poll OVERWRITES the row. EOD reads at one wall-clock time; specialist reads at another wall-clock time; the row was overwritten between them; both reads are honest, both quote different values. Sibling to cascade #29 back-anchorability class: `ct_gex_timeseries` is append-only (back-anchorable to historical points); `ct_ticker_snapshots` is overwrite (no back-anchorability — every read is point-in-time of whatever the row was at read time).
+
+**Class diagnostic question:** *Before framing "consumer A and consumer B disagree on X" as a source-of-truth problem, did I verify whether A and B read the SAME substrate row at different times? If the substrate is overwrite-shaped, the disagreement is temporal, not architectural — and the fix is append-only substrate or coordinated read times, not "pick a canonical source."*
+
+**Fix shape:** for any field where multiple consumers need coherence, the substrate must be append-only (back-anchorable) OR consumers must read coordinated snapshots (one read per session, shared across consumers). Overwrite-row substrates structurally guarantee divergence between non-coordinated reads.
+
+**Linked artifacts:**
+- Ship 1 Phase A (2026-05-15) — EOD-vs-specialist drift class identification
+- Cascade #29 (back-anchorability) — `ct_gex_timeseries` append-only vs `ct_ticker_snapshots` overwrite
+- Sibling: `## llm-prose-numeric-claims-lack-structural-anchor (2026-05-15)` — prose-anchor inconsistencies often have this class as root
+- Sibling: `## consumer-direct-vendor-wire-fragments-quote-truth-across-organs (2026-05-15)` — different shape (vendor-wire fragmentation) but related symptom (consumers disagree)
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## brief-frames-symptom-as-classifier-problem-when-its-data-supply-problem (2026-05-15)
+
+A brief observes a classifier producing "unknown" / "abstain" / "not enough signal" at higher-than-expected rates and frames it as a classifier-quality regression. Phase A reveals the classifier is honestly abstaining because the upstream signal substrate is structurally sparse at the sampled window. The symptom ("model is unsure") looks like model regression; the cause is data supply. The framing drives the wrong fix — retrain / re-tune / re-prompt the classifier — when the actual fix is upstream supply OR honest framing of the abstention as data-state, not model-state.
+
+**Why this matters:** classifier-regression framings ship as "improve the model" investigations and consume the engineering budget that should go to upstream data-supply work. Worse, when the classifier "improvement" lands and the symptom doesn't move, the team concludes the new model is also broken, when the real problem is one layer upstream. The class compounds with each cycle.
+
+**Empirical motivation — 2026-05-15 Ship 6 Phase A:**
+
+Ship 6 brief framed Regime v2's "9/10 unknown at 22:00 UTC" as a classifier-quality regression. Phase A traced the symptom: `ct_pulse_events` substrate is structurally sparse in the off-RTH dead window post-22:00 UTC. The classifier is honestly abstaining when `ct_pulse_events` returns 0-3 rows over the lookback. 24h baseline per-ticker unknown rate is 15-33% — the 9/10 snapshot at 22:00 UTC is within distribution, not anomalous. The classifier is doing its job; the supply is thin.
+
+**Class diagnostic question:** *Before framing a high-abstention rate as classifier regression, did Phase A verify the upstream signal substrate's row count and density at the sampled window? If the substrate is sparse, the abstention is honest data-state, not model behavior — the fix surface is upstream supply or projection-layer honest framing, not classifier retraining.*
+
+**Fix shape:** Ship 6 recommendation — 6.A stop-gap: organ projection layer emits `quiet_no_events` status distinct from `unknown / classifier-couldn't-decide`. Honest framing at the consumer surface. Then 6.B widen lookback to `ct_config.regime_momentum_lookback_minutes`. Then 6.C bar-grounding. The classifier itself doesn't need re-training; the consumer needs to read the right status.
+
+**Linked artifacts:**
+- Ship 6 Phase A (2026-05-15) — symptom-vs-supply attribution
+- Ship 6 recommendations 6.A / 6.B / 6.C sequence
+- Sibling: `## window-shape-collision-in-surface (2026-05-15)` — same root: window-empty vs metric-state conflation, surfaced at the render layer
+- Sibling: `## empirical-distribution-of-symptom-rate-must-be-checked-before-claiming-regression (2026-05-15)` (below) — same arc, the calibration discipline that catches this class at brief-write time
+- Sibling: `## audit-frame-mismatch` — same family of cause-attribution misses
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## brief-conflates-pulse-v1-with-regime-v2 (2026-05-15)
+
+A brief asserts a problem in "the X system" where X resolves ambiguously to two architecturally distinct pipelines. Pulse v1 (`pulseContext.ts`, reads `premium_net`) and Regime v2 (`regimeContext.ts`, reads `ct_pulse_events`) are two separate organs with different producers, different read paths, different consumer surfaces. The brief's framing ("the regime is broken") doesn't disambiguate which pipeline; the brief author may have one in mind, the engine-room may verify the other; the resolution lands in a system the brief didn't intend.
+
+**Why this matters:** v1/v2 ambiguity is a common shape across any system that has shipped a replacement pipeline while keeping the predecessor live (intentionally or vestigially). Briefs referencing "the X system" without specifying generation drift across the two pipelines in subsequent design. Phase A verification at the wrong pipeline catches the wrong symptom and confirms the wrong fix.
+
+**Empirical motivation — 2026-05-15 Ship 6 Phase A:**
+
+Ship 6 brief used "Regime v2 quality" in framing and "Pulse" / "regime" interchangeably in body text. Phase A grep across organ helpers found: `pulseContext.ts` reads `premium_net` (Pulse v1 pipeline); `regimeContext.ts` reads `ct_pulse_events` (Regime v2 pipeline). The two pipelines share concept ("market regime") but no producer overlap and no consumer overlap. Resolving "regime is broken" required asking which pipeline — the brief didn't disambiguate; Phase A receive-time forced the disambiguation.
+
+**Class diagnostic question:** *When the brief asserts a problem in "the X system," does X resolve to ONE pipeline, or am I actually pointing at two? If two, which one is the brief framing — and would the resolution at one pipeline address the brief's intent if the symptom is actually at the other?*
+
+**Fix shape:** at brief-write time, the brief names the pipeline by file path or organ-helper name: "regime v2 via `regimeContext.ts`" disambiguates from "pulse v1 via `pulseContext.ts`." At receive-time, engine-room Phase A grep both candidate pipelines before scoping the fix; if the brief framing matches one but the symptom traces to the other, surface the ambiguity as a Phase A finding.
+
+**Linked artifacts:**
+- Ship 6 Phase A (2026-05-15) — Pulse v1 vs Regime v2 disambiguation
+- `_shared/pulseContext.ts` (Pulse v1) — reads `premium_net`
+- `_shared/regimeContext.ts` (Regime v2) — reads `ct_pulse_events`
+- Sibling: `## brief-frames-symptom-as-classifier-problem-when-its-data-supply-problem (2026-05-15)` (above) — same brief, sibling miss
+- Sibling: instance #37 family (brief-asserts-state-vs-intent) — same family of brief-author-layer premise mistakes
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## empirical-distribution-of-symptom-rate-must-be-checked-before-claiming-regression (2026-05-15)
+
+A brief frames a single observation as regression ("9/10 unknown at 22:00 UTC — classifier broken"). Phase A surfaces the 24-hour or 7-day empirical distribution of the same symptom rate: the snapshot is within the empirical distribution, not anomalous. The single observation IS NOT regression; it is a sample from a distribution the brief author didn't characterize. Regression claims require distribution-anchored evidence, not point-in-time observation.
+
+**Why this matters:** point-in-time observations look like signals when read in isolation. Without the distribution, every observation is either "in band" or "out of band" — and the brief's framing presumes "out of band" without ever having read "in band." Every signal-vs-noise question is a distribution question; framing a single observation as regression collapses the signal/noise distinction silently.
+
+**Empirical motivation — 2026-05-15 Ship 6 Phase A:**
+
+Brief framed "9/10 unknown at 22:00 UTC" as Regime v2 regression. Phase A pulled 24h baseline per-ticker unknown rate: **15-33%**. The 9/10 sample at 22:00 UTC is within the empirical distribution — it's a thin off-RTH window sample, not a regression. The regression framing would have driven re-tuning of a healthy classifier. Phase A receive-time discipline caught the framing miss before any work was scoped.
+
+**Class diagnostic question:** *Before claiming a single observation is regression, what is the 24h / 7d empirical distribution of the same symptom rate? If the observation falls inside the empirical distribution, it is sampling variance, not regression — and the framing is wrong.*
+
+**Fix shape:** at brief-write time, every regression claim includes the empirical distribution it's measured against ("baseline N=7d shows mean X, p95 Y; current observation is Z, outside the p95 band by Δ"). If the distribution is not characterized, frame as "investigate" not "regression." At Phase A receive-time, every regression claim's distribution gets recomputed before any fix scope.
+
+**Linked artifacts:**
+- Ship 6 Phase A (2026-05-15) — 24h baseline 15-33% vs single-sample 9/10
+- Sibling: `## single-sample-acceptance-window` — same family at the acceptance-decision layer; this entry is at the regression-claim layer
+- Sibling: `## threshold-calibration-test-premise-requires-distribution-shape-verification` — same family at the threshold-test layer (cascade #18-adjacent codification 2026-05-13)
+- Sibling: `## brief-frames-symptom-as-classifier-problem-when-its-data-supply-problem (2026-05-15)` (above) — same arc, the data-supply-vs-model-state shape
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## hidden-row-cap-shifts-window-semantics-not-just-coverage — cascade #49 (2026-05-15)
+
+**Pattern:** PostgREST's 1000-row hidden cap (applied regardless of `.limit()` value) silently shifts the SEMANTIC window of any ASC-ordered query that fans across N entities. The conventional framing — "the cap truncates the tail; I'll see fewer rows but the rows I see are correct" — is wrong for ASC + N-entity queries. The cap returns the first 1000 rows in ASC order, which means it returns the EARLIEST window across the N entities. If the producer fans 8000+ rows in ASC time order across 10 tickers, the first 1000 rows is the earliest few hours of the union — and per-ticker the visible rows are the earliest per-ticker fragment, not a representative cross-section. The query result doesn't say what you think it says: not "less data, same window," but "different window entirely."
+
+**Empirical motivation — 2026-05-15 Ship 7 (this session):**
+
+Production manifestation of the class. `ct-eod-report/index.ts:605-612` queries `ct_price_bars` with `.limit(8000)` + `order=ts.asc`. PostgREST caps at 1000. Population in the requested window: 9754 bars across 10 tickers. ASC order returns the earliest 1000 bars = the first 5h41m of pre-market per ticker. Per ticker, last `bar_start` returned ≈ 09:40-09:41 UTC = 04:39-04:41 ET. **Market open is 09:30 ET. None of the 40 ticker-session cells in the 5/11-5/14 window contains a single intra-RTH bar.** `dailyMoveFromBars(...)` then runs honestly on `[04:00 ET open] → [~05:41 ET close]` = pre-market drift = noise.
+
+The captain's brief had framed F1 (wrong-metric: intraday-vs-daily) as the dominant root. Phase A revealed F2-via-cap one layer below as actually dominant: the math was correctly applied to the wrong window. Direction-flip vs Public's close-to-close is pre-market drift decorrelated from RTH direction (often opposite sign on gap-and-fade days). Reconstructed CT's stored `alpha_pct`/`session_pct` to ±0.00pp for 37/40 ticker-sessions. Empirical distribution across 120 alpha rows / 12 EOD reports since 2026-04-29: `|alpha| ≥ 1pp` = 2.5% vs real RTH ~30-40%. Distribution squashed ~10×.
+
+**Third production instance of the class.** Predecessors:
+- **#1 (2026-05-06):** warden cache_hit §5 NVDA-absent — `count(*)` query absent NVDA was actually 1000-cap truncating the tail
+- **#2 (2026-05-06):** `feedback_audit_query_hidden_row_caps.md` instance #9 — codified the rule "absent from sample ≠ absent from population"
+- **#3 (2026-05-15):** Ship 7 — first manifestation that shifts SEMANTIC window, not just coverage tail
+
+**Resolution — Ship 7 α shipped this session (2026-05-15):**
+- `e50b374` — producer fix: per-ticker fan-out at `ct-eod-report/index.ts:605-612`. Replaces single ASC `.limit(8000)` cross-ticker query with N per-ticker queries, each fully inside the 1000-row cap by construction (max bars/ticker/day < 1000).
+- `d0c8209` — warden invariant `eod_report_bars_intra_rth_coverage` — EXISTS-guarded (dormant-until-active per `feedback_warden_dormant_until_active_pattern.md`). Asserts every EOD ticker-session contains ≥1 intra-RTH bar (`bar_start` between 13:30Z and 20:00Z). Catches regression of this class at the substrate layer.
+- `050b815` — backfill script for `ct_eod_reports.morning_brief_scorecard.alpha_pct` + `per_ticker_close.session_pct` across the 12 contaminated reports since 2026-04-29. Score_pct distribution shifted post-backfill: 5/01 85% → 20%, 5/14 65% → 15% (post-fix scores reflect honest RTH-window distribution).
+
+**Critical instrumentation rule extension:** check LAST-row timestamp per entity, not just `count(*)`. Confirming `count(*) = 1000` looks like "the cap engaged, expected"; checking `max(ts) per ticker` is what surfaces "the window shifted, not just the tail." This rule extends to any ASC-ordered query against PostgREST that fans across N entities. Phase A audit step: before trusting a fanned-ASC result, verify per-entity tail timestamp against expected window boundary.
+
+**Class:** sibling of cascade #43 (`substrate-on-table-vs-sibling-table-discrimination`) — different surface, same class of "query result doesn't say what you think it says." Also sibling of `## audit-query-hidden-row-caps` / `feedback_audit_query_hidden_row_caps.md` — third instance promotes the rule from "verify count, not just presence" to "verify window per entity, not just total count."
+
+**Diagnostic question for future class fires of this shape:** *Is this query ASC-ordered? Does it fan across N entities? Could the PostgREST 1000-row cap engage? If yes to all three, what does `max(<order-column>) per entity` return — and does that match the window I think I'm querying?*
+
+**Linked artifacts:**
+- Producer fix: `supabase/functions/ct-eod-report/index.ts:605-612` (commit `e50b374`)
+- Warden invariant: `eod_report_bars_intra_rth_coverage` (commit `d0c8209`)
+- Backfill: scripts shipped at commit `050b815` — 120 cells × 12 reports + ct-brief-reflection re-run for accuracy_score history
+- Predecessor #1: 2026-05-06 warden cache_hit §5 NVDA-absent
+- Predecessor #2: `~/.claude/agent-memory/core-logic-builder/feedback_audit_query_hidden_row_caps.md` instance #9
+- Sibling cascade: `## substrate-on-table-vs-sibling-table-discrimination — cascade #43`
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `### Instance #49 — hidden-row-cap-shifts-window-semantics-not-just-coverage`
+
+---
+
+## brief-frames-F1-as-dominant-when-F2-is-upstream-root — instance #37 sub-class — cascade #50 (2026-05-15)
+
+**Pattern:** Sub-class of instance #37 family (brief asserts state vs intent). The brief asserts a root cause (F1); Phase A reveals a layer below the brief's named cause (F2) that's actually dominant. The brief's F1 is real but symptomatic — F1's math is correctly applied to the wrong window, and the window-mismatch (F2) is the upstream root. Resolving F1 alone leaves F2 unaddressed and the symptom persists.
+
+The same root as instance #37: the brief should frame intent ("close the alpha_pct accuracy regression") and let Phase A audit the upstream-most cause empirically. Naming F1 as "the root" in the brief is a state-assertion the brief can't verify at write-time; receive-time Phase A is where root-attribution gets empirically verified.
+
+**Empirical motivation — 2026-05-15 Ship 7 brief framing (this session):**
+
+Captain's Ship 7 brief named F1 (wrong-metric: intraday-vs-daily) as the dominant root for the `alpha_pct` regression. Engine-room Phase A:
+1. Recomputed `alpha_pct` per the F1 hypothesis (use end-of-RTH price vs open-of-RTH price instead of bar-derived). Result: still ±0.00pp off from CT's stored value for 37/40 ticker-sessions. F1's math change doesn't close the gap.
+2. Traced producer chain: `ct-eod-report/index.ts:605-612` queries `ct_price_bars` ASC + `.limit(8000)`. PostgREST 1000-row cap. ASC → first 5h41m of pre-market per ticker. F2-via-cap (window shift) is one layer below F1 (metric choice).
+3. **Math is correctly applied to wrong window.** F1's framing assumed the window was RTH and the metric within the window was wrong. Empirically, the metric is fine; the window is pre-market only. F2 is the upstream-most root.
+
+The brief's resolution (F1-only) would have re-computed the same wrong-window number with a different metric → same ±0 result → captain concludes "Ship 7 didn't fix it" → multi-week delay before F2 surfaced.
+
+**Cumulative instance #37 fire count across the 6-Phase-A arc: 7 fires.** Cumulative session count went 32 → 39 across the arc; this Ship 7 fire is one of the seven (the other six fired across Ships 1, 3, 4, 5, 6 — each Phase A surfaced its own instance-#37 framing miss, all caught at receive-time). Discipline-stack operationally compounded at **7-fires-per-mega-prompt vs ~1-per-day historical baseline.**
+
+**Class diagnostic question:** *When a brief asserts "the root is X," does Phase A separately empirically verify that X is upstream-most? Or could X be a symptom one layer below an unstated F2? The verification is concrete: (a) apply X's proposed fix in a Phase A sandbox to see if the symptom moves, AND (b) trace the producer chain upstream of X by at least one layer to identify what's feeding the metric X is operating on.*
+
+**Fix shape:** at brief-write time, the brief frames intent and names the symptom — NOT the root. The root is what Phase A empirically establishes. If the brief author has a strong hypothesis, name it as hypothesis ("captain's hypothesis: F1 is the dominant root; Phase A to verify") not as fact ("F1 is the root"). Receive-time discipline runs the verification before any fix scopes.
+
+**Linked artifacts:**
+- Ship 7 Phase A receive-time discipline (2026-05-15) — F1 verification fail + F2 surface
+- Cascade #49 (`hidden-row-cap-shifts-window-semantics-not-just-coverage`) — F2-via-cap was the upstream root
+- Parent: instance #37 family (brief-asserts-state-vs-intent)
+- Sibling instance #37 sub-classes from prior sessions:
+  - `## brief-models-race-surface-from-one-call-path-misses-other-call-path-asymmetry — instance #37 sub-class (2026-05-13)`
+  - `## brief-asserts-cron-slot-without-verifying-current-cron-table — instance #37 sub-class (2026-05-13)`
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `### Instance #50 — brief-frames-F1-as-dominant-when-F2-is-upstream-root`
+
+---
+
+## codified-LLM-instruction-protecting-wrong-value — cascade #51 (2026-05-15)
+
+**Pattern:** A defensive LLM-instruction shipped at a downstream layer — typically of the form "do not recompute X; echo the producer's value" — can STRUCTURALLY LOCK IN an upstream producer bug. Defense-in-depth at the wrong layer hides producer bugs. The guard is correct in principle (deterministic-code-wins-over-LLM, per Tenet 13's structural-prevention discipline applied to LLM-hallucination class); shipped without prior producer-correctness verification, it converts an upstream bug into a permanent contract.
+
+**Why this matters:** the guard's intent is to prevent the LLM from drifting away from the producer's value (hallucination resistance). When the producer is correct, the guard structurally amplifies producer correctness. When the producer is broken, the guard structurally amplifies the bug. The LLM cannot self-correct against producer drift because the guard explicitly forbids it. The bug becomes invisible to LLM-output validation (the LLM did exactly what it was told) and to producer-side validation (the producer's value is consistent with itself). The lie lives at the join between guard and producer, a layer neither validator watches.
+
+**Empirical motivation — 2026-05-15 Ship 7 α (this session):**
+
+`supabase/functions/_shared/eodReportPrompt.ts:58` codified an instruction forbidding Sonnet from recomputing `session_pct` — exact wording asserts the producer's value as canonical and disallows LLM recomputation. The guard class is correct in principle: deterministic-code-wins-over-LLM. The producer (`ct-eod-report/index.ts:605-612` reading `ct_price_bars` via the now-cascaded #49 hidden-row-cap query) was emitting structurally-wrong `session_pct` for 5+ days. Sonnet correctly echoed the broken value across all 12 EOD reports since 2026-04-29. The downstream `accuracy_score` calculation (via Ship 6 reflection bridge, commit `503506f`) consumed the broken value. The `prior_brief_summary` propagator (Ship 7-from-5/13 commit `af8bd7f`) carried the broken `accuracy_score` forward into next-day composer prompts. **Cowork's canonical 5/13 ~20:45Z claim "Property loop closed at brief layer end-to-end" was EMPIRICALLY NOT CLOSED** — the reflection bridge wrote structurally-wrong `accuracy_score` for 5+ days. Retro-correction owed when Ship 7 ships.
+
+If a future engineer had instead patched the LLM to recompute `session_pct` from `ct_price_bars` directly, the recomputation would have hit the same hidden-row-cap query — the patch would have hidden the producer bug indefinitely, because the LLM-recompute would have matched the broken producer value by reading the same wrong window. The guard, paradoxically, made the bug VISIBLE at receive-time Phase A (the discrepancy between the cap-shifted window and Public's close-to-close direction was the surface signal). Post-Ship-7-α, the guard is now correct because the producer is now correct. The guard's correctness is contingent on producer correctness — not standalone.
+
+**New methodology rule:** when defensive LLM-guard ships, audit producer correctness BEFORE locking the guard in. The guard is a protective layer; if the layer below has a bug, the guard structurally protects the wrong value. Producer audit precedes guard-ship, not follows.
+
+**Class diagnostic question:** *When shipping an LLM-must-echo-not-recompute guard, has the producer been Phase-A-verified as the correct source of truth? If not, the guard is preserving an unverified value as canonical — and any producer bug becomes structurally locked in by the guard's existence.*
+
+**Fix shape (forward):** every LLM-guard ship that asserts producer-value-as-canonical includes a Phase A receive-time audit step verifying the producer's correctness empirically (compare producer output against an independent canonical source for ≥N samples). If the producer is not verifiable against an independent canonical source, the guard ships with explicit caveat ("guard pins LLM to producer; producer correctness is the load-bearing invariant — verified at X frequency by Y warden invariant"). The warden invariant for producer correctness ships in the same arc as the guard.
+
+**Class:** sibling of `## structured-zero-misread-as-null` (same family of defense-at-wrong-layer-hides-upstream-bug); sibling of cascade #49 (this session — the producer bug the guard was protecting); sibling of `## llm-prose-numeric-claims-lack-structural-anchor` (the converse: guard absent → LLM prose drifts; guard present + producer broken → LLM prose locked to broken producer).
+
+**Linked artifacts:**
+- Guard location: `supabase/functions/_shared/eodReportPrompt.ts:58`
+- Producer (now-fixed): `supabase/functions/ct-eod-report/index.ts:605-612` (commit `e50b374`)
+- Producer-correctness warden: `eod_report_bars_intra_rth_coverage` (commit `d0c8209`)
+- Downstream consumer chain: Ship 6 reflection bridge (5/13 commit `503506f`) → `ct_daily_briefs.accuracy_score` → `prior_brief_summary` propagator (5/13 commit `af8bd7f`)
+- Retro-correction owed: Cowork canonical 5/13 ~20:45Z "Property loop closed" claim
+- Sibling cascade: `## hidden-row-cap-shifts-window-semantics-not-just-coverage — cascade #49 (2026-05-15)` (this session)
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` `### Instance #51 — codified-LLM-instruction-protecting-wrong-value`
+
+---
+
+## internal-numeric-anchor-reconciliation-verification-surface — verification surface #8 (2026-05-15)
+
+**Pattern (verification surface):** Within a single LLM-prose field, numeric anchors must reconcile (a) to each other inside the same prose, AND (b) to the structured producer fields they purport to describe, AND (c) to the upstream producer outputs the structured fields were computed from. Three reconciliation directions; all three must hold for the prose to be honest. The verification surface tests all three; passing one (e.g., "the structured field exists and is non-null") does not imply the other two.
+
+This is the 8th verification surface in the methodology catalog — sibling of the existing `audit-verification-surface-mismatch` family (per-layer verification surface awareness) but specific to the within-prose / prose-vs-structured / structured-vs-producer reconciliation triad. The other seven verification surfaces (catalogued implicitly across the audit-discipline runbook section) cover: substrate layer, RPC layer, organ projection layer, consumer projection layer, surface render layer, prose-emit layer, warden invariant layer. Surface #8 closes the gap between the prose-emit layer and the producer chain by enforcing internal-numeric coherence as a first-class verification.
+
+**Why this matters:** prose is the highest-bandwidth surface. A prose anchor that's locally consistent with one structured field but inconsistent with another structured field on the same record (or inconsistent with the upstream producer) is a high-value lie — high-bandwidth, high-trust, low-detectability without explicit reconciliation. Surface #8 is the verification that catches this class structurally.
+
+**Empirical motivation — 2026-05-15 Ship 1 Phase A:**
+
+Ship 1's "two stale reads same row" finding surfaced the need. EOD commentary prose mentioned spot prices and pct moves that disagreed with `ct_ticker_snapshots` AND with the structured `session_pct` on the same record. The prose claim "+0.00%" was honest given the surface's window (out-of-window collapse), but mismatched the truth one layer down. Without surface #8, the lie has no verifier — no audit layer asks "do the prose anchors match the structured fields match the producer outputs?"
+
+**Example (Ship 1 + Ship 7 composite):** an EOD commentary mentioning "+0.54%" and "+$102K bullish flow" must reconcile across:
+- (within-prose) the two anchors are not in conflict with each other when read in narrative context
+- (prose-vs-structured) `session_pct: 0.54` and `flow_close: "bull +$102K"` fields on the same record match the anchors
+- (structured-vs-producer) the structured fields are honestly derived from `ct_price_bars` / `ct_flow_pulse_ticks` outputs — same window, same math, same producer chain
+
+All three directions must pass. If any one fails, surface #8 raises an `organMetadata` warning.
+
+**Class diagnostic question:** *Does the prose I'm reading contain numeric anchors? If yes, has surface #8 validated all three reconciliation directions for this record? If not, the prose is unverified — it may be locally consistent and globally lying.*
+
+**Fix shape:** `numericClaimValidator` helper (Ship 1 Bundle Phase 3 recommendation). Extract numeric tokens from prose with explicit anchor labels; resolve each to its structured field on the same record; resolve each structured field to its producer's most recent output; raise `organMetadata` warning on any divergence beyond tolerance. The validator runs at prose-emit time (during composition) and at consumer-read time (during organ projection), catching divergence at both surfaces.
+
+**Verification surface position in the discipline-stack:**
+- Surface 1-3: substrate, RPC, organ projection (load-bearing for "is the data flowing")
+- Surface 4-5: consumer projection, surface render (load-bearing for "is the data reaching the consumer correctly")
+- Surface 6-7: prose-emit, warden invariant (load-bearing for "is the composition honest, is the system self-monitoring")
+- **Surface 8: internal-numeric-anchor reconciliation** (load-bearing for "are the high-bandwidth prose surfaces honest against the structured fields and producer outputs")
+
+**Linked artifacts:**
+- Ship 1 Phase A (2026-05-15) — empirical motivation
+- Ship 1 Bundle Phase 3 recommendation — `tickerSpotCard` primitive + `numericClaimValidator` + per-anchor organMetadata
+- Sibling pattern: `## llm-prose-numeric-claims-lack-structural-anchor (2026-05-15)` (above) — the pattern surface #8 verifies
+- Sibling pattern: `## audit-verification-surface-mismatch` — same family of verification-surface discipline
+- Sibling cascade: `## codified-LLM-instruction-protecting-wrong-value — cascade #51 (2026-05-15)` — the guard surface #8 complements (the guard pins LLM to producer; surface #8 verifies the producer the guard is pinning to)
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
