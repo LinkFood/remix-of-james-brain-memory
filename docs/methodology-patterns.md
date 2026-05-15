@@ -2460,3 +2460,83 @@ All three directions must pass. If any one fails, surface #8 raises an `organMet
 - Sibling cascade: `## codified-LLM-instruction-protecting-wrong-value — cascade #51 (2026-05-15)` — the guard surface #8 complements (the guard pins LLM to producer; surface #8 verifies the producer the guard is pinning to)
 - Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
 
+---
+
+## manual-experiment-cadence-doesnt-survive-captain-life-cadence — cascade #52 (2026-05-14)
+
+**Pattern:** A recurring experiment or measurement that depends on a human firing it on a fixed cadence is structurally fragile — not because the human is unreliable, but because the fixed cadence competes with the captain's actual life cadence. A nightly capture that "should" fire every night will be missed on the nights life intervenes (travel, illness, a late session, simply forgetting). A missed night doesn't fail loudly; it silently corrupts the experiment window — the dataset has a hole, the feature-isolation analysis runs on a shorter or gappy window, and the gap is invisible unless someone audits row counts per night. Manual cadence is a band-aid over the absence of automation; it works in the demo and degrades in production-against-a-real-life.
+
+**Empirical motivation — 2026-05-14 D3 nightly feature-isolation capture:**
+
+The D3 14-day feature-isolation experiment captured one row-set per night via a manually-run terminal command (Tenet 26 framing: analysis-mode stays terminal-Claude, no edge-function shim). The cadence requirement — fire every weeknight for 14 nights — depended on the captain remembering to run it each night. Across the window the cadence competed directly with the captain's life cadence; the experiment window's integrity rode on a human's nightly memory. Class-killed 2026-05-14 by commit `107891c` ("autonomize nightly capture"), which moved the capture to an autonomous cron. The capture now fires whether or not the captain is present — the experiment window is structurally complete by construction.
+
+Note the apparent tension with Tenet 26 (analysis-mode lives in terminal-Claude, never an edge-function shim). The resolution: Tenet 26 governs *analysis* (the deep-dive, the "what if", the interpretation) — that stays terminal-Claude. But the *capture* of a recurring measurement is not analysis; it is data collection on a fixed cadence, and data collection on a fixed cadence is autonomous-mode work by definition (Tenet 26's own reflex test: "Does this need to run when James isn't here?" — yes, every night, including the nights he isn't here). The capture cron feeds the dataset; the captain still does the analysis in terminal. Autonomizing the capture does not violate Tenet 26 — it correctly assigns the capture to the mode it always belonged in.
+
+**Rule:** any recurring experiment or measurement that must fire on a fixed cadence is autonomous (cron), never manual. Manual cadence does not survive contact with a real human's schedule. The recurring-measurement-fires-on-cron rule is not an optimization — it is the structural form of "the experiment window must be complete."
+
+**Class:** sibling of `## calendar-anchor-becomes-deferral` — same family of "a calendar/cadence dependency that rides on human memory degrades into deferral or gaps." Calendar-anchor-becomes-deferral is the *forward-work* form (a queued task anchored to a day slides); this is the *recurring-capture* form (a nightly fire is missed). Both resolve the same way: remove the human-memory dependency from the cadence.
+
+**Class diagnostic question:** *Does this recurring task depend on a human remembering to fire it? If yes, it will be missed — autonomize it. The question is not "is the human reliable" but "does the fixed cadence compete with a real life," and the answer is always yes.*
+
+**Linked artifacts:**
+- Class-kill commit: `107891c` ("autonomize nightly capture") — moved D3 nightly feature-isolation capture to an autonomous cron
+- Sibling pattern: `## calendar-anchor-becomes-deferral` — the forward-work form of the same human-memory-cadence-dependency class
+- Tenet 26 (three-mode architecture) — capture is autonomous-mode, analysis stays terminal-Claude; autonomizing the capture is correct mode-assignment, not a Tenet 26 violation
+- Cross-catalog parity: codified in Cowork `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md` as Cascade #52
+
+---
+
+## engine-room-brief-asserts-fix-shape-without-verifying-fix-clears-the-cap-it-targets — instance #37 sub-class (2026-05-15)
+
+**Pattern:** Sub-class of the instance #37 family (brief asserts state vs intent — see cascade #50, `brief-asserts-cron-slot-without-verifying-current-cron-table`, and the parent rule). This sub-class establishes that the brief-author-state-vs-intent rule binds **engine-room's own briefs**, not just Cowork-authored briefs. When a brief asserts a fix *shape* for a cap/limit bug — "use `.limit(N)`", "page per-ticker", "split the query" — the assertion is a state-claim the brief cannot verify at write-time: it claims the proposed shape clears the cap for every entity. If the brief does not verify the shape against the **worst-case entity**, the fix can ship and still be inside the bug. The fix shape is not a fact until it is checked against the entity with the most rows.
+
+**Empirical motivation — 2026-05-15 Ship 7 (this session, recursive/self-referential instance):**
+
+Ship 7's `alpha_pct` regression fix shipped wrong **twice** before the real fix landed — both times because a brief asserted a fix shape without verifying it cleared the PostgREST 1000-row cap (cascade #49) for the worst-case ticker:
+
+1. **v1 (`e50b374`)** — "per-ticker fan-out" was asserted as the fix. But the v1 implementation still issued a multi-ticker ASC query that was cap-truncated. Shape asserted, shape not verified — still inside the bug.
+2. **Mid-day correction** — re-shipped as a per-ticker query with `.limit(4000)`. The `.limit(4000)` was asserted as "comfortably under the cap." It is not — PostgREST caps at 1000 regardless of the `.limit()` value. And even setting that aside, the worst-case entities were over 1000 *bars*: NVDA had 1003 bars in the window, TSLA 1012. The proposed shape did not clear the cap for the worst-case entity; the brief asserted it did.
+3. **v2 (`58ef637`)** — an agent's Phase A caught the residual. The real fix was full pagination (range-based fetch looping until the per-ticker result set is exhausted), which clears the cap for any entity regardless of bar count. This is the shape that is provably correct against the worst case.
+
+The lesson: when a brief asserts a fix shape for a cap/limit bug, the brief must verify the proposed shape provably clears the cap for the **worst-case entity** — not assert "this should be under the cap." `.limit(4000)` *reads* like it clears a 1000 cap; it does not, both because PostgREST ignores the value above 1000 and because the worst-case entity's true row count (NVDA 1003, TSLA 1012) was never checked against the proposed ceiling. "Should be under the cap" is an assertion; "the worst-case entity has N rows and the shape handles N" is a verification.
+
+This is the **recursive/self-referential instance** of the instance #37 family: the brief-author rule is a fractal property of the discipline-stack — it binds *any* author, including engine-room itself authoring its own Ship 7 brief. The discipline does not have an exemption for the engine room. **Cumulative instance #37 fire count moves 42 → 43** with this self-referential fire.
+
+**Fix shape (forward):** when a brief proposes a fix shape for a cap/limit/pagination bug, the brief includes — or Phase A produces before any code — the worst-case-entity row count and a demonstration that the proposed shape handles that count. For PostgREST specifically: `.limit(N)` for N > 1000 does NOT clear the 1000-row cap; only pagination (range loop) or a query whose per-entity result set is provably < 1000 by construction clears it. The brief asserts intent ("close the alpha_pct window-shift residual"); Phase A establishes the worst-case entity and verifies the shape against it.
+
+**Class diagnostic question:** *Does my proposed fix shape provably clear the limit for the worst-case entity — with that entity's actual row count in hand — or am I asserting it does? "Should be under the cap" is the smell; "the worst-case entity has N rows and the shape handles N" is the verification.*
+
+**Linked artifacts:**
+- v1 (still cap-truncated): commit `e50b374`
+- Mid-day correction (`.limit(4000)`, still over cap — NVDA 1003 bars, TSLA 1012): see Ship 7 arc
+- v2 (full pagination — the real fix): commit `58ef637`
+- Parent: instance #37 family (brief-asserts-state-vs-intent)
+- Sibling cascade: `## brief-frames-F1-as-dominant-when-F2-is-upstream-root — instance #37 sub-class — cascade #50 (2026-05-15)`
+- Sibling cascade: `## hidden-row-cap-shifts-window-semantics-not-just-coverage — cascade #49 (2026-05-15)` — the PostgREST 1000-row cap this sub-class is about clearing
+- Cross-catalog parity: codified in Cowork `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## parallel-agents-collide-on-shared-working-directory-branch — recurring class (2026-05-15)
+
+**Pattern:** When 2+ parallel agents share a single working directory and that directory is parked on a feature branch, agents that commit to git will collide — a commit from one agent's task lands on another agent's branch, or on a branch reserved for a different purpose. The collision is not a merge conflict (which git surfaces loudly); it is a *wrong-branch* commit (which git accepts silently). The shared working directory is a single git HEAD; parallel agents committing through it all push to whatever branch that HEAD points at, regardless of which agent's task the commit belongs to.
+
+**Second production instance of the parallel-agent-collision class.** The first instance was 2026-05-09 evening — `## parallel-agents-create-same-file-with-different-signatures` — where parallel agents independently created the same file with divergent function signatures. Different surface (file creation vs git branch), same class: parallel agents sharing state with no isolation collide on that shared state.
+
+**Empirical motivation — 2026-05-15 (this session):**
+
+Parallel background agents shared one working directory parked on a feature branch. A code commit, belonging to a different agent's task, landed on **PR #124's docs-only branch** by mistake — polluting a docs-only PR with a code change. Recovered via cherry-pick of the misplaced commit to main + reset and force-push of the polluted branch back to its intended docs-only state. Recovery succeeded, but recovery-per-incident is the wrong posture for a known class: this is the second instance, and two instances of the same failure shape is the definition of a class, not an incident.
+
+**Structural-prevention rule:** before dispatching parallel agents that touch git, the dispatcher must either (a) use worktree isolation — one git worktree per agent, each with its own HEAD and branch — OR (b) explicitly check out / assign each agent its own branch and verify each agent operates only on its assigned branch. A shared working directory parked on any branch is not safe for parallel git-committing agents. Recovery-per-incident (cherry-pick + reset + force-push) is acceptable as a one-time response to the first instance of a novel failure; it is not acceptable as the standing answer to a known, named class.
+
+**Captain decision pending.** A captain decision was requested on whether to codify this as a class (structural-prevention rule, dispatcher must isolate) versus accept it as a per-incident cost (recover each time it happens). This entry is written under the **codify-as-class default** — two instances is a class, and the discipline-stack's standing posture is structural prevention over per-incident recovery (Tenet 13, Tenet 15). If the captain later rules for accept-per-incident, this entry gets revised to record that ruling and its rationale.
+
+**Class diagnostic question:** *Am I about to dispatch 2+ agents that commit to git from a shared working directory? If yes, isolate first — worktree-per-agent or explicit branch-per-agent with verification. A shared HEAD means all agents' commits land on one branch; that is the collision.*
+
+**Linked artifacts:**
+- First instance (file-creation surface): `## parallel-agents-create-same-file-with-different-signatures` (2026-05-09 evening)
+- Recovery this instance: cherry-pick of misplaced commit to main + reset/force-push of PR #124's polluted docs-only branch
+- Sibling discipline: Tenet 13 (structural prevention beats validators) + Tenet 15 (ground-up, no band-aids — fix the class, not the instance)
+- Captain decision: codify-as-class vs accept-per-incident — this entry written under codify-as-class default; revise if captain rules otherwise
+- Cross-catalog parity: codified in Cowork `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
