@@ -1366,6 +1366,58 @@ export async function getOptionContractFlow(
  *
  * Returns nulls everywhere on failure / no-print rather than throwing — the
  * poller treats null as "no quote available this tick", not a hard error.
+ *
+ * ────────────────────────────────────────────────────────────────────────
+ * SHIP 10 endpoint-contract audit (2026-05-14) — vendor-API-naming class-kill
+ * ────────────────────────────────────────────────────────────────────────
+ *
+ * The function name reads like "fetch a live NBBO snapshot" but the actual
+ * UW endpoint behind it is the per-contract flow tape (`/flow?limit=1`).
+ * This is not a stop-gap — it is the ONLY path UW exposes for per-contract
+ * live NBBO. The implication: if a contract doesn't re-print after a flag
+ * fires, `getOptionContractLatestMid` returns `{ok:false, error:'no_prints'}`
+ * forever and the poller writes no quote. This is a UW API limitation, not
+ * a bug in the wrapper. Per the Ship 2 telemetry the cost is real (illiquid
+ * / far-OTM strikes are silent until the next print).
+ *
+ * Phase A audit, 2026-05-14, probed against UW REST via ct-uw-probe:
+ *
+ *   404  /api/option-contract/{symbol}/nbbo
+ *   404  /api/option-contract/{symbol}/quote
+ *   404  /api/option-contract/{symbol}/snapshot
+ *   404  /api/option-contract/{symbol}/bbo
+ *   404  /api/option-contract/{symbol}/last      (also /latest /mid /greeks)
+ *   404  /api/option-contract/{symbol}             (root)
+ *   404  /api/option-contracts/{symbol}            (plural)
+ *   404  /api/options/{symbol}/nbbo                (alt namespace)
+ *   404  /api/options/{symbol}/quote
+ *   200  /api/option-contract/{symbol}/intraday   (OHLC + premium-side ONLY,
+ *                                                  NO bid/ask/nbbo fields)
+ *   200  /api/option-contract/{symbol}/historic   (daily rows, EOD-snapshot
+ *                                                  NBBO — not live)
+ *   200  /api/option-contract/{symbol}/flow       (per-print NBBO at exact
+ *                                                  print time — this wrapper)
+ *
+ * Conclusion: no migration available. UW's per-contract API exposes exactly
+ * 3 GET routes; only `/flow` carries live NBBO. The 2026-04-18 OpenAPI sweep
+ * already captured this in the per-contract endpoint-contract block above
+ * (lines 1060-1085); Ship 10 re-verified empirically against live UW.
+ *
+ * Cost-model: 1 UW request unit per call (same as any other UW REST GET).
+ * Daily budget header at 20,000; minute budget 120.
+ *
+ * If UW ships an NBBO endpoint in the future, the migration is local:
+ *   1. Add `getOptionContractNbbo(symbol)` wrapper hitting the new path.
+ *   2. Change this function to call it as primary, with the flow tape kept
+ *      as a fallback for symbols the NBBO endpoint doesn't cover.
+ *   3. Return shape stays the same so ct-contract-poller needs no edit.
+ *   4. Re-run the registry probe (see UW_ENDPOINT_REGISTRY below).
+ *
+ * Class-kill discipline: the wrapper name reads like a quote-endpoint call.
+ * If you rename anything in this neighborhood, prefer a name that encodes
+ * the real source (e.g. `getOptionContractLatestPrintMid`) — the brief that
+ * spawned Ship 10 was framed around the wrong-endpoint assumption that the
+ * wrapper name implied.
  */
 export async function getOptionContractLatestMid(
   optionSymbol: string,
