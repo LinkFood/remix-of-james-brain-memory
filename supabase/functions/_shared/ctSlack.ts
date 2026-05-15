@@ -242,8 +242,15 @@ export async function ctSlackPushTiltTransition(
     ? `${Math.round(payload.recoveryRate * 100)}% (${payload.recoveryN} cases)`
     : 'insufficient history';
 
+  // Label clarifies the metric so the captain doesn't conflate this with
+  // the EOD slack hit% or the morning-brief scorecard. This counter measures
+  // the LEADING RUN of wrong verdicts in ct_grades over a 30d rolling window
+  // — per-call grader verdicts, not today-only. Companion fix: EOD slack +
+  // morning-brief scorecard chip in /eod-report each carry their own
+  // metric-name + window label so captain knows exactly which measurement
+  // they're reading. (goal #4 item 3 disambiguation, 2026-05-15.)
   const text =
-    `:warning: *${payload.wrongStreak}-wrong streak* on ${tickerStr}. ` +
+    `:warning: *Tilt streak (30d grader) — ${payload.wrongStreak}-wrong* on ${tickerStr}. ` +
     `Historical recovery win rate after ${payload.wrongStreak}L: ${rateStr}. ` +
     `Consider pause or tighter setups only.`;
 

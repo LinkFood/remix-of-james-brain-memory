@@ -1419,7 +1419,14 @@ End with a single closing sentence on the day's regime → tomorrow's setup.`;
           },
         ];
 
-        const fallbackText = `Co-Trader EOD ${sessionDate}: regime ${regimeStr} · ${hitRateStr} hit rate · ${tracksRealizedTodayCount ?? 0} tracks realized · ${slowBurnCount} slow-burn pays`;
+        // Label disambiguation: this hit rate is the CONTRACT WIN-BAR HIT%
+        // on today's flagged contracts (peak ≥ win bar over today's session)
+        // — NOT the tilt streak (30d per-call grader run) NOT the morning-
+        // brief scorecard (LLM judges per-ticker thesis vs close). Three
+        // different surfaces, three different units; the label now says so
+        // explicitly so the captain can't conflate them on a glance.
+        // (goal #4 item 3 disambiguation, 2026-05-15.)
+        const fallbackText = `Co-Trader EOD ${sessionDate}: regime ${regimeStr} · Contract WIN-bar hit% today ${hitRateStr} · ${tracksRealizedTodayCount ?? 0} tracks realized · ${slowBurnCount} slow-burn pays`;
         await ctSlackPushDirect(supabase, userId, fallbackText, 'eod', blocks);
         slackOutcome = 'sent';
       }

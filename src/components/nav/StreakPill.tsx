@@ -34,9 +34,13 @@ export function StreakPill() {
         to="/patterns#streaks"
         className={`flex items-center gap-1 px-2 py-1 rounded-md text-xs border transition-colors ${tone}`}
         title={
+          // Label scope made explicit so captain doesn't conflate this 30d
+          // per-call-grader counter with today's contract-track WIN-bar hit%
+          // (EOD slack) or the morning-brief scorecard EOD% (/eod-report).
+          // (goal #4 item 3 disambiguation, 2026-05-15.)
           tilt_risk
-            ? `Tilt risk: ${data.combined.tilt_reasons.join(', ')}`
-            : `Current wrong streak: ${w}`
+            ? `Tilt streak (30d grader) — ${data.combined.tilt_reasons.join(', ')}`
+            : `Tilt streak (30d grader) — current wrong streak: ${w}`
         }
       >
         <AlertTriangle className="w-3 h-3" aria-hidden />

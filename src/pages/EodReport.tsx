@@ -235,7 +235,7 @@ function ScorecardSummaryChip({ s }: { s: ScorecardSummary }) {
     return (
       <Card className="p-3 border-border/60">
         <div className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">
-          Morning Brief Scorecard
+          Morning Brief Scorecard · EOD %
         </div>
         <div className="text-sm text-muted-foreground italic">
           No morning brief yesterday — nothing to grade.
@@ -265,8 +265,11 @@ function ScorecardSummaryChip({ s }: { s: ScorecardSummary }) {
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex items-center gap-2">
           <ClipboardCheck className={cn('w-4 h-4', textColor)} />
-          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-            Morning Brief Scorecard
+          <span
+            className="text-[10px] uppercase tracking-wider text-muted-foreground"
+            title="LLM grades morning brief per-ticker theses vs close. Distinct from /alarms tilt-streak (30d grader) + EOD slack contract-WIN-bar hit% (today)."
+          >
+            Morning Brief Scorecard · EOD %
           </span>
         </div>
         <div className="flex items-center gap-3">
