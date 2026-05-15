@@ -118,7 +118,30 @@ function resolveOrgansArg(
 
 async function emitCacheHitTelemetry(
   supabase: SupabaseClient,
-  args: { organ: string; ticker: string; ageSec: number; ttlSec: number },
+  args: {
+    organ: string;
+    ticker: string;
+    ageSec: number;
+    ttlSec: number;
+    /**
+     * organMetadata.status from the cached HelperResult. Threaded through
+     * so the row matches what buildClaudeContext writes on a cold miss
+     * (claudeReadSurface.ts:2052 / 2256). Without this, the cotrader-mcp
+     * cache-hit path produced rows with `organ_status IS NULL AND error IS
+     * NULL`, tripping `organ_metadata_completeness_{analogs,
+     * event_recency, james_flags, specialist_recall}` invariants on every
+     * 30-min warden sweep that landed within an hour of a captain mcp call
+     * (instance 2026-05-14 13:24Z + repeating fire+recover pattern across
+     * the day). Phase A surfaced in goal #1 item 6 (2026-05-15 session);
+     * fix in goal #2 item 2.
+     *
+     * Helper-version is also threaded through for symmetry — cold-miss
+     * rows include it; the cache-hit row should too so /health and warden
+     * see the same shape across both paths.
+     */
+    organStatus?: string | null;
+    helperVersion?: string | null;
+  },
 ): Promise<void> {
   // Same shape as the rows buildClaudeContext writes per organ outcome.
   // `cache_hit=true` is the structured signal. The `error` column stays NULL
@@ -127,12 +150,14 @@ async function emitCacheHitTelemetry(
   try {
     await supabase.from('ct_brain_telemetry').insert({
       helper_name: args.organ,
+      helper_version: args.helperVersion ?? null,
       audience: 'cotrader',
       ticker_focus: args.ticker,
       consumer_name: CONSUMER_NAME,
       latency_ms: 0,
       output_size_bytes: 0,
       cache_hit: true,
+      organ_status: args.organStatus ?? null,
     });
   } catch (_e) {
     // Telemetry must never block. Swallow.
@@ -175,12 +200,19 @@ export async function getCoTraderContext(
       if (hit) {
         cachedOrgans[o] = hit.value;
         cacheHits.push({ organ: o, ageSec: hit.ageSec });
-        // Fire telemetry for this cache hit (best-effort).
+        // Fire telemetry for this cache hit (best-effort). organStatus +
+        // helperVersion threaded through from the cached HelperResult so the
+        // row matches the cold-miss shape (claudeReadSurface.ts:2042-2053)
+        // and the organ_metadata_completeness_* warden invariants stop
+        // tripping on captain MCP cache hits. See emitCacheHitTelemetry
+        // docstring for the goal #1 item 6 / goal #2 item 2 history.
         void emitCacheHitTelemetry(supabase, {
           organ: o,
           ticker,
           ageSec: hit.ageSec,
           ttlSec: Math.round(cacheStats().ttlMs / 1000),
+          organStatus: hit.value.organMetadata?.status ?? null,
+          helperVersion: hit.value.meta?.helperVersion ?? null,
         });
       } else {
         stableMisses.push(o);
