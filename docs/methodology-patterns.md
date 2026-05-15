@@ -1777,3 +1777,241 @@ When a methodology error bites:
 2. If it's a new class, add a new top-level `## name — short description` heading and write up the pattern, then add the instance.
 3. Always link source artifacts (memos / decisions / migrations) so the reasoning chain stays traceable.
 4. End each instance with the **diagnostic question** future-you should have asked earlier — that's the actionable lesson.
+
+---
+
+## consumer-side-dashboard-join-failures-masquerade-as-producer-side-data-absence
+
+Sibling of `audit-frame-mismatch` (the original of this family). Different shape: this one is when the dashboard's CONSUMER hooks fail to join correctly to the producer's output. The producer is healthy; the dashboard renders empty; the audit reads the empty surface and concludes "X isn't producing."
+
+**Why this matters:** consumer-side join bugs masquerade as producer-side outages. A dashboard rendering empty cells looks identical to a writer that stopped writing. The audit conclusion drives whether the next ship targets the producer (wrong) or the consumer (right).
+
+### Instance — 2026-05-14 Phase 1 close arc, three convergent fires
+
+Three independent consumer-layer bugs all looked like producer-side data absence:
+
+1. `/flags` header counts read from a loaded 200-row slice (capped, score-filtered, source-filtered) instead of from `ct_flags`/`ct_flag_grades` `count=exact` queries. Header said "0 graded today" while the DB had 48.
+2. `/edge` hook layer (`src/hooks/useEdge.ts`) had types declared against pre-rename columns (`wins/losses/flats/regime/sample/updated_at`) while the producer wrote post-rename columns (`snapshot_*` / `regime_tag` / `sample_count` / `last_updated_at`). 5 of 11 sections silently rendered "—" since deploy.
+3. `/specialists` page filtered `ct_flags.specialist_ticker IN (10)` and joined `ct_flag_grades` via PostgREST FK auto-resolve (which returned null even when grades existed). All cards showed graded=0 universal; pre-Ship-5 visible graded count was 14; post-Ship-5 fix → 1,978.
+
+**Audit-side framing failure:** the original audit's Phase A reads were on the dashboards themselves, not on the underlying tables. Each of the three pages was diagnosed as "producer-side" before the cross-cutting class agent verified the producer was healthy and the dashboards were lying.
+
+**Class diagnostic question for future audits:** *"For every 'X looks broken on the dashboard' finding, did I run a count(\*) directly against the source table within the audit's same Phase A pass?"* If not, the audit's premise is unverified.
+
+**Linked artifacts:**
+- Ship 4 (`e491512`) — /flags DB-of-truth counts
+- Ship 3 (`159b98c`) — /edge column rename reconciliation + runtime canary
+- Ship 5 (`15f02c3`) — /specialists FK direct-join + 30d window
+- Cross-cutting agent finding: grading pipeline NOT empty (1,978 rows lifetime); consumer-side joins lying.
+
+---
+
+## tunable-numbers-belong-in-ct_config-not-constants
+
+Tenet 16 reinforcement at the methodology layer. Any number that might need recalibration over time — thresholds, floors, cooldowns, sample minimums, bucket boundaries — belongs in `ct_config` as a row, not in code as a constant. Constants are static. Anything that might evolve is data.
+
+**Why this matters:** when a threshold needs recalibration mid-arc (corpus shift, distribution drift, regime change), the difference between "edit one row" and "redeploy N edge functions" is the difference between a 5-minute fix and a 1-day arc. Worse, hardcoded constants drift silently — the inline comment that says "calibrated 2026-05-02 against 1,395 grades / 4-day window" rots the moment the calibration changes shape.
+
+### Instance — 2026-05-14 Phase 1 close arc
+
+The original audit asserted "thresholds need to move from constants to ct_config" for both `DEFAULT_ALARM_BUCKETS` in `ct-flag-grader/index.ts:81-87` and tier thresholds in `_shared/alarmTiering.ts:33-48`. Ship 1's Phase A discovered **both halves were already wired to ct_config** — `getSourceDefaults()` and `loadTierThresholds()` had been reading from ct_config since 2026-05-02 (`category='grader'` and `category='signature_watcher'`). The constants in code were FALLBACKS, not the operative source.
+
+The actual structural need was **VALUE recalibration**, not WIRING. Ship 1 v2 updated ct_config rows to empirical P75 anchors; the wiring layer was already done.
+
+**Class diagnostic question:** *"Before asserting a structural fix shape ('move X to ct_config'), did I verify whether the wiring already exists and the problem is in the VALUES, not the LOCATION?"*
+
+**Linked artifacts:**
+- Ship 1 v2 (`3b377ec`) — grader threshold recalibration to empirical P75 anchors
+- Ship 9a (`a04e3eb`) — tier threshold recalibration; same shape (values, not wiring)
+- Companion: `brief-asserts-structural-fix-without-verifying-fix-already-shipped-historically` (below)
+
+---
+
+## header-counts-must-source-from-DB-not-loaded-slice
+
+Dashboards that show summary counts ("N active · M graded today") must source those counts from `count=exact` DB queries, not from the length of a paginated/filtered slice already in the consumer's memory. The slice has been narrowed by score floors, source filters, status filters, date windows — none of which the header label communicates.
+
+**Why this matters:** when a header says "48 graded today" but actually means "48 graded today in the currently-rendered 200-row slice filtered by score≥70 from sources A+B with When=today," the header is a label-vs-data lie. The user reads the literal label; the data is something else entirely. The class only surfaces when a backlog grows past the slice cap, or a filter narrows the slice into thinness — both common in production.
+
+### Instance — 2026-05-14 /flags header (`Flags.tsx:723-737`)
+
+Header rendered `counts.gradedToday` derived from the loaded 200-row useQuery slice. With detector_alarm flood at 977/day and a 70-score floor, today's 48 actual `ct_flag_grades` rows weren't even in the slice. Header read "0 graded today" while DB had 48. Captain spent two weeks unable to see Ship 1's grader lift because the surface that should have surfaced it was lying.
+
+**Fix shape:** separate `useQuery` hooks per count metric (active / conviction / gradedToday / backlog), each with `head: true` + `Prefer: count=exact`. Don't share queries with the list.
+
+**Class diagnostic question:** *"For every count rendered in a header chip, does the query that produces it have the same WHERE clauses as the label promises — and is it counting rows that may not appear in the loaded list?"*
+
+**Linked artifacts:**
+- Ship 4 (`e491512`) — DB-of-truth counts on /flags
+- Pre-Ship-4 baseline: header said 0 graded today; DB had 48.
+
+---
+
+## PostgREST-FK-auto-resolve-silently-returns-null-when-relationship-misnamed
+
+PostgREST embedded-query syntax (`ct_parent?select=*,ct_child(*)`) requires a foreign key declared between the tables AND a name PostgREST can match unambiguously. When the FK is unnamed-inline, has multiple FKs between the same tables, or the relationship name PostgREST infers doesn't match what the consumer expects, the embedded query returns the parent rows with `null` in the child slot — silently. No error. No PGRST200.
+
+**Why this matters:** Postgres-side JOIN works (the FK exists for referential integrity); PostgREST-side embedded select fails (the projection layer can't resolve the relationship). A warden invariant written in SQL would report PASS while the consumer renders empty. The class is invisible to substrate-layer monitoring.
+
+### Instance — 2026-05-14 /specialists graded counts (cards rendered 0 across the board)
+
+`ct_flag_grades.flag_id → ct_flags(id)` FK exists, declared unnamed-inline in `20260423000026_v2_specialist_schema.sql:83`. Forward direction (`ct_flags?select=...,ct_flag_grades(...)`) returns `ct_flag_grades: null` for every row. Reverse direction (`ct_flag_grades?select=...,ct_flags(...)`) resolves cleanly. Same FK, asymmetric projection-layer behavior.
+
+**Fix shape:** either rename FK explicitly (`CONSTRAINT fk_flag_grades_to_flags FOREIGN KEY (flag_id) REFERENCES ct_flags(id)`) and use explicit-syntax embedded selects (`ct_flag_grades!fk_flag_grades_to_flags(*)`), or bypass via a separate `.in()` query joined in JS.
+
+**Class diagnostic question:** *"When a UI page shows a join's child as null/empty, did I verify the embedded query returns rows for the specific FK relationship — or am I assuming because the SQL JOIN works?"*
+
+**Linked artifacts:**
+- Ship 5 (`15f02c3`) — /specialists bypassed via `ct_flag_grades.specialist_ticker` direct join
+- `~/.claude/agent-memory/core-logic-builder/postgrest_embedded_fk_silent_null.md`
+
+---
+
+## vendor-API-endpoint-naming-doesnt-always-match-function-naming
+
+A wrapper function named `getOptionContractLatestMid` reads as "fetches latest mid/NBBO for an option contract." The reader assumes it calls a quote endpoint. The function body may call a different vendor endpoint entirely (flow-alerts tape, recent prints, etc.) that happens to surface a mid-price as a side effect. The naming-vs-implementation gap creates a structural class where the consumer's mental model never matches reality until the wrapper's source is read.
+
+**Why this matters:** consumers of wrapper functions don't read the source every time they're called. Audits citing "wrapper X uses endpoint Y" propagate the wrapper's NAME, not its actual endpoint. The audit conclusion ("we're calling the wrong endpoint, switch to Z") may be predicated on the wrapper having been named correctly — and if a true Z endpoint doesn't exist on the vendor's API, the entire "fix" arc is hopeful, not actionable.
+
+### Instance — 2026-05-14 Ship 10 UW endpoint audit
+
+The original audit asserted ct-contract-poller calls the "wrong endpoint" (flow-alerts) and proposed migrating to a true NBBO endpoint, claiming the write rate was 3-7% on polls. Ship 10's Phase A discovered:
+- UW has NO NBBO/quote endpoint (404 on /nbbo, /quote, /snapshot, /bbo, /last, /mid, etc.)
+- Flow-alerts IS the canonical per-contract NBBO source on UW
+- Actual write rate from Ship 2 telemetry: **94%**, not 3-7%
+- The wrapper's name suggested a quote endpoint; the implementation was already correct given the vendor's API surface
+- The codebase author's 2026-04-18 OpenAPI sweep had already documented this at `uwClient.ts:1060-1085`; the audit author missed the comment
+
+**Class diagnostic question:** *"When an audit cites a wrapper's behavior, did I read the wrapper's source (and its inline endpoint docs) to verify the asserted endpoint, not just trust the function name?"*
+
+**Linked artifacts:**
+- Ship 10 (`ca11e68`) — UW endpoint audit; doc-comment block added at `getOptionContractLatestMid` codifying the empirical 404 list
+
+---
+
+## MV-shape-change-must-explicitly-account-for-downstream-statistical-consumers
+
+When a fix changes the shape of a materialized view, an RPC's output, or a corpus-aggregating table (median, P50/75/90, percentile distributions), downstream consumers that calibrated thresholds against the OLD shape will silently drift. The thresholds are now wrong relative to the new distribution. No error fires; the system just produces tier/grade/conviction labels that no longer match the empirical reality.
+
+**Why this matters:** the fix is correct (the cleanup it performed was right); but the downstream calibration was never re-anchored. The system enters a state where the fix's beneficial effect is invisible because the labels it produces are misaligned. The audit framing may attribute the symptom (zero gold tiers, zero high-conviction flags) to "thresholds broken" — when actually the substrate's distribution shifted under the thresholds, and the thresholds never moved.
+
+### Instance — 2026-05-14 Ship 9a corpus collapse forensics
+
+Audit asserted: `ct_signature_alarm_log.median_peak_pct` dropped ~44× post-2026-05-02, "likely caused by ct_flag_analysis_corpus MV / unified_verdict ship." Ship 9a Phase A discovered:
+- The 5/02 MV ship was a red herring
+- Real cause: 5/01 evening commit `c951c59` (flag-grader silent-exit class-kill) wiped 51 corrupt grades writing fabricated "+3693% win" outcomes
+- Pre-fix corpus was POLLUTED (P75=0.939, max=1.379); post-fix corpus is HONEST (P75=0.007, max=0.031)
+- The underlying `ct_contract_tracks.peak_contract_pct` distribution stayed stable (~2.17 → ~1.16); the alarm corpus statistic collapsed because it was inflated by repeated polluted-RPC reads
+- The "shift" was a CLEANUP, not a regime change
+- Tier thresholds calibrated against the polluted distribution were now ~16× above the honest distribution → zero tier signal for 14 days
+
+**Class diagnostic question:** *"When a cleanup ship lands, did I explicitly identify which downstream statistical consumers (thresholds, tier ladders, conviction floors, calibration windows) were anchored to the pre-cleanup distribution — and ship recalibration in the same arc?"*
+
+**Linked artifacts:**
+- Ship 9a (`a04e3eb`) — tier threshold recalibration to honest post-cleanup distribution
+- Tier replay: pre 0/0/158 → post 10/24/124 (gold/silver/bronze)
+- Companion: `audit-frame-mismatch` (causal attribution wrong); `tunable-numbers-belong-in-ct_config-not-constants` (locator of the fix)
+
+---
+
+## single-source-of-truth-for-rendering-layer-across-N-consumers
+
+When N independent consumer surfaces render the same data shape (tape commentary, brief content, alarm cards, etc.), the rendering logic must live in ONE module. Each consumer composes the renderer; no consumer reimplements. The class to kill: rendering drift, where adding a feature to the producer (markdown bolds, embedded chips, hour-buckets) requires N coordinated edits across N consumer surfaces — and one consumer inevitably gets missed, producing visible drift.
+
+**Why this matters:** the producer-side enrichment (better prompt, more structured payload) silently degrades when consumer-side rendering doesn't keep pace. Captain reads the literal output (`**bold**` as literal asterisks; UUID arrays as "10 flag" instead of resolvable chips); the producer's actual semantic work never surfaces.
+
+### Instance — 2026-05-14 Ship 8 TapeCommentaryRender canonical
+
+`ct_tape_commentary` was consumed by 5 frontend surfaces (TapeReader page, TapeReaderBanner, TapeReaderArc ×2, ClaudesRead, AlphaTopStrip excluded as no commentary surface). Each rendered the commentary as raw `{r.commentary}` with literal `**` asterisks. The producer was emitting bolded contract anchors, flag_id/flow_id arrays, multi-paragraph synthesis. Five identical drift patterns.
+
+**Fix shape:** `TapeCommentaryRender.tsx` as the canonical component. All 5 consumers import it. Producer enrichment goes to one place; all surfaces inherit. Local bold-stripping (where it was deliberately wanted, e.g. semantic-recall mini-preview at 140 chars) survives as a separate helper with explicit docstring.
+
+**Class diagnostic question:** *"When I see the same data shape rendered in 3+ consumer surfaces, is the rendering logic centralized — or am I about to ship a 4th drift instance?"*
+
+**Linked artifacts:**
+- Ship 8 (`a4b8fe6`) — canonical rendering across 5 consumers
+- `src/components/co-trader/TapeCommentaryRender.tsx`
+
+---
+
+## structural-audit-shape
+
+Captain-driven audits that span N surfaces (state-of-site, post-incident, end-of-quarter) work best when they follow a documented structural shape: per-surface card + cross-cutting class section + top-of-report summary + recommended ship sequence with dependency ordering. The shape forces the audit to produce decisions, not just observations.
+
+**Why this matters:** an audit that produces unstructured findings ("X looks off, Y is dashed, Z hasn't moved in weeks") gives the captain a list of suspicions, not a decision-ready ship plan. The structural shape forces the audit to commit to a STATUS verdict per surface, a ROOT CAUSE single-sentence claim per finding, and a RECOMMENDATION (KEEP / FIX / REDESIGN / RETIRE) per surface. Each commitment is verifiable — if Phase A later refutes it, the disagreement is concrete, not vibes.
+
+### Instance — 2026-05-14 state-of-site audit + Phase 1 close arc
+
+The 2026-05-14 evening state-of-site audit followed this shape (8 per-surface cards + 5 cross-cutting class investigations + bundle-gated ship sequence). The arc produced 11 ships in parallel because the structure held — per-surface cards were independent inputs; cross-cutting findings unblocked dependency-rooted ships; the bundle structure gave captain explicit validation checkpoints. Without the structural shape, an 11-ship arc would have drifted.
+
+**Reusable artifact:** the deliverable shape (Page / Status / Captain observation / Producer chain / Producer freshness / Data layer state / Consumer side / Root cause / Recommendation / Next ship / Evidence / Cross-cutting classes touched) generalizes to any multi-surface audit.
+
+**Class diagnostic question:** *"For my next multi-surface audit, what's the structural shape that forces decision-readiness — and am I committing to it before the first finding lands?"*
+
+**Linked artifacts:**
+- 2026-05-14 evening state-of-site audit (in conversation transcript)
+- Phase 1 close arc (11 commits 5236ccb → 6174fc0)
+- Companion: `state-asserting-briefs-need-cross-surface-snapshot-plus-receive-time-audit` (state-snapshot discipline at brief-write time)
+
+---
+
+## audit-state-assertions-need-Phase-A-too
+
+Audits assert state ("the grading pipeline is empty"; "the poller writes 3-7% of attempts"; "long-DTE is 45% of pool"; "thresholds need to move to ct_config"). These assertions feel like findings but they're hypotheses awaiting verification. Engine-room Phase A receive-time has to verify them empirically before any ship lands. Audit framing CAN BE WRONG even when the symptom it's pointing at is real.
+
+**Why this matters:** "the audit found X" propagates as fact. Briefs assert audit findings as premise. Phase A receive-time is the gate that catches audit framing failures — if the audit said "3-7% write rate" and the empirical rate is 94%, every downstream recommendation predicated on that number is invalid. The discipline is to treat audit findings the same as brief premise: subject to Phase A verification, not load-bearing as-is.
+
+### Instance — 2026-05-14 Phase 1 close arc, four audit reframes
+
+Four audit assertions failed Phase A receive-time:
+1. "3-7% write rate" → actual **94%** (Ship 10)
+2. "5/2 corpus shift caused by MV ship" → actually caused by 5/1 grader cleanup (Ship 9a)
+3. "Long-DTE is 45% of pool" → actually **28.4%** (Ship 7)
+4. "Move thresholds to ct_config (wiring needed)" → already shipped 2026-05-02; the structural need was VALUE recalibration, not wiring (Ship 1 v2)
+
+Engine-room caught each at receive-time and reported back. The arc shipped the right fixes; the audit framing didn't survive contact with data.
+
+**Class diagnostic question:** *"Before treating an audit finding as load-bearing, did I empirically verify it at receive-time — or am I about to ship against a hypothesis dressed as a fact?"*
+
+**Linked artifacts:**
+- Ship 1 v2, Ship 7, Ship 9a, Ship 10 (each Phase A surfaced an audit reframe)
+- Companion: `brief-author-premise-empirical-verification` (briefs flag empirical claims as verify-in-Phase-A); this entry generalizes the same rule to audit findings.
+
+---
+
+## brief-asserts-structural-fix-without-verifying-fix-already-shipped-historically
+
+Sub-class of `audit-state-assertions-need-Phase-A-too` (specifically the wiring-vs-values shape) and sibling of `discovery-of-existing-coverage-changes-edit-shape-not-edit-target` (2026-05-07). Brief asserts a structural fix is needed ("move X to ct_config", "add Y telemetry", "wire Z back-link"). Phase A discovers the structural fix has already been shipped historically — the operative gap is in the VALUES, the CALIBRATION, or the CONSUMER LAYER, not in the structural location.
+
+**Why this matters:** shipping the asserted structural fix again is wasted effort AND it masks the actual gap. Worse, the brief author's framing — "we don't have X" — never gets corrected at the methodology layer; the same brief shape lands again next month.
+
+### Instance — 2026-05-14 instance #37 fire (engine-room Phase A on Ship 1)
+
+Audit + brief both asserted "move DEFAULT_ALARM_BUCKETS from constants to ct_config" as if Tenet 16 wiring hadn't been done. Reality: ct_config wiring was shipped 2026-05-02. The constants in code were FALLBACKS. The structural gap was that the ct_config VALUES were calibrated against the pre-cleanup polluted corpus. Engine-room v1 stopped at Phase A and raised the fork to captain (Option B vs C vs A+B) rather than shipping the asserted-but-wrong fix.
+
+**Class diagnostic question:** *"Before asserting a structural fix shape, did I `git log --grep` for the structural ship and confirm it hasn't already landed historically — and if it has, is my actual gap in the VALUES rather than the LOCATION?"*
+
+**Linked artifacts:**
+- Ship 1 v1 stop-and-fork (Phase A report from engine-room raising A/B/C/A+B options)
+- Ship 1 v2 (`3b377ec`) — the actual operative fix (value recalibration, not wiring)
+- Companion: `discovery-of-existing-coverage-changes-edit-shape-not-edit-target` (2026-05-07 — same family, different sub-shape)
+
+---
+
+## symptom-level-grouping-hides-cause-level-differences (Instance — 2026-05-14)
+
+(Appended to existing section above; new instance from the Phase 1 close arc.)
+
+Three surfaces all read as "ticker undersupply" — /pulse 9/10 unknown, /specialists MSFT/AMZN/META flags=0, D3 corpus MSFT N=13 post-back-fill. A unified "specialist undersupply" ship would have addressed none of them correctly. Phase A on the cross-cutting class agent revealed THREE different mechanisms:
+
+1. **/pulse 9/10 unknown** — NOT a class. After-hours TOD artifact. 30-min momentum window post-RTH is empty by design. RTH same day: 78-83% non-unknown per ticker. Don't fix the classifier.
+2. **MSFT silence** — upstream `ct_scored_flow` produces only 4 score≥70 events/7d vs SPY 278. Scorer ticker-fairness bug at the scoring formula layer.
+3. **AMZN/META silence** — events present (24/24, 30/30 respectively), Claude passes 100%. Prompt thresholds tuned for thicker tape than these tickers produce.
+
+Three Phase A audits, three different fixes (deferred to Ship 14 post-5/15 per content gates). The unified-ship instinct would have been wrong.
+
+**Linked artifacts:**
+- 2026-05-14 evening state-of-site audit, cross-cutting class D
+- Ship 14 (deferred to ≥5/16) — three separate audits queued
+- Companion entry above (same section) — original 2026-05-09 instance.
+
