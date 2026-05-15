@@ -581,31 +581,51 @@ serve(async (req) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: any = supabase;
 
-  // Per-ticker fan-out for ct_price_bars: PostgREST hard-caps responses at
-  // db.max_rows (1000) regardless of .limit(n). A single multi-ticker ASC query
-  // for a full session (10 tickers × 2 timeframes × ~975 bars/timeframe ≈ 19k+
-  // rows) is silently truncated to the first 1000 bars by ts-ASC order, which
-  // window-shifts every per-ticker first/last bar to the first ~5h41m of
-  // pre-market. Fan out into 10 single-ticker queries (each ~1950 rows for 1m+5m
-  // intraday, well under the cap) and merge. See cascade #49.
+  // Per-ticker-per-timeframe fan-out for ct_price_bars with explicit pagination.
+  //
+  // PostgREST hard-caps responses at db.max_rows (1000) regardless of .limit(n).
+  // The original cascade #49 fix fanned out per-ticker but kept 1m+5m in one
+  // query; a single high-volume ticker's 1m bars for a full session already
+  // exceed 1000 (NVDA was 1003 1m rows on 2026-05-15), so the ASC-ordered
+  // response was still truncated — the session-close bars silently dropped.
+  // dailyMoveFromBars reads rows[0] (open) and rows[rows.length-1] (close), so
+  // any tail truncation corrupts the close and every per-ticker session_pct.
+  //
+  // Fix: one fan-out unit per (ticker, timeframe), each paged through the cap
+  // in 1000-row windows via .range() until a short page returns. No single
+  // response can be truncated regardless of bar volume. See cascade #49.
+  const BARS_PAGE = 1000;
   const barsFanOutPromise = (async () => {
-    const perTickerResults = await Promise.all(
-      watchlist.map((ticker) =>
-        sb.from('ct_price_bars')
-          .select('ticker, ts, timeframe, open, high, low, close')
-          .eq('ticker', ticker)
-          .in('timeframe', ['1m', '5m'])
-          .gte('ts', dayStartIso)
-          .lte('ts', dayEndIso)
-          .order('ts', { ascending: true })
-          .limit(4000),
-      ),
-    );
+    const units: Array<{ ticker: string; timeframe: '1m' | '5m' }> = [];
+    for (const ticker of watchlist) {
+      units.push({ ticker, timeframe: '1m' });
+      units.push({ ticker, timeframe: '5m' });
+    }
     const merged: PriceBarRow[] = [];
     const errs: string[] = [];
-    for (const r of perTickerResults) {
-      if (r.error) errs.push(r.error.message);
-      else if (Array.isArray(r.data)) merged.push(...(r.data as PriceBarRow[]));
+    const perUnitResults = await Promise.all(
+      units.map(async ({ ticker, timeframe }) => {
+        const rows: PriceBarRow[] = [];
+        for (let offset = 0; ; offset += BARS_PAGE) {
+          const { data, error } = await sb.from('ct_price_bars')
+            .select('ticker, ts, timeframe, open, high, low, close')
+            .eq('ticker', ticker)
+            .eq('timeframe', timeframe)
+            .gte('ts', dayStartIso)
+            .lte('ts', dayEndIso)
+            .order('ts', { ascending: true })
+            .range(offset, offset + BARS_PAGE - 1);
+          if (error) return { error: `${ticker}/${timeframe}: ${error.message}`, rows };
+          const page = Array.isArray(data) ? (data as PriceBarRow[]) : [];
+          rows.push(...page);
+          if (page.length < BARS_PAGE) break; // short page = last page
+        }
+        return { error: null as string | null, rows };
+      }),
+    );
+    for (const r of perUnitResults) {
+      if (r.error) errs.push(r.error);
+      merged.push(...r.rows);
     }
     return { data: merged, error: errs.length > 0 ? { message: errs.join('; ') } : null };
   })();
