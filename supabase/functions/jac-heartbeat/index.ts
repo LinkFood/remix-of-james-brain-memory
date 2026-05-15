@@ -289,6 +289,49 @@ serve(async (req) => {
         }
       }
 
+      // 2.5. Cross-producer yield. Heartbeat is the "interrupt channel";
+      // brain-insights is the "scheduled batch" producer (writes type=pattern
+      // /overdue/stale/schedule/suggestion/activity at 10AM + 8PM ET). When
+      // they fire back-to-back (e.g. 22:00 batch → 22:30 heartbeat), Claude
+      // sometimes lands on the same theme across both producers (instance
+      // 2026-05-14 22:00:28Z "Narrative velocity outpacing decision velocity"
+      // + 22:30:14Z "Narrative velocity masking decision velocity"). Yield
+      // if ANY non-heartbeat brain_insights row landed within the cross-
+      // producer window — heartbeat skips silently; the user still sees the
+      // batch insight on /brain.
+      //
+      // Tunable via ct_config key `jac_heartbeat_cross_producer_yield_ms`
+      // (default 30 min). Tenet 16.
+      const CROSS_PRODUCER_YIELD_DEFAULT_MS = 30 * 60 * 1000;
+      const yieldMs = await (async () => {
+        const { data: cfgRow } = await supabase
+          .from('ct_config')
+          .select('value')
+          .eq('key', 'jac_heartbeat_cross_producer_yield_ms')
+          .maybeSingle();
+        const raw = (cfgRow as { value?: unknown } | null)?.value;
+        const parsed = typeof raw === 'number' ? raw : Number(raw);
+        return Number.isFinite(parsed) && parsed >= 0 ? parsed : CROSS_PRODUCER_YIELD_DEFAULT_MS;
+      })();
+
+      if (yieldMs > 0) {
+        const yieldSince = new Date(Date.now() - yieldMs).toISOString();
+        const { data: recentNonHeartbeat } = await supabase
+          .from('brain_insights')
+          .select('type, created_at')
+          .eq('user_id', userId)
+          .neq('type', 'heartbeat')
+          .gte('created_at', yieldSince)
+          .order('created_at', { ascending: false })
+          .limit(1);
+        const yieldRow = recentNonHeartbeat?.[0] as { type?: string; created_at?: string } | undefined;
+        if (yieldRow?.created_at) {
+          const minutesSince = ((Date.now() - Date.parse(yieldRow.created_at)) / 60_000).toFixed(1);
+          console.log(`[jac-heartbeat] Cross-producer yield for user ${userId} (recent ${yieldRow.type} insight ${minutesSince}m ago, yield window ${yieldMs}ms)`);
+          continue;
+        }
+      }
+
       // 3. Load context
       const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
       const today = new Date().toISOString().split('T')[0];
