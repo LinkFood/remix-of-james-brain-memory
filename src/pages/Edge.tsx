@@ -912,7 +912,13 @@ function thresholdHealthClass(pct: number | null | undefined): string {
 
 function bucketLabel(b: string): string {
   switch (b) {
+    // 5-bucket grader-canonical (Ship 1 v2, 2026-05-14)
     case '0dte': return '0DTE';
+    case '1_3d': return '1-3d';
+    case '4_14d': return '4-14d';
+    case '15_45d': return '15-45d';
+    case '46d_plus': return '46d+';
+    // 4-bucket legacy overload (still used by ct_signature_magnitude_stats)
     case 'short': return 'Short (1-7d)';
     case 'mid': return 'Mid (8-30d)';
     case 'long': return 'Long (30d+)';

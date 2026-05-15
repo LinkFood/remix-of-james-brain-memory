@@ -504,15 +504,18 @@ export interface ContractThresholdRow {
 
 export function useContractThresholdDistribution(sinceDays = 7) {
   return useQuery<ContractThresholdRow[]>({
-    queryKey: ['ct_contract_threshold_distribution', sinceDays],
+    queryKey: ['ct_contract_threshold_distribution', sinceDays, '5bucket'],
     staleTime: 60_000,
     refetchInterval: 60_000,
     retry: false,
     queryFn: async () => {
-      const since = new Date(Date.now() - sinceDays * 86_400_000).toISOString();
+      // Ship 1 v2 (2026-05-14) added a 5-bucket-canonical overload (p_window_days int)
+      // matching grader buckets 0dte / 1_3d / 4_14d / 15_45d / 46d_plus. current_threshold_pct
+      // is now sourced live from ct_config grader.alarm_win_pct.*. The original
+      // (p_since timestamptz) 4-bucket overload still exists for backward-compat.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as any).rpc('ct_contract_threshold_distribution', {
-        p_since: since,
+        p_window_days: sinceDays,
       });
       if (error) {
         console.warn('[useContractThresholdDistribution]', error.message);
