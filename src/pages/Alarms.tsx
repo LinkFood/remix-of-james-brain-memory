@@ -530,7 +530,7 @@ export default function Alarms() {
                     <AlarmRowView
                       key={a.id}
                       alarm={a}
-                      outcome={a.alertId ? outcomes.get(a.alertId) : undefined}
+                      outcome={a.scoredFlowId ? outcomes.get(a.scoredFlowId) : undefined}
                     />
                   ))}
                 </tbody>

@@ -6,10 +6,20 @@
  * a refetch. Mirrors the bootstrap-fetch + realtime pattern in
  * useAlarmRealtime, but returns a sortable table shape (not a 60s glow queue).
  *
- * Outcome lookup: source_flow_ids[0] is the alert_id that ct_contract_tracks
- * is keyed on. We batch-fetch tracks for the visible alarms in a separate,
- * non-blocking query so the table renders alarms immediately and fills in
- * outcome chips as data arrives.
+ * Outcome lookup chain (2-hop, post Ship 9b 2026-05-14):
+ *   ct_flags.source_flow_ids[0] → ct_scored_flow.id (BIGINT)
+ *   ct_scored_flow.source_id     → ct_flow_alerts.id (UUID)
+ *   ct_contract_tracks.alert_id  = that UUID
+ *
+ * Pre-Ship-9b, ct_flags.source_flow_ids was assumed to be `string[]` of
+ * UUIDs lined up with ct_contract_tracks.alert_id directly — but Ship 9b's
+ * Phase A surfaced the actual schema: BIGINT[] referencing ct_scored_flow.id
+ * (BIGSERIAL). Reading source_flow_ids[0] as a UUID and joining .in('alert_id', ...)
+ * matched zero rows; outcome chips never populated for signature_alarm rows.
+ * Fix: thread the 2-hop. AlarmRow.scoredFlowId carries the stringified BIGINT
+ * (stable synchronous key for Map indexing); outcome useQuery does the 2-hop
+ * internally and re-keys the result Map by scoredFlowId so downstream code
+ * stays clean.
  *
  * Realtime caveat (per user-scope memory): ALTER PUBLICATION succeeded but
  * INSERT delivery isn't guaranteed — the bootstrap fetch is the floor, the
@@ -45,7 +55,15 @@ export interface AlarmRow {
   targetPrice: number | null;
   status: string | null;
   isReplay: boolean;
-  alertId: string | null;
+  /**
+   * Stringified ct_scored_flow.id (BIGINT) — the first element of
+   * ct_flags.source_flow_ids. Stable synchronous key for outcome Map
+   * indexing. Pre-Ship-9b this field was named `alertId` and assumed to
+   * carry a ct_flow_alerts.id UUID; that assumption was structurally
+   * wrong (column is BIGINT[], not UUID[]). The 2-hop to the real
+   * contract-track row happens inside the outcome useQuery.
+   */
+  scoredFlowId: string | null;
   createdAt: string;
   pulseRegime: AlarmRegime;
   pulseNetPremium: number | null;
@@ -76,7 +94,12 @@ interface CtFlagRow {
   entry_price: number | null;
   target_price: number | null;
   status: string | null;
-  source_flow_ids: string[] | null;
+  /**
+   * Postgres BIGINT[] referencing ct_scored_flow.id (BIGSERIAL). PostgREST
+   * serializes BIGINT as either number or string depending on size — accept
+   * both, coerce to string downstream for stable Map keying.
+   */
+  source_flow_ids: (number | string)[] | null;
   created_at: string;
   pulse_regime_at_fire: string | null;
   pulse_net_premium_at_fire: number | string | null;
@@ -107,7 +130,10 @@ function toNumOrNull(v: number | string | null | undefined): number | null {
 
 function rowToAlarm(row: CtFlagRow): AlarmRow {
   const isReplay = (row.tags ?? []).includes('replay');
-  const alertId = Array.isArray(row.source_flow_ids) && row.source_flow_ids.length > 0
+  // source_flow_ids[0] is a BIGINT (ct_scored_flow.id). Coerce to string for
+  // stable Map keying in the outcome lookup. See module docstring for the
+  // 2-hop chain to ct_contract_tracks.
+  const scoredFlowId = Array.isArray(row.source_flow_ids) && row.source_flow_ids.length > 0
     ? String(row.source_flow_ids[0])
     : null;
   return {
@@ -127,7 +153,7 @@ function rowToAlarm(row: CtFlagRow): AlarmRow {
     targetPrice: row.target_price,
     status: row.status,
     isReplay,
-    alertId,
+    scoredFlowId,
     createdAt: row.created_at,
     pulseRegime: parseRegime(row.pulse_regime_at_fire),
     pulseNetPremium: toNumOrNull(row.pulse_net_premium_at_fire),
@@ -265,24 +291,58 @@ export function useAlarms({
       .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   }, [liveAlarms, tier, type, floorIso, detector, regime]);
 
-  // Outcome lookup — non-blocking, batched on visible alert IDs.
-  const alertIds = useMemo(
-    () => Array.from(new Set(alarms.map((a) => a.alertId).filter((x): x is string => !!x))),
+  // Outcome lookup — 2-hop, non-blocking, batched on visible scored_flow_ids.
+  // Pre-Ship-9b this hook did a single .in('alert_id', source_flow_ids)
+  // assuming source_flow_ids were UUIDs. Reality: source_flow_ids is BIGINT[]
+  // referencing ct_scored_flow.id; ct_contract_tracks.alert_id is text-UUID
+  // matching ct_flow_alerts.id; the bridge is ct_scored_flow.source_id (when
+  // source_table='ct_flow_alerts'). Two queries, mapped back to scoredFlowId
+  // so downstream Map keying stays stable.
+  const scoredFlowIds = useMemo(
+    () => Array.from(new Set(alarms.map((a) => a.scoredFlowId).filter((x): x is string => !!x))),
     [alarms],
   );
 
   const { data: outcomes } = useQuery<Map<string, ContractOutcome>>({
-    queryKey: ['ct_contract_tracks_for_alarms', alertIds],
-    enabled: alertIds.length > 0,
+    queryKey: ['ct_contract_tracks_for_alarms', scoredFlowIds],
+    enabled: scoredFlowIds.length > 0,
     refetchInterval: 60_000,
     queryFn: async () => {
+      // Hop 1: resolve scored_flow.id → underlying ct_flow_alerts.id UUID.
+      // PostgREST will accept stringified BIGINTs in .in() — the column is
+      // BIGINT, PostgREST coerces.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data, error } = await (supabase.from('ct_contract_tracks' as never) as any)
+      const { data: scoredRows, error: scoredErr } = await (supabase.from('ct_scored_flow' as never) as any)
+        .select('id, source_id, source_table')
+        .in('id', scoredFlowIds);
+      if (scoredErr) throw scoredErr;
+      // scoredFlowId (stringified) → ct_flow_alerts.id UUID
+      const scoredToAlert = new Map<string, string>();
+      const alertUuids: string[] = [];
+      for (const row of (scoredRows ?? []) as Array<{
+        id: number | string;
+        source_id: string | null;
+        source_table: string | null;
+      }>) {
+        // Only ct_flow_alerts-sourced rows have a usable contract-track UUID.
+        // Other source_tables would need different routing (none currently
+        // surface via ct-signature-watcher → /alarms).
+        if (row.source_table === 'ct_flow_alerts' && row.source_id) {
+          scoredToAlert.set(String(row.id), row.source_id);
+          alertUuids.push(row.source_id);
+        }
+      }
+      if (alertUuids.length === 0) return new Map<string, ContractOutcome>();
+
+      // Hop 2: fetch contract tracks keyed by the resolved alert_id UUIDs.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: trackRows, error: trackErr } = await (supabase.from('ct_contract_tracks' as never) as any)
         .select('alert_id, peak_contract_pct, current_contract_pct, track_status')
-        .in('alert_id', alertIds);
-      if (error) throw error;
-      const m = new Map<string, ContractOutcome>();
-      for (const row of (data ?? []) as Array<{
+        .in('alert_id', alertUuids);
+      if (trackErr) throw trackErr;
+      // alert_id UUID → ContractOutcome
+      const byAlertId = new Map<string, ContractOutcome>();
+      for (const row of (trackRows ?? []) as Array<{
         alert_id: string;
         peak_contract_pct: number | null;
         current_contract_pct: number | null;
@@ -294,13 +354,21 @@ export function useAlarms({
           row.track_status === 'WORKING' ? 'WORKING' :
           row.track_status === 'EXPIRED' ? 'EXPIRED' :
           'UNKNOWN';
-        m.set(row.alert_id, {
+        byAlertId.set(row.alert_id, {
           status,
           peakPct: Number(row.peak_contract_pct ?? 0),
           currentPct: Number(row.current_contract_pct ?? 0),
         });
       }
-      return m;
+
+      // Re-key the result Map by scoredFlowId so consumers (Alarms.tsx) can
+      // look up via the stable synchronous key on AlarmRow.
+      const byScoredFlowId = new Map<string, ContractOutcome>();
+      for (const [scoredFlowIdStr, alertUuid] of scoredToAlert) {
+        const outcome = byAlertId.get(alertUuid);
+        if (outcome) byScoredFlowId.set(scoredFlowIdStr, outcome);
+      }
+      return byScoredFlowId;
     },
   });
 
