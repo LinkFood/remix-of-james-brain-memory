@@ -581,6 +581,35 @@ serve(async (req) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: any = supabase;
 
+  // Per-ticker fan-out for ct_price_bars: PostgREST hard-caps responses at
+  // db.max_rows (1000) regardless of .limit(n). A single multi-ticker ASC query
+  // for a full session (10 tickers × 2 timeframes × ~975 bars/timeframe ≈ 19k+
+  // rows) is silently truncated to the first 1000 bars by ts-ASC order, which
+  // window-shifts every per-ticker first/last bar to the first ~5h41m of
+  // pre-market. Fan out into 10 single-ticker queries (each ~1950 rows for 1m+5m
+  // intraday, well under the cap) and merge. See cascade #49.
+  const barsFanOutPromise = (async () => {
+    const perTickerResults = await Promise.all(
+      watchlist.map((ticker) =>
+        sb.from('ct_price_bars')
+          .select('ticker, ts, timeframe, open, high, low, close')
+          .eq('ticker', ticker)
+          .in('timeframe', ['1m', '5m'])
+          .gte('ts', dayStartIso)
+          .lte('ts', dayEndIso)
+          .order('ts', { ascending: true })
+          .limit(4000),
+      ),
+    );
+    const merged: PriceBarRow[] = [];
+    const errs: string[] = [];
+    for (const r of perTickerResults) {
+      if (r.error) errs.push(r.error.message);
+      else if (Array.isArray(r.data)) merged.push(...(r.data as PriceBarRow[]));
+    }
+    return { data: merged, error: errs.length > 0 ? { message: errs.join('; ') } : null };
+  })();
+
   const [
     journalRes,
     morningBriefRes,
@@ -602,14 +631,7 @@ serve(async (req) => {
       .order('brief_version', { ascending: false })
       .limit(1)
       .maybeSingle(),
-    sb.from('ct_price_bars')
-      .select('ticker, ts, timeframe, open, high, low, close')
-      .in('ticker', watchlist)
-      .in('timeframe', ['1m', '5m'])
-      .gte('ts', dayStartIso)
-      .lte('ts', dayEndIso)
-      .order('ts', { ascending: true })
-      .limit(8000),
+    barsFanOutPromise,
     sb.from('ct_flow_pulse_ticks')
       .select('tick_time, ticker, premium_net, call_put_ratio, is_unusual')
       .in('ticker', watchlist)
