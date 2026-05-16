@@ -2609,3 +2609,93 @@ The false-PASS was caught only by the empirical re-run during Phase A — runnin
 - Surfaced in the 2026-05-16 /goal cluster (Ship 3)
 - Cross-catalog parity: codified in Cowork `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
 
+---
+
+## cohort-on-rewritable-field-corrupts-cohort-after-drain — cascade #55 (2026-05-16)
+
+**Pattern:** When a script splits rows into cohorts (pre-deploy vs post-deploy, before-window vs after-window, treatment vs control) the cohort boundary MUST key on an *immutable* field — a `created_at`, a fire-time, an event timestamp that is written once and never touched again. A cohort boundary keyed on a *mutable* field (`updated_at`, a status-transition timestamp, a last-modified column) is silently corrupted by any downstream batch job that touches the row after the fact. Re-embedding, grading, status transitions, backfills — each rewrites the mutable field and shifts every touched row across the cohort boundary. After such a job runs, the cohort split no longer measures what the script thinks it measures; it measures the batch job's run timestamp.
+
+**Why this matters:** the cohort split is the load-bearing axis of any pre/post comparison. If the boundary field is mutable, the comparison can collapse entirely — every row lands on one side — and the script still runs to completion and reports a verdict. The verdict is an artifact of the batch job's timing, not of the behavior the script set out to measure. The failure is invisible: no error, no crash, just a cohort that quietly emptied.
+
+**Empirical motivation — 2026-05-16 Ship 4 C1 cohort collapse (this session):**
+
+`scripts/ct_specialist_recall_14d_acceptance.py` split its pre-deploy and post-deploy cohorts on `ct_specialist_reads.updated_at`. `updated_at` is mutable — both the embedding backfill and the Ship 1 grader drain (see `## grader-HOL-starvation-re-emergence-at-deeper-layer — cascade #53`) rewrite it. After the grader drain ran, every graded specialist read had `updated_at >= the drain timestamp`, so all **93 grades collapsed into the post-deploy cohort** and the pre-deploy cohort went empty for all 10 tickers. C1 needs `>=5` decisive grades in BOTH cohorts; it read **0 of 10 tickers measurable** and returned an artifact INCONCLUSIVE. The script was measuring the grader-drain timestamp, not specialist behavior.
+
+**Brief-author-state-vs-intent note:** the brief that scoped this fix named `ct_specialist_reads.created_at` as the immutable key — a column that does not exist. The `ct_specialist_reads` table has only `updated_at`; the correct immutable key is `ct_flags.created_at` (the flag-fire timestamp), reachable via a `flag_id` batch join. This is a brief-author-state-vs-intent instance (instance #37 family): the brief asserted a schema state — "use `created_at`" — without verifying the column exists on the named table. The *intent* (cohort on an immutable field) was right; the *formula* (the specific column) was wrong because it was unverified.
+
+**Fix (commit `3766fca`):** cohort now keys on `ct_flags.created_at` — the immutable flag-fire timestamp — fetched via a `flag_id` batch join. The flag-fire timestamp is written once when the flag fires and is never rewritten by any downstream job, so the cohort split is stable regardless of how many times re-embedding or grading touch the specialist read.
+
+**Class diagnostic question:** *Is my cohort / window boundary keyed on a field that any downstream job can rewrite? For the boundary column: after it is first written, can re-embedding, grading, a status transition, or a backfill ever change its value? If yes, every touched row silently crosses the boundary when that job runs — the boundary must move to a write-once field.*
+
+**Fix shape (forward):** any cohort split, window boundary, or pre/post comparison keys on a write-once immutable field (a `created_at`, an event/fire timestamp). Never on `updated_at` or any last-modified column. If the immutable timestamp lives on a different table, reach it via a batch join on the stable id rather than falling back to the mutable local column. And — per the brief-author-state-vs-intent rule — verify the chosen column actually exists on the table named before treating the brief's column choice as fact.
+
+**Class:** sibling of `## acceptance-criteria-default-must-be-inconclusive-not-pass — cascade #54 (2026-05-16)` — there the verification surface asserted a wrong conclusion; here the verification surface mis-buckets its own evidence so the conclusion is unmeasurable. Member of the brief-author-state-vs-intent rule family (instance #37 family) via the unverified-column note above. Sibling of `## heuristic-phrase-list-misses-vocabulary-drift — cascade #56 (2026-05-16)` and `## cron-doesnt-request-needed-flag-creates-one-time-seed-class — cascade #57 (2026-05-16)` (below) — all three surfaced in the 2026-05-16 /goal cluster #3.
+
+**Linked artifacts:**
+- Bug location: `scripts/ct_specialist_recall_14d_acceptance.py` — cohort split on `ct_specialist_reads.updated_at`
+- Fix: commit `3766fca` — cohort keyed on `ct_flags.created_at` (immutable flag-fire timestamp) via `flag_id` batch join
+- Brief defect: scoping brief named `ct_specialist_reads.created_at`, a non-existent column (instance #37 family — unverified schema-state assertion)
+- Upstream cause of the cohort collapse: `## grader-HOL-starvation-re-emergence-at-deeper-layer — cascade #53 (2026-05-16)` (the grader drain that rewrote every graded row's `updated_at`)
+- Sibling cascade: `## acceptance-criteria-default-must-be-inconclusive-not-pass — cascade #54 (2026-05-16)`
+- Sibling cascades (this cluster): `## heuristic-phrase-list-misses-vocabulary-drift — cascade #56 (2026-05-16)` and `## cron-doesnt-request-needed-flag-creates-one-time-seed-class — cascade #57 (2026-05-16)` (below)
+- Parent rule family: brief-author-state-vs-intent (instance #37 family) — see `docs/governance/engine-room-write-time-checklist.md` check 1
+- Surfaced in the 2026-05-16 /goal cluster (cluster #3, Ship 4)
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## heuristic-phrase-list-misses-vocabulary-drift — cascade #56 (2026-05-16)
+
+**Pattern:** A verification check that recognizes a property by matching a fixed keyword/phrase list silently rots as the thing it inspects evolves its vocabulary. The check encodes, at the moment it was written, the specific words the producer used *then*. The producer keeps writing — and its vocabulary drifts. New phrasings express the exact same property but match none of the frozen phrases. The check then reports "0 hits" and concludes the property is *absent*, when the truth is "0 hits for THESE phrases." A phrase-match verifier conflates "I did not find my keywords" with "the property is not there" — and those are different statements.
+
+**Why this matters:** a phrase-match check that reports a false absence drives a false FAIL on a healthy system. Worse, the failure mode is asymmetric and one-directional: as the producer's vocabulary naturally evolves, the check's recall only ever decays — it never self-corrects. A check written against last quarter's phrasing slowly becomes a check of "does the producer still use last quarter's words," which is not the property anyone wanted to verify.
+
+**Empirical motivation — 2026-05-16 Ship cluster #3 C4 narrative-continuity false-FAIL (this session):**
+
+The C4 narrative-continuity check scored NVDA specialist reads **0 of 5** for continuity language and returned FAIL. Phase A found continuity was present in **10 of 10** reads — but expressed in *streak-gate vocabulary* ("5-bullish streak", "streak gate", "continuation-trap", "N-bullish pending") rather than the *first-person citation grammar* ("as I flagged", "my prior") that the heuristic phrase-list recognized. The recall organ was working correctly; the heuristic's vocabulary had simply drifted out of sync with how the specialist actually writes. "0 hits" meant "no hits for the citation-grammar phrases," not "no continuity."
+
+**Fix (commit `3766fca`):** extended `_CONTINUITY_PHRASES` with a streak-self-reference phrase family so the check recognizes streak-gate vocabulary as continuity language. This restores recall for the current producer vocabulary — but the structural lesson is that any fixed phrase list will drift again.
+
+**Class diagnostic question:** *When my phrase-match / keyword verification check reports 0 hits — does that mean the property is absent, or only that the producer's current vocabulary no longer matches the phrases I froze into the check? When was this phrase list last re-grounded against current producer output? If the producer's wording has evolved since, the check is measuring vocabulary match, not the property.*
+
+**Fix shape (forward):** a phrase-match verifier needs either (a) periodic re-grounding — re-sample current producer output and refresh the phrase list on a cadence — or (b) a non-keyword method that does not rot with vocabulary: embedding similarity against a reference exemplar, or an LLM judge that evaluates the property semantically. Treat any "0 hits" from a phrase-match check as "0 hits for these phrases" and confirm against current output before concluding the property is absent.
+
+**Class:** sibling of `## acceptance-criteria-default-must-be-inconclusive-not-pass — cascade #54 (2026-05-16)` — both are verification surfaces confidently asserting a wrong conclusion on a healthy system (cascade #54 a false PASS on no data, this a false FAIL on drifted vocabulary). Sibling of `## cohort-on-rewritable-field-corrupts-cohort-after-drain — cascade #55 (2026-05-16)` and `## cron-doesnt-request-needed-flag-creates-one-time-seed-class — cascade #57 (2026-05-16)` — all three surfaced in the 2026-05-16 /goal cluster #3.
+
+**Linked artifacts:**
+- Bug location: C4 narrative-continuity check — `_CONTINUITY_PHRASES` frozen against first-person citation grammar only
+- Fix: commit `3766fca` — `_CONTINUITY_PHRASES` extended with a streak-self-reference phrase family
+- Sibling cascade: `## acceptance-criteria-default-must-be-inconclusive-not-pass — cascade #54 (2026-05-16)`
+- Sibling cascades (this cluster): `## cohort-on-rewritable-field-corrupts-cohort-after-drain — cascade #55 (2026-05-16)` (above) and `## cron-doesnt-request-needed-flag-creates-one-time-seed-class — cascade #57 (2026-05-16)` (below)
+- Surfaced in the 2026-05-16 /goal cluster (cluster #3)
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## cron-doesnt-request-needed-flag-creates-one-time-seed-class — cascade #57 (2026-05-16)
+
+**Pattern:** When a producer is feature-flag-gated — it does the expensive work only if its request body or invocation carries an explicit flag — and the cron that drives that producer never sets the flag, the feature silently never runs in production. The producer is deployed, the cron is scheduled, the dashboard shows the producer "running" on cadence; but the flagged branch is dead. The tell is a one-time manual seed: an ad-hoc backfill populated the table once, so the data *looks* present (rows exist for every entity) while being frozen at the seed date. A second tell is a consumer built ahead of a never-wired producer — downstream code that reads the flagged output exists and runs, but always falls through to its default branch because the flagged data never advances.
+
+**Why this matters:** the failure is doubly invisible. Row-count monitoring passes — the seed left rows for every entity. The producer's own health signal passes — the cron fires and the producer returns 200, it just never takes the flagged branch. Only a *per-timeframe* or *per-variant* freshness check, or noticing a downstream consumer permanently on its fallback branch, surfaces it. Meanwhile any consumer built against the flagged output is silently degraded — it was built ahead of a producer that was never actually wired to produce.
+
+**Empirical motivation — 2026-05-16 Ship cluster #3 5m price-bar gap (this session):**
+
+`ct_price_bars` 5m bars existed for all 10 tickers but froze **2026-04-22** — a one-time ad-hoc seed. `ct-price-backfill` fetches 5m bars only when its request body carries `include_5m=true` (default `false`). The cron wrapper `trigger_ct_price_backfill` built the request body with `lookback_days` only and never set `include_5m`, so every scheduled backfill silently skipped 5m. Downstream, `ct-edge-miner`'s `computeRegimeTag` fell through to the 1m branch and biased the realized-vol axis **~2.2x toward `low_vol`** — its threshold is 5m-calibrated. The 5m regime branch and the 5m forward-return RPC were consumers built ahead of a never-wired producer; that is the tell.
+
+**Fix (commit `7ef793f`):** `trigger_ct_price_backfill` now always sets `include_5m=true` in the request body; the historical 5m gap was backfilled explicitly; and a `price_bar_freshness_per_timeframe` warden invariant was pair-shipped so a missing timeframe surfaces structurally instead of hiding behind a row-count check that the seed satisfies.
+
+**Class diagnostic question:** *For every feature-flag-gated producer — does the cron that drives it actually set the flag? If a producer only does its expensive work when `include_X=true` and the cron body omits `include_X`, that branch has never run in production. Is any table populated only by a one-time manual seed (frozen-date rows for every entity)? Is any consumer permanently on its fallback branch because the flagged data it expects never advanced?*
+
+**Fix shape (forward):** when a producer is feature-flag-gated, the cron wrapper that drives it must explicitly set every flag the production path needs — the request-body construction is part of the producer's contract, not an afterthought. Pair-ship a per-timeframe / per-variant freshness warden invariant for any data that has multiple variants (timeframes, expiries, modes), because a whole-table row-count check is satisfied by a one-time seed and cannot tell a frozen variant from a live one. A consumer built ahead of a producer must verify the producer is actually wired before the consumer is trusted.
+
+**Class:** different root from the butterfly-grader column-rename bug of /goal cluster #1 — that was read-side schema drift; this is a never-set-request-flag on the write side. The shared family trait is only the surface symptom: a silent failure on a price-bar dependency with no per-timeframe health signal, which the pair-shipped warden invariant closes. Sibling of `## cohort-on-rewritable-field-corrupts-cohort-after-drain — cascade #55 (2026-05-16)` and `## heuristic-phrase-list-misses-vocabulary-drift — cascade #56 (2026-05-16)` — all three surfaced in the 2026-05-16 /goal cluster #3.
+
+**Linked artifacts:**
+- Bug location: `trigger_ct_price_backfill` cron wrapper — request body built with `lookback_days` only, never sets `include_5m`; `ct-price-backfill` 5m branch is `include_5m`-gated (default `false`)
+- Downstream impact: `ct-edge-miner` `computeRegimeTag` fell through to the 1m branch, biasing the realized-vol axis ~2.2x toward `low_vol`
+- Fix: commit `7ef793f` — `trigger_ct_price_backfill` always sets `include_5m=true`; historical 5m gap backfilled explicitly
+- Regression guard: `price_bar_freshness_per_timeframe` warden invariant (pair-shipped)
+- Sibling cascades (this cluster): `## cohort-on-rewritable-field-corrupts-cohort-after-drain — cascade #55 (2026-05-16)` and `## heuristic-phrase-list-misses-vocabulary-drift — cascade #56 (2026-05-16)` (above)
+- Surfaced in the 2026-05-16 /goal cluster (cluster #3)
+- Cross-catalog parity entry queued at `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
