@@ -318,13 +318,36 @@ async function loadContractTrack(
 }
 
 // ---------------------------------------------------------------------------
+// Terminal ungradeable transition — moves a flag out of the candidate pool
+// permanently when a STRUCTURAL skip path is hit (Ship 1 HOL class-kill).
+// Skip-without-status-transition was the immortality mechanism: a flag the
+// grader could never grade re-occupied the oldest-200 ASC slots forever and
+// starved everything behind it. NOT used for the market_closed skip — that
+// path is transient and self-heals on the next RTH run, so those flags
+// correctly stay 'active'.
+// ---------------------------------------------------------------------------
+async function markUngradeable(
+  supabase: SupabaseClient,
+  flagId: string,
+  reason: string,
+): Promise<void> {
+  const { error } = await supabase
+    .from('ct_flags')
+    .update({ status: 'ungradeable', ungradeable_reason: reason })
+    .eq('id', flagId);
+  if (error) {
+    console.warn(`[ct-flag-grader] mark ungradeable ${flagId} (${reason}): ${error.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Job A — grade expired flags across all sources.
 // ---------------------------------------------------------------------------
 async function gradeExpiredFlags(
   supabase: SupabaseClient,
   targetThresholdPct: number,
   sourceDefaults: SourceDefaults,
-): Promise<{ graded: number; skipped: number; bySource: Record<string, number>; errors: string[] }> {
+): Promise<{ graded: number; skipped: number; ungradeable: number; bySource: Record<string, number>; errors: string[] }> {
   const nowIso = new Date().toISOString();
   // ASC by horizon_ts: oldest expired flags get graded first so the backlog
   // actually drains. Without ORDER BY, postgres returns whatever the planner
@@ -339,16 +362,17 @@ async function gradeExpiredFlags(
     .limit(200);
 
   if (error) {
-    return { graded: 0, skipped: 0, bySource: {}, errors: [`fetch: ${error.message}`] };
+    return { graded: 0, skipped: 0, ungradeable: 0, bySource: {}, errors: [`fetch: ${error.message}`] };
   }
   if (!flags || flags.length === 0) {
-    return { graded: 0, skipped: 0, bySource: {}, errors: [] };
+    return { graded: 0, skipped: 0, ungradeable: 0, bySource: {}, errors: [] };
   }
 
   const errors: string[] = [];
   const bySource: Record<string, number> = {};
   let graded = 0;
   let skipped = 0;
+  let ungradeable = 0;
 
   const nowDate = new Date();
   const nowOpen = isMarketOpen(nowDate);
@@ -376,12 +400,14 @@ async function gradeExpiredFlags(
         // computed from intraday option-quote polling and doesn't depend on
         // ct_price_bars freshness.
         if (!row.option_symbol) {
-          skipped += 1;
+          await markUngradeable(supabase, row.id, 'no_option_symbol');
+          ungradeable += 1;
           continue;
         }
         const track = await loadContractTrack(supabase, row.option_symbol, row.created_at, row.horizon_ts);
         if (!track) {
-          skipped += 1;
+          await markUngradeable(supabase, row.id, 'no_contract_track');
+          ungradeable += 1;
           console.warn(`[ct-flag-grader] ${row.source} ${row.id}: no contract track`);
           continue;
         }
@@ -413,7 +439,8 @@ async function gradeExpiredFlags(
         entryPx = await nearestClose(supabase, tickerForPrice, row.created_at);
         exitPx = await nearestClose(supabase, tickerForPrice, row.horizon_ts);
         if (entryPx === null || exitPx === null || entryPx <= 0) {
-          skipped += 1;
+          await markUngradeable(supabase, row.id, 'price_unavailable');
+          ungradeable += 1;
           console.warn(`[ct-flag-grader] skip ${row.id} (${row.source}): price unavailable (entry=${entryPx}, exit=${exitPx})`);
           continue;
         }
@@ -480,7 +507,7 @@ async function gradeExpiredFlags(
     }
   }
 
-  return { graded, skipped, bySource, errors };
+  return { graded, skipped, ungradeable, bySource, errors };
 }
 
 // ---------------------------------------------------------------------------
@@ -595,7 +622,7 @@ serve(async (req) => {
   await recordDecision(supabase, {
     decision_type: 'flag_grader_run',
     model_tier: 'deterministic',
-    reasoning: `target=${targetThresholdPct}% — graded ${jobA.graded} (${JSON.stringify(jobA.bySource)})/skipped ${jobA.skipped}, oi_upgrades ${jobB.upgraded}/still_active ${jobB.still_active}, errors ${jobA.errors.length + jobB.errors.length}`,
+    reasoning: `target=${targetThresholdPct}% — graded ${jobA.graded} (${JSON.stringify(jobA.bySource)})/skipped ${jobA.skipped}/ungradeable ${jobA.ungradeable}, oi_upgrades ${jobB.upgraded}/still_active ${jobB.still_active}, errors ${jobA.errors.length + jobB.errors.length}`,
     outcome: jobA.graded > 0 || jobB.upgraded > 0 ? 'progress' : 'noop',
   });
 
@@ -607,6 +634,7 @@ serve(async (req) => {
     graded_count: jobA.graded,
     graded_by_source: jobA.bySource,
     skipped_count: jobA.skipped,
+    ungradeable_count: jobA.ungradeable,
     conviction_upgraded_count: jobB.upgraded,
     still_active_count: jobB.still_active,
     errors: [...jobA.errors, ...jobB.errors].slice(0, 20),
