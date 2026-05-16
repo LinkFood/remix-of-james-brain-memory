@@ -44,6 +44,14 @@ RUN_DATE = "2026-05-15"
 TICKERS = ["NVDA", "AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA", "QQQ", "SPY", "IWM"]
 INSUFFICIENT_N = 5  # below this in either cohort → mark "insufficient sample"
 DEGRADATION_THRESHOLD = 0.05  # 5pp — C1 fail gate
+PASS_QUORUM = 3  # ≥ this many tickers measured with sufficient decisive N
+                 # (and none failing) for C1 to earn a PASS. Below it →
+                 # INCONCLUSIVE. A PASS must rest on positive evidence of
+                 # non-degradation, never on the mere absence of detected
+                 # degradation. Captain-tunable.
+SEMANTIC_SWAP_DATE = "2026-05-13"  # Ship 10 Phase 7b consumer-swap. Post-deploy
+                                   # reads dated before this used chronological
+                                   # recall; on/after, semantic recall.
 
 
 # ---------------------------------------------------------------------------
@@ -120,11 +128,90 @@ def rest_post(path: str, sr_key: str, body: dict) -> list | dict:
 # ---------------------------------------------------------------------------
 # C1 — Hit-rate delta per ticker
 # ---------------------------------------------------------------------------
-def run_c1(sr_key: str) -> tuple[str, bool]:
+def _bucket_hit_rates(
+    reads: list, grades_by_flag: dict[str, str], split: str,
+) -> tuple[dict[str, list[int]], dict[str, list[int]]]:
+    """Bucket decisive (win/loss) graded reads into pre/post `split` cohorts.
+    `split` may be a full ISO timestamp or a YYYY-MM-DD date — string compare
+    works for both since updated_at is ISO-8601. Returns (pre, post), each
+    ticker → [wins, losses]."""
+    pre: dict[str, list[int]] = {t: [0, 0] for t in TICKERS}
+    post: dict[str, list[int]] = {t: [0, 0] for t in TICKERS}
+    for r in reads:
+        ticker = r.get("ticker")
+        if ticker not in TICKERS:
+            continue
+        outcome = grades_by_flag.get(r.get("flag_id", ""))
+        if outcome not in ("win", "loss"):
+            continue  # pending / partial → not decisive
+        bucket = post if r["updated_at"] >= split else pre
+        bucket[ticker][0 if outcome == "win" else 1] += 1
+    return pre, post
+
+
+def _render_cohort_table(
+    pre: dict[str, list[int]], post: dict[str, list[int]],
+    label_pre: str, label_post: str,
+) -> tuple[list[str], int, int]:
+    """Render a per-ticker hit-rate table. Returns (lines, measured, failed)
+    where `measured` counts tickers with sufficient decisive N in both
+    cohorts and `failed` counts tickers degraded beyond the gate."""
+    lines = [
+        f"{'Ticker':<7} {label_pre + ' W/L':<11} {label_pre + ' HR':<9} "
+        f"{label_post + ' W/L':<11} {label_post + ' HR':<9} {'Δ':<9} Status"
+    ]
+    lines.append("-" * 76)
+    measured = 0
+    failed = 0
+    for ticker in TICKERS:
+        pw, pl = pre[ticker]
+        qw, ql = post[ticker]
+        pre_n = pw + pl
+        post_n = qw + ql
+        if pre_n < INSUFFICIENT_N or post_n < INSUFFICIENT_N:
+            status = "⚠ insuf"
+            delta_str = "—"
+            pre_pct_s = post_pct_s = "—"
+            pre_hr_s = f"{pw}/{pl}"
+            post_hr_s = f"{qw}/{ql}"
+        else:
+            measured += 1
+            pre_hr = pw / pre_n
+            post_hr = qw / post_n
+            delta = post_hr - pre_hr
+            delta_str = f"{delta * 100:+.1f}pp"
+            pre_pct_s = f"{pre_hr * 100:.0f}%"
+            post_pct_s = f"{post_hr * 100:.0f}%"
+            pre_hr_s = f"{pw}/{pl}"
+            post_hr_s = f"{qw}/{ql}"
+            if delta < -DEGRADATION_THRESHOLD:
+                status = "FAIL ❌"
+                failed += 1
+            else:
+                status = "PASS ✅"
+        lines.append(
+            f"{ticker:<7} {pre_hr_s:<11} {pre_pct_s:<9} "
+            f"{post_hr_s:<11} {post_pct_s:<9} {delta_str:<9} {status}"
+        )
+    return lines, measured, failed
+
+
+def run_c1(sr_key: str) -> tuple[str, str]:
     """
-    Pull all flagged reads with flag_id → join grades → bucket by cohort+ticker.
-    Returns (formatted table, pass_bool).
-    Pass: every ticker with sufficient data has post_hr >= pre_hr - 5pp.
+    Pull all flagged reads with flag_id, join grades, render two views:
+      (a) pre-deploy vs post-deploy hit-rate — drives the C1 verdict
+      (b) chronological-recall vs semantic-recall hit-rate, split at the
+          2026-05-13 Ship 10 consumer-swap — reported, does NOT gate
+
+    Three-state verdict (returned as a string):
+      FAIL         — any sufficiently-sampled ticker degraded > 5pp
+      PASS         — zero degradation AND ≥ PASS_QUORUM tickers measured
+                     (positive evidence of non-degradation)
+      INCONCLUSIVE — too few tickers measurable to assert anything either way
+
+    The old binary (return ..., True on zero/insufficient data) was a
+    false-green: it reported PASS whenever no degradation was *detected*,
+    even when nothing was *measured*. PASS now requires evidence.
     """
     print("  Fetching flagged reads…")
     reads = rest_paginate(
@@ -140,7 +227,10 @@ def run_c1(sr_key: str) -> tuple[str, bool]:
     print(f"  → {len(reads)} flagged reads with flag_id")
 
     if not reads:
-        return "No flagged reads found in either cohort.", True
+        return (
+            "No flagged reads with flag_id found — C1 has no substrate.\n"
+            "Verdict INCONCLUSIVE: zero data is not evidence of non-degradation."
+        ), "INCONCLUSIVE"
 
     # Unique flag_ids (may span thousands of reads, keep set)
     flag_ids = list({r["flag_id"] for r in reads if r.get("flag_id")})
@@ -161,66 +251,46 @@ def run_c1(sr_key: str) -> tuple[str, bool]:
             grades_by_flag[g["flag_id"]] = g["outcome"]
     print(f"  → {len(grades_by_flag)} grades loaded")
 
-    # Bucket into pre / post by decisive outcomes only (win | loss)
-    pre: dict[str, list[int]] = {t: [0, 0] for t in TICKERS}   # [wins, losses]
-    post: dict[str, list[int]] = {t: [0, 0] for t in TICKERS}
+    # (a) Verdict axis — pre-deploy vs post-deploy.
+    pre, post = _bucket_hit_rates(reads, grades_by_flag, DEPLOY_TS)
+    deploy_lines, measured, failed = _render_cohort_table(pre, post, "Pre", "Post")
 
-    for r in reads:
-        ticker = r.get("ticker")
-        if ticker not in TICKERS:
-            continue
-        outcome = grades_by_flag.get(r.get("flag_id", ""))
-        if outcome not in ("win", "loss"):
-            continue  # pending / partial → not decisive
-        bucket = post if r["updated_at"] >= DEPLOY_TS else pre
-        if outcome == "win":
-            bucket[ticker][0] += 1
-        else:
-            bucket[ticker][1] += 1
+    # (b) Recall-mode axis — chronological vs semantic, post-deploy reads only.
+    post_deploy_reads = [r for r in reads if r["updated_at"] >= DEPLOY_TS]
+    chrono, semantic = _bucket_hit_rates(
+        post_deploy_reads, grades_by_flag, SEMANTIC_SWAP_DATE)
+    mode_lines, _, _ = _render_cohort_table(chrono, semantic, "Chrono", "Semantic")
 
-    # Render
-    lines = [f"{'Ticker':<7} {'Pre W/L':<10} {'Pre HR':<10} {'Post W/L':<10} {'Post HR':<10} {'Δ':<9} Status"]
-    lines.append("-" * 72)
-    all_pass = True
+    # Three-state verdict — PASS requires positive evidence, not silence.
+    if failed > 0:
+        verdict = "FAIL"
+    elif measured >= PASS_QUORUM:
+        verdict = "PASS"
+    else:
+        verdict = "INCONCLUSIVE"
 
-    for ticker in TICKERS:
-        pw, pl = pre[ticker]
-        qw, ql = post[ticker]
-        pre_n = pw + pl
-        post_n = qw + ql
-
-        if pre_n < INSUFFICIENT_N or post_n < INSUFFICIENT_N:
-            status = "⚠ insuf"
-            delta_str = "—"
-            pre_hr_s = f"{pw}/{pl}" if pre_n else "0/0"
-            post_hr_s = f"{qw}/{ql}" if post_n else "0/0"
-            pre_pct_s = "—"
-            post_pct_s = "—"
-        else:
-            pre_hr = pw / pre_n
-            post_hr = qw / post_n
-            delta = post_hr - pre_hr
-            delta_str = f"{delta * 100:+.1f}pp"
-            pre_pct_s = f"{pre_hr * 100:.0f}%"
-            post_pct_s = f"{post_hr * 100:.0f}%"
-            pre_hr_s = f"{pw}/{pl}"
-            post_hr_s = f"{qw}/{ql}"
-            if delta < -DEGRADATION_THRESHOLD:
-                status = "FAIL ❌"
-                all_pass = False
-            else:
-                status = "PASS ✅"
-
-        lines.append(
-            f"{ticker:<7} {pre_hr_s:<10} {pre_pct_s:<10} {post_hr_s:<10} {post_pct_s:<10} {delta_str:<9} {status}"
-        )
-
+    lines = ["── (a) Hit-rate delta · pre-deploy vs post-deploy (verdict axis) ──"]
+    lines += deploy_lines
+    lines.append("")
+    lines.append(
+        f"── (b) Recall mode · chronological (<{SEMANTIC_SWAP_DATE}) vs "
+        f"semantic (≥{SEMANTIC_SWAP_DATE}) · post-deploy reads ──"
+    )
+    lines += mode_lines
     lines.append("")
     lines.append("W/L = wins/losses (decisive only; pending + partial excluded).")
-    lines.append(f"⚠ insuf = n_decisive < {INSUFFICIENT_N} in that cohort → not graded.")
-    lines.append(f"FAIL gate: post_hr < pre_hr − 5pp.")
+    lines.append(f"⚠ insuf = n_decisive < {INSUFFICIENT_N} in that cohort → not measured.")
+    lines.append(
+        f"FAIL gate: post_hr < pre_hr − {DEGRADATION_THRESHOLD * 100:.0f}pp "
+        "on any measured ticker."
+    )
+    lines.append(
+        f"Verdict: FAIL if any measured ticker degrades; PASS if 0 degrade "
+        f"AND ≥{PASS_QUORUM} tickers measured; else INCONCLUSIVE."
+    )
+    lines.append(f"→ {measured} ticker(s) measured, {failed} degraded → C1 {verdict}")
 
-    return "\n".join(lines), all_pass
+    return "\n".join(lines), verdict
 
 
 # ---------------------------------------------------------------------------
@@ -505,9 +575,8 @@ def main() -> None:
 
     # 2. C1
     print("── C1: Hit-rate delta ──────────────────────────────────────")
-    c1_table, c1_pass = run_c1(sr_key)
+    c1_table, c1_verdict = run_c1(sr_key)
     print(c1_table)
-    c1_verdict = "PASS" if c1_pass else "FAIL"
     print(f"\n→ C1: {c1_verdict}\n")
 
     # 3. C4
