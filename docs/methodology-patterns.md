@@ -2540,3 +2540,72 @@ Parallel background agents shared one working directory parked on a feature bran
 - Captain decision: codify-as-class vs accept-per-incident — this entry written under codify-as-class default; revise if captain rules otherwise
 - Cross-catalog parity: codified in Cowork `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
 
+---
+
+## grader-HOL-starvation-re-emergence-at-deeper-layer — cascade #53 (2026-05-16)
+
+**Pattern:** When a worker processes a bounded slice (`limit N`) of an ordered queue, EVERY terminal exit path must transition the row OUT of the worker's selection predicate. If a path *processes* a row but cannot *resolve* it — and exits without changing the row's state — that un-processable row stays inside the selection predicate forever. On every subsequent run it re-occupies the oldest-N slots and starves every newer, gradeable row behind the `limit N` window. The queue head is permanently blocked by immortal residents; the cursor frontier never advances. This is head-of-line (HOL) starvation, and it is a **re-emergence of Tenet 15's 3x DESC-sort starvation class one layer deeper**: the same starvation *shape*, a different *mechanism*.
+
+**Why this matters:** the earlier starvation class (createMissingTracks → createMissingContractTracks → runContractGradePass) was wrong sort *order* — a DESC sort starved old rows; switching to ASC fixed it. The ASC fix is genuinely correct and stays correct. But ASC ordering alone is not sufficient: it guarantees the *oldest* rows are selected first, which is exactly what makes skip-without-status-transition catastrophic. An un-resolvable row is, by construction, old (it failed and was never retired), so ASC ordering pins the worker's window onto the immortal residents. The mechanism is no longer sort order — it is **skip-without-status-transition**: a processed-but-unresolvable row that is never removed from the selection predicate becomes a permanent queue resident.
+
+**Empirical motivation — 2026-05-16 Ship 1 grader head-of-line starvation (all facts verified 2026-05-16):**
+
+`ct-flag-grader` Job A (`supabase/functions/ct-flag-grader/index.ts:333-339`) selected its candidate pool with `.in('status',['active','conviction']).lte('horizon_ts',now).order('horizon_ts',asc).limit(200)`. The overdue pool was **12,761 flags**. Three of four skip paths executed `continue` WITHOUT transitioning `ct_flags.status`:
+
+1. `!option_symbol` (`:378`)
+2. `!contract_track` (`:383`)
+3. `price_unavailable` (`:415`)
+
+An un-gradeable flag therefore stayed `status='active'` forever and re-occupied the oldest-200 ASC slots on every run. Result: the grader cursor frontier was empirically pinned at `horizon_ts ~2026-05-01` (newest graded flag horizon = `2026-05-01T19:10`). All **80 overdue specialist flags** sat behind the wall, ungraded — which was the C1 acceptance blocker (see the sibling pattern below).
+
+**Class-kill (commit `00c8a56`, migration `20260516000000_ship_1_grader_hol_class_kill.sql`):** a terminal `ungradeable` status. Each *structural* skip path now transitions the flag to `status='ungradeable'` + `ungradeable_reason`, so dead flags leave the candidate pool permanently and the cursor advances. **Deliberate exception:** the `market_closed` skip stayed transient — it self-heals on the next RTH run, so transitioning it to a terminal status would be wrong. Not every skip path is terminal; transient ones must stay transient. The rule is "every *terminal* exit path retires the row," not "every skip path retires the row" — distinguishing terminal from transient is part of the design.
+
+Pair-shipped a `grader_oldest_overdue_flag_age` warden invariant as the structural regression guard — if the grader frontier ever stalls again, the warden surfaces it before it becomes an acceptance blocker.
+
+**Class diagnostic question:** *Does every terminal exit path in my bounded-slice worker transition the row OUT of the selection predicate? For each `continue` / early-return: after this path runs, is the row still selectable on the next run? If yes, and the path is terminal (not transient/self-healing), that row is an immortal queue resident — it will starve everything behind the `limit N` window.*
+
+**Fix shape (forward):** for any worker that drains an ordered queue via `limit N`, enumerate every exit path and classify each as terminal or transient. Terminal paths MUST write a status that removes the row from the selection predicate (a dedicated terminal status like `ungradeable` with a `*_reason` column is the cleanest shape). Transient paths leave the row selectable by design. Pair-ship a warden invariant on the queue's oldest-overdue-row age so a future re-emergence is caught structurally rather than via an acceptance-window failure.
+
+**Class:** re-emergence of Tenet 15's 3x DESC-sort starvation class (createMissingTracks → createMissingContractTracks → runContractGradePass) — same starvation shape, deeper mechanism (skip-without-status-transition rather than wrong sort order). Sibling of `## acceptance-criteria-default-must-be-inconclusive-not-pass — cascade #54 (2026-05-16)` (below) — this starvation was the upstream cause of that pattern's false-PASS: the grader HOL kept only 3 of 107 specialist-flagged reads graded, which is the near-zero sample the acceptance script then mis-reported as PASS.
+
+**Linked artifacts:**
+- Bug location: `ct-flag-grader` Job A candidate-pool select — `supabase/functions/ct-flag-grader/index.ts:333-339`; skip paths at `:378` / `:383` / `:415`
+- Class-kill: commit `00c8a56`, migration `20260516000000_ship_1_grader_hol_class_kill.sql` (terminal `ungradeable` status + `ungradeable_reason`)
+- Regression guard: `grader_oldest_overdue_flag_age` warden invariant (pair-shipped)
+- Parent class: Tenet 15 3x DESC-sort starvation class (createMissingTracks → createMissingContractTracks → runContractGradePass)
+- Sibling pattern (downstream consequence): `## acceptance-criteria-default-must-be-inconclusive-not-pass — cascade #54 (2026-05-16)` (below)
+- Surfaced in the 2026-05-16 /goal cluster (Ship 1)
+- Cross-catalog parity: codified in Cowork `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
+---
+
+## acceptance-criteria-default-must-be-inconclusive-not-pass — cascade #54 (2026-05-16)
+
+**Pattern (verification surface):** An acceptance script or verification surface must DEFAULT to INCONCLUSIVE and require *positive evidence* to upgrade to PASS. The defect class is reporting PASS whenever degradation is not *detected* — even when nothing was *measured*. "No failure detected" is not "passed." A verification surface that initializes its verdict to PASS and only flips to FAIL when a failure gate fires will confidently assert PASS on near-zero data: with nothing measured, no failure gate can fire, so the default verdict survives untouched and gets written as a real result.
+
+**Why this matters:** the acceptance verdict drives a high-trust decision — whether a property's acceptance window closed cleanly. A false PASS written to a canonical surface (here, a `brain_reports` row) is a high-bandwidth, high-trust lie: downstream readers treat "C1: PASS" as evidence the property held, when it is actually evidence that the property was never measured. The error is in the *criteria design*, not the data — it is a brief-author-state-vs-intent failure applied to the verification surface's own logic. The acceptance script's author implicitly assumed "we will have data; the only question is whether it degrades" and designed PASS-by-default around that assumption. When the assumption fails (insufficient sample), the design has no third state to fall back to.
+
+**Empirical motivation — 2026-05-16 Ship 3 C1 false-PASS (this session):**
+
+`scripts/ct_specialist_recall_14d_acceptance.py` `run_c1` returned `(table, True)` on zero reads (`:142-143`) and initialized `all_pass=True`, only flipping to `False` if a FAIL gate fired. Every ticker was insufficiently sampled — only **3 of 107** specialist-flagged reads had grades, due to the upstream grader head-of-line starvation (see `## grader-HOL-starvation-re-emergence-at-deeper-layer — cascade #53 (2026-05-16)`, above). With near-zero data, no FAIL gate could fire → the script reported "C1: PASS" on near-zero data. The false-PASS was written to a canonical `brain_reports` row (since annotated as **SUPERSEDED**).
+
+The false-PASS was caught only by the empirical re-run during Phase A — running the acceptance script empirically exposed the gap nobody knew existed. It was invisible to anyone reading the `brain_reports` row at face value, because the row asserted PASS exactly as designed; the design itself was the bug.
+
+**Fix (commit `bbd4e17`):** C1 is now three-state — FAIL / PASS / INCONCLUSIVE. PASS now requires *zero degradation* AND *≥3 tickers measured with sufficient decisive N*. Insufficient sample resolves to INCONCLUSIVE, not PASS. Positive evidence is now required to reach PASS; absence of a detected failure no longer suffices.
+
+**Class diagnostic question:** *When my acceptance script / verification surface returns PASS — is that because positive evidence confirmed the property held, or merely because no failure was detected? If the surface cannot distinguish "measured and clean" from "not measured," it has no INCONCLUSIVE state, and its PASS is unverified. The default verdict on insufficient evidence must be INCONCLUSIVE.*
+
+**Fix shape (forward):** every acceptance script and verification surface is three-state — FAIL / PASS / INCONCLUSIVE — by construction. PASS requires explicit positive evidence (a minimum measured-sample threshold) AND zero detected degradation. INCONCLUSIVE is the default and the fallback for insufficient sample. The brief-author-state-vs-intent discipline (intent over formula; verify the premise) binds the verification surface's *own criteria design*: the surface's author must not assume the data will exist — the surface must measure whether it does and report INCONCLUSIVE when it does not.
+
+**Class:** verification-layer sibling of `## codified-LLM-instruction-protecting-wrong-value — cascade #51 (2026-05-15)` — both are verification surfaces that confidently assert a wrong conclusion (cascade #51's guard locks in a wrong producer value; this surface reports a wrong PASS verdict). Member of the brief-author-state-vs-intent rule family (the parent instance #37 family; see `## brief-frames-F1-as-dominant-when-F2-is-upstream-root — instance #37 sub-class — cascade #50` and the engine-room-write-time checklist) — applied here to the verification surface's own logic rather than to an authored brief. Sibling of `## grader-HOL-starvation-re-emergence-at-deeper-layer — cascade #53 (2026-05-16)` (above) — that starvation was the upstream cause that produced the near-zero sample this false-PASS was reported on.
+
+**Linked artifacts:**
+- Bug location: `scripts/ct_specialist_recall_14d_acceptance.py` `run_c1` — `(table, True)` on zero reads at `:142-143`, `all_pass=True` initialization
+- Fix: commit `bbd4e17` — three-state C1 (FAIL / PASS / INCONCLUSIVE); PASS requires zero degradation AND ≥3 tickers measured with sufficient decisive N
+- Canonical surface corrected: the false-PASS `brain_reports` row (since annotated SUPERSEDED)
+- Sibling verification-surface pattern: `## codified-LLM-instruction-protecting-wrong-value — cascade #51 (2026-05-15)`
+- Sibling pattern (upstream cause): `## grader-HOL-starvation-re-emergence-at-deeper-layer — cascade #53 (2026-05-16)` (above)
+- Parent rule family: brief-author-state-vs-intent (instance #37 family) — see `docs/governance/engine-room-write-time-checklist.md` check 1
+- Surfaced in the 2026-05-16 /goal cluster (Ship 3)
+- Cross-catalog parity: codified in Cowork `/Users/jameschellis/Documents/cowork-cotrader/memory/patterns.md`
+
