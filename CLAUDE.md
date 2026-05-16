@@ -16,7 +16,7 @@ Co-Trader is an **intelligence amplifier for James** — pattern detection that 
 
 2. **We're a microscope, not a fund.** Find where smart money is, see what algos see, ride the wave. Same pattern-detection sophistication as institutional desks (Citadel quant, Two Sigma, Renaissance), deployed for one trader. The asymmetry IS the edge.
 
-3. **Trust-per-alarm is the metric.** False alarms erode trust faster than missed signals. Gate alarms on earned trust. The product is signal James can act on without second-guessing.
+3. **Trust-per-alarm is the metric.** False alarms erode trust faster than missed signals. Gate alarms on earned trust. The product is signal James can act on without second-guessing. *(Content-gate pending — captain leans toward reframing this to "earned-trust gating via tier ladder"; the keep/reframe/delete decision content-gates on the Ship 9a tier ladder's first empirical observation, i.e. does gold/silver fire in RTH and does the captain trust the tier when it does. Tenet text held as-is until that observation resolves. Captain renderings locked 2026-05-15 ~03:50 UTC.)*
 
 ### Universe & Data
 
@@ -63,13 +63,13 @@ Co-Trader is an **intelligence amplifier for James** — pattern detection that 
     - **Analysis/calibration** (human-in-loop, conversational, weekly): terminal-Claude (Opus 4.7 under Max 20x — fixed cost, free per call, cumulative memory across sessions)
     - Don't burn API budget on calibration when Max gives terminal-Claude for free.
 
-21. **UI is glance-first.** User sees state in one view. Tabs drill down. Nothing critical hides behind navigation.
+21. **UI is glance-first.** User sees state in one view. Tabs drill down. Nothing critical hides behind navigation. *(Content-gate flag — glance-first is the north star, but the 2026-05-14 state-of-site audit empirically failed this gate: Edge unclear, Flags hard to read, Specialists empty, Pulse page broken, percent-change inconsistent across surfaces. The Tape command center vision (Ship 11) is the intended closing mechanism. Tenet stays aspirational; framing acknowledges the current gap. Captain renderings locked 2026-05-15 ~03:50 UTC.)*
 
-22. **Real-time contextual awareness.** Daily Brief, breaking-news watcher, per-ticker quant cards, Pulse, current detector scoreboard — all in the operator's field of view. The system reads the world, not a silo.
+22. **Real-time contextual awareness.** Daily Brief, breaking-news watcher, per-ticker quant cards, Pulse, current detector scoreboard — all in the operator's field of view. The system reads the world, not a silo. Explicit mechanisms operating end-to-end: the cotrader MCP bridge, brief continuity (`prior_brief_summary`), the emission layer, the synthesis layer, and the warden. Tenet is working; nailing the "more" down further is the multiplier.
 
 ### Cross-facet
 
-23. **Meta-layer eats its own outputs.** Co-Trader's decisions, grades, dreams, and principles feed JAC's `jac_reflections` pipeline via `ct-reflect-to-jac` (daily 22:30 UTC) and become input to JAC's weekly `distill-principles` extraction. Cross-facet feedback is how meta-layer learns from domain-specific outcomes. A new facet is not a new brain — it's a new vertical feeding the same brain.
+23. **Meta-layer eats its own outputs.** Co-Trader's decisions, grades, dreams, and principles feed JAC's `jac_reflections` pipeline via `ct-reflect-to-jac` (daily 22:30 UTC) and become input to JAC's weekly `distill-principles` extraction. Cross-facet feedback is how meta-layer learns from domain-specific outcomes. A new facet is not a new brain — it's a new vertical feeding the same brain. *(Wrinkle flag — eating outputs is shipped end-to-end, but APPLYING them is dormant: `jac_principles` shows `times_applied=0` (instance-of-applied tracking gap at the dispatcher injection layer). Content-gated on a future ship; the tenet text may gain "applied-back-to-decisions, not just stored" framing once the wrinkle closes. Captain renderings locked 2026-05-15 ~03:50 UTC.)*
 
 ### System integrity
 
