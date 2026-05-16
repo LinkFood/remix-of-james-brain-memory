@@ -136,16 +136,16 @@ async function loadPriceBarsForTicker(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const sb: any = supabase;
   const { data, error } = await sb.from('ct_price_bars')
-    .select('bar_ts, close')
+    .select('ts, close')
     .eq('ticker', ticker)
-    .eq('interval', '1m')
-    .gte('bar_ts', fromIso)
-    .lte('bar_ts', toIso)
-    .order('bar_ts', { ascending: true })
+    .eq('timeframe', '1m')
+    .gte('ts', fromIso)
+    .lte('ts', toIso)
+    .order('ts', { ascending: true })
     .limit(2000);
   if (error || !Array.isArray(data)) return [];
-  return (data as Array<{ bar_ts: string; close: number | string }>).map((r) => ({
-    bar_ts: r.bar_ts,
+  return (data as Array<{ ts: string; close: number | string }>).map((r) => ({
+    bar_ts: r.ts,
     close: typeof r.close === 'number' ? r.close : Number(r.close),
   }));
 }
