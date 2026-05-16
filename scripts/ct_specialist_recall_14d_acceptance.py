@@ -129,12 +129,17 @@ def rest_post(path: str, sr_key: str, body: dict) -> list | dict:
 # C1 — Hit-rate delta per ticker
 # ---------------------------------------------------------------------------
 def _bucket_hit_rates(
-    reads: list, grades_by_flag: dict[str, str], split: str,
+    reads: list, grades_by_flag: dict[str, str],
+    fire_time_by_flag: dict[str, str], split: str,
 ) -> tuple[dict[str, list[int]], dict[str, list[int]]]:
     """Bucket decisive (win/loss) graded reads into pre/post `split` cohorts.
-    `split` may be a full ISO timestamp or a YYYY-MM-DD date — string compare
-    works for both since updated_at is ISO-8601. Returns (pre, post), each
-    ticker → [wins, losses]."""
+    Cohorts split on the flag's immutable created_at (fire time) from
+    ct_flags -- NOT on ct_specialist_reads.updated_at. updated_at is rewritten
+    by the embedding backfill and the grader drain, which collapses every
+    graded read into the post-split bucket and empties the pre cohort (the
+    cohort-on-rewritable-field bug). `split` may be a full ISO timestamp or a
+    YYYY-MM-DD date; string compare works for both since created_at is
+    ISO-8601. Returns (pre, post), each ticker -> [wins, losses]."""
     pre: dict[str, list[int]] = {t: [0, 0] for t in TICKERS}
     post: dict[str, list[int]] = {t: [0, 0] for t in TICKERS}
     for r in reads:
@@ -143,8 +148,11 @@ def _bucket_hit_rates(
             continue
         outcome = grades_by_flag.get(r.get("flag_id", ""))
         if outcome not in ("win", "loss"):
-            continue  # pending / partial → not decisive
-        bucket = post if r["updated_at"] >= split else pre
+            continue  # pending / partial -> not decisive
+        fire_time = fire_time_by_flag.get(r.get("flag_id", ""))
+        if not fire_time:
+            continue  # flag fire time unavailable -> cannot cohort
+        bucket = post if fire_time >= split else pre
         bucket[ticker][0 if outcome == "win" else 1] += 1
     return pre, post
 
@@ -251,14 +259,34 @@ def run_c1(sr_key: str) -> tuple[str, str]:
             grades_by_flag[g["flag_id"]] = g["outcome"]
     print(f"  → {len(grades_by_flag)} grades loaded")
 
-    # (a) Verdict axis — pre-deploy vs post-deploy.
-    pre, post = _bucket_hit_rates(reads, grades_by_flag, DEPLOY_TS)
+    # Flag fire-time lookup -- cohorts split on ct_flags.created_at (the
+    # immutable flag-fire timestamp). See _bucket_hit_rates for why
+    # ct_specialist_reads.updated_at must NOT be used as the cohort key.
+    print(f"  Fetching flag fire-times for {len(flag_ids)} flags…")
+    fire_time_by_flag: dict[str, str] = {}
+    for i in range(0, len(flag_ids), BATCH):
+        chunk = flag_ids[i : i + BATCH]
+        ids_str = "(" + ",".join(f'"{fid}"' for fid in chunk) + ")"
+        batch = rest_get(
+            "/rest/v1/ct_flags",
+            sr_key,
+            params={"select": "id,created_at", "id": f"in.{ids_str}"},
+        )
+        for f in batch:
+            fire_time_by_flag[f["id"]] = f["created_at"]
+    print(f"  → {len(fire_time_by_flag)} flag fire-times loaded")
+
+    # (a) Verdict axis — pre-deploy vs post-deploy (split on flag fire time).
+    pre, post = _bucket_hit_rates(reads, grades_by_flag, fire_time_by_flag, DEPLOY_TS)
     deploy_lines, measured, failed = _render_cohort_table(pre, post, "Pre", "Post")
 
     # (b) Recall-mode axis — chronological vs semantic, post-deploy reads only.
-    post_deploy_reads = [r for r in reads if r["updated_at"] >= DEPLOY_TS]
+    post_deploy_reads = [
+        r for r in reads
+        if (fire_time_by_flag.get(r.get("flag_id", "")) or "") >= DEPLOY_TS
+    ]
     chrono, semantic = _bucket_hit_rates(
-        post_deploy_reads, grades_by_flag, SEMANTIC_SWAP_DATE)
+        post_deploy_reads, grades_by_flag, fire_time_by_flag, SEMANTIC_SWAP_DATE)
     mode_lines, _, _ = _render_cohort_table(chrono, semantic, "Chrono", "Semantic")
 
     # Three-state verdict — PASS requires positive evidence, not silence.
@@ -298,6 +326,15 @@ def run_c1(sr_key: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 # Phrases that indicate the specialist explicitly references its own prior read.
+# Two families:
+#  1. First-person citation grammar ("as i noted", "my prior", ...).
+#  2. Streak-self-reference grammar ("streak gate", "5-bullish streak", ...) --
+#     the specialist citing its own prior-flag track record via the streak the
+#     recall organ injects. The Phase A audit (2026-05-16) found NVDA reads
+#     express continuity almost entirely in family 2, which the original
+#     family-1-only list scored 0/5 -- a heuristic-vocabulary-drift false
+#     negative. Family 2 is the streak-gate vocabulary surfaced by the recall
+#     organ's formatRecallBlock.
 _CONTINUITY_PHRASES = [
     "as i noted", "as i flagged", "i flagged", "i noted yesterday",
     "continuing the read", "still bearish", "still bullish", "prior read",
@@ -306,6 +343,12 @@ _CONTINUITY_PHRASES = [
     "my last", "my prior", "per my last", "from last", "in my last read",
     "my previous", "the flag i", "the put i", "the call i",
     "as flagged", "as noted",
+    # Streak-self-reference family (added 2026-05-16, Ship B).
+    "streak gate", "bullish streak", "bearish streak", "continuation-trap",
+    "continuation trap", "bullish pending", "bearish pending", "break streak",
+    "break the streak", "extend the streak", "extend a streak",
+    "consecutive bullish", "consecutive bearish", "priced yesterday",
+    "flags pending", "streak of",
 ]
 
 # Phrases that suggest lean is being driven by streak rather than current flow.
