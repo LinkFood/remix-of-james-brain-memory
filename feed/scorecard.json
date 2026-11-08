@@ -1,14 +1,14 @@
 {
- "generated_at": "2026-11-08T20:23:33.609Z",
+ "generated_at": "2026-11-08T23:52:40.979Z",
  "window": {
   "from": "2026-11-08T02:16:50.113Z",
-  "to": "2026-11-08T20:23:33.609Z",
-  "runs": 5
+  "to": "2026-11-08T23:52:40.979Z",
+  "runs": 6
  },
  "collector": {
-  "runs": 5,
+  "runs": 6,
   "longest_gap_between_runs_min": 413,
-  "gaps_over_10_min": 3
+  "gaps_over_10_min": 4
  },
  "sources": [
   {
@@ -71,8 +71,8 @@
    "group": "gov",
    "every_min": 5,
    "off": null,
-   "reads": 4,
-   "reads_ok": 4,
+   "reads": 5,
+   "reads_ok": 5,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 415,
@@ -86,8 +86,8 @@
     "max": null
    },
    "newest_published_at": "2026-11-05T16:00:00Z",
-   "newest_age_min": 4584,
-   "last_ok_at": "2026-11-08T20:23:33.327Z",
+   "newest_age_min": 4793,
+   "last_ok_at": "2026-11-08T23:52:40.725Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -125,8 +125,8 @@
    "group": "gov",
    "every_min": 15,
    "off": null,
-   "reads": 4,
-   "reads_ok": 4,
+   "reads": 5,
+   "reads_ok": 5,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 415,
@@ -140,8 +140,8 @@
     "max": null
    },
    "newest_published_at": "2026-11-06T22:00:00Z",
-   "newest_age_min": 2784,
-   "last_ok_at": "2026-11-08T20:23:33.518Z",
+   "newest_age_min": 2993,
+   "last_ok_at": "2026-11-08T23:52:40.825Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -152,8 +152,8 @@
    "group": "gov",
    "every_min": 30,
    "off": null,
-   "reads": 4,
-   "reads_ok": 4,
+   "reads": 5,
+   "reads_ok": 5,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 415,
@@ -167,8 +167,8 @@
     "max": null
    },
    "newest_published_at": "2026-11-06T21:15:00Z",
-   "newest_age_min": 2829,
-   "last_ok_at": "2026-11-08T20:23:33.351Z",
+   "newest_age_min": 3038,
+   "last_ok_at": "2026-11-08T23:52:40.810Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -179,8 +179,8 @@
    "group": "outlet",
    "every_min": 5,
    "off": null,
-   "reads": 4,
-   "reads_ok": 4,
+   "reads": 5,
+   "reads_ok": 5,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 415,
@@ -194,8 +194,8 @@
     "max": null
    },
    "newest_published_at": "2026-11-06T22:22:20Z",
-   "newest_age_min": 2761,
-   "last_ok_at": "2026-11-08T20:23:33.382Z",
+   "newest_age_min": 2970,
+   "last_ok_at": "2026-11-08T23:52:40.785Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -206,8 +206,8 @@
    "group": "outlet",
    "every_min": 30,
    "off": null,
-   "reads": 4,
-   "reads_ok": 4,
+   "reads": 5,
+   "reads_ok": 5,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 415,
@@ -221,8 +221,8 @@
     "max": null
    },
    "newest_published_at": "2026-11-06T13:11:46Z",
-   "newest_age_min": 3312,
-   "last_ok_at": "2026-11-08T20:23:33.541Z",
+   "newest_age_min": 3521,
+   "last_ok_at": "2026-11-08T23:52:40.907Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
