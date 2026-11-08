@@ -150,8 +150,13 @@ assert.deepEqual(C.openWindows(rel, Date.parse("2026-11-08T13:30:00Z")), [], "a 
 assert.deepEqual(C.openWindows([{ source: "fed", et: "14:00", dates: ["2026-11-10"] }], Date.parse("2026-11-10T19:00:30Z")), ["fed"], "a dated window");
 const env = { NEWSFEED_CONTACT: "x y@z" };
 let d = C.dueSources(S.SOURCES, {}, T, {}, []);
-assert.deepEqual(d.skip.map((s) => s.key).sort(), ["bls", "sec_6k", "sec_8k"], "no contact line: SEC and BLS skipped, and say so");
-d = C.dueSources(S.SOURCES, { npr_business: { last_attempt_at: new Date(T - 2 * 60000).toISOString() }, bls: { last_attempt_at: new Date(T - 1500).toISOString() } }, T, env, ["bls"]);
+assert.deepEqual(d.skip.map((s) => s.key).sort(), ["bls", "sec_6k", "sec_8k"], "SEC and BLS off for now, and say so");
+assert.ok(d.skip.every((s) => s.note === S.OFF_NOTE));
+d = C.dueSources(S.SOURCES, {}, T, env, ["bls"]);
+assert.ok(!d.read.some(({ s }) => ["bls", "sec_8k", "sec_6k"].includes(s.key)), "off even with the contact line set");
+// The rest of the scheduling checks run on the sources as they would be with SEC and BLS on.
+const ON = S.SOURCES.map(({ off, ...s }) => s);
+d = C.dueSources(ON, { npr_business: { last_attempt_at: new Date(T - 2 * 60000).toISOString() }, bls: { last_attempt_at: new Date(T - 1500).toISOString() } }, T, env, ["bls"]);
 assert.ok(!d.read.some(({ s }) => s.key === "npr_business"), "inside its cadence: not read");
 assert.ok(d.read.some(({ s, fast }) => s.key === "bls" && fast), "inside a release window: read every second");
 d = C.dueSources(S.SOURCES, { fed: { backoff_until: new Date(T + 60000).toISOString() } }, T, env, []);
@@ -192,7 +197,7 @@ globalThis.fetch = async (url, o) => {
 const dir = mkdtempSync(join(tmpdir(), "nf-"));
 try {
   const r1 = await C.run({ stateDir: dir, env: {} });
-  assert.equal(r1.summary.sec_8k.skipped, "NEWSFEED_CONTACT not set: SEC and BLS ask every automated reader for a name and contact");
+  assert.equal(r1.summary.sec_8k.skipped, S.OFF_NOTE);
   assert.match(r1.summary.fed.error, /HTTP 429, backing off 2 min/);
   assert.equal(r1.summary.npr_business.new, 1);
   assert.ok(calls.every((c) => !/@/.test(c.ua)), "no email in any request");
@@ -207,10 +212,11 @@ try {
   const card = K.score({ items, reads: readFileSync(join(dir, "reads.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)), runs: readFileSync(join(dir, "runs.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l)), state: JSON.parse(readFileSync(join(dir, "state.json"), "utf8")) });
   const fedRow = card.sources.find((s) => s.key === "fed");
   assert.deepEqual([fedRow.reads, fedRow.reads_failed, card.broken.includes("fed")], [1, 1, true], "a failing source is named broken");
-  assert.equal(card.sources.find((s) => s.key === "sec_8k").skipped, "never read (needs NEWSFEED_CONTACT, or not run yet)");
+  assert.equal(card.sources.find((s) => s.key === "sec_8k").skipped, S.OFF_NOTE);
+  assert.ok(!card.broken.includes("sec_8k"), "off is not broken");
   assert.equal(card.window.runs, 2);
 } finally { globalThis.fetch = realFetch; rmSync(dir, { recursive: true, force: true }); }
-ok("the collector end to end: skips SEC and BLS without the contact line, backs off on 429, cadences hold between runs, outlet titles in no file, the scorecard names the broken source");
+ok("the collector end to end: leaves SEC and BLS off, backs off on 429, cadences hold between runs, outlet titles in no file, the scorecard names the broken source");
 
 // ---------- the scorecard ----------
 assert.equal(K.quantile([5, 1, 3], 0.5), 3);

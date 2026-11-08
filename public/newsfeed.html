@@ -66,7 +66,7 @@ function renderSources() {
   const tb = document.querySelector("#sources tbody"); tb.replaceChildren();
   const broken = new Set(health.broken || []);
   for (const s of health.sources || []) {
-    const state = !s.reads ? el("span", { className: "muted", textContent: "not read" }) : el("span", { className: broken.has(s.key) ? "bad" : "ok", textContent: `${s.reads_ok} of ${s.reads}` });
+    const state = s.off ? el("span", { className: "muted", textContent: "off for now" }) : !s.reads ? el("span", { className: "muted", textContent: "not read yet" }) : el("span", { className: broken.has(s.key) ? "bad" : "ok", textContent: `${s.reads_ok} of ${s.reads}` });
     const lag = s.lag_s && s.lag_s.n ? `${secs(s.lag_s.median)} / ${secs(s.lag_s.p90)} (${s.lag_s.n} items)` : "—";
     tb.append(el("tr", {},
       el("td", { textContent: s.label }), el("td", {}, state), el("td", { textContent: lag }),

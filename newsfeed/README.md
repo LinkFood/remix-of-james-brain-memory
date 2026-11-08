@@ -23,8 +23,9 @@ crons or the database.
 - Only sources whose own terms allow automated reading (terms noted per source in `lib/sources.mjs`).
 - Outlet titles (NPR, The Conversation) are never written to any file or log: this repo and its Actions logs are public.
   The page shows outlet items as source, time and a link.
-- SEC and BLS ask every automated reader for a name and contact. Set the optional repository secret `NEWSFEED_CONTACT`
-  (for example `Name you@example.com`); without it those sources are skipped and the scorecard says so.
+- SEC filings and BLS releases are off for now (daily news first). They stay in `lib/sources.mjs` and come back by
+  taking their keys out of `OFF` there; they also need the repository secret `NEWSFEED_CONTACT` (a name and email),
+  since SEC and BLS ask every automated reader for one.
 - The collector logs counts only, never a secret.
 
 ## Run it by hand

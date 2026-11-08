@@ -51,7 +51,7 @@ export function checkMoves(moves, items, windowMin = 30) {
 export function score({ items, reads, runs, state, moves = null, now = Date.now() }) {
   const from = runs.length ? Date.parse(runs[0].started_at) : now;
   const bySrc = {};
-  for (const s of SOURCES) bySrc[s.key] = { key: s.key, label: s.label, group: s.group, every_min: s.every };
+  for (const s of SOURCES) bySrc[s.key] = { key: s.key, label: s.label, group: s.group, every_min: s.every, off: s.off || null };
   const out = [];
   for (const s of Object.values(bySrc)) {
     const rs = reads.filter((r) => r.key === s.key);
@@ -72,7 +72,7 @@ export function score({ items, reads, runs, state, moves = null, now = Date.now(
       newest_published_at: st.newest_published_at || null,
       newest_age_min: st.newest_published_at ? Math.round((now - Date.parse(st.newest_published_at)) / 60000) : null,
       last_ok_at: st.last_ok_at || null, last_error: st.last_error || null, last_error_at: st.last_error_at || null,
-      skipped: rs.length ? null : "never read (needs NEWSFEED_CONTACT, or not run yet)",
+      skipped: s.off || (rs.length ? null : "not read yet"),
     });
   }
   const runStarts = runs.map((r) => r.started_at);
@@ -105,7 +105,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.a
   const seenBy = {};
   for (const s of items) if (s.type === "sighting") (seenBy[s.story] ||= []).push({ source: s.source, trail_s: s.trail_s });
   writeFileSync(join(outDir, "latest.json"), JSON.stringify({ generated_at: card.generated_at, last_run: runs.at(-1) || null, items: recent.map((i) => ({ ...i, also: seenBy[i.story] || [] })) }));
-  writeFileSync(join(outDir, "health.json"), JSON.stringify({ generated_at: card.generated_at, last_run: runs.at(-1) || null, collector: card.collector, broken: card.broken, sources: card.sources.map(({ key, label, group, reads, reads_ok, last_ok_at, last_error, newest_published_at, newest_age_min, lag_s }) => ({ key, label, group, reads, reads_ok, last_ok_at, last_error, newest_published_at, newest_age_min, lag_s })) }));
+  writeFileSync(join(outDir, "health.json"), JSON.stringify({ generated_at: card.generated_at, last_run: runs.at(-1) || null, collector: card.collector, broken: card.broken, sources: card.sources.map(({ key, label, group, off, reads, reads_ok, last_ok_at, last_error, newest_published_at, newest_age_min, lag_s }) => ({ key, label, group, off, reads, reads_ok, last_ok_at, last_error, newest_published_at, newest_age_min, lag_s })) }));
   writeFileSync(join(outDir, "scorecard.json"), JSON.stringify(card, null, 1));
   console.log(`scorecard: ${card.window.runs} runs, ${card.stories.total} stories, broken: ${card.broken.join(", ") || "none"}`);
 }

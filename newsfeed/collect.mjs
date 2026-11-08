@@ -73,6 +73,7 @@ export function dueSources(sources, states, now, env, fast = []) {
   const read = [], skip = [];
   for (const s of sources) {
     const st = states[s.key] || {};
+    if (s.off) { skip.push({ key: s.key, note: s.off }); continue; }
     if (s.needs && !String(env[s.needs] || "").trim()) { skip.push({ key: s.key, note: s.skipNote || `${s.needs} not set` }); continue; }
     if (st.backoff_until && Date.parse(st.backoff_until) > now) { skip.push({ key: s.key, note: `backing off until ${st.backoff_until}` }); continue; }
     const last = st.last_attempt_at ? Date.parse(st.last_attempt_at) : null;

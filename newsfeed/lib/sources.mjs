@@ -126,7 +126,12 @@ const bls = {
   terms: "conditions: a contact in the User-Agent, a low rate, cite BLS",
 };
 
-export const SOURCES = [
+// Off for now (James, Nov 8: "we are more or less looking for daily news"): SEC filings and BLS releases stay in the
+// list so they can come back with one line, but the collector doesn't read them and the page shows them as off.
+export const OFF_NOTE = "off for now: daily news first, not filings or data releases";
+const OFF = new Set(["sec_8k", "sec_6k", "bls"]);
+
+const ALL = [
   // Primary: filings, the Fed, BLS, Treasury, the Federal Register.
   sec("8-K"),
   sec("6-K"),
@@ -149,5 +154,7 @@ export const SOURCES = [
   rss("npr_business", "NPR Business", "https://feeds.npr.org/1006/rss.xml", { terms: "conditions: personal noncommercial use, credit NPR and link, headline and summary only" }),
   rss("conversation_business", "The Conversation US: business and economy", "https://theconversation.com/us/business/articles.atom", { every: 30, kind: "article", terms: "allowed: Creative Commons BY-ND" }),
 ];
+
+export const SOURCES = ALL.map((s) => (OFF.has(s.key) ? { ...s, off: OFF_NOTE } : s));
 
 export const SOURCE = Object.fromEntries(SOURCES.map((s) => [s.key, s]));
