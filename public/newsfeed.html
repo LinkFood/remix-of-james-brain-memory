@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>News feed test</title>
+<style>
+  :root { --bg: #242424; --panel: #2c2c2c; --line: #3a3a3a; --text: #e4e4e0; --muted: #9a9a94; --ok: #8fb894; --bad: #d08c7c; --warn: #d2b77a; --link: #9fb7d6; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 16px; }
+  h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 24px 0 8px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); vertical-align: top; white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  tr:last-child td { border-bottom: 0; }
+  td.wrap { white-space: normal; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); } .warn { color: var(--warn); } .muted { color: var(--muted); }
+  a { color: var(--link); text-decoration: none; } a:hover { text-decoration: underline; }
+  .tag { display: inline-block; font-size: 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; margin: 0 4px 0 0; }
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+  .filters button { background: var(--panel); color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; font: inherit; cursor: pointer; }
+  .filters button.on { color: var(--text); border-color: var(--muted); }
+  #status { color: var(--muted); font-size: 12px; }
+  footer { color: var(--muted); font-size: 12px; margin: 24px 0 8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>News feed test</h1>
+  <p class="sub">A one-week dry run of a free news feed: when each item was first seen, how late that was, and which sources broke. <span id="status">Loading…</span></p>
+
+  <h2>Sources</h2>
+  <div class="panel"><table id="sources"><thead><tr><th>Source</th><th>Reads ok</th><th>Seconds late (median / p90)</th><th>Newest item</th><th>Last good read</th><th>Last error</th></tr></thead><tbody></tbody></table></div>
+  <p class="muted" id="collector"></p>
+
+  <h2>Items, last 48 hours</h2>
+  <div class="filters" id="filters"></div>
+  <div class="panel"><table id="items"><thead><tr><th>First seen</th><th>Late</th><th>Source</th><th>Item</th></tr></thead><tbody></tbody></table></div>
+
+  <footer>Primary sources (SEC, the Fed, BLS, Treasury, the Federal Register) show their own titles. Outlet items (NPR, The Conversation) show only the source, the time and a link to the story on the outlet's site. Times are New York. History only; nothing here says what any price does next.</footer>
+</main>
+<script>
+const BASE = "https://raw.githubusercontent.com/LinkFood/remix-of-james-brain-memory/newsfeed-data/feed/";
+const OUTLETS = { npr_business: "NPR Business", conversation_business: "The Conversation" };
+let group = "all", data = null, health = null;
+
+const fmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" });
+const when = (iso) => (iso ? fmt.format(new Date(iso)) : "—");
+const ago = (min) => (min == null ? "—" : min < 60 ? `${min} min ago` : min < 2880 ? `${Math.round(min / 60)} h ago` : `${Math.round(min / 1440)} days ago`);
+const secs = (s) => (s == null ? "—" : s < 120 ? `${Math.round(s)} s` : s < 7200 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
+const el = (tag, attrs = {}, ...kids) => { const e = document.createElement(tag); for (const [k, v] of Object.entries(attrs)) e[k] = v; for (const k of kids) e.append(k); return e; };
+const safeUrl = (u) => { try { const x = new URL(u); return x.protocol === "https:" ? x.href : null; } catch { return null; } };
+
+async function get(name) {
+  const r = await fetch(BASE + name + "?t=" + Math.floor(Date.now() / 60000), { cache: "no-store" });
+  if (!r.ok) throw new Error(name + " " + r.status);
+  return r.json();
+}
+
+function renderSources() {
+  const tb = document.querySelector("#sources tbody"); tb.replaceChildren();
+  const broken = new Set(health.broken || []);
+  for (const s of health.sources || []) {
+    const state = !s.reads ? el("span", { className: "muted", textContent: "not read" }) : el("span", { className: broken.has(s.key) ? "bad" : "ok", textContent: `${s.reads_ok} of ${s.reads}` });
+    const lag = s.lag_s && s.lag_s.n ? `${secs(s.lag_s.median)} / ${secs(s.lag_s.p90)} (${s.lag_s.n} items)` : "—";
+    tb.append(el("tr", {},
+      el("td", { textContent: s.label }), el("td", {}, state), el("td", { textContent: lag }),
+      el("td", { textContent: ago(s.newest_age_min) }), el("td", { textContent: when(s.last_ok_at) }),
+      el("td", { className: "wrap " + (s.last_error ? "warn" : "muted"), textContent: s.last_error || "—" })));
+  }
+  const c = health.collector || {};
+  document.querySelector("#collector").textContent = `The collector ran ${c.runs ?? 0} times; its longest gap between runs was ${c.longest_gap_between_runs_min ?? "—"} minutes, and ${c.gaps_over_10_min ?? 0} gaps ran over 10 minutes (GitHub starting a run late, never counted against a source).`;
+}
+
+function renderFilters() {
+  const groups = ["all", ...new Set((data.items || []).map((i) => i.group))];
+  const f = document.querySelector("#filters"); f.replaceChildren();
+  for (const g of groups) { const b = el("button", { textContent: g, className: g === group ? "on" : "" }); b.onclick = () => { group = g; renderFilters(); renderItems(); }; f.append(b); }
+}
+
+function renderItems() {
+  const tb = document.querySelector("#items tbody"); tb.replaceChildren();
+  const items = (data.items || []).filter((i) => group === "all" || i.group === group);
+  if (!items.length) { tb.append(el("tr", {}, el("td", { colSpan: 4, className: "muted", textContent: "Nothing yet." }))); return; }
+  for (const i of items.slice(0, 400)) {
+    const url = safeUrl(i.url);
+    const outlet = OUTLETS[i.source];
+    const label = outlet ? `${outlet} story` : i.title || i.source;
+    const cell = el("td", { className: "wrap" }, url ? el("a", { href: url, target: "_blank", rel: "noopener noreferrer", textContent: label }) : label);
+    for (const t of i.tickers || []) cell.append(" ", el("span", { className: "tag", textContent: t }));
+    for (const t of i.tags || []) cell.append(" ", el("span", { className: "tag", textContent: t }));
+    if ((i.also || []).length) cell.append(" ", el("span", { className: "muted", textContent: `also seen in ${i.also.map((a) => a.source).join(", ")}` }));
+    const late = i.backfill ? el("span", { className: "muted", textContent: "on hand at start" }) : secs(i.lag_s);
+    tb.append(el("tr", {}, el("td", { textContent: when(i.first_seen_at) }), el("td", {}, late), el("td", { textContent: i.source }), cell));
+  }
+}
+
+async function load() {
+  try {
+    [data, health] = await Promise.all([get("latest.json"), get("health.json")]);
+    const run = data.last_run;
+    document.querySelector("#status").textContent = run ? `Last run ${when(run.ended_at || run.started_at)}.` : "No run yet.";
+    renderSources(); renderFilters(); renderItems();
+  } catch (e) {
+    document.querySelector("#status").textContent = "The feed's files aren't there yet (" + e.message + ").";
+  }
+}
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+# The news feed dry test (one week). Everything it runs lives in newsfeed/; nothing here touches the JAC app,
+# supabase/ or docs/. Each run reads the free public sources (newsfeed/lib/sources.mjs), keeps its state in the
+# Actions cache (no commit to main, so the site never redeploys for data), and publishes the page's files
+# (latest.json, health.json, scorecard.json) to the newsfeed-data branch, which the page at /newsfeed.html reads
+# from raw.githubusercontent.com. That branch carries its own vercel.json that turns Vercel's deploys off for it.
+#
+# Free: a public repo's standard runners cost nothing; no new account, no paid service.
+# Optional secret NEWSFEED_CONTACT ("Name email"): SEC and BLS ask every automated reader for one. Without it, those
+# sources are skipped and the scorecard says so.
+#
+# Times are UTC. The two release runs start early because GitHub can start a scheduled run late, and then keep
+# reading through the window: 13:10 UTC covers BLS at 8:30am New York and 14:40 UTC covers JOLTS at 10:00am, while
+# New York is on EST (until Mar 14 2027; move both an hour earlier then).
+name: newsfeed-test
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+    - cron: "10 13 * * 1-5"
+    - cron: "40 14 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      loop:
+        description: "Seconds to keep reading (0 = one pass)"
+        default: "0"
+
+concurrency:
+  group: newsfeed-test
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Restore the collector's state
+        uses: actions/cache/restore@v4
+        with:
+          path: newsfeed/.state
+          key: newsfeed-state-${{ github.run_id }}
+          restore-keys: newsfeed-state-
+
+      - name: How long to read
+        id: loop
+        run: |
+          case "${{ github.event.schedule }}" in
+            "10 13 * * 1-5") echo "sec=1500" >> "$GITHUB_OUTPUT" ;;   # to about 8:35am New York
+            "40 14 * * 1-5") echo "sec=1500" >> "$GITHUB_OUTPUT" ;;   # to about 10:05am New York
+            *) echo "sec=${{ github.event.inputs.loop || '0' }}" >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      - name: Collect
+        env:
+          NEWSFEED_CONTACT: ${{ secrets.NEWSFEED_CONTACT }}
+        run: node newsfeed/collect.mjs --loop "${{ steps.loop.outputs.sec }}"
+
+      - name: Score
+        run: node newsfeed/scorecard.mjs
+
+      - name: Save the collector's state
+        if: always() && hashFiles('newsfeed/.state/state.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: newsfeed/.state
+          key: newsfeed-state-${{ github.run_id }}
+
+      - name: Publish the page's files to newsfeed-data
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin newsfeed-data >/dev/null; then
+            git fetch --depth 1 origin newsfeed-data
+            git worktree add ../data FETCH_HEAD
+            git -C ../data checkout -B newsfeed-data
+          else
+            git worktree add --detach ../data
+            git -C ../data checkout --orphan newsfeed-data
+            git -C ../data rm -rfq . || true
+            git -C ../data clean -fdq
+          fi
+          mkdir -p ../data/feed
+          cp newsfeed/.state/export/latest.json newsfeed/.state/export/health.json newsfeed/.state/export/scorecard.json ../data/feed/
+          printf '%s\n' '{ "git": { "deploymentEnabled": false } }' > ../data/vercel.json
+          printf '%s\n' "Data for the news feed dry test, written by .github/workflows/newsfeed-test.yml on main. Never merge this branch." > ../data/README.md
+          cd ../data
+          git add -A
+          if git diff --cached --quiet; then echo "nothing new"; exit 0; fi
+          git commit -qm "newsfeed data $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3; do git push -q origin newsfeed-data && exit 0; sleep $((i * 5)); git pull -q --rebase origin newsfeed-data || true; done
+          exit 1

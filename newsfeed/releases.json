@@ -1,0 +1,7 @@
+{
+  "note": "Release windows: the source is read every second from 3 seconds before to 2 minutes after each New York time. days: 1 Monday to 5 Friday. A window with dates applies on those dates only. BLS posts its market-moving releases at 8:30am and JOLTS at 10:00am on weekdays (each release's own date is on bls.gov/schedule); add the Fed's 2:00pm statement days from federalreserve.gov/monetarypolicy/fomccalendars.htm as dates, never from memory.",
+  "releases": [
+    { "source": "bls", "et": "08:30", "days": [1, 2, 3, 4, 5] },
+    { "source": "bls", "et": "10:00", "days": [1, 2, 3, 4, 5] }
+  ]
+}
