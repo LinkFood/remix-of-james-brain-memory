@@ -1,14 +1,14 @@
 {
- "generated_at": "2026-11-09T03:58:18.390Z",
+ "generated_at": "2026-11-09T12:44:33.719Z",
  "window": {
   "from": "2026-11-08T02:16:50.113Z",
-  "to": "2026-11-09T03:58:18.390Z",
-  "runs": 7
+  "to": "2026-11-09T12:44:33.719Z",
+  "runs": 8
  },
  "collector": {
-  "runs": 7,
-  "longest_gap_between_runs_min": 413,
-  "gaps_over_10_min": 5
+  "runs": 8,
+  "longest_gap_between_runs_min": 526,
+  "gaps_over_10_min": 6
  },
  "sources": [
   {
@@ -71,11 +71,11 @@
    "group": "gov",
    "every_min": 5,
    "off": null,
-   "reads": 6,
-   "reads_ok": 6,
+   "reads": 7,
+   "reads_ok": 7,
    "reads_failed": 0,
    "errors": [],
-   "longest_without_good_read_min": 415,
+   "longest_without_good_read_min": 526,
    "items": 20,
    "items_backfill": 20,
    "items_live": 0,
@@ -86,8 +86,8 @@
     "max": null
    },
    "newest_published_at": "2026-11-05T16:00:00Z",
-   "newest_age_min": 5038,
-   "last_ok_at": "2026-11-09T03:58:18.159Z",
+   "newest_age_min": 5565,
+   "last_ok_at": "2026-11-09T12:44:33.368Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -125,11 +125,11 @@
    "group": "gov",
    "every_min": 15,
    "off": null,
-   "reads": 6,
-   "reads_ok": 6,
+   "reads": 7,
+   "reads_ok": 7,
    "reads_failed": 0,
    "errors": [],
-   "longest_without_good_read_min": 415,
+   "longest_without_good_read_min": 526,
    "items": 10,
    "items_backfill": 10,
    "items_live": 0,
@@ -140,8 +140,8 @@
     "max": null
    },
    "newest_published_at": "2026-11-06T22:00:00Z",
-   "newest_age_min": 3238,
-   "last_ok_at": "2026-11-09T03:58:18.230Z",
+   "newest_age_min": 3765,
+   "last_ok_at": "2026-11-09T12:44:33.388Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -152,11 +152,11 @@
    "group": "gov",
    "every_min": 30,
    "off": null,
-   "reads": 6,
-   "reads_ok": 6,
+   "reads": 7,
+   "reads_ok": 7,
    "reads_failed": 0,
    "errors": [],
-   "longest_without_good_read_min": 415,
+   "longest_without_good_read_min": 526,
    "items": 103,
    "items_backfill": 103,
    "items_live": 0,
@@ -167,8 +167,8 @@
     "max": null
    },
    "newest_published_at": "2026-11-06T21:15:00Z",
-   "newest_age_min": 3283,
-   "last_ok_at": "2026-11-09T03:58:18.277Z",
+   "newest_age_min": 3810,
+   "last_ok_at": "2026-11-09T12:44:33.378Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -179,23 +179,23 @@
    "group": "outlet",
    "every_min": 5,
    "off": null,
-   "reads": 6,
-   "reads_ok": 6,
+   "reads": 7,
+   "reads_ok": 7,
    "reads_failed": 0,
    "errors": [],
-   "longest_without_good_read_min": 415,
-   "items": 10,
+   "longest_without_good_read_min": 526,
+   "items": 11,
    "items_backfill": 10,
-   "items_live": 0,
+   "items_live": 1,
    "lag_s": {
-    "n": 0,
-    "median": null,
-    "p90": null,
-    "max": null
+    "n": 1,
+    "median": 9874,
+    "p90": 9874,
+    "max": 9874
    },
-   "newest_published_at": "2026-11-06T22:22:20Z",
-   "newest_age_min": 3216,
-   "last_ok_at": "2026-11-09T03:58:18.262Z",
+   "newest_published_at": "2026-11-09T10:00:00Z",
+   "newest_age_min": 165,
+   "last_ok_at": "2026-11-09T12:44:33.619Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -206,11 +206,11 @@
    "group": "outlet",
    "every_min": 30,
    "off": null,
-   "reads": 6,
-   "reads_ok": 6,
+   "reads": 7,
+   "reads_ok": 7,
    "reads_failed": 0,
    "errors": [],
-   "longest_without_good_read_min": 415,
+   "longest_without_good_read_min": 526,
    "items": 25,
    "items_backfill": 25,
    "items_live": 0,
@@ -221,8 +221,8 @@
     "max": null
    },
    "newest_published_at": "2026-11-06T13:11:46Z",
-   "newest_age_min": 3767,
-   "last_ok_at": "2026-11-09T03:58:18.326Z",
+   "newest_age_min": 4293,
+   "last_ok_at": "2026-11-09T12:44:33.644Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -230,7 +230,7 @@
  ],
  "broken": [],
  "stories": {
-  "total": 168,
+  "total": 169,
   "with_more_than_one_source": 0,
   "sightings": 0,
   "trail_s_median": null
