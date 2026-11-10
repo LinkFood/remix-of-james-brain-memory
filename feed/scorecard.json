@@ -1,14 +1,14 @@
 {
- "generated_at": "2026-11-10T12:50:51.995Z",
+ "generated_at": "2026-11-10T20:05:17.695Z",
  "window": {
   "from": "2026-11-08T02:16:50.113Z",
-  "to": "2026-11-10T12:50:51.995Z",
-  "runs": 13
+  "to": "2026-11-10T20:05:17.695Z",
+  "runs": 14
  },
  "collector": {
-  "runs": 13,
+  "runs": 14,
   "longest_gap_between_runs_min": 600,
-  "gaps_over_10_min": 11
+  "gaps_over_10_min": 12
  },
  "sources": [
   {
@@ -71,8 +71,8 @@
    "group": "gov",
    "every_min": 5,
    "off": null,
-   "reads": 24,
-   "reads_ok": 24,
+   "reads": 25,
+   "reads_ok": 25,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 600,
@@ -86,8 +86,8 @@
     "max": 6271
    },
    "newest_published_at": "2026-11-09T21:00:00Z",
-   "newest_age_min": 951,
-   "last_ok_at": "2026-11-10T12:50:51.905Z",
+   "newest_age_min": 1385,
+   "last_ok_at": "2026-11-10T20:05:17.503Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -125,8 +125,8 @@
    "group": "gov",
    "every_min": 15,
    "off": null,
-   "reads": 14,
-   "reads_ok": 14,
+   "reads": 15,
+   "reads_ok": 15,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 600,
@@ -140,8 +140,8 @@
     "max": null
    },
    "newest_published_at": "2026-11-06T22:00:00Z",
-   "newest_age_min": 5211,
-   "last_ok_at": "2026-11-10T12:50:51.932Z",
+   "newest_age_min": 5645,
+   "last_ok_at": "2026-11-10T20:05:17.568Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -152,23 +152,23 @@
    "group": "gov",
    "every_min": 30,
    "off": null,
-   "reads": 12,
-   "reads_ok": 12,
+   "reads": 13,
+   "reads_ok": 13,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 600,
-   "items": 207,
+   "items": 329,
    "items_backfill": 103,
-   "items_live": 104,
+   "items_live": 226,
    "lag_s": {
-    "n": 104,
-    "median": 32371,
+    "n": 226,
+    "median": 22818,
     "p90": 32371,
     "max": 32371
    },
-   "newest_published_at": "2026-11-09T21:15:00Z",
-   "newest_age_min": 936,
-   "last_ok_at": "2026-11-10T12:50:51.895Z",
+   "newest_published_at": "2026-11-10T16:15:00Z",
+   "newest_age_min": 230,
+   "last_ok_at": "2026-11-10T20:05:17.521Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -179,23 +179,23 @@
    "group": "outlet",
    "every_min": 5,
    "off": null,
-   "reads": 24,
-   "reads_ok": 24,
+   "reads": 25,
+   "reads_ok": 25,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 600,
-   "items": 14,
+   "items": 17,
    "items_backfill": 10,
-   "items_live": 4,
+   "items_live": 7,
    "lag_s": {
-    "n": 4,
-    "median": 4983,
-    "p90": 9874,
-    "max": 9874
+    "n": 7,
+    "median": 8333,
+    "p90": 19768,
+    "max": 23718
    },
-   "newest_published_at": "2026-11-10T11:30:00Z",
-   "newest_age_min": 81,
-   "last_ok_at": "2026-11-10T12:50:51.914Z",
+   "newest_published_at": "2026-11-10T17:46:25Z",
+   "newest_age_min": 139,
+   "last_ok_at": "2026-11-10T20:05:17.632Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -206,23 +206,23 @@
    "group": "outlet",
    "every_min": 30,
    "off": null,
-   "reads": 12,
-   "reads_ok": 12,
+   "reads": 13,
+   "reads_ok": 13,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 600,
-   "items": 27,
+   "items": 29,
    "items_backfill": 25,
-   "items_live": 2,
+   "items_live": 4,
    "lag_s": {
-    "n": 2,
-    "median": 32489,
+    "n": 4,
+    "median": 32452,
     "p90": 32489,
     "max": 32489
    },
-   "newest_published_at": "2026-11-09T13:43:39Z",
-   "newest_age_min": 1387,
-   "last_ok_at": "2026-11-10T12:50:51.928Z",
+   "newest_published_at": "2026-11-10T13:37:08Z",
+   "newest_age_min": 388,
+   "last_ok_at": "2026-11-10T20:05:17.630Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -230,7 +230,7 @@
  ],
  "broken": [],
  "stories": {
-  "total": 279,
+  "total": 406,
   "with_more_than_one_source": 0,
   "sightings": 0,
   "trail_s_median": null
