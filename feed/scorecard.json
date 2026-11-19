@@ -1,14 +1,14 @@
 {
- "generated_at": "2026-11-19T13:48:17.560Z",
+ "generated_at": "2026-11-19T21:49:33.564Z",
  "window": {
   "from": "2026-11-08T02:16:50.113Z",
-  "to": "2026-11-19T13:48:17.560Z",
-  "runs": 60
+  "to": "2026-11-19T21:49:33.564Z",
+  "runs": 61
  },
  "collector": {
-  "runs": 60,
+  "runs": 61,
   "longest_gap_between_runs_min": 604,
-  "gaps_over_10_min": 58
+  "gaps_over_10_min": 59
  },
  "sources": [
   {
@@ -71,8 +71,8 @@
    "group": "gov",
    "every_min": 5,
    "off": null,
-   "reads": 154,
-   "reads_ok": 151,
+   "reads": 161,
+   "reads_ok": 158,
    "reads_failed": 3,
    "errors": [
     {
@@ -81,18 +81,18 @@
     }
    ],
    "longest_without_good_read_min": 604,
-   "items": 26,
+   "items": 27,
    "items_backfill": 20,
-   "items_live": 6,
+   "items_live": 7,
    "lag_s": {
-    "n": 6,
+    "n": 7,
     "median": 8135,
     "p90": 8988,
-    "max": 8988
+    "max": 19473
    },
-   "newest_published_at": "2026-11-18T19:00:00Z",
-   "newest_age_min": 1128,
-   "last_ok_at": "2026-11-19T13:48:17.370Z",
+   "newest_published_at": "2026-11-19T16:00:00Z",
+   "newest_age_min": 350,
+   "last_ok_at": "2026-11-19T21:48:36.434Z",
    "last_error": null,
    "last_error_at": "2026-11-18T21:37:40.153Z",
    "skipped": null
@@ -130,23 +130,23 @@
    "group": "gov",
    "every_min": 15,
    "off": null,
-   "reads": 74,
-   "reads_ok": 74,
+   "reads": 76,
+   "reads_ok": 76,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
-   "items": 17,
+   "items": 19,
    "items_backfill": 10,
-   "items_live": 7,
+   "items_live": 9,
    "lag_s": {
-    "n": 7,
-    "median": 12098,
-    "p90": 17269,
-    "max": 21214
+    "n": 9,
+    "median": 13669,
+    "p90": 23073,
+    "max": 23073
    },
-   "newest_published_at": "2026-11-18T21:05:00Z",
-   "newest_age_min": 1003,
-   "last_ok_at": "2026-11-19T13:48:17.438Z",
+   "newest_published_at": "2026-11-19T15:00:00Z",
+   "newest_age_min": 410,
+   "last_ok_at": "2026-11-19T21:38:34.292Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -157,23 +157,23 @@
    "group": "gov",
    "every_min": 30,
    "off": null,
-   "reads": 58,
-   "reads_ok": 58,
+   "reads": 59,
+   "reads_ok": 59,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
-   "items": 973,
+   "items": 975,
    "items_backfill": 104,
-   "items_live": 869,
+   "items_live": 871,
    "lag_s": {
-    "n": 869,
+    "n": 871,
     "median": 17088,
     "p90": 32371,
     "max": 32371
    },
-   "newest_published_at": "2026-11-19T13:45:00Z",
-   "newest_age_min": 3,
-   "last_ok_at": "2026-11-19T13:48:17.505Z",
+   "newest_published_at": "2026-11-19T21:15:00Z",
+   "newest_age_min": 35,
+   "last_ok_at": "2026-11-19T21:24:33.330Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -184,23 +184,23 @@
    "group": "outlet",
    "every_min": 5,
    "off": null,
-   "reads": 154,
-   "reads_ok": 154,
+   "reads": 161,
+   "reads_ok": 161,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
-   "items": 46,
+   "items": 47,
    "items_backfill": 10,
-   "items_live": 36,
+   "items_live": 37,
    "lag_s": {
-    "n": 36,
-    "median": 8333,
-    "p90": 28465,
+    "n": 37,
+    "median": 8163,
+    "p90": 26269,
     "max": 36664
    },
-   "newest_published_at": "2026-11-19T12:26:01Z",
-   "newest_age_min": 82,
-   "last_ok_at": "2026-11-19T13:48:17.382Z",
+   "newest_published_at": "2026-11-19T21:19:56Z",
+   "newest_age_min": 30,
+   "last_ok_at": "2026-11-19T21:48:36.392Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -211,23 +211,23 @@
    "group": "outlet",
    "every_min": 30,
    "off": null,
-   "reads": 58,
-   "reads_ok": 58,
+   "reads": 59,
+   "reads_ok": 59,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
-   "items": 35,
+   "items": 36,
    "items_backfill": 25,
-   "items_live": 10,
+   "items_live": 11,
    "lag_s": {
-    "n": 10,
+    "n": 11,
     "median": 18505,
     "p90": 32452,
     "max": 32489
    },
-   "newest_published_at": "2026-11-18T13:34:29Z",
-   "newest_age_min": 1454,
-   "last_ok_at": "2026-11-19T13:48:17.423Z",
+   "newest_published_at": "2026-11-19T13:42:38Z",
+   "newest_age_min": 487,
+   "last_ok_at": "2026-11-19T21:24:33.324Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -235,7 +235,7 @@
  ],
  "broken": [],
  "stories": {
-  "total": 1097,
+  "total": 1104,
   "with_more_than_one_source": 0,
   "sightings": 0,
   "trail_s_median": null
