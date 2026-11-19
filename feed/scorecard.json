@@ -1,14 +1,14 @@
 {
- "generated_at": "2026-11-18T23:35:34.564Z",
+ "generated_at": "2026-11-19T04:29:30.092Z",
  "window": {
   "from": "2026-11-08T02:16:50.113Z",
-  "to": "2026-11-18T23:35:34.564Z",
-  "runs": 58
+  "to": "2026-11-19T04:29:30.092Z",
+  "runs": 59
  },
  "collector": {
-  "runs": 58,
+  "runs": 59,
   "longest_gap_between_runs_min": 604,
-  "gaps_over_10_min": 56
+  "gaps_over_10_min": 57
  },
  "sources": [
   {
@@ -71,8 +71,8 @@
    "group": "gov",
    "every_min": 5,
    "off": null,
-   "reads": 152,
-   "reads_ok": 149,
+   "reads": 153,
+   "reads_ok": 150,
    "reads_failed": 3,
    "errors": [
     {
@@ -91,8 +91,8 @@
     "max": 8988
    },
    "newest_published_at": "2026-11-18T19:00:00Z",
-   "newest_age_min": 276,
-   "last_ok_at": "2026-11-18T23:35:34.274Z",
+   "newest_age_min": 570,
+   "last_ok_at": "2026-11-19T04:29:29.933Z",
    "last_error": null,
    "last_error_at": "2026-11-18T21:37:40.153Z",
    "skipped": null
@@ -130,8 +130,8 @@
    "group": "gov",
    "every_min": 15,
    "off": null,
-   "reads": 72,
-   "reads_ok": 72,
+   "reads": 73,
+   "reads_ok": 73,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
@@ -145,8 +145,8 @@
     "max": 21214
    },
    "newest_published_at": "2026-11-18T21:05:00Z",
-   "newest_age_min": 151,
-   "last_ok_at": "2026-11-18T23:35:34.307Z",
+   "newest_age_min": 445,
+   "last_ok_at": "2026-11-19T04:29:30.040Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -157,8 +157,8 @@
    "group": "gov",
    "every_min": 30,
    "off": null,
-   "reads": 56,
-   "reads_ok": 56,
+   "reads": 57,
+   "reads_ok": 57,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
@@ -172,8 +172,8 @@
     "max": 32371
    },
    "newest_published_at": "2026-11-18T16:15:00Z",
-   "newest_age_min": 441,
-   "last_ok_at": "2026-11-18T23:35:34.284Z",
+   "newest_age_min": 735,
+   "last_ok_at": "2026-11-19T04:29:29.921Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -184,23 +184,23 @@
    "group": "outlet",
    "every_min": 5,
    "off": null,
-   "reads": 152,
-   "reads_ok": 152,
+   "reads": 153,
+   "reads_ok": 153,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
-   "items": 43,
+   "items": 44,
    "items_backfill": 10,
-   "items_live": 33,
+   "items_live": 34,
    "lag_s": {
-    "n": 33,
-    "median": 8163,
+    "n": 34,
+    "median": 8333,
     "p90": 28465,
     "max": 36664
    },
-   "newest_published_at": "2026-11-18T22:12:46Z",
-   "newest_age_min": 83,
-   "last_ok_at": "2026-11-18T23:35:34.482Z",
+   "newest_published_at": "2026-11-18T23:54:56Z",
+   "newest_age_min": 275,
+   "last_ok_at": "2026-11-19T04:29:29.930Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -211,8 +211,8 @@
    "group": "outlet",
    "every_min": 30,
    "off": null,
-   "reads": 56,
-   "reads_ok": 56,
+   "reads": 57,
+   "reads_ok": 57,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
@@ -226,8 +226,8 @@
     "max": 32489
    },
    "newest_published_at": "2026-11-18T13:34:29Z",
-   "newest_age_min": 601,
-   "last_ok_at": "2026-11-18T23:35:34.368Z",
+   "newest_age_min": 895,
+   "last_ok_at": "2026-11-19T04:29:29.952Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -235,7 +235,7 @@
  ],
  "broken": [],
  "stories": {
-  "total": 985,
+  "total": 986,
   "with_more_than_one_source": 0,
   "sightings": 0,
   "trail_s_median": null
