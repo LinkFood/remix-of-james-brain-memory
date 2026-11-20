@@ -1,14 +1,14 @@
 {
- "generated_at": "2026-11-20T18:49:13.103Z",
+ "generated_at": "2026-11-20T21:26:26.520Z",
  "window": {
   "from": "2026-11-08T02:16:50.113Z",
-  "to": "2026-11-20T18:49:13.103Z",
-  "runs": 66
+  "to": "2026-11-20T21:26:26.520Z",
+  "runs": 67
  },
  "collector": {
-  "runs": 66,
+  "runs": 67,
   "longest_gap_between_runs_min": 604,
-  "gaps_over_10_min": 64
+  "gaps_over_10_min": 65
  },
  "sources": [
   {
@@ -71,30 +71,30 @@
    "group": "gov",
    "every_min": 5,
    "off": null,
-   "reads": 171,
-   "reads_ok": 168,
-   "reads_failed": 3,
+   "reads": 178,
+   "reads_ok": 174,
+   "reads_failed": 4,
    "errors": [
     {
      "error": "HTTP 404 from fed",
-     "n": 3
+     "n": 4
     }
    ],
    "longest_without_good_read_min": 604,
-   "items": 28,
+   "items": 29,
    "items_backfill": 20,
-   "items_live": 8,
+   "items_live": 9,
    "lag_s": {
-    "n": 8,
-    "median": 8498,
+    "n": 9,
+    "median": 8135,
     "p90": 13753,
     "max": 19473
    },
-   "newest_published_at": "2026-11-20T15:00:00Z",
-   "newest_age_min": 229,
-   "last_ok_at": "2026-11-20T18:49:12.733Z",
+   "newest_published_at": "2026-11-20T21:15:00Z",
+   "newest_age_min": 11,
+   "last_ok_at": "2026-11-20T21:25:29.138Z",
    "last_error": null,
-   "last_error_at": "2026-11-18T21:37:40.153Z",
+   "last_error_at": "2026-11-20T21:13:27.790Z",
    "skipped": null
   },
   {
@@ -130,23 +130,23 @@
    "group": "gov",
    "every_min": 15,
    "off": null,
-   "reads": 81,
-   "reads_ok": 81,
+   "reads": 83,
+   "reads_ok": 83,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
-   "items": 19,
+   "items": 20,
    "items_backfill": 10,
-   "items_live": 9,
+   "items_live": 10,
    "lag_s": {
-    "n": 9,
+    "n": 10,
     "median": 13669,
     "p90": 23073,
     "max": 23073
    },
-   "newest_published_at": "2026-11-19T15:00:00Z",
-   "newest_age_min": 1669,
-   "last_ok_at": "2026-11-20T18:49:13.041Z",
+   "newest_published_at": "2026-11-20T21:00:00Z",
+   "newest_age_min": 26,
+   "last_ok_at": "2026-11-20T21:15:27.163Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -157,8 +157,8 @@
    "group": "gov",
    "every_min": 30,
    "off": null,
-   "reads": 63,
-   "reads_ok": 63,
+   "reads": 64,
+   "reads_ok": 64,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
@@ -172,8 +172,8 @@
     "max": 32371
    },
    "newest_published_at": "2026-11-20T16:15:00Z",
-   "newest_age_min": 154,
-   "last_ok_at": "2026-11-20T18:49:12.945Z",
+   "newest_age_min": 311,
+   "last_ok_at": "2026-11-20T21:01:26.650Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -184,8 +184,8 @@
    "group": "outlet",
    "every_min": 5,
    "off": null,
-   "reads": 171,
-   "reads_ok": 171,
+   "reads": 178,
+   "reads_ok": 178,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
@@ -199,8 +199,8 @@
     "max": 36664
    },
    "newest_published_at": "2026-11-20T12:00:00Z",
-   "newest_age_min": 409,
-   "last_ok_at": "2026-11-20T18:49:12.729Z",
+   "newest_age_min": 566,
+   "last_ok_at": "2026-11-20T21:25:29.384Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -211,23 +211,23 @@
    "group": "outlet",
    "every_min": 30,
    "off": null,
-   "reads": 63,
-   "reads_ok": 63,
+   "reads": 64,
+   "reads_ok": 64,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 604,
-   "items": 38,
+   "items": 39,
    "items_backfill": 25,
-   "items_live": 13,
+   "items_live": 14,
    "lag_s": {
-    "n": 13,
+    "n": 14,
     "median": 18334,
     "p90": 32452,
     "max": 32489
    },
-   "newest_published_at": "2026-11-20T13:45:11Z",
-   "newest_age_min": 304,
-   "last_ok_at": "2026-11-20T18:49:12.904Z",
+   "newest_published_at": "2026-11-20T19:58:13Z",
+   "newest_age_min": 88,
+   "last_ok_at": "2026-11-20T21:01:26.562Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -235,7 +235,7 @@
  ],
  "broken": [],
  "stories": {
-  "total": 1201,
+  "total": 1204,
   "with_more_than_one_source": 0,
   "sightings": 0,
   "trail_s_median": null
