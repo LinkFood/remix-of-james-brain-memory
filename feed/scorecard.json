@@ -1,14 +1,14 @@
 {
- "generated_at": "2026-11-24T17:41:04.785Z",
+ "generated_at": "2026-11-24T23:23:59.484Z",
  "window": {
   "from": "2026-11-08T02:16:50.113Z",
-  "to": "2026-11-24T17:41:04.785Z",
-  "runs": 83
+  "to": "2026-11-24T23:23:59.484Z",
+  "runs": 84
  },
  "collector": {
-  "runs": 83,
+  "runs": 84,
   "longest_gap_between_runs_min": 696,
-  "gaps_over_10_min": 81
+  "gaps_over_10_min": 82
  },
  "sources": [
   {
@@ -71,8 +71,8 @@
    "group": "gov",
    "every_min": 5,
    "off": null,
-   "reads": 212,
-   "reads_ok": 208,
+   "reads": 219,
+   "reads_ok": 215,
    "reads_failed": 4,
    "errors": [
     {
@@ -81,18 +81,18 @@
     }
    ],
    "longest_without_good_read_min": 696,
-   "items": 29,
+   "items": 30,
    "items_backfill": 20,
-   "items_live": 9,
+   "items_live": 10,
    "lag_s": {
-    "n": 9,
-    "median": 8135,
-    "p90": 13753,
+    "n": 10,
+    "median": 8498,
+    "p90": 14339,
     "max": 19473
    },
-   "newest_published_at": "2026-11-20T21:15:00Z",
-   "newest_age_min": 5546,
-   "last_ok_at": "2026-11-24T17:41:04.563Z",
+   "newest_published_at": "2026-11-24T19:00:00Z",
+   "newest_age_min": 264,
+   "last_ok_at": "2026-11-24T23:23:02.216Z",
    "last_error": null,
    "last_error_at": "2026-11-20T21:13:27.790Z",
    "skipped": null
@@ -130,8 +130,8 @@
    "group": "gov",
    "every_min": 15,
    "off": null,
-   "reads": 102,
-   "reads_ok": 102,
+   "reads": 104,
+   "reads_ok": 104,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 696,
@@ -145,8 +145,8 @@
     "max": 23073
    },
    "newest_published_at": "2026-11-23T18:00:00Z",
-   "newest_age_min": 1421,
-   "last_ok_at": "2026-11-24T17:41:04.679Z",
+   "newest_age_min": 1764,
+   "last_ok_at": "2026-11-24T23:12:59.974Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -157,23 +157,23 @@
    "group": "gov",
    "every_min": 30,
    "off": null,
-   "reads": 80,
-   "reads_ok": 80,
+   "reads": 81,
+   "reads_ok": 81,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 696,
-   "items": 1260,
+   "items": 1263,
    "items_backfill": 104,
-   "items_live": 1156,
+   "items_live": 1159,
    "lag_s": {
-    "n": 1156,
+    "n": 1159,
     "median": 18097,
     "p90": 30613,
     "max": 32371
    },
-   "newest_published_at": "2026-11-24T16:15:00Z",
-   "newest_age_min": 86,
-   "last_ok_at": "2026-11-24T17:41:04.725Z",
+   "newest_published_at": "2026-11-24T21:15:00Z",
+   "newest_age_min": 129,
+   "last_ok_at": "2026-11-24T22:58:58.867Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -184,8 +184,8 @@
    "group": "outlet",
    "every_min": 5,
    "off": null,
-   "reads": 212,
-   "reads_ok": 212,
+   "reads": 219,
+   "reads_ok": 219,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 696,
@@ -199,8 +199,8 @@
     "max": 74029
    },
    "newest_published_at": "2026-11-24T11:30:00Z",
-   "newest_age_min": 371,
-   "last_ok_at": "2026-11-24T17:41:04.559Z",
+   "newest_age_min": 714,
+   "last_ok_at": "2026-11-24T23:23:02.325Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -211,23 +211,23 @@
    "group": "outlet",
    "every_min": 30,
    "off": null,
-   "reads": 80,
-   "reads_ok": 80,
+   "reads": 81,
+   "reads_ok": 81,
    "reads_failed": 0,
    "errors": [],
    "longest_without_good_read_min": 696,
-   "items": 43,
+   "items": 44,
    "items_backfill": 25,
-   "items_live": 18,
+   "items_live": 19,
    "lag_s": {
-    "n": 18,
-    "median": 18334,
+    "n": 19,
+    "median": 18242,
     "p90": 32489,
     "max": 33175
    },
-   "newest_published_at": "2026-11-24T13:14:22Z",
-   "newest_age_min": 267,
-   "last_ok_at": "2026-11-24T17:41:04.606Z",
+   "newest_published_at": "2026-11-24T19:03:28Z",
+   "newest_age_min": 261,
+   "last_ok_at": "2026-11-24T22:58:58.959Z",
    "last_error": null,
    "last_error_at": null,
    "skipped": null
@@ -235,7 +235,7 @@
  ],
  "broken": [],
  "stories": {
-  "total": 1419,
+  "total": 1424,
   "with_more_than_one_source": 0,
   "sightings": 0,
   "trail_s_median": null
